@@ -174,14 +174,13 @@ class Configuration(BaseModel):
     )
     # Business Scenario Configuration
     business_scenario: str = Field(
-        default="general_research",
+        default="public_opinion_risk",
         metadata={
             "x_oap_ui_config": {
                 "type": "select",
-                "default": "general_research",
-                "description": "Business workflow profile. Use public_opinion_risk for enterprise public-opinion and brand-risk monitoring.",
+                "default": "public_opinion_risk",
+                "description": "Business workflow profile for enterprise public-opinion and brand-risk monitoring.",
                 "options": [
-                    {"label": "General research", "value": "general_research"},
                     {"label": "Public opinion risk", "value": "public_opinion_risk"},
                 ],
             }
@@ -1118,17 +1117,6 @@ class Configuration(BaseModel):
             }
         }
     )
-    tool_domain_filtering_enabled: bool = Field(
-        default=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": True,
-                "description": "Automatically filter MCP tools by domain based on the research topic. When enabled, database tools are only shown for SQL-related queries, Feishu tools only for 飞书-related queries, etc. Disable to always expose all tools.",
-            }
-        },
-    )
-
     # ------------------------------------------------------------------
     # Bytebase DBHub MCP — database query tools
     # ------------------------------------------------------------------
@@ -1455,13 +1443,12 @@ class Configuration(BaseModel):
                 raise ValueError(f"{field_name} must be greater than or equal to 0.")
         if not 0 <= self.budget_warning_ratio <= 1:
             raise ValueError("budget_warning_ratio must be between 0 and 1.")
-        supported_business_scenarios = {"general_research", "public_opinion_risk"}
+        supported_business_scenarios = {"public_opinion_risk"}
         if self.business_scenario.strip().lower() not in supported_business_scenarios:
             raise ValueError(
-                "business_scenario must be either general_research or public_opinion_risk."
+                "business_scenario must be public_opinion_risk."
             )
         allowed_business_agents = {
-            "general_research",
             *DEFAULT_PUBLIC_OPINION_AGENTS,
             *PUBLIC_OPINION_AGENT_ALIASES,
         }
@@ -1481,7 +1468,7 @@ class Configuration(BaseModel):
                     str(agent).strip().lower(),
                     str(agent).strip().lower(),
                 )
-                if normalized_agent not in normalized_agents and normalized_agent != "general_research":
+                if normalized_agent not in normalized_agents:
                     normalized_agents.append(normalized_agent)
             self.enabled_business_agents = normalized_agents or list(DEFAULT_PUBLIC_OPINION_AGENTS)
         return self

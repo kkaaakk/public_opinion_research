@@ -27,12 +27,26 @@ from typing import Any
 import aiohttp
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.config import get_store
-from mcp import McpError
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.tool_wrapper import wrap_mcp_tools
+
+# MCP adapter imports — gracefully degrade when incompatible versions are installed.
+# langchain_mcp_adapters may require a newer mcp SDK than currently installed.
+MCP_AVAILABLE = False
+MultiServerMCPClient = None  # type: ignore[assignment,misc]
+McpError = None  # type: ignore[assignment,misc]
+try:
+    from langchain_mcp_adapters.client import MultiServerMCPClient  # noqa: F811
+
+    from mcp import McpError  # noqa: F811
+    MCP_AVAILABLE = True
+except (ImportError, AttributeError) as _mcp_import_err:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "MCP adapters unavailable (%s). MCP tools will be skipped.", _mcp_import_err
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -385,6 +399,10 @@ async def load_mcp_tools(
     network timeout, …) is logged as a warning — the remaining servers
     continue to load normally.
     """
+    if not MCP_AVAILABLE:
+        logger.debug("MCP adapters not installed; skipping MCP tool loading.")
+        return []
+
     configurable = Configuration.from_runnable_config(config)
     servers: dict[str, dict[str, Any]] = {}
 

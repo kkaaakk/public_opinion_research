@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 from langchain_core.tools import BaseTool
 
@@ -126,12 +125,6 @@ DOMAIN_REGISTRY: list[DomainDef] = [
 
 # Fast lookups derived from the registry (kept in sync automatically)
 _DOMAIN_BY_NAME: dict[str, DomainDef] = {d.name: d for d in DOMAIN_REGISTRY}
-_DOMAIN_KEYWORDS: dict[str, list[str]] = {
-    d.name: d.keywords for d in DOMAIN_REGISTRY if d.keywords
-}
-_ALWAYS_ACTIVE_DOMAINS: set[str] = {
-    d.name for d in DOMAIN_REGISTRY if d.always_active
-}
 _DOMAIN_PROMPT_ORDER: list[tuple[str, str]] = [
     (d.name, d.label) for d in DOMAIN_REGISTRY
 ]
@@ -177,23 +170,6 @@ def iter_domain_labels(domains: set[str]) -> list[tuple[str, str]]:
     return [(name, label) for name, label in _DOMAIN_PROMPT_ORDER if name in domains]
 
 
-def build_domain_classifier_prompt() -> str:
-    """Generate the domain-classification section for the LLM prompt.
-
-    Used by ``write_research_brief`` so the LLM can output ``relevant_domains``.
-    Dynamically built from the registry — no hardcoded domain lists.
-    """
-    lines: list[str] = []
-    for dom in DOMAIN_REGISTRY:
-        if dom.name in ("core", "web_search"):
-            continue  # always active, LLM doesn't need to list them
-        kw_hint = ""
-        if dom.keywords:
-            kw_hint = f" (keywords: {', '.join(dom.keywords[:6])})"
-        lines.append(f"- **{dom.name}**: {dom.description}{kw_hint}")
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------------------
 # Tool domain resolution
 # ---------------------------------------------------------------------------
@@ -231,30 +207,6 @@ def _tool_domain(tool) -> str:
     return "external_mcp"
 
 
-def tag_builtin_tools(tools: list) -> list:
-    """Ensure every built-in tool carries ``tool_domain`` metadata.
-
-    Call this once after ``get_all_tools()`` assembles the full tool list.
-    Tools that already have domain metadata (MCP tools) are left untouched.
-    """
-    for tool in tools:
-        if isinstance(tool, dict):
-            continue
-        metadata = getattr(tool, "metadata", None)
-        if metadata is None:
-            tool.metadata = {}
-        if isinstance(tool.metadata, dict) and "tool_domain" not in tool.metadata:
-            name = getattr(tool, "name", "")
-            domain = _BUILTIN_NAME_TO_DOMAIN.get(name, "external_mcp")
-            tool.metadata["tool_domain"] = domain
-    return tools
-
-
-# ---------------------------------------------------------------------------
-# Domain detection & filtering
-# ---------------------------------------------------------------------------
-
-
 def classify_tools(tools: list[BaseTool]) -> dict[str, list[BaseTool]]:
     """Group *tools* by their domain category."""
     buckets: dict[str, list[BaseTool]] = {}
@@ -262,56 +214,6 @@ def classify_tools(tools: list[BaseTool]) -> dict[str, list[BaseTool]]:
         domain = _tool_domain(tool)
         buckets.setdefault(domain, []).append(tool)
     return buckets
-
-
-def detect_active_domains(
-    research_topic: str,
-    *,
-    agent_role: str = "general_research",
-) -> set[str]:
-    """Return the set of domains relevant to *research_topic* (keyword fallback)."""
-    active = set(_ALWAYS_ACTIVE_DOMAINS)
-    text = research_topic.lower()
-    for domain, keywords in _DOMAIN_KEYWORDS.items():
-        if any(keyword in text for keyword in keywords):
-            active.add(domain)
-    logger.debug(
-        "Keyword domain detection for role=%s topic=%.120s → %s",
-        agent_role, research_topic, sorted(active),
-    )
-    return active
-
-
-def filter_tools_by_domain(
-    tools: list[BaseTool],
-    active_domains: set[str],
-) -> list[BaseTool]:
-    """Return only the tools whose domain is in *active_domains*."""
-    filtered: list[BaseTool] = []
-    dropped: list[str] = []
-    for tool in tools:
-        domain = _tool_domain(tool)
-        if domain in active_domains:
-            filtered.append(tool)
-        else:
-            dropped.append(tool.name)
-    if dropped:
-        logger.info(
-            "Domain filter: dropped %d tool(s) from inactive domains: %s",
-            len(dropped), ", ".join(dropped),
-        )
-    return filtered
-
-
-def get_filtered_tools(
-    tools: list[BaseTool],
-    research_topic: str,
-    *,
-    agent_role: str = "general_research",
-) -> list[BaseTool]:
-    """Convenience: detect active domains and filter *tools* in one call."""
-    active = detect_active_domains(research_topic, agent_role=agent_role)
-    return filter_tools_by_domain(tools, active)
 
 
 def tool_domain_summary(tools: list[BaseTool]) -> str:

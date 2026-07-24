@@ -24,9 +24,7 @@ const modeSelect = document.getElementById('mode');
 /* ── Node → badge mapping ───────────────────────────────────────── */
 const NODE_BADGE = {
     write_research_brief: { label: 'Plan', cls: 'plan' },
-    research_supervisor:   { label: 'Plan', cls: 'plan' },
-    supervisor:            { label: 'Think', cls: 'think' },
-    researcher:            { label: 'Search', cls: 'search' },
+    research_supervisor:   { label: 'Analyze', cls: 'think' },
     compress_research:     { label: 'Write', cls: 'write' },
     final_report_generation: { label: 'Write', cls: 'write' },
 };
@@ -44,11 +42,6 @@ function setTopic(text) {
     topicInput.focus();
 }
 
-function toggleScenario() {
-    const scenario = document.getElementById('scenario').value;
-    const poExtra = document.getElementById('po-extra');
-    poExtra.classList.toggle('hidden', scenario !== 'public_opinion_risk');
-}
 
 /* ── Start / Stop ───────────────────────────────────────────────── */
 async function startResearch() {
@@ -82,7 +75,6 @@ async function startResearch() {
         model: modelSelect.value,
         search_api: searchSelect.value,
         mode: modeSelect.value,
-        scenario: document.getElementById('scenario').value,
         org_context: document.getElementById('org-context').value,
         rag_enabled: document.getElementById('rag-enabled')?.checked || false,
     });

@@ -3,22 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Open Deep Research</title>
+    <title>Public Opinion Research</title>
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
     <div class="app">
         <header class="header">
-            <h1>Open Deep Research</h1>
-            <span class="subtitle">AI-powered research agent</span>
+            <h1>Public Opinion Research</h1>
+            <span class="subtitle">Enterprise public-opinion and brand-risk monitoring</span>
         </header>
 
         <!-- Input -->
         <section class="input-panel">
-            <label for="topic" class="input-label">What would you like me to research?</label>
+            <label for="topic" class="input-label">请输入需要分析的品牌、企业、产品或舆情事件</label>
             <textarea id="topic" class="topic-input"
-                placeholder="e.g., What are the latest advances in CRISPR gene editing?"
+                placeholder="例如：分析某品牌近期产品质量投诉舆情"
                 rows="3" autofocus></textarea>
 
             <div class="controls">
@@ -49,21 +49,14 @@
                         <option value="deep">Deep</option>
                     </select>
                 </div>
-                <div class="control-group">
-                    <label for="scenario">Scenario</label>
-                    <select id="scenario" onchange="toggleScenario()">
-                        <option value="general_research" selected>Research</option>
-                        <option value="public_opinion_risk">Public Opinion</option>
-                    </select>
-                </div>
                 <button id="start-btn" class="btn-start" onclick="startResearch()">
-                    Start Research
+                    开始舆情分析
                 </button>
                 <button id="stop-btn" class="btn-stop hidden" onclick="stopResearch()">
                     Stop
                 </button>
             </div>
-            <div id="po-extra" class="hidden" style="margin-top:12px;padding:14px 16px;background:#f6f8fa;border-radius:8px;border:1px solid var(--border);">
+            <div id="po-extra" style="margin-top:12px;padding:14px 16px;background:#f6f8fa;border-radius:8px;border:1px solid var(--border);">
                 <div style="margin-bottom:10px;">
                     <label for="org-context" style="font-size:0.82rem;font-weight:600;color:var(--text-secondary);">Organization context (optional)</label>
                     <input type="text" id="org-context" class="topic-input" style="padding:8px 12px;font-size:0.85rem;margin-top:4px;"
@@ -114,16 +107,16 @@
         <!-- Empty State -->
         <section id="empty-state" class="empty-state">
             <div class="empty-icon">🔬</div>
-            <p>Enter a research topic above and click <strong>Start Research</strong></p>
+            <p>输入需要分析的舆情话题，点击 <strong>开始舆情分析</strong></p>
             <div class="example-topics">
-                <button class="example-chip" onclick="setTopic('What are the latest advances in quantum computing?')">Quantum computing advances</button>
-                <button class="example-chip" onclick="setTopic('Compare renewable energy adoption across EU countries in 2025')">EU renewable energy 2025</button>
-                <button class="example-chip" onclick="setTopic('How is AI being used in drug discovery today?')">AI in drug discovery</button>
+                <button class="example-chip" onclick="setTopic('分析特斯拉近期产品发布的公众舆情')">特斯拉产品舆情</button>
+                <button class="example-chip" onclick="setTopic('某消费电子品牌在欧盟监管环境下的声誉风险')">欧盟监管风险</button>
+                <button class="example-chip" onclick="setTopic('分析某品牌近期营销活动的社交媒体反响')">营销活动舆情</button>
             </div>
         </section>
 
         <footer class="footer">
-            Open Deep Research · <a href="https://github.com/langchain-ai/open_deep_research" target="_blank">GitHub</a>
+            Public Opinion Research · 企业舆情风险研究与处置辅助系统
         </footer>
     </div>
 

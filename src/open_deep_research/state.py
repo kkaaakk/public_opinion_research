@@ -10,12 +10,10 @@ from typing_extensions import TypedDict
 
 from open_deep_research.budget import empty_budget_usage, merge_budget_usage
 
-
 ###################
 # Structured Outputs
 ###################
 BusinessAgentRole = Literal[
-    "general_research",
     "public_signal",
     "internal_knowledge",
     "risk_assessment",
@@ -23,28 +21,6 @@ BusinessAgentRole = Literal[
 ]
 
 
-class ConductResearch(BaseModel):
-    """Call this tool to conduct research on a specific topic."""
-    research_topic: str = Field(
-        description="The topic to research. Should be a single topic, and should be described in high detail (at least a paragraph).",
-    )
-    agent_role: BusinessAgentRole = Field(
-        default="general_research",
-        description=(
-            "Specialized role for the delegated sub-agent. Use general_research for "
-            "ordinary research, or a public-opinion role such as public_signal, "
-            "internal_knowledge, risk_assessment, or response_strategy for enterprise "
-            "brand-risk monitoring."
-        ),
-    )
-    expected_output: str = Field(
-        default="",
-        description=(
-            "Concise description of the evidence and deliverable this sub-agent should "
-            "return, such as a timeline, claim verification table, internal RAG evidence, "
-            "risk register, or PR response recommendations."
-        ),
-    )
 
 class ResearchComplete(BaseModel):
     """Call this tool to indicate that the research is complete."""
@@ -73,14 +49,6 @@ class ResearchQuestion(BaseModel):
 
     research_brief: str = Field(
         description="A research question that will be used to guide the research.",
-    )
-    relevant_domains: list[str] = Field(
-        default_factory=list,
-        description=(
-            "List of tool domains relevant to this research question. "
-            "Choose from: database, document, feishu, social_media, web_search, rag. "
-            "Empty list means only the default core + web_search tools are needed."
-        ),
     )
 
 
@@ -202,7 +170,6 @@ class AgentState(MessagesState):
 
     supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     research_brief: Optional[str]
-    relevant_domains: Annotated[list[str], override_reducer] = []
     agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
     raw_notes: Annotated[list[str], override_reducer] = []
     notes: Annotated[list[str], override_reducer] = []
@@ -213,43 +180,13 @@ class AgentState(MessagesState):
     completed_sections: Annotated[list[Section], operator.add] = []
     feedback_on_report_plan: Annotated[list[str], operator.add] = []
 
-class SupervisorState(TypedDict):
-    """State for the supervisor that manages research tasks."""
 
-    supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
-    research_brief: str
-    relevant_domains: list[str]  # LLM-detected domains from write_research_brief
-    notes: Annotated[list[str], override_reducer] = []
-    research_iterations: int = 0
-    raw_notes: Annotated[list[str], override_reducer] = []
-    budget_usage: Annotated[dict[str, Any], budget_usage_reducer]
-
-class ResearcherState(TypedDict):
-    """State for individual researchers conducting research."""
-
-    researcher_messages: Annotated[list[MessageLikeRepresentation], operator.add]
-    tool_call_iterations: int = 0
-    research_topic: str
-    agent_role: str
-    expected_output: str
-    compressed_research: str
-    relevant_domains: list[str]  # LLM-detected domains from write_research_brief
-    raw_notes: Annotated[list[str], override_reducer] = []
-    budget_usage: Annotated[dict[str, Any], budget_usage_reducer]
-
-class ResearcherOutputState(BaseModel):
-    """Output state from individual researchers."""
-    
-    compressed_research: str
-    raw_notes: Annotated[list[str], override_reducer] = []
-    budget_usage: dict[str, Any] = Field(default_factory=empty_budget_usage)
 
 class PublicOpinionState(TypedDict):
     """State for the explicit public-opinion multi-agent workflow."""
 
     messages: list[MessageLikeRepresentation]
     research_brief: str
-    relevant_domains: list[str]  # LLM-detected domains from write_research_brief
     role_reports: Annotated[dict[str, str], role_reports_reducer]
     agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
     notes: Annotated[list[str], override_reducer] = []

@@ -1,7 +1,6 @@
-"""Locust load-testing script for Open Deep Research web server.
+"""Locust load-testing script for Public Opinion Research web server.
 
-Exercises the real business logic — both research scenarios
-(general_research, public_opinion_risk), all three modes (fast / normal / deep),
+Exercises the public_opinion_risk scenario with all three modes (fast / normal / deep),
 and multiple model / search_api combinations.
 
 Launch the server first:
@@ -47,18 +46,6 @@ RESEARCH_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "600"))
 # Scenario definitions — maps to the two business_scenario values in the app
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ── general_research topics (broad knowledge questions) ────────────────
-GENERAL_TOPICS = [
-    "What is quantum computing and how does it differ from classical computing?",
-    "Brief history of the internet from ARPANET to today",
-    "Explain how CRISPR gene editing works and its medical applications",
-    "Latest advances in nuclear fusion energy research",
-    "Compare microservices vs monolithic architecture for web applications",
-    "What are the key challenges in autonomous vehicle safety?",
-    "How do large language models work under the hood?",
-    "Climate change mitigation strategies being deployed in 2025-2026",
-]
-
 # ── public_opinion_risk topics (brand / enterprise risk) ───────────────
 PUBLIC_OPINION_TOPICS = [
     "Analyze public sentiment around Tesla's recent product launches",
@@ -101,24 +88,13 @@ SEARCH_APIS = ["tavily", "openai", "anthropic"]
 # ═══════════════════════════════════════════════════════════════════════════
 
 class Scenario(str, Enum):
-    GENERAL = "general_research"
     PUBLIC_OPINION = "public_opinion_risk"
 
 
 def _build_profile(scenario: Scenario, mode: str) -> dict:
-    """Build a realistic request payload for a given scenario + mode combination.
-
-    The web server maps mode to:
-        fast:   1 supervisor iteration, 2 tool calls, 1 concurrent unit,  8k content
-        normal: 3 supervisor iterations, 4 tool calls, 2 concurrent units, 20k content
-        deep:   uses Configuration defaults (6 iters, 10 tool calls, 5 units, 50k)
-    """
-    if scenario == Scenario.GENERAL:
-        topic = random.choice(GENERAL_TOPICS)
-        org_context = ""
-    else:
-        topic = random.choice(PUBLIC_OPINION_TOPICS)
-        org_context = random.choice(ORG_CONTEXTS)
+    """Build a realistic request payload for public_opinion_risk scenario."""
+    topic = random.choice(PUBLIC_OPINION_TOPICS)
+    org_context = random.choice(ORG_CONTEXTS)
 
     return {
         "topic": topic,
@@ -193,8 +169,6 @@ class SSEValidator:
 
         # Check that key nodes ran
         expected = {"write_research_brief", "final_report_generation"}
-        if scenario == Scenario.GENERAL:
-            expected.update({"supervisor", "researcher"})
 
         missing = expected - self.nodes_seen
         if missing:
@@ -230,58 +204,8 @@ class SmokeChecks:
                 r.failure(f"status={r.status_code} len={len(r.text)}")
 
 
-class ResearchGeneral:
-    """Run the ``general_research`` scenario across different modes."""
-
-    @task(3)
-    def general_fast(self):
-        self._run(scenario=Scenario.GENERAL, mode="fast",
-                  name="POST /api/research [general_research / fast]")
-
-    @task(2)
-    def general_normal(self):
-        self._run(scenario=Scenario.GENERAL, mode="normal",
-                  name="POST /api/research [general_research / normal]")
-
-    @task(1)
-    def general_deep(self):
-        self._run(scenario=Scenario.GENERAL, mode="deep",
-                  name="POST /api/research [general_research / deep]")
-
-    def _run(self, scenario: Scenario, mode: str, name: str):
-        payload = _build_profile(scenario, mode)
-        validator = SSEValidator()
-
-        with self.client.post(
-            "/api/research",
-            json=payload,
-            catch_response=True,
-            stream=True,
-            timeout=RESEARCH_TIMEOUT,
-            name=name,
-        ) as resp:
-            if resp.status_code != 200:
-                resp.failure(f"HTTP {resp.status_code}: {resp.text[:200]}")
-                return
-
-            try:
-                for line in resp.iter_lines(decode_unicode=True):
-                    validator.feed_line(line)
-                    if validator.error or validator.report_content:
-                        pass  # keep reading until "done"
-            except Exception as exc:
-                resp.failure(f"SSE read error: {exc}")
-                return
-
-            ok, reason = validator.is_valid(scenario)
-            if ok:
-                resp.success()
-            else:
-                resp.failure(reason)
-
-
 class ResearchPublicOpinion:
-    """Run the ``public_opinion_risk`` scenario — enterprise brand monitoring."""
+    """Run the public_opinion_risk scenario — enterprise brand monitoring."""
 
     @task(2)
     def public_opinion_fast(self):
@@ -326,25 +250,17 @@ class ResearchPublicOpinion:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class ResearchUser(HttpUser):
-    """Simulates real users: health checks + both research scenarios.
+    """Simulates real users: health checks + public-opinion research.
 
     Task weighting (default):
         ~75%  smoke checks (health + index)
-        ~15%  general_research (fast > normal > deep)
-        ~10%  public_opinion_risk (fast > normal)
-
-    Because research endpoints call real LLMs and search APIs, keep user
-    count low (e.g.  -u 2 -r 1) and favour ``fast`` mode.
+        ~25%  public_opinion_risk (fast > normal)
     """
     wait_time = between(5, 15)
 
-    # Attach task sets as mixin-style tasks on the user class.
-    # Each ``@task`` decorator inside the mixin classes contributes to the
-    # global weight pool.
     tasks = {
-        SmokeChecks: 6,             # health(3) + index(2) implicit, overridden by dict weight
-        ResearchGeneral: RESEARCH_WEIGHT,
-        ResearchPublicOpinion: max(1, RESEARCH_WEIGHT // 2),
+        SmokeChecks: 6,
+        ResearchPublicOpinion: RESEARCH_WEIGHT,
     }
 
 

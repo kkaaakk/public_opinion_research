@@ -14,7 +14,7 @@ Usage:
     python tests/agent_stress.py --runs 1
 
     # Reliability test (serial)
-    python tests/agent_stress.py --runs 20 --scenario general_research --mode fast
+    python tests/agent_stress.py --runs 20 --scenario public_opinion_risk --mode fast
 
     # Concurrency stress
     python tests/agent_stress.py --runs 10 --concurrency 3
@@ -46,15 +46,10 @@ load_dotenv()
 # Test matrix
 # ═══════════════════════════════════════════════════════════════════════════
 
-SCENARIOS = ["general_research", "public_opinion_risk"]
+SCENARIOS = ["public_opinion_risk"]
 MODES = ["fast", "normal", "deep"]
 
 TOPICS = {
-    "general_research": [
-        "What is quantum computing?",
-        "Explain CRISPR gene editing",
-        "How do transformers work in deep learning?",
-    ],
     "public_opinion_risk": [
         "Analyze public sentiment around Tesla Cybertruck",
         "Apple brand reputation in EU regulatory environment",
@@ -112,7 +107,7 @@ class AgentStressTester:
             "search_api": "tavily",
             "mode": mode,
             "scenario": scenario,
-            "org_context": ORG_CONTEXT if scenario == "public_opinion_risk" else "",
+            "org_context": ORG_CONTEXT,
             "rag_enabled": False,
         }
 
@@ -272,7 +267,7 @@ def print_report(results: list[AgentResult]):
 async def main():
     parser = argparse.ArgumentParser(description="Agent stress/reliability test")
     parser.add_argument("--runs", type=int, default=1, help="Runs per combination")
-    parser.add_argument("--scenario", choices=SCENARIOS, default="general_research")
+    parser.add_argument("--scenario", choices=SCENARIOS, default="public_opinion_risk")
     parser.add_argument("--mode", choices=MODES, default="fast")
     parser.add_argument("--concurrency", type=int, default=1,
                         help="Parallel runs (finds race conditions)")

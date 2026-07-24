@@ -16,20 +16,20 @@ from dotenv import load_dotenv
 # Load .env before anything else — API keys live there
 load_dotenv()
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from langchain_core.messages import HumanMessage
+from fastapi import FastAPI, Request  # noqa: E402, I001
+from fastapi.responses import HTMLResponse, StreamingResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from langchain_core.messages import HumanMessage  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
-from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_graph
+from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_graph  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(
-    title="Open Deep Research",
-    description="A clean web frontend for Open Deep Research",
-    version="0.1.0",
+    title="Public Opinion Research",
+    description="Enterprise public-opinion and brand-risk monitoring system",
+    version="0.2.0",
 )
 
 if STATIC_DIR.is_dir():
@@ -41,7 +41,6 @@ class ResearchRequest(BaseModel):
     model: str = "deepseek:deepseek-chat"
     search_api: str = "tavily"
     mode: str = "normal"
-    scenario: str = "general_research"
     org_context: str = ""
     rag_enabled: bool = False
 
@@ -53,10 +52,8 @@ def _event(data: dict) -> str:
 # ── Node → human label ─────────────────────────────────────────────
 _NODE_LABEL = {
     "write_research_brief": "Planning research…",
-    "research_supervisor": "Supervisor running…",
+    "research_supervisor": "Analyzing public opinion…",
     "final_report_generation": "Writing report…",
-    "supervisor": "Analyzing findings…",
-    "researcher": "Searching web…",
     "compress_research": "Summarizing…",
 }
 
@@ -129,7 +126,7 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
                     "summarization_model": request.model,
                     "search_api": request.search_api,
                     "allow_clarification": False,
-                    "business_scenario": request.scenario,
+                    "business_scenario": "public_opinion_risk",
                     "organization_context": request.org_context or None,
                     "rag_enabled": request.rag_enabled,
                     "retrieval_mode": "hybrid" if request.rag_enabled else "web_only",
@@ -220,8 +217,8 @@ def main():
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
 
-    print(f"\n  Open Deep Research web UI")
-    print(f"  ─────────────────────────")
+    print("\n  Open Deep Research web UI")
+    print("  ─────────────────────────")
     print(f"  http://{host}:{port}\n")
 
     uvicorn.run(

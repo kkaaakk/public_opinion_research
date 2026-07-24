@@ -1,6 +1,6 @@
 # 🔬 Public Opinion Research
 
-基于 LangGraph 的开源舆情深度研究智能体，支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒媒体监控、长期记忆等能力。
+基于 LangGraph、RAG、MCP 和多 Agent 协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒体监控、长期记忆等能力。
 
 ## 🆕 扩展功能
 
@@ -14,14 +14,14 @@
 
 ### 📰 舆情分析 Agent
 面向品牌/产品舆情监控的多智能体系统：
-- `RiskAssessmentAgent` — 风险评估
 - `PublicSignalAgent` — 舆情信号采集
 - `InternalKnowledgeAgent` — 内部知识检索
+- `RiskAssessmentAgent` — 风险评估
 - `ResponseStrategyAgent` — 应对策略生成
 - 内置知识库：合规文档、FAQ、历史案例、PR 预案
 
-### 📱 社交媒媒体 MCP
-- 社交媒媒体数据采集与搜索 MCP Server
+### 📱 社交媒体 MCP
+- 社交媒体数据采集与搜索 MCP Server
 - Apify 适配器对接真实平台数据（Twitter/X 等）
 - 情感分析、主题提取、风险检测
 
@@ -29,10 +29,6 @@
 - 文件记忆（JSONL）和 MySQL 双后端
 - 对话摘要和持久记忆自动提取
 - 记忆回溯与检索增强
-
-### 🌐 Web 管理面板
-- 基于 FastAPI 的 Web UI
-- 可视化配置和对话管理
 
 ### 💰 预算管理
 - 可选的 token/调用次数预算守卫
@@ -226,20 +222,20 @@ data/
 ## 🧪 测试
 
 ```bash
+# 运行所有测试
+pytest
+
 # RAG 检索评估
-python tests/evaluate_rag_retrieval.py
+pytest tests/evaluate_rag_retrieval.py
 
 # 舆情 Agent 测试
-python tests/test_public_opinion_agents.py
+pytest tests/test_public_opinion_agents.py
 
-# 社交媒媒体测试
-python tests/test_social_media_skill.py
+# 社交媒体测试
+pytest tests/test_social_media_skill.py
 
 # 预算守卫测试
-python tests/test_budget.py
-
-# Deep Research Bench 评估
-python tests/run_evaluate.py
+pytest tests/test_budget.py
 ```
 
 ## 📖 文档
