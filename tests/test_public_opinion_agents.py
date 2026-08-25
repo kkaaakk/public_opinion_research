@@ -1,12 +1,20 @@
 """Tests for public-opinion business-agent encapsulation."""
 
+import asyncio
+from types import SimpleNamespace
+
+import open_deep_research.deep_researcher as deep_researcher_module
 from open_deep_research.configuration import Configuration
 from open_deep_research.public_opinion_agents import (
     PUBLIC_OPINION_AGENT_ORDER,
     PUBLIC_OPINION_AGENT_SPECS,
     get_public_opinion_agent_spec,
 )
-from open_deep_research.state import agent_memories_reducer
+from open_deep_research.state import (
+    Section,
+    agent_memories_reducer,
+    role_reports_reducer,
+)
 
 
 def test_public_opinion_agent_registry_has_compact_roles() -> None:
@@ -90,3 +98,75 @@ def test_agent_memories_reducer_keeps_private_memory_by_role() -> None:
     assert [entry["content"] for entry in merged["response_strategy"]] == [
         "new response memory",
     ]
+
+
+def test_section_writer_uses_full_role_report(monkeypatch) -> None:
+    """Formal role reports, rather than compact memory, reach the writer prompt."""
+
+    captured_prompts: list[str] = []
+
+    class CapturingModel:
+        def with_config(self, _config):
+            return self
+
+        async def ainvoke(self, messages):
+            captured_prompts.append(str(messages[0].content))
+            return SimpleNamespace(content="section output")
+
+    monkeypatch.setattr(deep_researcher_module, "configurable_model", CapturingModel())
+    full_report = "A" * 2_000 + "\nTAIL_EVIDENCE_MUST_REACH_SECTION_WRITER"
+    compact_memory = full_report[:1_800] + "\n[truncated]"
+    state = {
+        "sections": [
+            Section(
+                name="Risk evidence",
+                description="Summarize risk evidence.",
+                research=True,
+                agent_role="public_signal",
+            )
+        ],
+        "role_reports": {"public_signal": full_report},
+        "agent_memories": {
+            "public_signal": [
+                {
+                    "source": "current_public_opinion_run",
+                    "content": compact_memory,
+                }
+            ]
+        },
+        "budget_usage": {},
+    }
+
+    asyncio.run(
+        deep_researcher_module.section_writer(
+            state,
+            {"configurable": {"section_writer_model": "fixture:model"}},
+        )
+    )
+
+    assert captured_prompts
+    assert "TAIL_EVIDENCE_MUST_REACH_SECTION_WRITER" in captured_prompts[0]
+
+
+def test_private_memory_remains_compact() -> None:
+    """Private memory keeps its bounded representation after P0-2."""
+
+    report = "B" * 2_000
+    memory = deep_researcher_module._build_agent_private_memory("public_signal", report, [])
+
+    assert len(memory["content"]) <= 1_820
+    assert memory["content"].endswith("[truncated]")
+
+
+def test_role_reports_override_previous_run() -> None:
+    """A new research phase replaces prior formal reports instead of merging them."""
+
+    merged = role_reports_reducer(
+        {"public_signal": "OLD_REPORT", "risk_assessment": "STALE_REPORT"},
+        {
+            "type": "override",
+            "value": {"public_signal": "NEW_REPORT"},
+        },
+    )
+
+    assert merged == {"public_signal": "NEW_REPORT"}

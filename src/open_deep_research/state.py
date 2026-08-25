@@ -170,6 +170,7 @@ class AgentState(MessagesState):
 
     supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     research_brief: Optional[str]
+    role_reports: Annotated[dict[str, str], role_reports_reducer]
     agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
     raw_notes: Annotated[list[str], override_reducer] = []
     notes: Annotated[list[str], override_reducer] = []

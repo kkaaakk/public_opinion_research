@@ -95,10 +95,11 @@ class TestGraphStructure:
     def test_no_general_mode_conditional_branching(self):
         """Graph edges should not branch based on business_scenario/mode."""
         edges = deep_researcher.get_graph().edges
-        # No conditional edge from research_supervisor to anything other than write_final_sections
+        # The public-opinion research phase now hands its formal reports to the
+        # dedicated section_writer node before final-section writing.
         for edge in edges:
             if edge.source == "research_supervisor":
-                assert edge.target == "write_final_sections"
+                assert edge.target == "section_writer"
 
     def test_public_opinion_nodes_exist(self):
         """Graph should contain the public-opinion workflow nodes."""
@@ -109,6 +110,7 @@ class TestGraphStructure:
             "write_research_brief",
             "plan_report_sections",
             "research_supervisor",
+            "section_writer",
             "write_final_sections",
             "compile_final_report",
         }
