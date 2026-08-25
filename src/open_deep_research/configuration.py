@@ -129,6 +129,48 @@ class Configuration(BaseModel):
             }
         }
     )
+    # Optional Agent Observer sidecar configuration. The integration is
+    # deliberately disabled by default and must never affect business output.
+    agent_observer_enabled: bool = Field(
+        default=False,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "boolean",
+                "default": False,
+                "description": "Enable optional Agent Observer v0.2 telemetry for this run.",
+            }
+        },
+    )
+    agent_observer_endpoint: str = Field(
+        default="http://127.0.0.1:8766",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "http://127.0.0.1:8766",
+                "description": "Agent Observer HTTP endpoint.",
+            }
+        },
+    )
+    agent_observer_project: str = Field(
+        default="public-opinion-research",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "public-opinion-research",
+                "description": "Agent Observer project name.",
+            }
+        },
+    )
+    agent_observer_timeout: float = Field(
+        default=0.35,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "number",
+                "default": 0.35,
+                "description": "Maximum per-request Observer sidecar timeout in seconds.",
+            }
+        },
+    )
     # Research Configuration
     search_api: SearchAPI = Field(
         default=SearchAPI.TAVILY,

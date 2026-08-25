@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Any, Literal
 
 from langchain.chat_models import init_chat_model
@@ -38,6 +39,13 @@ from open_deep_research.budget import (
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.memory.writer import persist_conversation_memory
+from open_deep_research.observability import (
+    ObservedGraph,
+    observe_graph_node,
+    observe_model_ainvoke,
+    record_tool_call,
+    record_tool_result,
+)
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
@@ -239,16 +247,34 @@ async def _business_agent_tools(config: RunnableConfig, role: str):
     return filtered_tools
 
 
-async def execute_tool_safely(tool, args, config):
+async def execute_tool_safely(tool, args, config, *, tool_call_id: str | None = None):
     """Safely execute a tool with error handling."""
+    tool_name = _tool_name(tool) or "unknown_tool"
+    record_tool_call(tool_name, tool_call_id=tool_call_id, args=args)
+    started_at = time.perf_counter()
     capture_token = start_budget_capture()
     try:
         observation = await tool.ainvoke(args, config)
         captured_budget = stop_budget_capture(capture_token)
-        return observation, captured_budget
+        record_tool_result(
+            tool_name,
+            tool_call_id=tool_call_id,
+            success=True,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1_000)),
+            result=observation,
+        )
+        return observation, captured_budget, True
     except Exception as e:
         captured_budget = stop_budget_capture(capture_token)
-        return f"Error executing tool: {str(e)}", captured_budget
+        error_result = f"Error executing tool: {str(e)}"
+        record_tool_result(
+            tool_name,
+            tool_call_id=tool_call_id,
+            success=False,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1_000)),
+            result=error_result,
+        )
+        return error_result, captured_budget, False
 
 
 def _has_query_image_context(messages) -> bool:
@@ -266,6 +292,7 @@ def _messages_without_query_image_context(messages):
     ]
 
 
+@observe_graph_node(name="enrich_query_images", kind="graph_node")
 async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict:
     """Convert user-question images into temporary text context before research planning."""
     configurable = Configuration.from_runnable_config(config)
@@ -318,6 +345,7 @@ def budget_skip_tool_message(tool_call: dict, reason: str) -> ToolMessage:
     )
 
 
+@observe_graph_node(name="clarify_with_user", kind="graph_node")
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
     
@@ -373,7 +401,11 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         messages=get_buffer_string(messages), 
         date=get_today_str()
     )
-    response = await clarification_model.ainvoke([HumanMessage(content=prompt_content)])
+    response = await observe_model_ainvoke(
+        clarification_model,
+        [HumanMessage(content=prompt_content)],
+        observer_model=configurable.research_model,
+    )
     budget_update = budget_from_model_response(response)
     
     # Step 4: Route based on clarification analysis
@@ -397,6 +429,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         )
 
 
+@observe_graph_node(name="write_research_brief", kind="graph_node")
 async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_supervisor"]]:
     """Transform user messages into a structured research brief and initialize supervisor.
     
@@ -465,7 +498,11 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         "and any internal-knowledge requirements. If a detail is unspecified, "
         "state that it is unspecified rather than inventing it."
     )
-    response = await research_model.ainvoke([HumanMessage(content=prompt_content)])
+    response = await observe_model_ainvoke(
+        research_model,
+        [HumanMessage(content=prompt_content)],
+        observer_model=configurable.research_model,
+    )
     budget_update = budget_from_model_response(response)
 
     # Step 3: Initialize supervisor with research brief and instructions
@@ -487,6 +524,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     )
 
 
+@observe_graph_node(name="plan_report_sections", kind="graph_node")
 async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Command[Literal["plan_report_sections", "research_supervisor"]]:
     """Plan report sections using Plan-and-Execute pattern.
     
@@ -545,7 +583,11 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
     )
     
     try:
-        response = await planner.ainvoke([HumanMessage(content=prompt)])
+        response = await observe_model_ainvoke(
+            planner,
+            [HumanMessage(content=prompt)],
+            observer_model=planner_model_name,
+        )
         budget_update = budget_from_model_response(response)
     except Exception as exc:
         LOGGER.warning("Section planning failed: %s. Falling back to single section.", exc)
@@ -693,6 +735,7 @@ def _extract_section_evidence(section, role_report_content: dict[str, str]) -> s
     return "\n\n".join(evidence_parts)
 
 
+@observe_graph_node(name="section_writer", kind="writer")
 async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     """Write report sections from role evidence in public-opinion mode.
     
@@ -701,16 +744,14 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     """
     configurable = Configuration.from_runnable_config(config)
     sections = state.get("sections", [])
-    role_reports = state.get("agent_memories", {})
-    
-    # Find role reports from public opinion subgraph output
-    role_report_content: dict[str, str] = {}
-    for role in _PUBLIC_OPINION_ROLE_NAMES:
-        memories = list(role_reports.get(role, []) or [])
-        for mem in memories:
-            if isinstance(mem, dict) and mem.get("source") == "current_public_opinion_run":
-                role_report_content[role] = str(mem.get("content") or "")
-                break
+    role_reports = state.get("role_reports", {}) or {}
+    # Formal role reports are the source of truth for current-run writing.
+    # Compact private memories intentionally remain separate and may be truncated.
+    role_report_content = {
+        role: str(role_reports.get(role) or "")
+        for role in _PUBLIC_OPINION_ROLE_NAMES
+        if role in role_reports
+    }
     
     research_sections = [s for s in sections if s.research and s.status != "done"]
     if not research_sections:
@@ -754,7 +795,11 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
                 evidence=evidence,
             )
             writer = configurable_model.with_config(writer_model_config)
-            response = await writer.ainvoke([HumanMessage(content=prompt)])
+            response = await observe_model_ainvoke(
+                writer,
+                [HumanMessage(content=prompt)],
+                observer_model=writer_model_name,
+            )
             section.content = str(response.content)
             section.status = "done"
         except Exception as exc:
@@ -779,6 +824,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     }
 
 
+@observe_graph_node(name="write_final_sections", kind="writer")
 async def write_final_sections(state: AgentState, config: RunnableConfig) -> dict:
     """Write non-research sections (intro, conclusion) in parallel.
     
@@ -829,7 +875,11 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
                 context=context,
             )
             writer = configurable_model.with_config(writer_model_config)
-            response = await writer.ainvoke([HumanMessage(content=prompt)])
+            response = await observe_model_ainvoke(
+                writer,
+                [HumanMessage(content=prompt)],
+                observer_model=configurable.final_report_model,
+            )
             section.content = str(response.content)
             section.status = "done"
         except Exception as exc:
@@ -854,6 +904,7 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     }
 
 
+@observe_graph_node(name="compile_final_report", kind="writer")
 async def compile_final_report(state: AgentState, config: RunnableConfig):
     """Compile the final report by assembling sections in planned order.
 
@@ -907,9 +958,11 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                         "api_key": get_api_key_for_model(configurable.final_report_model, config),
                         "tags": ["langsmith:nostream"],
                     }
-                    fill_response = await configurable_model.with_config(writer_config).ainvoke([
-                        HumanMessage(content=final_report_prompt)
-                    ])
+                    fill_response = await observe_model_ainvoke(
+                        configurable_model.with_config(writer_config),
+                        [HumanMessage(content=final_report_prompt)],
+                        observer_model=configurable.final_report_model,
+                    )
                     budget_update = merge_budget_usage(
                         budget_from_model_response(fill_response),
                         budget_usage_with_reason(f"Filled {len(missing_names)} missing sections via final_report_model."),
@@ -1005,7 +1058,11 @@ async def compress_research(state: dict, config: RunnableConfig):
             messages = [SystemMessage(content=compression_prompt)] + researcher_messages
             
             # Execute compression
-            response = await synthesizer_model.ainvoke(messages)
+            response = await observe_model_ainvoke(
+                synthesizer_model,
+                messages,
+                observer_model=configurable.compression_model,
+            )
             budget_update = budget_from_model_response(response)
             
             # Extract raw notes from all tool and AI messages
@@ -1122,8 +1179,10 @@ async def _run_public_opinion_agent(
             )
             break
 
-        response = await agent_model.ainvoke(
-            [SystemMessage(content=agent_prompt)] + role_messages
+        response = await observe_model_ainvoke(
+            agent_model,
+            [SystemMessage(content=agent_prompt)] + role_messages,
+            observer_model=configurable.research_model,
         )
         role_messages.append(response)
         response_budget = budget_from_model_response(response)
@@ -1187,16 +1246,17 @@ async def _run_public_opinion_agent(
                         tools_by_name[tool_call["name"]],
                         tool_call["args"],
                         config,
+                        tool_call_id=tool_call["id"],
                     )
                     for tool_call in known_calls
                 ]
                 tool_results = await asyncio.gather(*tool_execution_tasks)
-                observations = [observation for observation, _ in tool_results]
+                observations = [observation for observation, _, _ in tool_results]
                 role_budget_update = merge_budget_usage(
                     role_budget_update,
                     budget_from_tool_calls(known_calls, tools_by_name),
                 )
-                for _, captured_budget in tool_results:
+                for _, captured_budget, _ in tool_results:
                     role_budget_update = merge_budget_usage(role_budget_update, captured_budget)
 
                 role_messages.extend([
@@ -1248,21 +1308,25 @@ async def _run_public_opinion_agent(
     }
 
 
+@observe_graph_node(name="public_signal_agent", kind="agent")
 async def public_signal_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Collect integrated news, social, complaint, competitor, and spread evidence."""
     return await _run_public_opinion_agent(state, config, "public_signal")
 
 
+@observe_graph_node(name="internal_knowledge_agent", kind="agent")
 async def internal_knowledge_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Collect internal RAG evidence from company knowledge, playbooks, and memory."""
     return await _run_public_opinion_agent(state, config, "internal_knowledge")
 
 
+@observe_graph_node(name="risk_assessment_agent", kind="agent")
 async def risk_assessment_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Verify claims and assess compliance, legal, and product-risk signals."""
     return await _run_public_opinion_agent(state, config, "risk_assessment")
 
 
+@observe_graph_node(name="response_strategy_agent", kind="agent")
 async def response_strategy_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Create PR response posture, FAQ points, actions, and monitoring keywords."""
     return await _run_public_opinion_agent(state, config, "response_strategy")
@@ -1289,6 +1353,7 @@ public_opinion_builder.add_edge("response_strategy_agent", END)
 public_opinion_subgraph = public_opinion_builder.compile()
 
 
+@observe_graph_node(name="research_supervisor", kind="subgraph")
 async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     """Run the public-opinion research phase using the 4-agent business workflow."""
     input_budget = state.get("budget_usage", {})
@@ -1306,35 +1371,21 @@ async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     )
     budget_update = diff_budget_usage(result.get("budget_usage", {}), input_budget)
     
-    # Build state after public_opinion_subgraph for section_writer consumption
-    post_opinion_state = {
-        **state,
-        "sections": state.get("sections", []),
-        "completed_sections": [],
-        "agent_memories": result.get("agent_memories", state.get("agent_memories", {})),
-        "notes": result.get("notes", []),
-        "raw_notes": result.get("raw_notes", []),
-        "budget_usage": merge_budget_usage(input_budget, budget_update),
-    }
-    
-    # Run section_writer to convert role evidence into section content
-    writer_result = await section_writer(post_opinion_state, config)
-    
-    total_budget_update = merge_budget_usage(
-        budget_update,
-        writer_result.get("budget_usage", {}),
-    )
-    
+    # Keep the full current-run reports in the formal state channel. The compact
+    # private memories remain available for agent prompt memory only.
     return {
         "research_brief": result.get("research_brief", state.get("research_brief", "")),
+        "role_reports": {
+            "type": "override",
+            "value": result.get("role_reports", {}),
+        },
         "notes": result.get("notes", []),
         "raw_notes": result.get("raw_notes", []),
-        "completed_sections": writer_result.get("completed_sections", []),
         "agent_memories": {
             "type": "override",
             "value": result.get("agent_memories", state.get("agent_memories", {})),
         },
-        "budget_usage": total_budget_update,
+        "budget_usage": budget_update,
     }
 
 
@@ -1483,9 +1534,11 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
             )
             
             # Generate the final report
-            final_report = await configurable_model.with_config(writer_model_config).ainvoke([
-                HumanMessage(content=final_report_prompt)
-            ])
+            final_report = await observe_model_ainvoke(
+                configurable_model.with_config(writer_model_config),
+                [HumanMessage(content=final_report_prompt)],
+                observer_model=configurable.final_report_model,
+            )
             final_budget_update = merge_budget_usage(
                 budget_update,
                 budget_from_model_response(final_report),
@@ -1564,15 +1617,17 @@ deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)        
 deep_researcher_builder.add_node("write_research_brief", write_research_brief)     # Research planning phase
 deep_researcher_builder.add_node("plan_report_sections", plan_report_sections)     # Section planning (Plan-and-Execute)
 deep_researcher_builder.add_node("research_supervisor", research_phase)            # Research execution phase
+deep_researcher_builder.add_node("section_writer", section_writer)                 # Research section writing
 deep_researcher_builder.add_node("write_final_sections", write_final_sections)     # Non-research section writing
 deep_researcher_builder.add_node("compile_final_report", compile_final_report)     # Final report assembly
 
 # Define main workflow edges for sequential execution
 deep_researcher_builder.add_edge(START, "enrich_query_images")                     # Entry point
 deep_researcher_builder.add_edge("enrich_query_images", "clarify_with_user")       # Image context to planning
-deep_researcher_builder.add_edge("research_supervisor", "write_final_sections")    # Research to final sections
+deep_researcher_builder.add_edge("research_supervisor", "section_writer")         # Research to evidence-based section writing
+deep_researcher_builder.add_edge("section_writer", "write_final_sections")        # Research sections to intro/conclusion writing
 deep_researcher_builder.add_edge("write_final_sections", "compile_final_report")   # Final sections to compilation
 deep_researcher_builder.add_edge("compile_final_report", END)                     # Final exit point
 
 # Compile the complete deep researcher workflow
-deep_researcher = deep_researcher_builder.compile()
+deep_researcher = ObservedGraph(deep_researcher_builder.compile())
