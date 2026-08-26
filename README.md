@@ -60,9 +60,19 @@ cp .env.example .env
 
 ### 4. 启动 LangGraph 开发服务器
 
+完成 `uv sync` 后，Unix/macOS 可直接运行：
+
 ```bash
-uvx --refresh --from "langgraph-cli[inmem]" --with-editable . --python 3.11 langgraph dev --allow-blocking
+uv run langgraph dev --allow-blocking
 ```
+
+Windows 若遇到 `uv` trampoline 或独立工具环境无法解析项目依赖，请使用已同步的虚拟环境：
+
+```powershell
+.\.venv\Scripts\python.exe -m langgraph_cli dev --allow-blocking
+```
+
+项目的 `pyproject.toml` 包含 `mcp>=1.9.4` 的 uv dependency override；因此不建议使用无法应用该 override 的独立 `uvx` 环境作为唯一启动方式。
 
 访问：
 - 🚀 API: http://127.0.0.1:2024

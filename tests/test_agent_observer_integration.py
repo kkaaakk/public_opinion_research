@@ -1,11 +1,14 @@
 """Focused tests for the optional Agent Observer v0.2 integration."""
 
 import asyncio
+import contextvars
 import json
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
+from langgraph.graph import END, START, StateGraph
+from typing_extensions import TypedDict
 
 import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.observability.agent_observer as observer_module
@@ -13,11 +16,14 @@ import open_deep_research.observability.agent_observer as observer_module
 agent_observer_sdk = pytest.importorskip("agent_observer.sdk")
 langgraph_adapter = pytest.importorskip("integrations.langgraph")
 SDKAgentObserver = agent_observer_sdk.AgentObserver
+get_current_observed_run = agent_observer_sdk.get_current_observed_run
 get_current_observed_span = agent_observer_sdk.get_current_observed_span
 register_graph_topology = langgraph_adapter.register_graph_topology
 run_context = langgraph_adapter.run_context
 from open_deep_research.observability import (  # noqa: E402
     ObservedGraph,
+    ObserverRunLifecycle,
+    observe_graph_node,
     observe_model_ainvoke,
     record_tool_call,
     record_tool_result,
@@ -44,6 +50,74 @@ class _EchoGraph:
         return self
 
 
+class _NativeFixtureState(TypedDict, total=False):
+    value: int
+
+
+def _native_fixture_graph(lifecycle: ObserverRunLifecycle, *, failing: bool = False):
+    """Build a tiny native Pregel graph around the real lifecycle wrapper."""
+
+    @observe_graph_node(name="native_agent", kind="agent")
+    async def native_agent(state, config):
+        span = get_current_observed_span()
+        if span is not None:
+            span.model_request(request_id="native-request", input_tokens=1)
+            record_tool_call("native_tool", tool_call_id="native-call", args={"value": state.get("value", 0)})
+            record_tool_result(
+                "native_tool",
+                tool_call_id="native-call",
+                success=True,
+                duration_ms=1,
+                result={"value": state.get("value", 0)},
+            )
+            span.model_response(request_id="native-request", output_tokens=1, duration_ms=1)
+        return {"value": state.get("value", 0) + 1}
+
+    @observe_graph_node(name="native_writer", kind="writer")
+    async def native_writer(state, config):
+        if failing:
+            raise RuntimeError("native fixture failed")
+        return {"value": state.get("value", 0) + 1}
+
+    builder = StateGraph(_NativeFixtureState)
+    builder.add_node("native_agent", lifecycle.wrap_node("native_agent", native_agent))
+    builder.add_node(
+        "native_writer",
+        lifecycle.wrap_node("native_writer", native_writer, finish=True),
+    )
+    builder.add_edge(START, "native_agent")
+    builder.add_edge("native_agent", "native_writer")
+    builder.add_edge("native_writer", END)
+    return builder.compile()
+
+
+def _recording_observer_class(captured_events):
+    class RecordingObserver:
+        def __init__(self, **kwargs):
+            self.inner = SDKAgentObserver(enabled=False, project=kwargs.get("project", "test"))
+
+            def record(run_id, sequence, event_type, *, span_id=None, **payload):
+                captured_events.append(
+                    {
+                        "run_id": run_id,
+                        "sequence": sequence,
+                        "type": event_type,
+                        "span_id": span_id,
+                        **payload,
+                    }
+                )
+
+            self.inner._record = record
+
+        def start_run(self, **kwargs):
+            return self.inner.start_run(**kwargs)
+
+        def close(self, timeout=1.0):
+            self.inner.close(timeout)
+
+    return RecordingObserver
+
+
 def _recording_run():
     observer = SDKAgentObserver(enabled=False, project="public-opinion-test")
     events: list[dict[str, Any]] = []
@@ -60,7 +134,14 @@ def _recording_run():
         )
 
     observer._record = record
-    run = observer.start_run(prompt="fixture research")
+    run_holder = {}
+    contextvars.copy_context().run(
+        lambda: run_holder.setdefault(
+            "run",
+            observer.start_run(prompt="fixture research"),
+        )
+    )
+    run = run_holder["run"]
     return observer, run, events
 
 
@@ -323,3 +404,139 @@ def test_observer_does_not_mutate_langgraph_state():
 
     assert state == original
     assert result == original
+
+
+def test_native_graph_invocation_creates_one_observer_run(monkeypatch):
+    """A native Pregel graph keeps one Run boundary across its nodes."""
+
+    captured_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        observer_module,
+        "AgentObserver",
+        _recording_observer_class(captured_events),
+    )
+    lifecycle = ObserverRunLifecycle()
+    graph = _native_fixture_graph(lifecycle)
+
+    result = asyncio.run(
+        graph.ainvoke(
+            {"value": 0},
+            {
+                "configurable": {
+                    "thread_id": "native-one",
+                    "agent_observer_enabled": True,
+                }
+            },
+        )
+    )
+
+    assert result["value"] == 2
+    assert [event["type"] for event in captured_events].count("run_started") == 1
+    assert [event["type"] for event in captured_events].count("run_finished") == 1
+    run_id = next(event["run_id"] for event in captured_events if event["type"] == "run_started")
+    run_events = [event for event in captured_events if event["run_id"] == run_id]
+    assert {event["name"] for event in run_events if event["type"] == "span_started"} == {
+        "native_agent",
+        "native_writer",
+    }
+    assert any(event["type"] == "model_request" for event in run_events)
+    assert any(event["type"] == "tool_call" for event in run_events)
+    assert get_current_observed_run() is None
+
+
+def test_two_native_graph_invocations_use_distinct_runs(monkeypatch):
+    """Factory-style native graphs do not cross-contaminate concurrent Runs."""
+
+    captured_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        observer_module,
+        "AgentObserver",
+        _recording_observer_class(captured_events),
+    )
+
+    async def invoke(thread_id: str):
+        graph = _native_fixture_graph(ObserverRunLifecycle())
+        return await graph.ainvoke(
+            {"value": 0},
+            {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "agent_observer_enabled": True,
+                }
+            },
+        )
+
+    async def run_both():
+        return await asyncio.gather(invoke("native-a"), invoke("native-b"))
+
+    results = asyncio.run(run_both())
+    assert [result["value"] for result in results] == [2, 2]
+
+    run_ids = {
+        event["run_id"]
+        for event in captured_events
+        if event["type"] == "run_started"
+    }
+    assert len(run_ids) == 2
+    for run_id in run_ids:
+        run_events = [event for event in captured_events if event["run_id"] == run_id]
+        assert [event["type"] for event in run_events].count("run_finished") == 1
+        assert all(event["run_id"] == run_id for event in run_events)
+
+
+def test_native_graph_failure_marks_run_failed_and_cleans_context(monkeypatch):
+    """A native graph exception fails and closes its Run without leaking context."""
+
+    captured_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        observer_module,
+        "AgentObserver",
+        _recording_observer_class(captured_events),
+    )
+    lifecycle = ObserverRunLifecycle()
+    graph = _native_fixture_graph(lifecycle, failing=True)
+
+    with pytest.raises(RuntimeError, match="native fixture failed"):
+        asyncio.run(
+            graph.ainvoke(
+                {"value": 0},
+                {
+                    "configurable": {
+                        "thread_id": "native-failure",
+                        "agent_observer_enabled": True,
+                    }
+                },
+            )
+        )
+
+    assert any(event["type"] == "run_failed" for event in captured_events)
+    assert not any(event["type"] == "run_finished" for event in captured_events)
+    assert get_current_observed_run() is None
+
+
+def test_native_graph_disabled_and_offline_are_fail_open():
+    """Native graphs still run with Observer disabled or its server offline."""
+
+    disabled_graph = _native_fixture_graph(ObserverRunLifecycle())
+    disabled_result = asyncio.run(
+        disabled_graph.ainvoke(
+            {"value": 0},
+            {"configurable": {"agent_observer_enabled": False}},
+        )
+    )
+    assert disabled_result["value"] == 2
+
+    offline_graph = _native_fixture_graph(ObserverRunLifecycle())
+    offline_result = asyncio.run(
+        offline_graph.ainvoke(
+            {"value": 0},
+            {
+                "configurable": {
+                    "agent_observer_enabled": True,
+                    "agent_observer_endpoint": "http://127.0.0.1:9",
+                    "agent_observer_timeout": 0.01,
+                }
+            },
+        )
+    )
+    assert offline_result["value"] == 2

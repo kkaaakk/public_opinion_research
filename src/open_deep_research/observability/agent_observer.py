@@ -7,13 +7,17 @@ an event serialization error must never change research behavior.
 
 from __future__ import annotations
 
+import contextvars
+import inspect
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any, Callable, TypeVar, overload
 
 from open_deep_research.configuration import Configuration
@@ -261,17 +265,126 @@ def _start_observed_run(value: Any, config: Mapping[str, Any] | None) -> _Observ
             timeout=max(0.01, timeout),
             capture_full_tool_content=False,
         )
-        run = observer.start_run(
-            prompt=_extract_prompt(value),
-            metadata=_metadata_for_run(config),
-            model=model if isinstance(model, str) else None,
-            provider=_provider_for_model(model),
-        )
+        run_holder: dict[str, Any] = {}
+
+        def create_run() -> None:
+            run_holder["run"] = observer.start_run(
+                prompt=_extract_prompt(value),
+                metadata=_metadata_for_run(config),
+                model=model if isinstance(model, str) else None,
+                provider=_provider_for_model(model),
+            )
+
+        # AgentObserver.start_run() binds its Run in a contextvar as a
+        # convenience. Create it in an isolated copy so the host task does not
+        # retain a stale Run after the native graph finishes.
+        contextvars.copy_context().run(create_run)
+        run = run_holder["run"]
         register_graph_topology(_PUBLIC_OPINION_TOPOLOGY, run=run)
         return _ObserverRun(observer=observer, run=run, started_at=time.perf_counter(), timeout=timeout)
     except Exception:  # pragma: no cover - optional sidecar guard
         LOGGER.debug("Agent Observer setup failed; continuing without telemetry", exc_info=True)
         return None
+
+
+class ObserverRunLifecycle:
+    """Bind one lazily-created Observer Run to a native graph's node calls."""
+
+    def __init__(self) -> None:
+        """Create an isolated lifecycle for one graph factory invocation."""
+        self._observed: _ObserverRun | None = None
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def _ensure_run(self, value: Any, config: Mapping[str, Any] | None) -> _ObserverRun | None:
+        with self._lock:
+            if self._closed:
+                return self._observed
+            if self._observed is None:
+                self._observed = _start_observed_run(value, config)
+            return self._observed
+
+    @staticmethod
+    def _node_inputs(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> tuple[Any, Mapping[str, Any] | None]:
+        value = args[0] if args else None
+        config = kwargs.get("config")
+        if config is None and len(args) > 1 and isinstance(args[1], Mapping):
+            config = args[1]
+        return value, config
+
+    @staticmethod
+    def _is_terminal_command(result: Any) -> bool:
+        goto = getattr(result, "goto", None)
+        if isinstance(goto, str):
+            return goto in {"__end__", "END"}
+        if isinstance(goto, (list, tuple, set)):
+            return any(item in {"__end__", "END"} for item in goto)
+        return False
+
+    def finish(self, result: Any) -> None:
+        """Finish and close the Run after a successful terminal node."""
+        with self._lock:
+            observed = self._observed
+            self._closed = True
+        if observed is not None:
+            observed.finish(result)
+            observed.close()
+
+    def fail(self, error: BaseException) -> None:
+        """Fail and close the Run after an unrecoverable node exception."""
+        with self._lock:
+            observed = self._observed
+            self._closed = True
+        if observed is not None:
+            observed.fail(error)
+            observed.close()
+
+    def wrap_node(
+        self,
+        name: str,
+        function: F,
+        *,
+        finish: bool = False,
+        terminal: bool = False,
+    ) -> F:
+        """Return a native graph node wrapper that binds this lifecycle."""
+        if inspect.iscoroutinefunction(function):
+
+            @wraps(function)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                value, config = self._node_inputs(args, kwargs)
+                observed = self._ensure_run(value, config)
+                if observed is None or _run_context is None:
+                    return await function(*args, **kwargs)
+                try:
+                    with _run_context(observed.run):
+                        result = await function(*args, **kwargs)
+                    if finish or (terminal and self._is_terminal_command(result)):
+                        self.finish(result)
+                    return result
+                except BaseException as error:
+                    self.fail(error)
+                    raise
+
+            return async_wrapper  # type: ignore[return-value]
+
+        @wraps(function)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            value, config = self._node_inputs(args, kwargs)
+            observed = self._ensure_run(value, config)
+            if observed is None or _run_context is None:
+                return function(*args, **kwargs)
+            try:
+                with _run_context(observed.run):
+                    result = function(*args, **kwargs)
+                if finish or (terminal and self._is_terminal_command(result)):
+                    self.finish(result)
+                return result
+            except BaseException as error:
+                self.fail(error)
+                raise
+
+        return sync_wrapper  # type: ignore[return-value]
 
 
 class ObservedGraph:
@@ -526,6 +639,7 @@ def record_tool_result(
 
 __all__ = [
     "ObservedGraph",
+    "ObserverRunLifecycle",
     "observe_graph_node",
     "observe_model_ainvoke",
     "observer_available",
