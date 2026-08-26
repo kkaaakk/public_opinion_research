@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from langchain_core.messages import HumanMessage  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_graph  # noqa: E402
+from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_factory  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -142,7 +142,7 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
             budget = {}
 
             # Stream graph execution with node-level updates
-            async for chunk in _deep_researcher_graph.astream(
+            async for chunk in _deep_researcher_factory(config).astream(
                 initial_state, config, stream_mode="updates"
             ):
                 for node_name, node_output in chunk.items():

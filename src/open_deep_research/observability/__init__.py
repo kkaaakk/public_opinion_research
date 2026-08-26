@@ -2,6 +2,7 @@
 
 from open_deep_research.observability.agent_observer import (
     ObservedGraph,
+    ObserverRunLifecycle,
     observe_graph_node,
     observe_model_ainvoke,
     observer_available,
@@ -12,6 +13,7 @@ from open_deep_research.observability.agent_observer import (
 
 __all__ = [
     "ObservedGraph",
+    "ObserverRunLifecycle",
     "observe_graph_node",
     "observe_model_ainvoke",
     "observer_available",

@@ -11,7 +11,7 @@ Covers:
 import pytest
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.deep_researcher import deep_researcher
+from open_deep_research.deep_researcher import deep_researcher_graph
 from open_deep_research.state import (
     AgentState,
     PublicOpinionState,
@@ -71,7 +71,7 @@ class TestGraphStructure:
         Note: 'research_supervisor' exists as a wrapper around the PO subgraph,
         which is different from the old standalone 'supervisor' node.
         """
-        node_names = set(deep_researcher.get_graph().nodes)
+        node_names = set(deep_researcher_graph.get_graph().nodes)
         assert "supervisor" not in node_names
         # research_supervisor is the PO wrapper, not the old general-mode supervisor
         assert "research_supervisor" in node_names
@@ -82,19 +82,19 @@ class TestGraphStructure:
         The old general-mode had separate supervisor/researcher nodes.
         Now research_supervisor delegates directly to public_opinion_subgraph.
         """
-        node_names = set(deep_researcher.get_graph().nodes)
+        node_names = set(deep_researcher_graph.get_graph().nodes)
         assert "researcher" not in node_names
         # No separate researcher node exists; PO agents run inside research_supervisor
 
     def test_no_mode_router(self):
         """Graph should not contain any mode-routing conditional edges."""
-        node_names = set(deep_researcher.get_graph().nodes)
+        node_names = set(deep_researcher_graph.get_graph().nodes)
         for name in node_names:
             assert "route" not in str(name).lower() or "enrich" in str(name).lower()
 
     def test_no_general_mode_conditional_branching(self):
         """Graph edges should not branch based on business_scenario/mode."""
-        edges = deep_researcher.get_graph().edges
+        edges = deep_researcher_graph.get_graph().edges
         # The public-opinion research phase now hands its formal reports to the
         # dedicated section_writer node before final-section writing.
         for edge in edges:
@@ -103,7 +103,7 @@ class TestGraphStructure:
 
     def test_public_opinion_nodes_exist(self):
         """Graph should contain the public-opinion workflow nodes."""
-        node_names = set(deep_researcher.get_graph().nodes)
+        node_names = set(deep_researcher_graph.get_graph().nodes)
         expected = {
             "enrich_query_images",
             "clarify_with_user",
