@@ -79,6 +79,37 @@ Windows 若遇到 `uv` trampoline 或独立工具环境无法解析项目依赖�
 - 🎨 Studio UI: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 - 📚 API Docs: http://127.0.0.1:2024/docs
 
+## 🔭 Agent Observer 可观测性
+
+可选的 Observer 集成默认关闭；开启后通过 `AGENT_OBSERVER_ENABLED=1` 或
+Studio 配置中的 `agent_observer_enabled=true` 上报到本地 Observer（默认
+`http://127.0.0.1:8766`）。集成层保持 fail-open，不会改变业务 Agent 的返回值、
+工具 schema 或 LangGraph 图导出。
+
+Model execution 统一经过 `src/open_deep_research/observability/` 的 boundary，覆盖：
+
+- 主图模型调用、RAG query rewrite、Vision/multimodal loader、网页摘要和 structured output；
+- structured output 优先使用 provider 实际返回的 usage；wrapper 没有 raw usage 时保持 `N/A`，不估算 token；
+- ContextVar guard 抑制 wrapper 嵌套造成的 Model 双计数，Model Call 以逻辑/provider boundary 为准。
+
+Tool execution 统一由 researcher 的 `execute_tool_safely` 调用
+`observe_tool_ainvoke`，覆盖内置 RAG、MCP、社交媒体及其他运行时 LangChain tools。
+Observer 默认只记录工具名、参数摘要、duration、成功/失败和 bounded result bytes，
+不记录完整工具结果；MCP namespace wrapper 保留原有 schema、metadata 和行为。
+
+生命周期语义分开记录：
+
+- 每次 LangGraph node attempt 都有独立 Span，并带 `node_name`、`attempt`、`retry`；
+- `interrupt()` 记录为 `INTERRUPTED`，不会变成 `FAILED` 或 `COMPLETED`；
+- resume 是新的 runtime invocation/physical segment，通过同一个
+  `logical_run_id` 与原工作流关联，避免把 Python Run 对象写入 checkpoint/state；
+- `thread_id` 与 LangGraph checkpoint 用于 correlation，normal/failure/retry/interrupt/resume
+  路径都会清理当前 Run/Span Context。
+
+独立启动的 RAG/MCP server 没有当前 Public Opinion Run 时不会强行绑定 Observer；
+只有实际嵌入一次研究运行的调用才会出现在该 Run 中。P0-2 的 `role_reports` 仍是
+Section Writer 的正式当前运行输入，`agent_memories` 只作为 compact/private memory。
+
 ## 🧩 模块结构
 
 ```

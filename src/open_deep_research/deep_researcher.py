@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import time
 from typing import Any, Literal
 
 from langchain.chat_models import init_chat_model
@@ -44,8 +43,7 @@ from open_deep_research.observability import (
     ObserverRunLifecycle,
     observe_graph_node,
     observe_model_ainvoke,
-    record_tool_call,
-    record_tool_result,
+    observe_tool_ainvoke,
 )
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
@@ -250,31 +248,22 @@ async def _business_agent_tools(config: RunnableConfig, role: str):
 
 async def execute_tool_safely(tool, args, config, *, tool_call_id: str | None = None):
     """Safely execute a tool with error handling."""
-    tool_name = _tool_name(tool) or "unknown_tool"
-    record_tool_call(tool_name, tool_call_id=tool_call_id, args=args)
-    started_at = time.perf_counter()
     capture_token = start_budget_capture()
     try:
-        observation = await tool.ainvoke(args, config)
-        captured_budget = stop_budget_capture(capture_token)
-        record_tool_result(
-            tool_name,
+        observation = await observe_tool_ainvoke(
+            tool,
+            args,
+            config,
             tool_call_id=tool_call_id,
-            success=True,
-            duration_ms=max(0, int((time.perf_counter() - started_at) * 1_000)),
-            result=observation,
         )
+        captured_budget = stop_budget_capture(capture_token)
         return observation, captured_budget, True
+    except asyncio.CancelledError:
+        stop_budget_capture(capture_token)
+        raise
     except Exception as e:
         captured_budget = stop_budget_capture(capture_token)
         error_result = f"Error executing tool: {str(e)}"
-        record_tool_result(
-            tool_name,
-            tool_call_id=tool_call_id,
-            success=False,
-            duration_ms=max(0, int((time.perf_counter() - started_at) * 1_000)),
-            result=error_result,
-        )
         return error_result, captured_budget, False
 
 
@@ -406,6 +395,8 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         clarification_model,
         [HumanMessage(content=prompt_content)],
         observer_model=configurable.research_model,
+        observer_structured_output=True,
+        observer_component="clarification",
     )
     budget_update = budget_from_model_response(response)
     
@@ -503,6 +494,8 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         research_model,
         [HumanMessage(content=prompt_content)],
         observer_model=configurable.research_model,
+        observer_structured_output=True,
+        observer_component="research_brief",
     )
     budget_update = budget_from_model_response(response)
 
@@ -588,6 +581,8 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             planner,
             [HumanMessage(content=prompt)],
             observer_model=planner_model_name,
+            observer_structured_output=True,
+            observer_component="report_planner",
         )
         budget_update = budget_from_model_response(response)
     except Exception as exc:

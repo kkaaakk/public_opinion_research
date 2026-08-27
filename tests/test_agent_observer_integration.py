@@ -3,11 +3,15 @@
 import asyncio
 import contextvars
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, RetryPolicy, interrupt
 from typing_extensions import TypedDict
 
 import open_deep_research.deep_researcher as deep_researcher_module
@@ -54,7 +58,12 @@ class _NativeFixtureState(TypedDict, total=False):
     value: int
 
 
-def _native_fixture_graph(lifecycle: ObserverRunLifecycle, *, failing: bool = False):
+def _native_fixture_graph(
+    lifecycle: ObserverRunLifecycle,
+    *,
+    failing: bool = False,
+    retrying: bool = False,
+):
     """Build a tiny native Pregel graph around the real lifecycle wrapper."""
 
     @observe_graph_node(name="native_agent", kind="agent")
@@ -77,18 +86,53 @@ def _native_fixture_graph(lifecycle: ObserverRunLifecycle, *, failing: bool = Fa
     async def native_writer(state, config):
         if failing:
             raise RuntimeError("native fixture failed")
+        if retrying and not getattr(native_writer, "has_failed", False):
+            native_writer.has_failed = True
+            raise ConnectionError("native retry fixture failed once")
         return {"value": state.get("value", 0) + 1}
 
     builder = StateGraph(_NativeFixtureState)
     builder.add_node("native_agent", lifecycle.wrap_node("native_agent", native_agent))
     builder.add_node(
         "native_writer",
-        lifecycle.wrap_node("native_writer", native_writer, finish=True),
+        lifecycle.wrap_node(
+            "native_writer",
+            native_writer,
+            finish=True,
+            retry_max_attempts=2 if retrying else None,
+        ),
+        retry_policy=(
+            RetryPolicy(
+                initial_interval=0,
+                max_attempts=2,
+                jitter=False,
+                retry_on=lambda _error: True,
+            )
+            if retrying
+            else None
+        ),
     )
     builder.add_edge(START, "native_agent")
     builder.add_edge("native_agent", "native_writer")
     builder.add_edge("native_writer", END)
     return builder.compile()
+
+
+def _interrupt_fixture_graph(lifecycle: ObserverRunLifecycle):
+    """Build a checkpointed native graph that pauses once and then resumes."""
+
+    @observe_graph_node(name="approval_node", kind="agent")
+    async def approval_node(state, config):
+        answer = interrupt("approval required")
+        return {"value": answer}
+
+    builder = StateGraph(_NativeFixtureState)
+    builder.add_node(
+        "approval_node",
+        lifecycle.wrap_node("approval_node", approval_node, finish=True),
+    )
+    builder.add_edge(START, "approval_node")
+    return builder.compile(checkpointer=InMemorySaver())
 
 
 def _recording_observer_class(captured_events):
@@ -404,6 +448,360 @@ def test_observer_does_not_mutate_langgraph_state():
 
     assert state == original
     assert result == original
+
+
+def test_rag_query_rewrite_model_is_observed():
+    """The synchronous RAG rewrite path uses the same model boundary."""
+
+    from open_deep_research.rag.query_rewriter import rewrite_query_with_model
+
+    observer, run, events = _recording_run()
+
+    class FakeModel:
+        def invoke(self, payload):
+            return AIMessage(
+                content="Rewritten query: battery warranty complaint",
+                usage_metadata={"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
+            )
+
+    with run_context(run):
+        with run.span("rag_tool", kind="agent"):
+            rewritten = rewrite_query_with_model(
+                "battery complaint",
+                model_name="openai:fixture",
+                max_tokens=32,
+                api_key=None,
+                model_factory=lambda **_kwargs: FakeModel(),
+            )
+
+    assert rewritten == "battery warranty complaint"
+    assert any(
+        event["type"] == "model_request" and event.get("component") == "rag_query_rewrite"
+        for event in events
+    )
+    observer.close()
+
+
+def test_vision_model_is_observed(monkeypatch):
+    """The multimodal loader reports a runtime Vision request when in a Run."""
+
+    from open_deep_research.rag.loaders import knowledge
+
+    observer, run, events = _recording_run()
+
+    class FakeVisionModel:
+        def invoke(self, payload):
+            return AIMessage(
+                content="a product diagram",
+                usage_metadata={"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+            )
+
+    monkeypatch.setattr(knowledge, "init_chat_model", lambda **_kwargs: FakeVisionModel())
+    with run_context(run):
+        with run.span("rag_vision", kind="agent"):
+            result = knowledge._invoke_vision_model(
+                image_bytes=b"image",
+                mime_type="image/png",
+                model="openai:vision-fixture",
+                prompt="describe",
+                max_tokens=32,
+            )
+
+    assert result == "a product diagram"
+    assert any(event.get("component") == "rag_vision" for event in events if event["type"] == "model_request")
+    observer.close()
+
+
+def test_utils_structured_model_is_observed_and_missing_usage_stays_na():
+    """Structured wrappers are visible even when no raw provider usage exists."""
+
+    from open_deep_research.utils import summarize_webpage
+
+    observer, run, events = _recording_run()
+
+    class FakeStructuredModel:
+        async def ainvoke(self, payload):
+            return SimpleNamespace(summary="short", key_excerpts=["evidence"])
+
+    async def exercise():
+        with run_context(run):
+            async with run.span("web_search", kind="agent"):
+                result = await summarize_webpage(
+                    FakeStructuredModel(),
+                    "page text",
+                    observer_model="openai:summary-fixture",
+                )
+        return result
+
+    assert "<summary>" in asyncio.run(exercise())
+    response = next(
+        event
+        for event in events
+        if event["type"] == "model_response" and event.get("component") == "webpage_summarization"
+    )
+    assert response["structured_output"] is True
+    assert response["input_tokens"] is None
+    assert response["output_tokens"] is None
+    observer.close()
+
+
+def test_model_call_not_double_counted():
+    """Nested helper use records the provider boundary once."""
+
+    observer, run, events = _recording_run()
+
+    class InnerModel:
+        async def ainvoke(self, payload):
+            return AIMessage(content="ok")
+
+    class OuterModel:
+        async def ainvoke(self, payload):
+            return await observe_model_ainvoke(InnerModel(), payload, observer_model="fixture:inner")
+
+    async def exercise():
+        with run_context(run):
+            async with run.span("agent", kind="agent"):
+                await observe_model_ainvoke(OuterModel(), [], observer_model="fixture:outer")
+
+    asyncio.run(exercise())
+    assert [event["type"] for event in events].count("model_request") == 1
+    assert [event["type"] for event in events].count("model_response") == 1
+    observer.close()
+
+
+def test_failed_model_call_recorded():
+    """A model exception emits a failed response fact before being re-raised."""
+
+    observer, run, events = _recording_run()
+
+    class FailingModel:
+        async def ainvoke(self, payload):
+            raise RuntimeError("model fixture failed")
+
+    async def exercise():
+        with run_context(run):
+            with pytest.raises(RuntimeError, match="model fixture failed"):
+                async with run.span("agent", kind="agent"):
+                    await observe_model_ainvoke(FailingModel(), [], observer_model="fixture:model")
+
+    asyncio.run(exercise())
+    response = next(event for event in events if event["type"] == "model_response")
+    assert response["success"] is False
+    assert response["stop_reason"] == "error"
+    observer.close()
+
+
+def test_direct_tool_execution_is_observed_and_not_double_counted():
+    """Nested tool adapters emit one privacy-preserving call/result pair."""
+
+    observer, run, events = _recording_run()
+
+    class InnerTool:
+        name = "rag_search"
+        metadata = {"tool_domain": "rag"}
+
+        async def ainvoke(self, args, config=None):
+            return {"context": "SENSITIVE"}
+
+    inner = InnerTool()
+
+    class OuterTool:
+        name = "mcp__rag_search"
+        metadata = {"tool_domain": "external_mcp"}
+
+        async def ainvoke(self, args, config=None):
+            return await observer_module.observe_tool_ainvoke(
+                inner,
+                args,
+                config,
+                tool_call_id="inner-call",
+            )
+
+    async def exercise():
+        with run_context(run):
+            async with run.span("agent", kind="agent"):
+                result = await observer_module.observe_tool_ainvoke(
+                    OuterTool(),
+                    {"query": "secret query"},
+                    {},
+                    tool_call_id="outer-call",
+                )
+        return result
+
+    assert asyncio.run(exercise()) == {"context": "SENSITIVE"}
+    assert [event["type"] for event in events].count("tool_call") == 1
+    assert [event["type"] for event in events].count("tool_result") == 1
+    assert "SENSITIVE" not in json.dumps(events)
+    observer.close()
+
+
+def test_execute_tool_safely_is_runtime_tool_boundary():
+    """The Public Opinion ReAct executor emits exactly one tool call/result."""
+
+    observer, run, events = _recording_run()
+
+    class FakeTool:
+        name = "mcp__fixture_search"
+        metadata = {"tool_domain": "external_mcp"}
+
+        async def ainvoke(self, args, config=None):
+            return "bounded fixture result"
+
+    async def exercise():
+        with run_context(run):
+            async with run.span("agent", kind="agent"):
+                return await deep_researcher_module.execute_tool_safely(
+                    FakeTool(),
+                    {"query": "fixture"},
+                    {},
+                    tool_call_id="fixture-call",
+                )
+
+    observation, _budget, success = asyncio.run(exercise())
+    assert observation == "bounded fixture result"
+    assert success is True
+    assert [event["type"] for event in events].count("tool_call") == 1
+    assert [event["type"] for event in events].count("tool_result") == 1
+    observer.close()
+
+
+def test_failed_tool_recorded():
+    """Tool failures remain visible while the original exception propagates."""
+
+    observer, run, events = _recording_run()
+
+    class FailingTool:
+        name = "mcp_fixture"
+
+        async def ainvoke(self, args, config=None):
+            raise RuntimeError("tool fixture failed")
+
+    async def exercise():
+        with run_context(run):
+            async with run.span("agent", kind="agent"):
+                with pytest.raises(RuntimeError, match="tool fixture failed"):
+                    await observer_module.observe_tool_ainvoke(FailingTool(), {}, {})
+
+    asyncio.run(exercise())
+    result = next(event for event in events if event["type"] == "tool_result")
+    assert result["success"] is False
+    assert result["error_type"] == "RuntimeError"
+    observer.close()
+
+
+def test_tool_schema_preserved_after_mcp_wrapping():
+    """MCP namespace wrapping keeps the original schema and behavior fields."""
+
+    from open_deep_research.mcp.tool_wrapper import wrap_mcp_tools
+
+    def execute(query: str) -> str:
+        return query
+
+    original = StructuredTool.from_function(
+        execute,
+        name="search",
+        description="search fixture",
+        return_direct=True,
+    )
+    wrapped = wrap_mcp_tools("rag", [original], {"search"})[0]
+    assert wrapped.name == "rag__search"
+    assert wrapped.description.startswith("[rag]")
+    assert wrapped.args_schema is original.args_schema
+    assert wrapped.return_direct is True
+
+
+def test_node_retry_creates_distinct_attempt_spans(monkeypatch):
+    """LangGraph retry attempts use new Span IDs and close both attempts."""
+
+    captured_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(observer_module, "AgentObserver", _recording_observer_class(captured_events))
+    graph = _native_fixture_graph(ObserverRunLifecycle(), retrying=True)
+    result = asyncio.run(
+        graph.ainvoke(
+            {"value": 0},
+            {"configurable": {"thread_id": "retry-thread", "agent_observer_enabled": True}},
+        )
+    )
+    assert result["value"] == 2
+    writer_starts = [
+        event
+        for event in captured_events
+        if event["type"] == "span_started" and event["name"] == "native_writer"
+    ]
+    assert len(writer_starts) == 2
+    assert {event["metadata"]["attempt"] for event in writer_starts} == {1, 2}
+    assert len({event["span_id"] for event in writer_starts}) == 2
+    assert sum(event["type"] == "span_failed" and event["span_id"] == writer_starts[0]["span_id"] for event in captured_events) == 1
+    assert sum(event["type"] == "span_finished" and event["span_id"] == writer_starts[1]["span_id"] for event in captured_events) == 1
+    assert [event["type"] for event in captured_events].count("run_finished") == 1
+    assert not any(event["type"] == "run_failed" for event in captured_events)
+
+
+def test_interrupt_resume_uses_linked_segments_without_context_leak(monkeypatch):
+    """Interrupt is terminal for one segment; resume starts a linked segment."""
+
+    captured_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(observer_module, "AgentObserver", _recording_observer_class(captured_events))
+    lifecycle = ObserverRunLifecycle()
+    graph = _interrupt_fixture_graph(lifecycle)
+    config = {"configurable": {"thread_id": "interrupt-thread", "agent_observer_enabled": True}}
+
+    first = asyncio.run(graph.ainvoke({"value": "start"}, config))
+    assert "__interrupt__" in first
+    first_run_id = next(event["run_id"] for event in captured_events if event["type"] == "run_started")
+    first_run_events = [event for event in captured_events if event["run_id"] == first_run_id]
+    assert any(event["type"] == "run_interrupted" for event in first_run_events)
+    assert not any(event["type"] in {"run_failed", "run_finished"} for event in first_run_events)
+    assert any(event["type"] == "span_interrupted" for event in first_run_events)
+
+    resumed = asyncio.run(graph.ainvoke(Command(resume="approved"), config))
+    assert resumed["value"] == "approved"
+    run_starts = [event for event in captured_events if event["type"] == "run_started"]
+    assert len(run_starts) == 2
+    second_run_id = run_starts[1]["run_id"]
+    assert second_run_id != first_run_id
+    assert run_starts[0]["metadata"]["logical_run_id"] == run_starts[1]["metadata"]["logical_run_id"]
+    assert run_starts[1]["metadata"]["invocation_kind"] == "resume"
+    second_run_events = [event for event in captured_events if event["run_id"] == second_run_id]
+    assert any(event["type"] == "run_finished" for event in second_run_events)
+    assert not any(event["type"] == "run_failed" for event in second_run_events)
+    assert get_current_observed_run() is None
+    assert get_current_observed_span() is None
+
+    fresh = asyncio.run(graph.ainvoke({"value": "fresh"}, config))
+    assert "__interrupt__" in fresh
+    run_starts = [event for event in captured_events if event["type"] == "run_started"]
+    assert len(run_starts) == 3
+    assert run_starts[2]["metadata"]["logical_run_id"] != run_starts[0]["metadata"]["logical_run_id"]
+    assert run_starts[2]["metadata"]["invocation_kind"] == "start"
+
+
+def test_concurrent_native_invocations_do_not_cross_contaminate(monkeypatch):
+    """One compiled graph can serve two thread-scoped Runs concurrently."""
+
+    captured_events: list[dict[str, Any]] = []
+    monkeypatch.setattr(observer_module, "AgentObserver", _recording_observer_class(captured_events))
+    graph = _native_fixture_graph(ObserverRunLifecycle())
+
+    async def invoke(thread_id: str):
+        return await graph.ainvoke(
+            {"value": 0},
+            {"configurable": {"thread_id": thread_id, "agent_observer_enabled": True}},
+        )
+
+    async def run_both():
+        return await asyncio.gather(invoke("concurrent-a"), invoke("concurrent-b"))
+
+    results = asyncio.run(run_both())
+    assert [result["value"] for result in results] == [2, 2]
+    by_run = {}
+    for event in captured_events:
+        by_run.setdefault(event["run_id"], []).append(event)
+    assert len(by_run) == 2
+    for run_events in by_run.values():
+        assert [event["type"] for event in run_events].count("run_finished") == 1
+        assert {event.get("metadata", {}).get("thread_id") for event in run_events if event["type"] == "span_started"}
+        assert all(event["run_id"] == run_events[0]["run_id"] for event in run_events)
 
 
 def test_native_graph_invocation_creates_one_observer_run(monkeypatch):
