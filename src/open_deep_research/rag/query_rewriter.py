@@ -10,6 +10,8 @@ from typing import Any
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 
+from open_deep_research.observability import observe_model_invoke
+
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_RAG_QUERY_REWRITE_PROMPT = """Rewrite the user's question into one standalone search query for local RAG retrieval.
@@ -47,8 +49,11 @@ def rewrite_query_with_model(
             api_key=api_key,
             tags=["langsmith:nostream"],
         )
-        response = model.invoke(
-            [HumanMessage(content=prompt.format(query=original_query))]
+        response = observe_model_invoke(
+            model,
+            [HumanMessage(content=prompt.format(query=original_query))],
+            observer_model=model_name,
+            observer_component="rag_query_rewrite",
         )
     except Exception as exc:
         LOGGER.warning("RAG query rewrite failed; using original query: %s", exc)

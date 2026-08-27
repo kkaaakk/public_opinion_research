@@ -23,6 +23,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 
+from open_deep_research.observability import observe_model_invoke
 from open_deep_research.rag.code_languages import (
     CODE_EXTENSION_LANGUAGE_MAP,
     language_for_extension,
@@ -886,7 +887,8 @@ def _invoke_vision_model(
         max_tokens=max_tokens,
         tags=["langsmith:nostream"],
     )
-    response = vision_model.invoke(
+    response = observe_model_invoke(
+        vision_model,
         [
             HumanMessage(
                 content=[
@@ -894,7 +896,9 @@ def _invoke_vision_model(
                     {"type": "image_url", "image_url": {"url": image_url}},
                 ]
             )
-        ]
+        ],
+        observer_model=model,
+        observer_component="rag_vision",
     )
     return _message_content_to_text(response.content).strip()
 

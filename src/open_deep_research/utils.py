@@ -23,9 +23,10 @@ from tavily import AsyncTavilyClient
 
 from open_deep_research.budget import capture_model_response
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
+from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.prompts import summarize_webpage_prompt
-from open_deep_research.tools.rag_tool import rag_search
 from open_deep_research.state import ResearchComplete, Summary
+from open_deep_research.tools.rag_tool import rag_search
 
 ##########################
 # Tavily Search Tool Utils
@@ -90,12 +91,14 @@ async def tavily_search(
     async def noop():
         """No-op function for results without raw content."""
         return None
-    
+
     summarization_tasks = [
-        noop() if not result.get("raw_content") 
+        noop()
+        if not result.get("raw_content")
         else summarize_webpage(
-            summarization_model, 
-            result['raw_content'][:max_char_to_include]
+            summarization_model,
+            result["raw_content"][:max_char_to_include],
+            observer_model=configurable.summarization_model,
         )
         for result in unique_results.values()
     ]
@@ -166,7 +169,12 @@ async def tavily_search_async(
     search_results = await asyncio.gather(*search_tasks)
     return search_results
 
-async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
+async def summarize_webpage(
+    model: BaseChatModel,
+    webpage_content: str,
+    *,
+    observer_model: str | None = None,
+) -> str:
     """Summarize webpage content using AI model with timeout protection.
     
     Args:
@@ -185,7 +193,13 @@ async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
         
         # Execute summarization with timeout to prevent hanging
         summary = await asyncio.wait_for(
-            model.ainvoke([HumanMessage(content=prompt_content)]),
+            observe_model_ainvoke(
+                model,
+                [HumanMessage(content=prompt_content)],
+                observer_model=observer_model,
+                observer_structured_output=True,
+                observer_component="webpage_summarization",
+            ),
             timeout=60.0  # 60 second timeout for summarization
         )
         capture_model_response(summary)
