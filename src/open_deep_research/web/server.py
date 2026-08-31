@@ -8,23 +8,50 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import secrets
+import uuid
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 
 # Load .env before anything else — API keys live there
 load_dotenv()
 
-from fastapi import FastAPI, Request  # noqa: E402, I001
-from fastapi.responses import HTMLResponse, StreamingResponse  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request  # noqa: E402, I001
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from langchain_core.messages import HumanMessage  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, Field, field_validator  # noqa: E402
 
 from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_factory  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
+LOGGER = logging.getLogger(__name__)
+
+MAX_REQUEST_BYTES = 64 * 1024
+MAX_TOPIC_LENGTH = 12_000
+MAX_ORG_CONTEXT_LENGTH = 8_000
+MAX_CONCURRENT_RESEARCH_REQUESTS = 2
+ALLOWED_RESEARCH_MODELS = frozenset(
+    {
+        "deepseek:deepseek-chat",
+        "openai:gpt-4.1",
+        "openai:gpt-4o",
+        "anthropic:claude-sonnet-4-20250514",
+        "anthropic:claude-opus-4-20250514",
+        "google:gemini-2.5-pro",
+    }
+)
+WEB_API_TOKEN = (
+    os.environ.get("PUBLIC_OPINION_API_TOKEN")
+    or os.environ.get("WEB_API_TOKEN")
+    or ""
+).strip()
+_RESEARCH_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_RESEARCH_REQUESTS)
 
 app = FastAPI(
     title="Public Opinion Research",
@@ -37,12 +64,72 @@ if STATIC_DIR.is_dir():
 
 
 class ResearchRequest(BaseModel):
-    topic: str
+    topic: str = Field(min_length=1, max_length=MAX_TOPIC_LENGTH)
     model: str = "deepseek:deepseek-chat"
-    search_api: str = "tavily"
-    mode: str = "normal"
-    org_context: str = ""
+    search_api: Literal["tavily", "openai", "anthropic"] = "tavily"
+    mode: Literal["fast", "normal", "deep"] = "normal"
+    org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
     rag_enabled: bool = False
+
+    @field_validator("topic")
+    @classmethod
+    def validate_topic(cls, value: str) -> str:
+        """Reject blank topics after trimming whitespace."""
+        if not value.strip():
+            raise ValueError("topic must not be blank")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str) -> str:
+        """Allow only models selected by the server-side policy."""
+        if value not in ALLOWED_RESEARCH_MODELS:
+            raise ValueError("model is not allowed")
+        return value
+
+
+@app.middleware("http")
+async def enforce_request_size(request: Request, call_next):
+    """Reject oversized HTTP bodies before they reach request validation."""
+    content_length = request.headers.get("content-length")
+    try:
+        request_size = int(content_length) if content_length else 0
+    except ValueError:
+        request_size = MAX_REQUEST_BYTES + 1
+    if request_size > MAX_REQUEST_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "Request payload exceeds the allowed size."},
+        )
+    return await call_next(request)
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation_error(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """Return stable, non-sensitive validation errors to API clients."""
+    oversized_types = {"string_too_long", "bytes_too_long", "value_error.any_str.max_length"}
+    status_code = 413 if any(error.get("type") in oversized_types for error in exc.errors()) else 400
+    message = (
+        "Request payload exceeds the allowed size."
+        if status_code == 413
+        else "Invalid research request."
+    )
+    return JSONResponse(status_code=status_code, content={"detail": message})
+
+
+def _request_is_authorized(request: Request) -> bool:
+    """Validate the optional local API token without exposing it in errors/logs."""
+    if not WEB_API_TOKEN:
+        return True
+    authorization = request.headers.get("authorization", "").split()
+    if len(authorization) == 2 and authorization[0].lower() == "bearer":
+        provided_token = authorization[1]
+    else:
+        provided_token = request.headers.get("x-api-token", "")
+    return secrets.compare_digest(provided_token, WEB_API_TOKEN)
 
 
 def _event(data: dict) -> str:
@@ -97,7 +184,11 @@ async def health() -> dict:
 async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
     """Run deep research with real-time streaming via SSE."""
 
-    async def event_stream():
+    if not _request_is_authorized(raw):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    async def _research_event_stream():
+        trace_id = uuid.uuid4().hex[:12]
         try:
             yield _event({"type": "status", "message": "Starting research…"})
 
@@ -194,11 +285,17 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
 
         except asyncio.CancelledError:
             yield _event({"type": "error", "message": "Research cancelled."})
-        except Exception as exc:
+        except Exception:
+            LOGGER.exception("Research request failed; trace_id=%s", trace_id)
             yield _event({
                 "type": "error",
-                "message": f"Research failed: {exc}",
+                "message": f"Research request failed. Trace ID: {trace_id}.",
             })
+
+    async def event_stream():
+        async with _RESEARCH_SEMAPHORE:
+            async for event in _research_event_stream():
+                yield event
 
     return StreamingResponse(
         event_stream(),
@@ -214,8 +311,15 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
 def main():
     import uvicorn
 
-    host = os.environ.get("HOST", "0.0.0.0")
+    host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
+
+    if host in {"0.0.0.0", "::"} and not WEB_API_TOKEN:
+        LOGGER.warning(
+            "Web UI is listening on %s without PUBLIC_OPINION_API_TOKEN; "
+            "use a reverse proxy and authentication before exposing it publicly.",
+            host,
+        )
 
     print("\n  Open Deep Research web UI")
     print("  ─────────────────────────")

@@ -7,10 +7,9 @@ ready retriever.
 """
 
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from open_deep_research.memory.store import MySQLChatMemoryStore
-from open_deep_research.memory.types import INDEXABLE_MEMORY_TYPES
 from open_deep_research.rag.elasticsearch_bm25 import ElasticsearchBM25Index
 from open_deep_research.rag.embeddings import create_embedding_backend
 from open_deep_research.rag.loaders import (
@@ -85,6 +84,7 @@ class RAGIndexer:
             keyword = self.config.keyword_search
 
             self.documents = self.load_indexable_documents()
+            pending_memory_ids = self._pending_memory_ids(self.documents)
             self.chunks = split_documents(
                 self.documents,
                 chunk_size=chunking.chunk_size,
@@ -107,7 +107,6 @@ class RAGIndexer:
             self.retriever = HybridChunkRetriever(
                 vectorstore=self.vectorstore,
                 keyword_index=self.keyword_index,
-                hybrid_alpha=hybrid.alpha,
                 rrf_rank_constant=hybrid.rrf_rank_constant,
                 structured_metadata_weight=hybrid.structured_metadata_weight,
                 graph_enabled=graph.enabled,
@@ -125,7 +124,7 @@ class RAGIndexer:
                 neo4j_password=graph.neo4j_password,
                 neo4j_database=graph.neo4j_database,
             )
-            self._mark_pending_memories_indexed()
+            self._mark_pending_memories_indexed(pending_memory_ids)
             self._source_fingerprint = self.source_fingerprint()
             self._ready = True
 
@@ -201,7 +200,22 @@ class RAGIndexer:
             ),
         }
 
-    def _mark_pending_memories_indexed(self) -> None:
+    @staticmethod
+    def _pending_memory_ids(documents: Sequence[RAGDocument]) -> list[str]:
+        """Snapshot pending MySQL memory ids included in the current document batch."""
+        memory_ids = [
+            str(document.metadata["memory_id"])
+            for document in documents
+            if document.metadata.get("memory_backend") == "mysql"
+            and document.metadata.get("index_status") == "pending"
+            and document.metadata.get("memory_id")
+        ]
+        return list(dict.fromkeys(memory_ids))
+
+    def _mark_pending_memories_indexed(self, memory_ids: Sequence[str]) -> None:
+        """Mark only the MySQL memory ids that were indexed in this batch."""
+        if not memory_ids:
+            return
         memory = self.config.memory
         if not (memory.enabled and memory.mysql_url):
             return
@@ -209,10 +223,4 @@ class RAGIndexer:
             database_url=memory.mysql_url,
             table_name=memory.mysql_table,
         )
-        pending_records = store.load_pending_indexable_records(
-            conversation_id=memory.conversation_id,
-            user_id=memory.user_id,
-            limit=memory.mysql_limit,
-            record_types=memory.mysql_index_record_types or INDEXABLE_MEMORY_TYPES,
-        )
-        store.mark_records_indexed([record.memory_id for record in pending_records])
+        store.mark_records_indexed(memory_ids)

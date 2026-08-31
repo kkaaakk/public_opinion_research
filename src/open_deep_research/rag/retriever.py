@@ -100,7 +100,6 @@ class HybridChunkRetriever:
         self,
         vectorstore: VectorStoreBackend,
         keyword_index: Any,
-        hybrid_alpha: float = 0.65,
         rrf_rank_constant: int = 60,
         structured_metadata_weight: float = 0.15,
         graph_enabled: bool = False,
@@ -121,7 +120,6 @@ class HybridChunkRetriever:
     ):
         self.vectorstore = vectorstore
         self.keyword_index = keyword_index
-        self.hybrid_alpha = min(1.0, max(0.0, hybrid_alpha))
         self.rrf_rank_constant = max(1, rrf_rank_constant)
         self.structured_metadata_weight = max(0.0, structured_metadata_weight)
         self.graph_max_neighbors = max(0, graph_max_neighbors)

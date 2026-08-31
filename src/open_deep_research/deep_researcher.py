@@ -320,6 +320,7 @@ async def execute_tool_safely(tool, args, config, *, tool_call_id: str | None = 
     except Exception as e:
         captured_budget = stop_budget_capture(capture_token)
         error_result = f"Error executing tool: {str(e)}"
+        LOGGER.exception("Unexpected tool execution failure for '%s'.", _tool_name(tool))
         return error_result, captured_budget, False
 
 
@@ -642,9 +643,15 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         )
         budget_update = budget_from_model_response(response)
     except Exception as exc:
-        LOGGER.warning("Section planning failed: %s. Falling back to single section.", exc)
+        if not is_token_limit_exceeded(exc, planner_model_name):
+            LOGGER.exception("Unexpected report section planning failure.")
+            raise
+        LOGGER.warning(
+            "Section planning hit the model context limit: %s. Falling back to single section.",
+            exc,
+        )
         budget_update = budget_usage_with_reason(
-            f"Section planning failed: {exc}. Falling back to single section."
+            "Section planning hit the model context limit; falling back to a single section."
         )
         single_section = Section(
             name="Research Report",
@@ -862,7 +869,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     if writer_max_tokens is not None:
         writer_model_config["max_tokens"] = writer_max_tokens
     
-    async def _write_one(section: Section) -> Section:
+    async def _write_one(section: Section) -> tuple[Section, dict[str, Any]]:
         try:
             evidence = _extract_section_evidence(section, role_report_content)
             prompt = section_writer_from_role_reports_prompt.format(
@@ -878,22 +885,31 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
             )
             section.content = str(response.content)
             section.status = "done"
+            response_budget = budget_from_model_response(response)
         except Exception as exc:
-            LOGGER.warning("Failed to write section '%s': %s", section.name, exc)
-            section.content = ""
-        return section
-    
-    results = await asyncio.gather(*[_write_one(s) for s in research_sections], return_exceptions=True)
-    
+            if is_token_limit_exceeded(exc, writer_model_name):
+                LOGGER.warning("Section '%s' exceeded the model context limit: %s", section.name, exc)
+                section.content = ""
+                response_budget = budget_usage_with_reason(
+                    f"Section '{section.name}' was not written because the model context limit was reached."
+                )
+            else:
+                LOGGER.exception("Unexpected section writer failure for '%s'.", section.name)
+                raise
+        return section, response_budget
+
+    results = await asyncio.gather(*[_write_one(s) for s in research_sections])
+
     completed = []
-    for result in results:
-        if isinstance(result, Exception):
-            LOGGER.warning("Section writer task raised exception: %s", result)
-            continue
-        if isinstance(result, Section):
-            completed.append(result)
-    
-    budget_update = budget_usage_with_reason(f"Wrote {len(completed)} sections via section_writer.")
+    budget_update = {}
+    for result, response_budget in results:
+        completed.append(result)
+        budget_update = merge_budget_usage(budget_update, response_budget)
+
+    budget_update = merge_budget_usage(
+        budget_update,
+        budget_usage_with_reason(f"Wrote {len(completed)} sections via section_writer."),
+    )
     return {
         "completed_sections": completed,
         "budget_usage": budget_update,
@@ -946,7 +962,7 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
         "tags": ["langsmith:nostream"],
     }
     
-    async def _write_one(section: Section) -> Section:
+    async def _write_one(section: Section) -> tuple[Section, dict[str, Any]]:
         try:
             prompt = final_section_writer_instructions.format(
                 section_name=section.name,
@@ -961,22 +977,31 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
             )
             section.content = str(response.content)
             section.status = "done"
+            response_budget = budget_from_model_response(response)
         except Exception as exc:
-            LOGGER.warning("Failed to write final section '%s': %s", section.name, exc)
-            section.content = ""
-        return section
-    
-    results = await asyncio.gather(*[_write_one(s) for s in final_sections], return_exceptions=True)
-    
+            if is_token_limit_exceeded(exc, configurable.final_report_model):
+                LOGGER.warning("Final section '%s' exceeded the model context limit: %s", section.name, exc)
+                section.content = ""
+                response_budget = budget_usage_with_reason(
+                    f"Final section '{section.name}' was not written because the model context limit was reached."
+                )
+            else:
+                LOGGER.exception("Unexpected final section writer failure for '%s'.", section.name)
+                raise
+        return section, response_budget
+
+    results = await asyncio.gather(*[_write_one(s) for s in final_sections])
+
     completed = []
-    for result in results:
-        if isinstance(result, Exception):
-            LOGGER.warning("Final section writer task raised exception: %s", result)
-            continue
-        if isinstance(result, Section):
-            completed.append(result)
-    
-    budget_update = budget_usage_with_reason(f"Wrote {len(completed)} final sections.")
+    budget_update = {}
+    for result, response_budget in results:
+        completed.append(result)
+        budget_update = merge_budget_usage(budget_update, response_budget)
+
+    budget_update = merge_budget_usage(
+        budget_update,
+        budget_usage_with_reason(f"Wrote {len(completed)} final sections."),
+    )
     return {
         "completed_sections": completed,
         "budget_usage": budget_update,
@@ -1062,8 +1087,14 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                         **cleared_state,
                     }
                 except Exception as exc:
-                    LOGGER.warning("Failed to fill missing sections: %s", exc)
-                    report += f"\n\n> Note: 以下 section 因预算限制未完成: {', '.join(missing_names)}"
+                    if not is_token_limit_exceeded(exc, configurable.final_report_model):
+                        LOGGER.exception("Unexpected missing-section report fill failure.")
+                        raise
+                    LOGGER.warning(
+                        "Filling missing sections hit the model context limit: %s",
+                        exc,
+                    )
+                    report += f"\n\n> Note: 以下 section 因模型上下文限制未完成: {', '.join(missing_names)}"
             else:
                 report += f"\n\n> Note: 以下 section 因预算限制未完成: {', '.join(missing_names)}"
         
@@ -1159,16 +1190,16 @@ async def compress_research(state: dict, config: RunnableConfig):
                 "budget_usage": budget_update,
             }
             
-        except Exception as e:
+        except Exception as exc:
             synthesis_attempts += 1
             
             # Handle token limit exceeded by removing older messages
-            if is_token_limit_exceeded(e, configurable.research_model):
+            if is_token_limit_exceeded(exc, configurable.compression_model):
                 researcher_messages = remove_up_to_last_ai_message(researcher_messages)
                 continue
             
-            # For other errors, continue retrying
-            continue
+            LOGGER.exception("Unexpected research compression failure.")
+            raise
     
     # Step 4: Return error result if all attempts failed
     raw_notes_content = "\n".join([
@@ -1493,8 +1524,8 @@ async def maybe_persist_chat_memory(
                 "date": get_today_str(),
             },
         )
-    except Exception as exc:  # pragma: no cover - depends on external MySQL/vector DB
-        LOGGER.warning("Failed to persist chat memory: %s", exc)
+    except Exception:  # pragma: no cover - depends on external MySQL/vector DB
+        LOGGER.exception("Failed to persist chat memory; continuing without persistence.")
 
 
 async def _fallback_report_generation(state: AgentState, config: RunnableConfig):
@@ -1637,17 +1668,20 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                 **cleared_state
             }
             
-        except Exception as e:
+        except Exception as exc:
             # Handle token limit exceeded errors with progressive truncation
-            if is_token_limit_exceeded(e, configurable.final_report_model):
+            if is_token_limit_exceeded(exc, configurable.final_report_model):
                 current_retry += 1
                 
                 if current_retry == 1:
                     # First retry: determine initial truncation limit
                     model_token_limit = get_model_token_limit(configurable.final_report_model)
                     if not model_token_limit:
+                        LOGGER.exception(
+                            "Final report model exceeded its context limit and no model limit is configured."
+                        )
                         return {
-                            "final_report": f"Error generating final report: Token limit exceeded, however, we could not determine the model's maximum context length. Please update the model map in deep_researcher/utils.py with this information. {e}",
+                            "final_report": "Error generating final report due to a model context limit.",
                             "messages": [AIMessage(content="Report generation failed due to token limits")],
                             "budget_usage": budget_update,
                             **cleared_state
@@ -1662,13 +1696,8 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                 findings = findings[:findings_token_limit]
                 continue
             else:
-                # Non-token-limit error: return error immediately
-                return {
-                    "final_report": f"Error generating final report: {e}",
-                    "messages": [AIMessage(content="Report generation failed due to an error")],
-                    "budget_usage": budget_update,
-                    **cleared_state
-                }
+                LOGGER.exception("Unexpected final report generation failure.")
+                raise
     
     # Step 4: Return failure result if all retries exhausted
     return {

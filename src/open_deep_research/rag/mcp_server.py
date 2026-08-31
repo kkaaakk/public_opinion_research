@@ -21,6 +21,7 @@ from open_deep_research.rag.service import (
     RAGPipeline,
     RAGPipelineConfig,
     build_rag_index_id,
+    build_rag_pipeline_config,
     get_or_create_rag_pipeline,
     reset_rag_pipeline_cache,
 )
@@ -40,19 +41,7 @@ mcp = FastMCP(
 
 def build_pipeline_config(config: Mapping[str, Any] | RAGPipelineConfig | None = None) -> RAGPipelineConfig:
     """Build a RAG pipeline config from direct or `rag_`-prefixed settings."""
-    if isinstance(config, RAGPipelineConfig):
-        return config
-
-    raw_config = _raw_config_dict(config)
-    payload: dict[str, Any] = {}
-    for field_name in RAGPipelineConfig.model_fields:
-        prefixed_name = f"rag_{field_name}"
-        if field_name in raw_config:
-            payload[field_name] = raw_config[field_name]
-        elif prefixed_name in raw_config:
-            payload[field_name] = raw_config[prefixed_name]
-
-    return RAGPipelineConfig(**payload)
+    return build_rag_pipeline_config(_raw_config_dict(config))
 
 
 @mcp.tool(

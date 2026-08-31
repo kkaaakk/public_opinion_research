@@ -208,14 +208,12 @@ Query → [向量召回 + BM25] → [RRF 融合] → [GraphRAG 扩展] → [Cros
 - 模型大小仍可接受（278MB，CPU 可用）
 - 评测记录 2-5 用的是 MiniLM 只是历史原因（评测集以英文为主）
 
-### 4.5 Hybrid Alpha = 0.65：为什么偏向向量？
+### 4.5 Hybrid Fusion：纯 RRF
 
-```
-RRF 融合后，不再使用 hybrid_alpha 做加权。
-hybrid_alpha 在代码中存在但 RRF 路径不使用——RRF 已经通过排名位置自然融合。
-```
-
-实际上，`hybrid_alpha` 是在 RRF 之前的版本中使用的。RRF 被引入后成为默认融合方式，`hybrid_alpha` 保留是为了兼容旧配置。这是一个好的工程实践——**重构时保留向后兼容**。
+当前 hybrid retrieval 使用向量召回和 BM25/关键词召回的 Reciprocal Rank
+Fusion（RRF）按排名位置融合，不再暴露没有实际作用的 dense/sparse alpha
+配置。这样配置项与真实 ranking 行为保持一致，也避免用户误以为可以通过
+alpha 调整权重。
 
 ### 4.6 Authority 系统：解决"知识腐烂"问题
 

@@ -711,7 +711,7 @@ pipeline.query(retrieval_query, original_query=query)
 | `rag_embedding_provider`         | embedding 后端                     |
 | `rag_vectorstore_provider`       | vector store 后端                  |
 | `rag_keyword_backend`            | keyword 后端                       |
-| `rag_hybrid_alpha`               | dense / keyword 权重相关配置       |
+| `rag_rrf_rank_constant`          | RRF 排名融合常数                   |
 | `rag_structured_metadata_weight` | metadata 命中加权                  |
 | `rag_graph_enabled`              | 是否启用 GraphRAG                  |
 | `rag_authority_rerank_enabled`   | 是否启用权威性降权                 |

@@ -164,7 +164,6 @@ Key configuration fields:
 - `rag_reranker_provider`
 - `rag_reranker_model`
 - `rag_keyword_top_k`
-- `rag_hybrid_alpha`
 - `rag_structured_metadata_weight`
 - `rag_graph_enabled`
 - `rag_graph_backend`

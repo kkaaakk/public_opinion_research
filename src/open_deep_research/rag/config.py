@@ -12,7 +12,10 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from open_deep_research.memory.types import INDEXABLE_MEMORY_TYPES
-from open_deep_research.rag.loaders import DEFAULT_RAG_VISION_MODEL, DEFAULT_RAG_VISION_PROMPT
+from open_deep_research.rag.loaders import (
+    DEFAULT_RAG_VISION_MODEL,
+    DEFAULT_RAG_VISION_PROMPT,
+)
 
 
 class EmbeddingConfig(BaseModel):
@@ -68,7 +71,6 @@ class KeywordSearchConfig(BaseModel):
 
 
 class HybridRetrievalConfig(BaseModel):
-    alpha: float = 0.65
     rrf_rank_constant: int = 60
     structured_metadata_weight: float = 0.15
 

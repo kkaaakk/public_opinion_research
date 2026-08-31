@@ -12,11 +12,15 @@ Memory-specific loading and MySQL indexing details live behind the indexer.
 import hashlib
 import json
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, model_validator
 
+from open_deep_research.configuration import Configuration
+from open_deep_research.memory.context import get_conversation_id, get_user_id
 from open_deep_research.memory.types import INDEXABLE_MEMORY_TYPES
 from open_deep_research.rag.citations import build_answer_ready_context
 from open_deep_research.rag.config import (
@@ -86,7 +90,6 @@ class RAGPipelineConfig(BaseModel):
     keyword_backend: str = "memory"
     elasticsearch_url: str = "http://localhost:9200"
     elasticsearch_index: str = "rag_chunks"
-    hybrid_alpha: float = 0.65
     rrf_rank_constant: int = 60
     structured_metadata_weight: float = 0.15
     graph_enabled: bool = False
@@ -229,7 +232,6 @@ class RAGPipelineConfig(BaseModel):
     def hybrid_retrieval(self) -> HybridRetrievalConfig:
         """Hybrid retrieval configuration (read-only view)."""
         return HybridRetrievalConfig(
-            alpha=self.hybrid_alpha,
             rrf_rank_constant=self.rrf_rank_constant,
             structured_metadata_weight=self.structured_metadata_weight,
         )
@@ -429,7 +431,6 @@ _SUB_TO_FLAT: dict[str, dict[str, str]] = {
         "elasticsearch_index": "elasticsearch_index",
     },
     "hybrid_retrieval": {
-        "alpha": "hybrid_alpha",
         "rrf_rank_constant": "rrf_rank_constant",
         "structured_metadata_weight": "structured_metadata_weight",
     },
@@ -463,6 +464,121 @@ _SUB_TO_FLAT: dict[str, dict[str, str]] = {
 def _sub_to_flat_field_name(sub_key: str, field_name: str) -> str | None:
     """Return the flat field name for a sub-config field, or None if unknown."""
     return _SUB_TO_FLAT.get(sub_key, {}).get(field_name)
+
+
+_CONFIG_TO_PIPELINE_FIELDS: dict[str, str] = {
+    "knowledge_base_paths": "rag_knowledge_base_paths",
+    "chunk_size": "rag_chunk_size",
+    "chunk_overlap": "rag_chunk_overlap",
+    "top_k": "rag_top_k",
+    "rerank_top_n": "rag_rerank_top_n",
+    "embedding_provider": "rag_embedding_provider",
+    "embedding_model": "rag_embedding_model",
+    "embedding_device": "rag_embedding_device",
+    "vectorstore_provider": "rag_vectorstore_provider",
+    "vectorstore_path": "rag_vectorstore_path",
+    "collection_name": "rag_collection_name",
+    "milvus_uri": "rag_milvus_uri",
+    "milvus_token": "rag_milvus_token",
+    "milvus_db_name": "rag_milvus_db_name",
+    "milvus_metric_type": "rag_milvus_metric_type",
+    "reranker_provider": "rag_reranker_provider",
+    "reranker_model": "rag_reranker_model",
+    "reranker_device": "rag_reranker_device",
+    "json_text_fields": "rag_json_text_fields",
+    "multimodal_enabled": "rag_multimodal_enabled",
+    "multimodal_provider": "rag_multimodal_provider",
+    "ocr_languages": "rag_ocr_languages",
+    "vision_enabled": "rag_vision_enabled",
+    "vision_model": "rag_vision_model",
+    "vision_prompt": "rag_vision_prompt",
+    "vision_max_tokens": "rag_vision_max_tokens",
+    "memory_enabled": "rag_memory_enabled",
+    "memory_paths": "rag_memory_paths",
+    "memory_json_text_fields": "rag_memory_json_text_fields",
+    "memory_mysql_url": "rag_memory_mysql_url",
+    "memory_mysql_table": "rag_memory_mysql_table",
+    "memory_mysql_limit": "rag_memory_mysql_limit",
+    "memory_mysql_index_record_types": "rag_memory_mysql_index_record_types",
+    "hash_embedding_dimensions": "rag_hash_embedding_dimensions",
+    "keyword_top_k": "rag_keyword_top_k",
+    "keyword_backend": "rag_keyword_backend",
+    "elasticsearch_url": "rag_elasticsearch_url",
+    "elasticsearch_index": "rag_elasticsearch_index",
+    "rrf_rank_constant": "rag_rrf_rank_constant",
+    "structured_metadata_weight": "rag_structured_metadata_weight",
+    "graph_enabled": "rag_graph_enabled",
+    "graph_backend": "rag_graph_backend",
+    "graph_max_neighbors": "rag_graph_max_neighbors",
+    "graph_weight": "rag_graph_weight",
+    "graph_ner_enabled": "rag_graph_ner_enabled",
+    "graph_idf_enabled": "rag_graph_idf_enabled",
+    "graph_idf_threshold_percentile": "rag_graph_idf_threshold_percentile",
+    "graph_confidence_threshold": "rag_graph_confidence_threshold",
+    "structural_edges_enabled": "rag_structural_edges_enabled",
+    "neo4j_uri": "rag_neo4j_uri",
+    "neo4j_username": "rag_neo4j_username",
+    "neo4j_password": "rag_neo4j_password",
+    "neo4j_database": "rag_neo4j_database",
+    "authority_rerank_enabled": "rag_authority_rerank_enabled",
+}
+
+
+def build_rag_pipeline_config(
+    configurable: Configuration | Mapping[str, Any] | RAGPipelineConfig | None = None,
+    runtime_config: RunnableConfig | Mapping[str, Any] | None = None,
+    *,
+    memory_user_id: str | None = None,
+    memory_conversation_id: str | None = None,
+    memory_enabled: bool | None = None,
+) -> RAGPipelineConfig:
+    """Build one effective RAG config for queries and indexing jobs.
+
+    ``Configuration`` supplies the application-level ``rag_*`` settings while
+    mappings support the direct and ``rag_``-prefixed shapes used by the RAG MCP.
+    Memory identity and the forced indexing mode are explicit overrides so the
+    memory refresh path cannot drift from normal query configuration.
+    """
+    if isinstance(configurable, RAGPipelineConfig):
+        payload = configurable.model_dump()
+    elif isinstance(configurable, Configuration):
+        payload = {
+            pipeline_field: getattr(configurable, configuration_field)
+            for pipeline_field, configuration_field in _CONFIG_TO_PIPELINE_FIELDS.items()
+        }
+    else:
+        raw_config = dict(configurable or {})
+        nested_config = raw_config.get("configurable")
+        if isinstance(nested_config, Mapping):
+            raw_config = dict(nested_config)
+        payload = {}
+        for pipeline_field in RAGPipelineConfig.model_fields:
+            prefixed_field = f"rag_{pipeline_field}"
+            if pipeline_field in raw_config:
+                payload[pipeline_field] = raw_config[pipeline_field]
+            elif prefixed_field in raw_config:
+                payload[pipeline_field] = raw_config[prefixed_field]
+        for sub_config_name in _SUB_TO_FLAT:
+            if sub_config_name in raw_config:
+                payload[sub_config_name] = raw_config[sub_config_name]
+
+    if runtime_config is not None:
+        if memory_conversation_id is None:
+            memory_conversation_id = get_conversation_id(runtime_config)
+        if memory_user_id is None:
+            memory_user_id = get_user_id(runtime_config)
+    if "knowledge_base_paths" in payload and payload["knowledge_base_paths"] is None:
+        # Configuration normalizes an explicitly empty path list to None, while
+        # the pipeline keeps the historical empty-list meaning for this field.
+        payload["knowledge_base_paths"] = []
+    if memory_conversation_id is not None:
+        payload["memory_conversation_id"] = memory_conversation_id
+    if memory_user_id is not None:
+        payload["memory_user_id"] = memory_user_id
+    if memory_enabled is not None:
+        payload["memory_enabled"] = memory_enabled
+
+    return RAGPipelineConfig(**payload)
 
 
 _PIPELINE_CACHE: dict[str, RAGPipeline] = {}

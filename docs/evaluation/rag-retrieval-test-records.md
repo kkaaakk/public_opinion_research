@@ -91,7 +91,7 @@ python tests\evaluate_rag_retrieval.py --embedding-provider hash --reranker-prov
 | Embedding 模型 | 无                                                    | 没有加载 sentence-transformers                             |
 | 向量库         | `InMemoryVectorStore` / `vectorstore_provider=memory` | 内存向量库，不持久化                                       |
 | 关键词检索     | 内存 BM25 / `keyword_top_k=12`                        | 与向量召回一起做 hybrid retrieval                          |
-| 混合召回       | vector + BM25, `hybrid_alpha=0.65`                    | 分数归一化后融合                                           |
+| 混合召回       | vector + BM25, RRF (`rrf_rank_constant=60`)           | 按排名位置融合                                           |
 | 重排           | `SimpleReranker` / `reranker_provider=simple`         | 基于简单规则重排，不加载 cross-encoder                     |
 | Reranker 模型  | 无                                                    | 没有加载 `.rag_models/cross-encoder-ms-marco-MiniLM-L6-v2` |
 | 候选数量       | `max(top_k, rerank_top_n)=8`                          | 召回 8 个候选后重排，再取前 5 个 citation 计算指标         |
@@ -180,7 +180,7 @@ python tests\evaluate_rag_retrieval.py --embedding-provider hash --reranker-prov
 | Embedding 模型 | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 多语言 MiniLM 模型，适合中英文混合检索             |
 | 向量库         | `InMemoryVectorStore` / `vectorstore_provider=memory`         | 内存向量库，不持久化，使用余弦相似度扫描           |
 | 关键词检索     | 内存 BM25 / `keyword_top_k=12`                                | 与向量召回一起做 hybrid retrieval                  |
-| 混合召回       | vector + BM25, `hybrid_alpha=0.65`                            | 分数归一化后融合，越接近 1 越偏向向量召回          |
+| 混合召回       | vector + BM25, RRF (`rrf_rank_constant=60`)                   | 按排名位置融合                                  |
 | 重排           | `CrossEncoderReranker` / `reranker_provider=cross_encoder`    | 真实 cross-encoder 模型对召回候选精排              |
 | Reranker 模型  | `.rag_models/cross-encoder-ms-marco-MiniLM-L6-v2`             | 本地 cross-encoder reranker                        |
 | 候选数量       | `max(top_k, rerank_top_n)=8`                                  | 召回 8 个候选后重排，再取前 5 个 citation 计算指标 |
@@ -546,7 +546,7 @@ none
 | Embedding 模型 | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 多语言 MiniLM 模型，支持中英文混合检索             |
 | 向量库         | `MilvusVectorStore` / `vectorstore_provider=milvus`           | 本次核心变化，向量召回走 Milvus Lite               |
 | 关键词检索     | 内存 BM25 / `keyword_top_k=12`                                | 与向量召回一起做 hybrid retrieval                  |
-| 混合召回       | vector + BM25, `hybrid_alpha=0.65`                            | 分数归一化后融合                                   |
+| 混合召回       | vector + BM25, RRF (`rrf_rank_constant=60`)                   | 按排名位置融合                                   |
 | 重排           | `CrossEncoderReranker` / `reranker_provider=cross_encoder`    | 对召回候选做模型精排                               |
 | Reranker 模型  | `.rag_models/cross-encoder-ms-marco-MiniLM-L6-v2`             | 本地 cross-encoder reranker                        |
 | 候选数量       | `max(top_k, rerank_top_n)=8`                                  | 召回 8 个候选后重排，再取前 5 个 citation 计算指标 |

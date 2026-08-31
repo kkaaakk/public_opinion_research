@@ -652,11 +652,10 @@ elasticsearch
 关键参数：
 
 - `rag_keyword_top_k`
-- `rag_hybrid_alpha`
 - `rag_rrf_rank_constant`
 - `rag_structured_metadata_weight`
 
-当前实现里 RRF 是主要融合方式，`hybrid_alpha` 保留在 retriever 配置中。
+当前实现使用纯 RRF；dense 与 keyword 的原始分数不会直接相加。
 
 ## 13. GraphRAG 技术栈
 

@@ -132,7 +132,7 @@ function handleEvent(data) {
             reportMarkdown = data.content;
             resultsPanel.classList.remove('hidden');
             logPanel.classList.add('hidden');
-            reportEl.innerHTML = marked.parse(data.content);
+            renderReport(data.content);
             resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
             break;
 
@@ -152,6 +152,21 @@ function handleEvent(data) {
         case 'done':
             statusText.textContent = 'Complete';
             break;
+    }
+}
+
+function renderReport(markdown) {
+    // Reports contain untrusted web, social, MCP, and RAG text. If the
+    // sanitizer CDN is unavailable, fail closed and show plain text.
+    if (typeof marked === 'undefined') {
+        reportEl.textContent = markdown || '';
+        return;
+    }
+    const html = marked.parse(markdown || '');
+    if (typeof DOMPurify !== 'undefined' && typeof DOMPurify.sanitize === 'function') {
+        reportEl.innerHTML = DOMPurify.sanitize(html);
+    } else {
+        reportEl.textContent = markdown || '';
     }
 }
 

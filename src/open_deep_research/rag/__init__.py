@@ -10,6 +10,13 @@ from open_deep_research.rag import rag_search, RAGPipeline
 `RAGPipeline` / `RAGPipelineConfig`。
 """
 
+from open_deep_research.memory.store import (
+    load_memory_record_by_id,
+    load_memory_record_by_source,
+    load_memory_record_by_source_id,
+    parse_mysql_memory_source,
+)
+from open_deep_research.memory.writer import persist_conversation_memory
 from open_deep_research.rag.config import (
     ChunkingConfig,
     EmbeddingConfig,
@@ -24,15 +31,9 @@ from open_deep_research.rag.config import (
 from open_deep_research.rag.service import (
     RAGPipeline,
     RAGPipelineConfig,
+    build_rag_pipeline_config,
     get_or_create_rag_pipeline,
     reset_rag_pipeline_cache,
-)
-from open_deep_research.memory.writer import persist_conversation_memory
-from open_deep_research.memory.store import (
-    load_memory_record_by_id,
-    load_memory_record_by_source,
-    load_memory_record_by_source_id,
-    parse_mysql_memory_source,
 )
 from open_deep_research.tools.rag_tool import rag_search
 
@@ -46,6 +47,7 @@ __all__ = [
     "MultimodalConfig",
     "RAGPipeline",
     "RAGPipelineConfig",
+    "build_rag_pipeline_config",
     "RerankerConfig",
     "VectorstoreConfig",
     "get_or_create_rag_pipeline",

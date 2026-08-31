@@ -235,6 +235,19 @@ python -m open_deep_research.rag.mcp_server --transport streamable-http --host 1
 - `rag_list_sources` — 列出知识源
 - `rag_reset_cache` — 重置缓存
 
+## 🌐 Local Web UI
+
+启动独立的 FastAPI Demo 页面：
+
+```bash
+python -m open_deep_research.web.server
+```
+
+默认只绑定 `127.0.0.1:8000`。如果通过反向代理或其他方式对外提供服务，
+请设置强随机的 `PUBLIC_OPINION_API_TOKEN`，并在代理层启用 HTTPS 和认证；
+不要直接将未认证的 Demo 服务暴露到公网。客户端只能选择服务端允许的模型，
+研究请求也有输入大小和并发保护。
+
 ## 📱 社交媒媒体 MCP Server
 
 ```bash

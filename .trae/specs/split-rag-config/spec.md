@@ -53,7 +53,7 @@ RAGPipelineConfig
 - `MultimodalConfig`：enabled / provider / ocr_languages / vision_enabled / vision_model / vision_prompt / vision_max_tokens
 - `MemoryConfig`：enabled / paths / json_text_fields / mysql_url / mysql_table / mysql_limit / mysql_index_record_types / conversation_id / user_id
 - `KeywordSearchConfig`：top_k / backend / elasticsearch_url / elasticsearch_index
-- `HybridRetrievalConfig`：alpha / rrf_rank_constant / structured_metadata_weight
+- `HybridRetrievalConfig`：rrf_rank_constant / structured_metadata_weight
 - `GraphRAGConfig`：enabled / backend / max_neighbors / weight / ner_enabled / idf_enabled / idf_threshold_percentile / confidence_threshold / structural_edges_enabled / neo4j_uri / neo4j_username / neo4j_password / neo4j_database
 - `ChunkingConfig`：knowledge_base_paths / chunk_size / chunk_overlap / top_k / rerank_top_n / json_text_fields / authority_rerank_enabled
 

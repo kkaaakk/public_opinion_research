@@ -1,13 +1,16 @@
-import os
 import asyncio
+import logging
+import os
+from typing import Any, Optional
+
 from langgraph_sdk import Auth
 from langgraph_sdk.auth.types import StudioUser
-from supabase import create_client, Client
-from typing import Optional, Any
+from supabase import Client, create_client
 
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_KEY")
 supabase: Optional[Client] = None
+LOGGER = logging.getLogger(__name__)
 
 if supabase_url and supabase_key:
     supabase = create_client(supabase_url, supabase_key)
@@ -31,8 +34,9 @@ async def get_current_user(authorization: str | None) -> Auth.types.MinimalUserD
     # Parse the authorization header
     try:
         scheme, token = authorization.split()
-        assert scheme.lower() == "bearer"
-    except (ValueError, AssertionError):
+        if scheme.lower() != "bearer":
+            raise ValueError("unsupported authorization scheme")
+    except ValueError:
         raise Auth.exceptions.HTTPException(
             status_code=401, detail="Invalid authorization header format"
         )
@@ -62,10 +66,12 @@ async def get_current_user(authorization: str | None) -> Auth.types.MinimalUserD
         return {
             "identity": user.id,
         }
-    except Exception as e:
-        # Handle any errors from Supabase
+    except Auth.exceptions.HTTPException:
+        raise
+    except Exception:
+        LOGGER.exception("Supabase token validation failed.")
         raise Auth.exceptions.HTTPException(
-            status_code=401, detail=f"Authentication error: {str(e)}"
+            status_code=401, detail="Authentication failed"
         )
 
 
@@ -152,5 +158,6 @@ async def authorize_store(ctx: Auth.types.AuthContext, value: dict):
         return
 
     # The "namespace" field for each store item is a tuple you can think of as the directory of an item.
-    namespace: tuple = value["namespace"]
-    assert namespace[0] == ctx.user.identity, "Not authorized"
+    namespace = value.get("namespace")
+    if not isinstance(namespace, (tuple, list)) or not namespace or namespace[0] != ctx.user.identity:
+        raise Auth.exceptions.HTTPException(status_code=403, detail="Not authorized")

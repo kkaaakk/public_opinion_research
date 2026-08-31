@@ -591,18 +591,6 @@ class Configuration(BaseModel):
             }
         }
     )
-    rag_hybrid_alpha: float = Field(
-        default=0.65,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "default": 0.65,
-                "min": 0.0,
-                "max": 1.0,
-                "description": "Hybrid retrieval weight for vector scores. The rest is BM25 keyword weight."
-            }
-        }
-    )
     rag_rrf_rank_constant: int = Field(
         default=60,
         metadata={
@@ -1431,8 +1419,6 @@ class Configuration(BaseModel):
                 raise ValueError(
                     "rag_memory_mysql_index_record_types contains an unsupported memory type."
                 )
-        if not 0 <= self.rag_hybrid_alpha <= 1:
-            raise ValueError("rag_hybrid_alpha must be between 0 and 1.")
         if self.rag_rrf_rank_constant <= 0:
             raise ValueError("rag_rrf_rank_constant must be greater than 0.")
         if not 0 <= self.rag_structured_metadata_weight <= 1:
