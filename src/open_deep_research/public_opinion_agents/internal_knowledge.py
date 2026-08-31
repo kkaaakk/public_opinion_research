@@ -12,7 +12,7 @@ AGENT = PublicOpinionAgentSpec(
         "company facts, product facts, prior incidents, policies, FAQs, PR playbooks, "
         "and memory. It does not infer external public sentiment."
     ),
-    tool_channels=frozenset({"rag"}),
+    allowed_domains=frozenset({"core", "rag"}),
     expected_output=(
         "Internal RAG evidence about company facts, product facts, PR playbooks, "
         "FAQs, prior cases, and memory, with local citations."

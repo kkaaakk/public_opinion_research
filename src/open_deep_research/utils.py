@@ -352,6 +352,17 @@ async def get_all_tools(config: RunnableConfig):
     mcp_tools = await load_mcp_tools(config, existing_tool_names)
     tools.extend(mcp_tools)
 
+    # Tag known built-ins once at the shared loading boundary. Unknown tools
+    # remain unclassified and are therefore denied by fixed-role business agents.
+    from open_deep_research.mcp.domain_filter import (
+        get_tool_domain,
+        tag_tools_with_domain,
+    )
+
+    for available_tool in tools:
+        domain = get_tool_domain(available_tool)
+        if domain:
+            tag_tools_with_domain([available_tool], domain)
     return tools
 
 def has_external_research_tool(tools: list[Any]) -> bool:

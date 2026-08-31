@@ -30,6 +30,7 @@ from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.config import get_store
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.mcp.domain_filter import tag_tools_with_domain
 from open_deep_research.mcp.tool_wrapper import wrap_mcp_tools
 
 # MCP adapter imports — gracefully degrade when incompatible versions are installed.
@@ -248,15 +249,9 @@ _SERVER_DOMAIN_MAP: dict[str, str] = {
 
 
 def _tag_tools_with_domain(tools: list[BaseTool], server_name: str) -> list[BaseTool]:
-    """Tag every tool's metadata with ``tool_domain`` so downstream filters
-    can decide whether to include or exclude it based on the user's query.
-    """
+    """Tag every MCP tool with its server's registered domain."""
     domain = _SERVER_DOMAIN_MAP.get(server_name, "external_mcp")
-    for tool in tools:
-        if tool.metadata is None:
-            tool.metadata = {}
-        tool.metadata["tool_domain"] = domain
-    return tools
+    return tag_tools_with_domain(tools, domain)
 
 
 # ---------------------------------------------------------------------------

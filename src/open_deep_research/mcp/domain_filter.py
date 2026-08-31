@@ -8,6 +8,7 @@ derived from it, so adding a new domain only requires one update.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from langchain_core.tools import BaseTool
@@ -175,36 +176,59 @@ def iter_domain_labels(domains: set[str]) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
-def _tool_domain(tool) -> str:
-    """Resolve the domain of a single tool (LangChain tool or native-search dict).
+_NATIVE_WEB_SEARCH_TYPES = frozenset(
+    {"web_search_20250305", "web_search_preview"}
+)
 
-    Priority:
-    1. ``tool.metadata["tool_domain"]`` — set by MCP loader
-    2. ``tool["name"]`` / ``tool.name`` → ``_BUILTIN_NAME_TO_DOMAIN``
-    3. ``"web_search"`` — fallback for anonymous dict tools
-    4. ``"external_mcp"`` — fallback for everything else
+
+def get_tool_domain(tool) -> str | None:
+    """Resolve a tool's explicit domain, or ``None`` when it is unclassified.
+
+    MCP tools are classified from their ``tool_domain`` metadata. Known built-in
+    tools and provider-native web-search declarations are also resolved here so
+    business-agent filtering can apply one consistent domain policy.
     """
-    # 1) MCP-loaded tools have explicit domain metadata
-    if not isinstance(tool, dict):
-        metadata = getattr(tool, "metadata", None) or {}
-        if isinstance(metadata, dict) and "tool_domain" in metadata:
-            return str(metadata["tool_domain"])
+    metadata = tool.get("metadata") if isinstance(tool, Mapping) else getattr(tool, "metadata", None)
+    if isinstance(metadata, Mapping) and "tool_domain" in metadata:
+        return str(metadata["tool_domain"])
 
-    # 2) Name-based matching — works for both BaseTool and dict tools
-    name = ""
-    if isinstance(tool, dict):
+    if isinstance(tool, Mapping):
         name = tool.get("name", "")
+        function = tool.get("function")
+        if not name and isinstance(function, Mapping):
+            name = function.get("name", "")
+        tool_type = tool.get("type")
     else:
         name = getattr(tool, "name", "")
+        tool_type = None
+
     if name in _BUILTIN_NAME_TO_DOMAIN:
         return _BUILTIN_NAME_TO_DOMAIN[name]
-
-    # 3) Anonymous dict tools → assume web_search
-    if isinstance(tool, dict):
+    if tool_type in _NATIVE_WEB_SEARCH_TYPES:
         return "web_search"
+    return None
 
-    # 4) Fallback
-    return "external_mcp"
+
+def _tool_domain(tool) -> str:
+    """Resolve a tool's domain for grouping and prompt display."""
+    return get_tool_domain(tool) or "external_mcp"
+
+
+def tag_tools_with_domain(tools: list, domain: str) -> list:
+    """Attach a validated ``tool_domain`` to LangChain tools.
+
+    Provider-native tool dictionaries are intentionally left unchanged because
+    their schema is provider-owned; ``get_tool_domain`` resolves known native
+    web-search declarations without treating arbitrary dictionaries as safe.
+    """
+    if domain not in _DOMAIN_BY_NAME:
+        raise ValueError(f"Unknown tool domain: {domain}")
+    for tool in tools:
+        if isinstance(tool, Mapping):
+            continue
+        metadata = getattr(tool, "metadata", None) or {}
+        tool.metadata = {**metadata, "tool_domain": domain}
+    return tools
 
 
 def classify_tools(tools: list[BaseTool]) -> dict[str, list[BaseTool]]:

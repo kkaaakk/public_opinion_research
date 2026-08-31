@@ -13,7 +13,7 @@ AGENT = PublicOpinionAgentSpec(
         "advertising/contract risk, and overall risk rationale. It does not draft the "
         "final PR response."
     ),
-    tool_channels=frozenset({"web", "rag", "mcp"}),
+    allowed_domains=frozenset({"core", "web_search", "rag", "social_media"}),
     expected_output=(
         "Integrated claim verification and risk register with confirmed facts, "
         "disputed claims, unsupported claims, regulatory, consumer-rights, "

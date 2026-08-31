@@ -13,7 +13,7 @@ AGENT = PublicOpinionAgentSpec(
         "keywords. It must ground company-facing guidance in internal RAG evidence and "
         "risk_assessment findings."
     ),
-    tool_channels=frozenset({"rag"}),
+    allowed_domains=frozenset({"core", "rag"}),
     expected_output=(
         "Response posture, holding statement, FAQ points, stakeholder messages, "
         "action plan, and monitoring keywords grounded in internal PR playbooks."

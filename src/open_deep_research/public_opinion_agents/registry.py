@@ -39,9 +39,29 @@ def public_opinion_role_expectations() -> dict[str, str]:
     }
 
 
-def public_opinion_role_channels() -> dict[str, frozenset[str]]:
-    """Return role-to-tool-channel mapping for compatibility."""
+def public_opinion_role_domains() -> dict[str, frozenset[str]]:
+    """Return the explicit role-to-tool-domain mapping."""
     return {
-        role: PUBLIC_OPINION_AGENT_SPECS[role].tool_channels
+        role: PUBLIC_OPINION_AGENT_SPECS[role].allowed_domains
+        for role in PUBLIC_OPINION_AGENT_ORDER
+    }
+
+
+def public_opinion_role_channels() -> dict[str, frozenset[str]]:
+    """Return a deprecated channel view derived from domain permissions.
+
+    Domain permissions remain the only authorization source. This compatibility
+    view is retained for callers that still display the former channel names.
+    """
+    return {
+        role: frozenset(
+            channel
+            for domain, channel in (
+                ("web_search", "web"),
+                ("rag", "rag"),
+                ("social_media", "mcp"),
+            )
+            if domain in PUBLIC_OPINION_AGENT_SPECS[role].allowed_domains
+        )
         for role in PUBLIC_OPINION_AGENT_ORDER
     }

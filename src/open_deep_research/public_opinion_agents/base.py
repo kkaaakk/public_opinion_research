@@ -11,7 +11,7 @@ class PublicOpinionAgentSpec:
     node_name: str
     display_name: str
     responsibility: str
-    tool_channels: frozenset[str]
+    allowed_domains: frozenset[str]
     expected_output: str
     input_contract: tuple[str, ...]
     output_schema: tuple[str, ...]

@@ -13,7 +13,7 @@ AGENT = PublicOpinionAgentSpec(
         "or category context. It does not make final compliance judgments or draft the "
         "response plan."
     ),
-    tool_channels=frozenset({"web", "mcp"}),
+    allowed_domains=frozenset({"core", "web_search", "social_media"}),
     expected_output=(
         "Integrated public-signal brief covering news, official notices, social "
         "discussion, complaint patterns, sentiment direction, spread signals, "

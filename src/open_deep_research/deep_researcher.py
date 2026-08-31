@@ -37,6 +37,7 @@ from open_deep_research.budget import (
     truncate_text_to_token_budget,
 )
 from open_deep_research.configuration import Configuration
+from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
 from open_deep_research.memory.writer import persist_conversation_memory
 from open_deep_research.observability import (
     ObservedGraph,
@@ -58,7 +59,6 @@ from open_deep_research.prompts import (
 )
 from open_deep_research.public_opinion_agents import (
     get_public_opinion_agent_spec,
-    public_opinion_role_channels,
     public_opinion_role_expectations,
 )
 from open_deep_research.rag import query_images
@@ -146,7 +146,6 @@ def _researcher_assignment(tool_call: dict, configurable: Configuration) -> dict
 
 
 PUBLIC_OPINION_ROLE_EXPECTATIONS = public_opinion_role_expectations()
-PUBLIC_OPINION_ROLE_CHANNELS = public_opinion_role_channels()
 
 
 def _tool_name(available_tool) -> str:
@@ -251,16 +250,19 @@ def _build_agent_private_memory(role: str, report: str, raw_notes: list[str]) ->
 
 def _role_tool_prompt(configurable: Configuration, role: str) -> str:
     """Describe the role-specific tool whitelist for the researcher prompt."""
-    allowed_channels = get_public_opinion_agent_spec(role).tool_channels
-    allowed_tools = ["think_tool", "ResearchComplete"]
-    if "web" in allowed_channels:
+    allowed_domains = get_public_opinion_agent_spec(role).allowed_domains
+    allowed_tools = []
+    if "core" in allowed_domains:
+        allowed_tools.extend(["think_tool", "ResearchComplete"])
+    if "web_search" in allowed_domains:
         allowed_tools.append("web_search")
-    if "rag" in allowed_channels:
+    if "rag" in allowed_domains:
         allowed_tools.append("rag_search")
-    if "mcp" in allowed_channels:
+    if "social_media" in allowed_domains:
         allowed_tools.extend(sorted(SOCIAL_MEDIA_TOOL_NAMES))
     return (
         f"{get_research_tool_prompt(configurable)}\n\n"
+        f"Role-specific allowed domains: {', '.join(sorted(allowed_domains))}. "
         "Role-specific tool whitelist: "
         f"{', '.join(allowed_tools)}. "
         "Do not attempt to use tools outside this whitelist."
@@ -269,25 +271,33 @@ def _role_tool_prompt(configurable: Configuration, role: str) -> str:
 
 async def _business_agent_tools(config: RunnableConfig, role: str):
     """Return the role-specific tool whitelist for an explicit business agent."""
-    allowed_channels = get_public_opinion_agent_spec(role).tool_channels
+    allowed_domains = get_public_opinion_agent_spec(role).allowed_domains
     all_tools = await get_all_tools(config)
-    if "mcp" in allowed_channels:
-        all_tools.extend(get_social_media_tools())
+    if "social_media" in allowed_domains:
+        all_tools.extend(tag_tools_with_domain(get_social_media_tools(), "social_media"))
+
+    tools_before = len(all_tools)
     filtered_tools = []
+    rejected_tools = []
 
     for available_tool in all_tools:
-        name = _tool_name(available_tool)
-        if name in {"ResearchComplete", "think_tool"}:
+        tool_domain = get_tool_domain(available_tool)
+        if tool_domain in allowed_domains:
             filtered_tools.append(available_tool)
-        elif name == "web_search" and "web" in allowed_channels:
-            filtered_tools.append(available_tool)
-        elif name == "rag_search" and "rag" in allowed_channels:
-            filtered_tools.append(available_tool)
-        elif name in SOCIAL_MEDIA_TOOL_NAMES and "mcp" in allowed_channels:
-            filtered_tools.append(available_tool)
-        elif name not in {"ResearchComplete", "think_tool", "web_search", "rag_search"}:
-            if "mcp" in allowed_channels:
-                filtered_tools.append(available_tool)
+        else:
+            rejected_tools.append(
+                (_tool_name(available_tool), tool_domain or "unclassified")
+            )
+
+    LOGGER.debug(
+        "Public-opinion agent %s: allowed_domains=%s tools_before=%d "
+        "tools_after=%d rejected=%s",
+        role,
+        sorted(allowed_domains),
+        tools_before,
+        len(filtered_tools),
+        rejected_tools,
+    )
 
     return filtered_tools
 
@@ -1197,10 +1207,10 @@ async def _run_public_opinion_agent(
     tools = await _business_agent_tools(config, role)
     if not has_external_research_tool(tools):
         spec = get_public_opinion_agent_spec(role)
-        required = [ch for ch in spec.tool_channels if ch not in ("mcp",)]
+        required = sorted(spec.allowed_domains - {"core"})
         raise ValueError(
             f"Public Opinion agent '{role}' ({spec.display_name}) requires "
-            f"tool channels: {', '.join(sorted(required))}. "
+            f"tool domains: {', '.join(required)}. "
             f"Missing tools — ensure RAG is enabled (rag_enabled=true) "
             f"and/or web search is configured (search_api=tavily)."
         )

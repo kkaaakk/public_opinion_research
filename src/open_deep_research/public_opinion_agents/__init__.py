@@ -6,6 +6,7 @@ from open_deep_research.public_opinion_agents.registry import (
     PUBLIC_OPINION_AGENT_SPECS,
     get_public_opinion_agent_spec,
     public_opinion_role_channels,
+    public_opinion_role_domains,
     public_opinion_role_expectations,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "PublicOpinionAgentSpec",
     "get_public_opinion_agent_spec",
     "public_opinion_role_channels",
+    "public_opinion_role_domains",
     "public_opinion_role_expectations",
 ]
