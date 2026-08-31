@@ -162,20 +162,43 @@ def _role_enabled(configurable: Configuration, role: str) -> bool:
     return role in {str(agent).strip().lower() for agent in enabled_agents}
 
 
-def _role_context(role_reports: dict[str, str]) -> str:
+_PUBLIC_OPINION_UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
+    "public_signal": (),
+    "internal_knowledge": (),
+    "risk_assessment": ("public_signal", "internal_knowledge"),
+    "response_strategy": (
+        "public_signal",
+        "internal_knowledge",
+        "risk_assessment",
+    ),
+}
+
+
+def _role_context(
+    role_reports: dict[str, str],
+    roles: tuple[str, ...] | None = None,
+) -> str:
     """Format upstream role reports for downstream public-opinion agents."""
     if not role_reports:
         return "No upstream role reports are available yet."
-    return "\n\n".join(
+
+    role_names = roles if roles is not None else tuple(role_reports)
+    formatted_reports = [
         f"## {role}\n{report}"
-        for role, report in role_reports.items()
+        for role in role_names
+        for report in [role_reports.get(role, "")]
         if report
-    )
+    ]
+    return "\n\n".join(formatted_reports) or "No upstream role reports are available yet."
 
 
 def _agent_private_memory_context(agent_memories: dict[str, list[dict[str, Any]]], role: str) -> str:
     """Format one agent's private short-term memory for prompt injection."""
-    memories = list((agent_memories or {}).get(role, []) or [])
+    role_memories = (agent_memories or {}).get(role, [])
+    if isinstance(role_memories, (str, bytes)):
+        memories = [role_memories]
+    else:
+        memories = list(role_memories or [])
     if not memories:
         return "No private memory has been recorded for this agent yet."
     formatted_entries = []
@@ -188,6 +211,29 @@ def _agent_private_memory_context(agent_memories: dict[str, list[dict[str, Any]]
         else:
             formatted_entries.append(f"{index}. {memory}")
     return "\n\n".join(formatted_entries)
+
+
+def _build_public_opinion_agent_assignment(
+    state: PublicOpinionState,
+    role: str,
+) -> str:
+    """Build one agent assignment with complete upstream reports and private memory."""
+    agent_spec = get_public_opinion_agent_spec(role)
+    upstream_context = _role_context(
+        state.get("role_reports", {}),
+        _PUBLIC_OPINION_UPSTREAM_ROLES.get(role),
+    )
+    private_memory_context = _agent_private_memory_context(
+        state.get("agent_memories", {}),
+        role,
+    )
+    return (
+        f"Overall research brief:\n{state.get('research_brief', '')}\n\n"
+        f"Upstream role reports (complete current-run outputs):\n{upstream_context}\n\n"
+        f"Your private memory (compact supplemental context):\n{private_memory_context}\n\n"
+        f"Input contract:\n{chr(10).join(f'- {item}' for item in agent_spec.input_contract)}\n\n"
+        f"Your role-specific objective:\n{agent_spec.expected_output}"
+    )
 
 
 def _build_agent_private_memory(role: str, report: str, raw_notes: list[str]) -> dict[str, Any]:
@@ -731,6 +777,33 @@ def _extract_section_evidence(section, role_report_content: dict[str, str]) -> s
     return "\n\n".join(evidence_parts)
 
 
+def _section_role_report_content(
+    role_reports: dict[str, str],
+    agent_memories: dict[str, list[dict[str, Any]]],
+) -> dict[str, str]:
+    """Build section evidence with full reports first and memory as a fallback.
+
+    A compact memory can preserve backward-compatible context when a role did not
+    produce a formal report. It must never replace or be appended to an existing
+    full current-run report, because the memory may be truncated.
+    """
+    content = {
+        role: str(role_reports.get(role) or "")
+        for role in _PUBLIC_OPINION_ROLE_NAMES
+        if role in role_reports and role_reports.get(role)
+    }
+    for role in _PUBLIC_OPINION_ROLE_NAMES:
+        if content.get(role):
+            continue
+        memory_context = _agent_private_memory_context(agent_memories, role)
+        if memory_context != "No private memory has been recorded for this agent yet.":
+            content[role] = (
+                "[Compact private-memory fallback; no complete role report was provided]\n"
+                f"{memory_context}"
+            )
+    return content
+
+
 @observe_graph_node(name="section_writer", kind="writer")
 async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     """Write report sections from role evidence in public-opinion mode.
@@ -741,13 +814,10 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     configurable = Configuration.from_runnable_config(config)
     sections = state.get("sections", [])
     role_reports = state.get("role_reports", {}) or {}
+    agent_memories = state.get("agent_memories", {}) or {}
     # Formal role reports are the source of truth for current-run writing.
-    # Compact private memories intentionally remain separate and may be truncated.
-    role_report_content = {
-        role: str(role_reports.get(role) or "")
-        for role in _PUBLIC_OPINION_ROLE_NAMES
-        if role in role_reports
-    }
+    # Compact private memories are only a fallback for roles without a report.
+    role_report_content = _section_role_report_content(role_reports, agent_memories)
     
     research_sections = [s for s in sections if s.research and s.status != "done"]
     if not research_sections:
@@ -829,6 +899,7 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     configurable = Configuration.from_runnable_config(config)
     sections = state.get("sections", [])
     completed_sections = state.get("completed_sections", [])
+    role_reports = state.get("role_reports", {}) or {}
     
     final_sections = [s for s in sections if not s.research]
     if not final_sections:
@@ -846,6 +917,8 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     )
     
     if not context:
+        context = _role_context(role_reports)
+    if not context or context == "No upstream role reports are available yet.":
         context = "No completed research sections are available yet."
     
     budget_usage = state.get("budget_usage", {})
@@ -939,7 +1012,9 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                 # Try to fill missing sections with final_report_model
                 try:
                     notes = state.get("notes", [])
-                    findings = "\n".join(notes)
+                    findings = _role_context(state.get("role_reports", {}))
+                    if findings == "No upstream role reports are available yet.":
+                        findings = "\n".join(notes)
                     
                     final_report_prompt = public_opinion_final_report_generation_prompt.format(
                         research_brief=state.get("research_brief", ""),
@@ -1113,17 +1188,10 @@ async def _run_public_opinion_agent(
     budget_usage = state.get("budget_usage", {})
     role_budget_update = {}
     expected_output = agent_spec.expected_output
-    upstream_context = _role_context(state.get("role_reports", {}))
+    assignment = _build_public_opinion_agent_assignment(state, role)
     private_memory_context = _agent_private_memory_context(
         state.get("agent_memories", {}),
         role,
-    )
-    assignment = (
-        f"Overall research brief:\n{state.get('research_brief', '')}\n\n"
-        f"Upstream role reports:\n{upstream_context}\n\n"
-        f"Your private memory:\n{private_memory_context}\n\n"
-        f"Input contract:\n{chr(10).join(f'- {item}' for item in agent_spec.input_contract)}\n\n"
-        f"Your role-specific objective:\n{expected_output}"
     )
 
     tools = await _business_agent_tools(config, role)
@@ -1366,20 +1434,22 @@ async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
         config,
     )
     budget_update = diff_budget_usage(result.get("budget_usage", {}), input_budget)
-    
+    role_reports = result.get("role_reports") or {}
+    agent_memories = result.get("agent_memories", state.get("agent_memories", {}))
+
     # Keep the full current-run reports in the formal state channel. The compact
     # private memories remain available for agent prompt memory only.
     return {
         "research_brief": result.get("research_brief", state.get("research_brief", "")),
         "role_reports": {
             "type": "override",
-            "value": result.get("role_reports", {}),
+            "value": role_reports,
         },
         "notes": result.get("notes", []),
         "raw_notes": result.get("raw_notes", []),
         "agent_memories": {
             "type": "override",
-            "value": result.get("agent_memories", state.get("agent_memories", {})),
+            "value": agent_memories,
         },
         "budget_usage": budget_update,
     }
@@ -1424,7 +1494,9 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
     """
     notes = state.get("notes", [])
     cleared_state = {"notes": {"type": "override", "value": []}}
-    findings = "\n".join(notes)
+    findings = _role_context(state.get("role_reports", {}))
+    if findings == "No upstream role reports are available yet.":
+        findings = "\n".join(notes)
     configurable = Configuration.from_runnable_config(config)
     budget_usage = state.get("budget_usage", {})
     budget_update = {}

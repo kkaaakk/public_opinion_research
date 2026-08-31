@@ -1,6 +1,7 @@
 """Graph state definitions and data structures for the Deep Research agent."""
 
 import operator
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal, Optional
 
 from langchain_core.messages import MessageLikeRepresentation
@@ -136,12 +137,15 @@ def budget_usage_reducer(current_value: Any, new_value: Any):
         return new_value.get("value", empty_budget_usage())
     return merge_budget_usage(current_value, new_value)
 
-def role_reports_reducer(current_value: Any, new_value: Any):
+def role_reports_reducer(current_value: Any, new_value: Any) -> dict[str, str]:
     """Reducer that merges public-opinion role reports by role name."""
     if isinstance(new_value, dict) and new_value.get("type") == "override":
-        return new_value.get("value", {})
-    merged = dict(current_value or {})
-    merged.update(new_value or {})
+        replacement = new_value.get("value", {})
+        return dict(replacement) if isinstance(replacement, Mapping) else {}
+    current_reports = current_value if isinstance(current_value, Mapping) else {}
+    new_reports = new_value if isinstance(new_value, Mapping) else {}
+    merged = dict(current_reports)
+    merged.update(new_reports)
     return merged
 
 def agent_memories_reducer(current_value: Any, new_value: Any):
@@ -170,7 +174,9 @@ class AgentState(MessagesState):
 
     supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     research_brief: Optional[str]
+    # Complete role outputs for the current public-opinion run.
     role_reports: Annotated[dict[str, str], role_reports_reducer]
+    # Compact private context; this channel may be truncated by design.
     agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
     raw_notes: Annotated[list[str], override_reducer] = []
     notes: Annotated[list[str], override_reducer] = []
@@ -188,7 +194,9 @@ class PublicOpinionState(TypedDict):
 
     messages: list[MessageLikeRepresentation]
     research_brief: str
+    # Complete role outputs are a formal subgraph input/output channel.
     role_reports: Annotated[dict[str, str], role_reports_reducer]
+    # Private per-agent memories remain compact and reducer-managed.
     agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
     notes: Annotated[list[str], override_reducer] = []
     raw_notes: Annotated[list[str], override_reducer] = []
