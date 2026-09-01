@@ -53,6 +53,61 @@ class ResearchQuestion(BaseModel):
     )
 
 
+class ResearchTask(BaseModel):
+    """One evidence-gap task assigned to a public-opinion research role."""
+
+    task_id: str = Field(
+        description="Stable identifier for this research task within the current run.",
+    )
+    objective: str = Field(
+        description="The specific unresolved question or claim to investigate.",
+    )
+    target_role: Literal["public_signal", "internal_knowledge"] = Field(
+        description="The public-opinion research role that should execute this task.",
+    )
+    evidence_needed: str = Field(
+        description="The evidence required to resolve the task.",
+    )
+    reason: str = Field(
+        description="Why resolving this task can affect the risk assessment.",
+    )
+    priority: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        description="Relative priority of this research task.",
+    )
+
+
+class ResearchReview(BaseModel):
+    """Structured review of public-opinion evidence and remaining research gaps."""
+
+    research_complete: bool = Field(
+        description=(
+            "Whether the available evidence is sufficient to proceed to risk assessment. "
+            "Do not keep researching gaps that would not materially change the risk judgment."
+        ),
+    )
+    confirmed_findings: list[str] = Field(
+        default_factory=list,
+        description="Findings supported well enough for downstream risk assessment.",
+    )
+    unresolved_claims: list[str] = Field(
+        default_factory=list,
+        description="Important claims that remain unverified or weakly supported.",
+    )
+    conflicts: list[str] = Field(
+        default_factory=list,
+        description="Material conflicts between public signals and internal knowledge.",
+    )
+    research_gaps: list[str] = Field(
+        default_factory=list,
+        description="Evidence gaps that could materially change the risk judgment.",
+    )
+    next_tasks: list[ResearchTask] = Field(
+        default_factory=list,
+        description="Executable follow-up tasks, grouped later by target_role.",
+    )
+
+
 class SearchQuery(BaseModel):
     """A single web search query."""
 
@@ -137,15 +192,86 @@ def budget_usage_reducer(current_value: Any, new_value: Any):
         return new_value.get("value", empty_budget_usage())
     return merge_budget_usage(current_value, new_value)
 
+
+def research_round_reducer(current_value: Any, new_value: Any) -> int:
+    """Keep the greatest completed/current round across parallel follow-ups."""
+    if isinstance(new_value, dict) and new_value.get("type") == "override":
+        new_value = new_value.get("value", 1)
+    try:
+        current_round = int(current_value or 1)
+    except (TypeError, ValueError):
+        current_round = 1
+    try:
+        incoming_round = int(new_value or 1)
+    except (TypeError, ValueError):
+        incoming_round = 1
+    return max(1, current_round, incoming_round)
+
+
+def _coerce_research_task(value: Any) -> ResearchTask | None:
+    """Convert a task-like value to the canonical structured task model."""
+    if isinstance(value, ResearchTask):
+        return value
+    if isinstance(value, Mapping):
+        try:
+            return ResearchTask.model_validate(value)
+        except Exception:
+            return None
+    return None
+
+
+def _research_task_values(value: Any) -> list[Any]:
+    """Return task-like values from a state update without assuming its encoding."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def research_tasks_reducer(current_value: Any, new_value: Any) -> list[ResearchTask]:
+    """Accumulate research tasks while de-duplicating stable task identifiers."""
+    if isinstance(new_value, dict) and new_value.get("type") == "override":
+        values = _research_task_values(new_value.get("value", []))
+    else:
+        values = _research_task_values(current_value) + _research_task_values(new_value)
+
+    merged: list[ResearchTask] = []
+    seen: set[str] = set()
+    for value in values:
+        task = _coerce_research_task(value)
+        if task is None:
+            continue
+        identity = task.task_id.strip() or (
+            f"{task.target_role}:{task.objective.strip()}:{task.evidence_needed.strip()}"
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        merged.append(task)
+    return merged
+
+
 def role_reports_reducer(current_value: Any, new_value: Any) -> dict[str, str]:
-    """Reducer that merges public-opinion role reports by role name."""
+    """Reducer that preserves every public-opinion report produced for each role."""
     if isinstance(new_value, dict) and new_value.get("type") == "override":
         replacement = new_value.get("value", {})
         return dict(replacement) if isinstance(replacement, Mapping) else {}
     current_reports = current_value if isinstance(current_value, Mapping) else {}
     new_reports = new_value if isinstance(new_value, Mapping) else {}
     merged = dict(current_reports)
-    merged.update(new_reports)
+    for role, report in new_reports.items():
+        normalized_role = str(role)
+        normalized_report = str(report or "")
+        previous_report = str(merged.get(normalized_role) or "")
+        if not previous_report:
+            merged[normalized_role] = normalized_report
+        elif normalized_report and normalized_report != previous_report:
+            merged[normalized_role] = (
+                f"{previous_report}\n\n"
+                f"--- Additional {normalized_role} research report ---\n"
+                f"{normalized_report}"
+            )
     return merged
 
 def agent_memories_reducer(current_value: Any, new_value: Any):
@@ -172,7 +298,6 @@ class AgentInputState(MessagesState):
 class AgentState(MessagesState):
     """Main agent state containing messages and research data."""
 
-    supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     research_brief: Optional[str]
     # Complete role outputs for the current public-opinion run.
     role_reports: Annotated[dict[str, str], role_reports_reducer]
@@ -201,3 +326,8 @@ class PublicOpinionState(TypedDict):
     notes: Annotated[list[str], override_reducer] = []
     raw_notes: Annotated[list[str], override_reducer] = []
     budget_usage: Annotated[dict[str, Any], budget_usage_reducer]
+    research_round: Annotated[int, research_round_reducer]
+    research_mode: Literal["initial", "followup"]
+    research_review: ResearchReview | None
+    current_research_tasks: Annotated[list[ResearchTask], research_tasks_reducer]
+    completed_research_tasks: Annotated[list[ResearchTask], research_tasks_reducer]

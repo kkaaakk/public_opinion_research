@@ -25,19 +25,19 @@
 
 ## plan_report_sections 节点
 - [ ] 函数签名 `plan_report_sections(state: AgentState, config: RunnableConfig)` 正确
-- [ ] 非舆情模式 passthrough（直接 goto research_supervisor，不执行规划）
+- [ ] 主图统一进入 `research_phase`，不再按业务模式 passthrough
 - [ ] 舆情模式使用 planner_model（配置回退到 research_model）+ with_structured_output(Sections)
 - [ ] Budget Guard 集成：预算不足时退化为单 section（agent_role 包含全部 4 角色）
 - [ ] section 数量限制：不超过 available_research_unit_slots 返回值（None 时上限 5）
 - [ ] 预算预留时序保护：扣除 section_writer 预留的 slots（等于 research=True 的 section 数量），扣除后 <=0 则退化为单 section
 - [ ] 舆情模式 prompt 增强：要求每个 section 声明 agent_role
 - [ ] allow_plan_feedback=True 时调用 `interrupt({"sections": [s.dict() for s in sections]})` 暂停
-- [ ] 单元测试覆盖：舆情正常规划、预算退化、section 截断、预算预留时序保护、人工批准、人工打回、通用模式 passthrough
+- [ ] 单元测试覆盖：正常规划、预算退化、section 截断、预算预留时序保护、人工批准和人工打回
 
 ## human_feedback_on_plan 节点
 - [ ] 函数签名 `human_feedback_on_plan(state, config)` 正确
 - [ ] 接收 Command(resume=<value>) 传入的 resume 值
-- [ ] resume 值为 True（bool）→ Command(goto="research_supervisor")
+- [ ] resume 值为 True（bool）→ Command(goto="research_phase")
 - [ ] resume 值为字符串 → Command(goto="plan_report_sections", update={"feedback_on_report_plan": [feedback]})
 - [ ] resume 值为其他类型 → 抛出 TypeError
 - [ ] 单元测试覆盖：True 批准、字符串打回、非法类型抛 TypeError
@@ -79,8 +79,8 @@
 ## research_phase 路由改造
 - [ ] 舆情模式下调用 public_opinion_subgraph 后调用 section_writer
 - [ ] section_writer 结果（completed_sections）合并到返回的 state update
-- [ ] 通用模式保持当前行为（调用 supervisor_subgraph，不改动）
-- [ ] 测试覆盖：舆情模式调用 section_writer、通用模式不调用
+- [ ] `research_phase` 调用 `public_opinion_subgraph` 并完成主图/子图状态转换
+- [ ] 测试覆盖：`research_phase` 调用子图并正确回写 role reports、memories、notes 和 budget
 
 ## 主图组装
 - [ ] `plan_report_sections` 节点添加到 deep_researcher_builder
@@ -89,13 +89,13 @@
 - [ ] `compile_final_report` 节点添加
 - [ ] 边：write_research_brief → plan_report_sections
 - [ ] 边：plan_report_sections → human_feedback_on_plan（条件：allow_plan_feedback）
-- [ ] 边：plan_report_sections → research_supervisor（条件：!allow_plan_feedback）
-- [ ] 边：human_feedback_on_plan → research_supervisor（批准）或 → plan_report_sections（打回）
-- [ ] 边：research_supervisor → write_final_sections
+- [ ] 边：plan_report_sections → research_phase（无反馈或批准）
+- [ ] `plan_report_sections` 打回时回到自身重新规划
+- [ ] 边：research_phase → section_writer → write_final_sections
 - [ ] 边：write_final_sections → compile_final_report
 - [ ] 边：compile_final_report → END
 - [ ] `langgraph.json` 入口仍为 deep_researcher，无改动
-- [ ] 通用模式流程不受影响（plan_report_sections 在非舆情模式下 passthrough）
+- [ ] Public Opinion 固定流程不受影响
 
 ## 向后兼容
 - [ ] plan_report_sections 预算不足 → 单 section（agent_role 包含全部 4 角色）
@@ -104,17 +104,16 @@
 - [ ] compile_final_report 所有 section 缺失 → 从 notes 合成（使用 public_opinion_final_report_generation_prompt）
 - [ ] 全量退化等价于当前舆情模式行为（端到端测试验证）
 
-## 通用模式不受影响
-- [ ] 通用模式 supervisor / researcher / ConductResearch 工具无改动
-- [ ] 通用模式 supervisor_subgraph / researcher_subgraph 无改动
-- [ ] 通用模式流程：write_research_brief → research_supervisor → final_report_generation 不变
-- [ ] 通用模式回归测试通过
+## Public Opinion 固定流程
+- [ ] 不引入独立 Supervisor / Researcher 子图
+- [ ] 固定流程：write_research_brief → plan_report_sections → research_phase → section_writer → compile_final_report
+- [ ] 四个业务 Agent 的依赖拓扑保持不变
 
 ## 集成验证
 - [ ] 舆情模式端到端测试通过
 - [ ] 预算不足退化测试通过
 - [ ] 人工反馈测试通过（含 interrupt/resume）
-- [ ] 通用模式回归测试通过
+- [ ] Public Opinion 主流程回归测试通过
 - [ ] `ruff check` 无 lint 错误
 - [ ] `mypy` 类型检查通过
 - [ ] 现有测试套件无回归

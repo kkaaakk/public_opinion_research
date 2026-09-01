@@ -8,7 +8,7 @@ Legacy 的 Plan-and-Execute 方案（`src/legacy/graph.py`）提供了"先规划
 
 两者是正交的：Plan-and-Execute 提供**结构骨架**，当前舆情模式提供**执行引擎**。本次变更将 Plan-and-Execute 的结构化规划能力作为**必选骨架**集成到舆情模式中，让报告结构从"事后组织"变成"事前规划 + 事中跟踪 + 事后拼装"。
 
-**本次变更只影响舆情模式（`business_scenario == "public_opinion_risk"`），通用模式（supervisor + researcher）保持不变。**
+**当前主图只运行舆情模式（`business_scenario == "public_opinion_risk"`），不包含独立的 Supervisor + Researcher 编排层。**
 
 ## What Changes
 
@@ -22,7 +22,7 @@ Legacy 的 Plan-and-Execute 方案（`src/legacy/graph.py`）提供了"先规划
 - **新增** 配置项：`allow_plan_feedback`、`report_structure`、`planner_model`、`planner_model_max_tokens`、`section_writer_model`、`section_writer_model_max_tokens`
 - **新增** Prompt 模板：`report_planner_instructions`（舆情增强版）、`section_writer_from_role_reports_prompt`、`final_section_writer_instructions`
 - **保留** 向后兼容：所有新节点在预算不足时退化为当前行为（单 section / 复用 role_reports 原文 / 从 notes 合成）
-- **不改动** 通用模式的 supervisor / researcher / ConductResearch 工具
+- **不新增** Supervisor Agent、Researcher 子图或 `ConductResearch` 委派链路
 
 ## Impact
 
@@ -37,9 +37,9 @@ Legacy 的 Plan-and-Execute 方案（`src/legacy/graph.py`）提供了"先规划
   - `langgraph.json` — 无改动（入口仍是 `deep_researcher`）
   - `tests/` — 新增针对 plan/section_writer/compile 的单元测试
 - **Not affected**:
-  - 通用模式的 `supervisor`、`supervisor_tools`、`researcher`、`researcher_tools`、`compress_research` 节点
+  - `compress_research` 作为四个业务 Agent 的内部压缩步骤保留
   - `ConductResearch`、`ResearchComplete` 工具
-  - `supervisor_subgraph`、`researcher_subgraph`
+  - 已移除的通用模式子图不属于当前主图
 
 ## ADDED Requirements
 
@@ -87,9 +87,9 @@ Legacy 的 Plan-and-Execute 方案（`src/legacy/graph.py`）提供了"先规划
 - **THEN** 系统扣除 section_writer 预留的 4 个 slots，剩余 0
 - **AND** 退化为单 section（agent_role 包含全部 4 角色）
 
-#### Scenario: 通用模式不触发
-- **WHEN** `business_scenario != "public_opinion_risk"`
-- **THEN** `plan_report_sections` 节点不执行，通用模式流程不变
+#### Scenario: Public Opinion 是唯一主流程
+- **WHEN** 主图启动
+- **THEN** `plan_report_sections` 和 `research_phase` 按固定 Public Opinion 流程执行
 
 ### Requirement: 人工审核舆情报告大纲
 
@@ -103,13 +103,13 @@ Legacy 的 Plan-and-Execute 方案（`src/legacy/graph.py`）提供了"先规划
 - `human_feedback_on_plan` 节点接收 resume 的值并路由
 
 `human_feedback_on_plan` 节点 SHALL 按以下规则解析 resume 值并路由：
-- resume 值为 `True`（bool）→ 批准计划，`Command(goto="research_supervisor")`
+- resume 值为 `True`（bool）→ 批准计划，`Command(goto="research_phase")`
 - resume 值为字符串 → 作为反馈累加到 `feedback_on_report_plan`，`Command(goto="plan_report_sections", update={"feedback_on_report_plan": [feedback]})`
 - resume 值为其他类型 → 抛出 `TypeError`（与 legacy `human_feedback` 节点行为一致）
 
 #### Scenario: 启用人工审核并批准
 - **WHEN** `allow_plan_feedback=True` 且用户通过 `Command(resume=True)` 恢复
-- **THEN** `human_feedback_on_plan` 节点路由到 `research_supervisor`
+- **THEN** `plan_report_sections` 路由到 `research_phase`
 
 #### Scenario: 启用人工审核并打回
 - **WHEN** `allow_plan_feedback=True` 且用户通过 `Command(resume="请增加竞品声量对比 section")` 恢复
@@ -233,22 +233,22 @@ Legacy 的 Plan-and-Execute 方案（`src/legacy/graph.py`）提供了"先规划
 
 当前舆情模式主图流程为：
 ```
-START → enrich_query_images → clarify_with_user → write_research_brief → research_supervisor → final_report_generation → END
+START → enrich_query_images → clarify_with_user → write_research_brief → plan_report_sections → research_phase → section_writer → write_final_sections → compile_final_report → END
 ```
 
-其中 `research_supervisor`（即 `research_phase`）在舆情模式下调用 `public_opinion_subgraph`。
+其中 `research_phase` 调用 `public_opinion_subgraph`，负责主图与子图的状态转换。
 
 修改后舆情模式流程为：
 ```
-START → enrich_query_images → clarify_with_user → write_research_brief → plan_report_sections → [human_feedback_on_plan] → research_supervisor → write_final_sections → compile_final_report → END
+START → enrich_query_images → clarify_with_user → write_research_brief → plan_report_sections → research_phase → section_writer → write_final_sections → compile_final_report → END
 ```
 
 其中：
 - `human_feedback_on_plan` 为条件节点，仅在 `allow_plan_feedback=True` 时启用
-- `research_supervisor`（`research_phase`）在舆情模式下内部调用 `public_opinion_subgraph` 后再调用 `section_writer`
+- `research_phase` 内部调用 `public_opinion_subgraph`，完成后由主图继续调用 `section_writer`
 - `final_report_generation` 节点在舆情模式下被替换为 `compile_final_report`
 
-**通用模式流程不变**：`write_research_brief → research_supervisor → final_report_generation`，supervisor 内部行为不改动。
+当前项目只有 Public Opinion 流程，不存在独立 Supervisor Agent 或通用模式分支。
 
 ### Requirement: AgentState 状态结构
 
@@ -257,7 +257,7 @@ START → enrich_query_images → clarify_with_user → write_research_brief →
 - `completed_sections: Annotated[list[Section], operator.add]` — 并行子图结果自动累加
 - `feedback_on_report_plan: Annotated[list[str], operator.add]` — 反馈累积
 
-保留现有字段：`supervisor_messages`、`research_brief`、`relevant_domains`、`agent_memories`、`raw_notes`、`notes`、`budget_usage`、`final_report`。
+保留现有字段：`research_brief`、`role_reports`、`agent_memories`、`raw_notes`、`notes`、`budget_usage`、`final_report`。
 
 `notes` 和 `raw_notes` SHALL 作为中间产物保留，作为 `compile_final_report` 兜底的输入素材。
 
@@ -265,7 +265,7 @@ START → enrich_query_images → clarify_with_user → write_research_brief →
 
 `research_phase` SHALL 在舆情模式下，调用 `public_opinion_subgraph` 后，再调用 `section_writer` 阶段，将 `role_reports` 转化为按 section 组织的 `completed_sections`。
 
-`research_phase` SHALL 在通用模式下保持当前行为（调用 `supervisor_subgraph`，不改动）。
+`research_phase` SHALL 调用 `public_opinion_subgraph`，并将 `role_reports`、`agent_memories`、`notes`、`raw_notes` 和 `budget_usage` 写回主图。
 
 ## REMOVED Requirements
 

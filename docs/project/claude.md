@@ -48,7 +48,6 @@ Contains two earlier research implementations:
 - `evaluators.py` - Specialized evaluation functions
 - `prompts.py` - Evaluation prompts and criteria
 - `pairwise_evaluation.py` - Comparative evaluation tools
-- `supervisor_parallel_evaluation.py` - Multi-threaded evaluation
 
 ### Examples (`examples/`)
 

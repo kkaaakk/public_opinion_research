@@ -15,7 +15,7 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import Command, Send, interrupt
 
 from open_deep_research.budget import (
     append_budget_summary,
@@ -52,14 +52,13 @@ from open_deep_research.prompts import (
     compress_research_system_prompt,
     final_section_writer_instructions,
     public_opinion_final_report_generation_prompt,
-    public_opinion_supervisor_prompt,
     report_planner_instructions,
+    research_review_prompt,
     section_writer_from_role_reports_prompt,
     transform_messages_into_research_topic_prompt,
 )
 from open_deep_research.public_opinion_agents import (
     get_public_opinion_agent_spec,
-    public_opinion_role_expectations,
 )
 from open_deep_research.rag import query_images
 from open_deep_research.social_media.tools import (
@@ -72,6 +71,8 @@ from open_deep_research.state import (
     ClarifyWithUser,
     PublicOpinionState,
     ResearchQuestion,
+    ResearchReview,
+    ResearchTask,
     Section,
     Sections,
 )
@@ -106,48 +107,6 @@ def _business_context(configurable: Configuration) -> str:
     )
 
 
-def _enabled_business_agents(configurable: Configuration) -> str:
-    """Format enabled business agents for prompt injection."""
-    agents = configurable.enabled_business_agents or []
-    return ", ".join(str(agent).strip() for agent in agents if str(agent).strip())
-
-
-def _supervisor_system_prompt(configurable: Configuration) -> str:
-    """Build the supervisor prompt for the public-opinion workflow."""
-    return public_opinion_supervisor_prompt.format(
-        date=get_today_str(),
-        organization_context=_business_context(configurable),
-        monitoring_window=configurable.public_opinion_monitoring_window,
-        enabled_business_agents=_enabled_business_agents(configurable),
-        max_concurrent_research_units=configurable.max_concurrent_research_units,
-        max_researcher_iterations=configurable.max_researcher_iterations,
-    )
-
-
-def _researcher_assignment(tool_call: dict, configurable: Configuration) -> dict[str, str]:
-    """Extract and normalize a delegated research assignment."""
-    args = tool_call.get("args", {})
-    research_topic = args.get("research_topic", "")
-    agent_role = args.get("agent_role", "public_signal") or "public_signal"
-    expected_output = args.get("expected_output", "") or ""
-
-    assignment_message = (
-        f"Assigned role: {agent_role}\n"
-        f"Expected output: {expected_output or 'Role-appropriate evidence report'}\n\n"
-        f"Task:\n{research_topic}"
-    )
-
-    return {
-        "research_topic": research_topic,
-        "agent_role": agent_role,
-        "expected_output": expected_output,
-        "message": assignment_message,
-    }
-
-
-PUBLIC_OPINION_ROLE_EXPECTATIONS = public_opinion_role_expectations()
-
-
 def _tool_name(available_tool) -> str:
     """Return a stable name for LangChain tools and provider-native tool dicts."""
     if isinstance(available_tool, dict):
@@ -171,6 +130,128 @@ _PUBLIC_OPINION_UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
         "risk_assessment",
     ),
 }
+
+_RESEARCH_TASK_ROLES = ("public_signal", "internal_knowledge")
+
+
+def _coerce_research_task(value: Any) -> ResearchTask | None:
+    """Normalize a task from a Pydantic or serialized LangGraph state value."""
+    if isinstance(value, ResearchTask):
+        return value
+    if isinstance(value, dict):
+        try:
+            return ResearchTask.model_validate(value)
+        except Exception:
+            return None
+    return None
+
+
+def _coerce_research_review(value: Any) -> ResearchReview | None:
+    """Normalize a review from a Pydantic or serialized LangGraph state value."""
+    if isinstance(value, ResearchReview):
+        return value
+    if isinstance(value, dict):
+        try:
+            return ResearchReview.model_validate(value)
+        except Exception:
+            return None
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return ResearchReview.model_validate(model_dump())
+        except Exception:
+            return None
+    return None
+
+
+def _coerce_research_tasks(value: Any) -> list[ResearchTask]:
+    """Normalize a list-like task channel and ignore malformed task values."""
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple)) else [value]
+    return [
+        task
+        for item in values
+        if (task := _coerce_research_task(item)) is not None
+    ]
+
+
+def _research_task_identity(task: ResearchTask) -> str:
+    """Return a stable identity for task de-duplication across review rounds."""
+    return task.task_id.strip() or (
+        f"{task.target_role}:{task.objective.strip()}:{task.evidence_needed.strip()}"
+    )
+
+
+def _research_task_payload(task: ResearchTask) -> dict[str, Any]:
+    """Serialize a task for a dynamic Send payload."""
+    return task.model_dump()
+
+
+def _enabled_research_roles(configurable: Configuration) -> set[str]:
+    """Return enabled roles that can execute dynamic follow-up research."""
+    enabled = configurable.enabled_business_agents or []
+    normalized = {str(role).strip().lower() for role in enabled}
+    return normalized.intersection(_RESEARCH_TASK_ROLES)
+
+
+def _effective_followup_tasks(
+    state: PublicOpinionState,
+    review: ResearchReview,
+    configurable: Configuration,
+) -> list[ResearchTask]:
+    """Filter review tasks to new, executable, decision-relevant follow-up work."""
+    current_round = max(1, int(state.get("research_round", 1) or 1))
+    if current_round >= configurable.max_research_rounds:
+        return []
+
+    completed_ids = {
+        _research_task_identity(task)
+        for task in _coerce_research_tasks(state.get("completed_research_tasks", []))
+    }
+    seen_ids = set(completed_ids)
+    effective_tasks: list[ResearchTask] = []
+    for raw_task in review.next_tasks:
+        task = _coerce_research_task(raw_task)
+        if task is None or task.target_role not in _RESEARCH_TASK_ROLES:
+            continue
+        if task.target_role not in _enabled_research_roles(configurable):
+            continue
+        if not task.objective.strip() or not task.evidence_needed.strip() or not task.reason.strip():
+            continue
+        identity = _research_task_identity(task)
+        if identity in seen_ids:
+            continue
+        seen_ids.add(identity)
+        effective_tasks.append(task)
+    return effective_tasks
+
+
+def _build_followup_send_payload(
+    state: PublicOpinionState,
+    tasks: list[ResearchTask],
+    next_round: int,
+) -> dict[str, Any]:
+    """Build the minimal complete state packet for one role's follow-up Send."""
+    return {
+        "messages": list(state.get("messages", [])),
+        "research_brief": state.get("research_brief", ""),
+        "role_reports": dict(state.get("role_reports", {}) or {}),
+        "agent_memories": dict(state.get("agent_memories", {}) or {}),
+        "notes": list(state.get("notes", []) or []),
+        "raw_notes": list(state.get("raw_notes", []) or []),
+        "budget_usage": dict(state.get("budget_usage", {}) or {}),
+        "research_round": next_round,
+        "research_mode": "followup",
+        "research_review": state.get("research_review"),
+        "current_research_tasks": [_research_task_payload(task) for task in tasks],
+        "completed_research_tasks": [
+            _research_task_payload(task)
+            for task in _coerce_research_tasks(
+                state.get("completed_research_tasks", [])
+            )
+        ],
+    }
 
 
 def _role_context(
@@ -216,7 +297,7 @@ def _build_public_opinion_agent_assignment(
     state: PublicOpinionState,
     role: str,
 ) -> str:
-    """Build one agent assignment with complete upstream reports and private memory."""
+    """Build an initial or gap-focused assignment with complete upstream context."""
     agent_spec = get_public_opinion_agent_spec(role)
     upstream_context = _role_context(
         state.get("role_reports", {}),
@@ -226,12 +307,42 @@ def _build_public_opinion_agent_assignment(
         state.get("agent_memories", {}),
         role,
     )
-    return (
+    review = _coerce_research_review(state.get("research_review"))
+    review_context = review.model_dump_json(indent=2) if review else "No research review yet."
+    assignment = (
         f"Overall research brief:\n{state.get('research_brief', '')}\n\n"
         f"Upstream role reports (complete current-run outputs):\n{upstream_context}\n\n"
         f"Your private memory (compact supplemental context):\n{private_memory_context}\n\n"
+        f"Latest research review:\n{review_context}\n\n"
         f"Input contract:\n{chr(10).join(f'- {item}' for item in agent_spec.input_contract)}\n\n"
         f"Your role-specific objective:\n{agent_spec.expected_output}"
+    )
+    if state.get("research_mode") != "followup":
+        return assignment
+
+    followup_tasks = [
+        task
+        for task in _coerce_research_tasks(state.get("current_research_tasks", []))
+        if task.target_role == role
+    ]
+    if not followup_tasks:
+        return assignment
+
+    task_lines = []
+    for index, task in enumerate(followup_tasks, start=1):
+        task_lines.append(
+            f"{index}. {task.objective}\n"
+            f"   Evidence needed: {task.evidence_needed}\n"
+            f"   Why it matters: {task.reason}\n"
+            f"   Priority: {task.priority}\n"
+            f"   Task ID: {task.task_id}"
+        )
+    return (
+        f"{assignment}\n\n"
+        f"Current mode: follow-up research round {state.get('research_round', 2)}.\n"
+        "Do not repeat the first-round comprehensive survey. Focus only on these unresolved, "
+        "decision-relevant research gaps and use the existing reports as context:\n"
+        f"{chr(10).join(task_lines)}"
     )
 
 
@@ -479,19 +590,18 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
 
 
 @observe_graph_node(name="write_research_brief", kind="graph_node")
-async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_supervisor"]]:
-    """Transform user messages into a structured research brief and initialize supervisor.
+async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_phase"]]:
+    """Transform user messages into a structured brief for the research phase.
     
     This function analyzes the user's messages and generates a focused research brief
-    that will guide the research supervisor. It also sets up the initial supervisor
-    context with appropriate prompts and instructions.
+    that will guide the public-opinion multi-agent subgraph.
     
     Args:
         state: Current agent state containing user messages
         config: Runtime configuration with model settings
         
     Returns:
-        Command to proceed to research supervisor with initialized context
+        Command to proceed to the research phase with the initialized brief
     """
     # Step 1: Set up the research model for structured output
     configurable = Configuration.from_runnable_config(config)
@@ -502,18 +612,10 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         reserve_final_report_call=True,
     ):
         research_brief = get_buffer_string(state.get("messages", []))
-        supervisor_system_prompt = _supervisor_system_prompt(configurable)
         return Command(
-            goto="research_supervisor",
+            goto="research_phase",
             update={
                 "research_brief": research_brief,
-                "supervisor_messages": {
-                    "type": "override",
-                    "value": [
-                        SystemMessage(content=supervisor_system_prompt),
-                        HumanMessage(content=research_brief)
-                    ]
-                },
                 "budget_usage": budget_usage_with_reason(
                     "Skipped research brief generation to preserve the final report model call."
                 ),
@@ -556,27 +658,17 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     )
     budget_update = budget_from_model_response(response)
 
-    # Step 3: Initialize supervisor with research brief and instructions
-    supervisor_system_prompt = _supervisor_system_prompt(configurable)
-
     return Command(
         goto="plan_report_sections",
         update={
             "research_brief": response.research_brief,
-            "supervisor_messages": {
-                "type": "override",
-                "value": [
-                    SystemMessage(content=supervisor_system_prompt),
-                    HumanMessage(content=response.research_brief)
-                ]
-            },
             "budget_usage": budget_update,
         }
     )
 
 
 @observe_graph_node(name="plan_report_sections", kind="graph_node")
-async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Command[Literal["plan_report_sections", "research_supervisor"]]:
+async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Command[Literal["plan_report_sections", "research_phase"]]:
     """Plan report sections using Plan-and-Execute pattern.
     
     Generates structured Sections from the research brief,
@@ -598,7 +690,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             status="pending",
         )
         return Command(
-            goto="research_supervisor",
+            goto="research_phase",
             update={
                 "sections": [single_section],
                 "budget_usage": budget_update,
@@ -661,7 +753,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             status="pending",
         )
         return Command(
-            goto="research_supervisor",
+            goto="research_phase",
             update={
                 "sections": [single_section],
                 "budget_usage": budget_update,
@@ -695,7 +787,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             status="pending",
         )
         return Command(
-            goto="research_supervisor",
+            goto="research_phase",
             update={
                 "sections": [single_section],
                 "budget_usage": budget_update,
@@ -715,7 +807,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         
         if feedback is True:
             return Command(
-                goto="research_supervisor",
+                goto="research_phase",
                 update={
                     "sections": sections,
                     "budget_usage": total_budget_update,
@@ -736,7 +828,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             )
     
     return Command(
-        goto="research_supervisor",
+        goto="research_phase",
         update={
             "sections": sections,
             "budget_usage": total_budget_update,
@@ -1229,6 +1321,8 @@ async def _run_public_opinion_agent(
     budget_usage = state.get("budget_usage", {})
     role_budget_update = {}
     expected_output = agent_spec.expected_output
+    research_round = max(1, int(state.get("research_round", 1) or 1))
+    research_mode = state.get("research_mode", "initial")
     assignment = _build_public_opinion_agent_assignment(state, role)
     private_memory_context = _agent_private_memory_context(
         state.get("agent_memories", {}),
@@ -1288,6 +1382,7 @@ async def _run_public_opinion_agent(
             agent_model,
             [SystemMessage(content=agent_prompt)] + role_messages,
             observer_model=configurable.research_model,
+            observer_component=f"{role}_{research_mode}_round_{research_round}",
         )
         role_messages.append(response)
         response_budget = budget_from_model_response(response)
@@ -1396,6 +1491,8 @@ async def _run_public_opinion_agent(
     report = (
         f"Agent role: {role}\n"
         f"Agent name: {agent_spec.display_name}\n"
+        f"Research round: {research_round}\n"
+        f"Research mode: {research_mode}\n"
         f"Expected output: {expected_output}\n\n"
         f"{compressed.get('compressed_research', '')}"
     )
@@ -1404,13 +1501,138 @@ async def _run_public_opinion_agent(
         report,
         compressed.get("raw_notes", []),
     )
-    return {
+    result = {
         "role_reports": {role: report},
         "agent_memories": {role: [private_memory]},
         "notes": [report],
         "raw_notes": compressed.get("raw_notes", []),
+        "completed_research_tasks": (
+            _coerce_research_tasks(state.get("current_research_tasks", []))
+            if research_mode == "followup"
+            else []
+        ),
         "budget_usage": role_budget_update,
     }
+    if research_mode == "followup":
+        result["research_round"] = research_round
+    return result
+
+
+@observe_graph_node(name="research_review", kind="graph_node")
+async def research_review(state: PublicOpinionState, config: RunnableConfig) -> dict:
+    """Review collected evidence and optionally create targeted follow-up tasks."""
+    configurable = Configuration.from_runnable_config(config)
+    current_round = max(1, int(state.get("research_round", 1) or 1))
+    previous_review = _coerce_research_review(state.get("research_review"))
+    completed_tasks = _coerce_research_tasks(
+        state.get("completed_research_tasks", [])
+    )
+    completed_tasks_text = "\n".join(
+        f"- {task.model_dump_json()}" for task in completed_tasks
+    ) or "None"
+    previous_review_text = (
+        previous_review.model_dump_json(indent=2) if previous_review else "None"
+    )
+    prompt = research_review_prompt.format(
+        research_brief=state.get("research_brief", ""),
+        public_signal_report=(state.get("role_reports", {}) or {}).get(
+            "public_signal", "No public-signal report is available."
+        ),
+        internal_knowledge_report=(state.get("role_reports", {}) or {}).get(
+            "internal_knowledge", "No internal-knowledge report is available."
+        ),
+        research_round=current_round,
+        max_research_rounds=configurable.max_research_rounds,
+        completed_research_tasks=completed_tasks_text,
+        previous_review=previous_review_text,
+    )
+    review_model_config: dict[str, Any] = {
+        "model": configurable.research_model,
+        "api_key": get_api_key_for_model(configurable.research_model, config),
+        "tags": ["langsmith:nostream"],
+    }
+    if configurable.research_model_max_tokens is not None:
+        review_model_config["max_tokens"] = configurable.research_model_max_tokens
+
+    reviewer = (
+        configurable_model
+        .with_structured_output(ResearchReview)
+        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        .with_config(review_model_config)
+    )
+    response = await observe_model_ainvoke(
+        reviewer,
+        [HumanMessage(content=prompt)],
+        observer_model=configurable.research_model,
+        observer_structured_output=True,
+        observer_component=f"research_review_round_{current_round}",
+    )
+    review = _coerce_research_review(response)
+    if review is None:
+        raise TypeError(
+            "Research review model returned an invalid ResearchReview structured output."
+        )
+
+    effective_tasks = _effective_followup_tasks(state, review, configurable)
+    return {
+        "research_review": review,
+        "current_research_tasks": {"type": "override", "value": []},
+        "research_mode": "followup" if effective_tasks else state.get(
+            "research_mode", "initial"
+        ),
+        "budget_usage": budget_from_model_response(response),
+    }
+
+
+def route_after_research_review(
+    state: PublicOpinionState,
+    config: RunnableConfig | None = None,
+) -> list[Send | str]:
+    """Route a review to risk assessment or grouped role-specific Sends."""
+    review = _coerce_research_review(state.get("research_review"))
+    if review is None or review.research_complete:
+        return ["risk_assessment_agent"]
+
+    configurable = (
+        config
+        if isinstance(config, Configuration)
+        else Configuration.from_runnable_config(config)
+    )
+    # Deliberately route only on review findings, task validity, and the
+    # workflow safety limit. Budget usage is carried for instrumentation and
+    # must not decide whether this research loop continues.
+    effective_tasks = _effective_followup_tasks(state, review, configurable)
+    if not effective_tasks:
+        return ["risk_assessment_agent"]
+
+    current_round = max(1, int(state.get("research_round", 1) or 1))
+    next_round = current_round + 1
+    grouped_tasks = {
+        role: [task for task in effective_tasks if task.target_role == role]
+        for role in _RESEARCH_TASK_ROLES
+    }
+    sends: list[Send | str] = []
+    node_by_role = {
+        "public_signal": "public_signal_agent",
+        "internal_knowledge": "internal_knowledge_agent",
+    }
+    for role in _RESEARCH_TASK_ROLES:
+        tasks = grouped_tasks[role]
+        if tasks:
+            sends.append(
+                Send(
+                    node_by_role[role],
+                    _build_followup_send_payload(state, tasks, next_round),
+                )
+            )
+    return sends or ["risk_assessment_agent"]
+
+
+def route_after_research_agent(state: PublicOpinionState) -> list[str]:
+    """Return to review only for agents launched by a follow-up Send."""
+    if state.get("research_mode") == "followup":
+        return ["research_review"]
+    return []
 
 
 @observe_graph_node(name="public_signal_agent", kind="agent")
@@ -1440,6 +1662,7 @@ async def response_strategy_agent(state: PublicOpinionState, config: RunnableCon
 public_opinion_builder = StateGraph(PublicOpinionState, config_schema=Configuration)
 public_opinion_builder.add_node("public_signal_agent", public_signal_agent)
 public_opinion_builder.add_node("internal_knowledge_agent", internal_knowledge_agent)
+public_opinion_builder.add_node("research_review", research_review)
 public_opinion_builder.add_node("risk_assessment_agent", risk_assessment_agent)
 public_opinion_builder.add_node("response_strategy_agent", response_strategy_agent)
 
@@ -1450,7 +1673,26 @@ public_opinion_builder.add_edge(
         "public_signal_agent",
         "internal_knowledge_agent",
     ],
-    "risk_assessment_agent",
+    "research_review",
+)
+public_opinion_builder.add_conditional_edges(
+    "public_signal_agent",
+    route_after_research_agent,
+    path_map={"research_review": "research_review"},
+)
+public_opinion_builder.add_conditional_edges(
+    "internal_knowledge_agent",
+    route_after_research_agent,
+    path_map={"research_review": "research_review"},
+)
+public_opinion_builder.add_conditional_edges(
+    "research_review",
+    route_after_research_review,
+    path_map={
+        "public_signal_agent": "public_signal_agent",
+        "internal_knowledge_agent": "internal_knowledge_agent",
+        "risk_assessment_agent": "risk_assessment_agent",
+    },
 )
 public_opinion_builder.add_edge("risk_assessment_agent", "response_strategy_agent")
 public_opinion_builder.add_edge("response_strategy_agent", END)
@@ -1458,9 +1700,9 @@ public_opinion_builder.add_edge("response_strategy_agent", END)
 public_opinion_subgraph = public_opinion_builder.compile()
 
 
-@observe_graph_node(name="research_supervisor", kind="subgraph")
+@observe_graph_node(name="research_phase", kind="subgraph")
 async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
-    """Run the public-opinion research phase using the 4-agent business workflow."""
+    """Run initial and gap-driven public-opinion research before report writing."""
     input_budget = state.get("budget_usage", {})
     result = await public_opinion_subgraph.ainvoke(
         {
@@ -1471,6 +1713,11 @@ async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
             "notes": [],
             "raw_notes": [],
             "budget_usage": input_budget,
+            "research_round": 1,
+            "research_mode": "initial",
+            "research_review": None,
+            "current_research_tasks": [],
+            "completed_research_tasks": [],
         },
         config,
     )
@@ -1745,8 +1992,8 @@ def _create_deep_researcher_builder(
         node("plan_report_sections", plan_report_sections),
     )
     builder.add_node(
-        "research_supervisor",
-        node("research_supervisor", research_phase),
+        "research_phase",
+        node("research_phase", research_phase),
     )
     builder.add_node(
         "section_writer",
@@ -1763,7 +2010,7 @@ def _create_deep_researcher_builder(
 
     builder.add_edge(START, "enrich_query_images")
     builder.add_edge("enrich_query_images", "clarify_with_user")
-    builder.add_edge("research_supervisor", "section_writer")
+    builder.add_edge("research_phase", "section_writer")
     builder.add_edge("section_writer", "write_final_sections")
     builder.add_edge("write_final_sections", "compile_final_report")
     builder.add_edge("compile_final_report", END)

@@ -139,7 +139,7 @@ def _event(data: dict) -> str:
 # ── Node → human label ─────────────────────────────────────────────
 _NODE_LABEL = {
     "write_research_brief": "Planning research…",
-    "research_supervisor": "Analyzing public opinion…",
+    "research_phase": "Analyzing public opinion…",
     "final_report_generation": "Writing report…",
     "compress_research": "Summarizing…",
 }
@@ -194,15 +194,11 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
 
             mode_configs = {
                 "fast": {
-                    "max_researcher_iterations": 1,
                     "max_react_tool_calls": 2,
-                    "max_concurrent_research_units": 1,
                     "max_content_length": 8000,
                 },
                 "normal": {
-                    "max_researcher_iterations": 3,
                     "max_react_tool_calls": 4,
-                    "max_concurrent_research_units": 2,
                     "max_content_length": 20000,
                 },
                 "deep": {},

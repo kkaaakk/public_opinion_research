@@ -20,7 +20,7 @@ AGENT = PublicOpinionAgentSpec(
         "competitor/category context, source reliability, and evidence gaps."
     ),
     input_contract=(
-        "Overall research brief from the supervisor.",
+        "Overall research brief for this public-opinion research phase.",
         "Organization context and monitoring window.",
         "No internal company fact may be assumed unless provided by upstream RAG evidence.",
     ),

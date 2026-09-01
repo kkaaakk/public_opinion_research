@@ -1,13 +1,22 @@
 # Public Opinion Agent Design
 
-The `public_opinion_risk` workflow uses one supervisor plus four compact business agents.
+The `public_opinion_risk` workflow uses a research phase containing four compact business agents.
 
 ```text
-supervisor
+research_phase
   ├─ public_signal_agent
   ├─ internal_knowledge_agent
   ├─ risk_assessment_agent
   └─ response_strategy_agent
+```
+
+The phase is a state-conversion wrapper around the subgraph, not a Supervisor
+Agent. Its fixed execution topology is:
+
+```text
+public_signal_agent + internal_knowledge_agent
+  -> risk_assessment_agent
+  -> response_strategy_agent
 ```
 
 Each business agent is encapsulated as:

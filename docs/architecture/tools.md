@@ -4,7 +4,7 @@
 
 | 项目     | 内容                                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| 阅读目标 | 理解 researcher / supervisor 可调用工具如何注册、筛选、执行和失败兜底。                                                    |
+| 阅读目标 | 理解 Public Opinion 业务 Agent 可调用工具如何注册、筛选、执行和失败兜底。                                    |
 | 关键代码 | `src/open_deep_research/utils.py`、`src/open_deep_research/tools/rag_tool.py`、`src/open_deep_research/deep_researcher.py` |
 | 上游文档 | [Agent Loop 模块说明](agent-loop.md)                                                                                       |
 | 下游文档 | [RAG 模块说明](rag.md)、[RAG 检索测试记录](../evaluation/rag-retrieval-test-records.md)                                    |
@@ -13,7 +13,7 @@
 
 ## 1. 模块定位
 
-`tools` 模块负责把项目内能力包装成 LangChain/LangGraph 可调用工具，让 researcher agent 在工具调用循环中使用。
+`tools` 模块负责把项目内能力包装成 LangChain/LangGraph 可调用工具，让 Public Opinion 业务 Agent 在工具调用循环中使用。
 
 当前独立的 `src/open_deep_research/tools/` 目录主要暴露本地 RAG 检索工具：
 
@@ -26,7 +26,7 @@
 因此实际工具体系可以分成两层：
 
 - 工具实现层：具体工具函数，例如 `rag_search`、`tavily_search`、`think_tool`。
-- 工具装配层：根据配置把 web search、RAG、MCP、控制工具组合成 researcher 可用工具列表。
+- 工具装配层：根据配置把 web search、RAG、MCP、控制工具组合成业务 Agent 可用工具列表。
 
 ## 2. 核心工具
 
@@ -53,7 +53,7 @@ async def rag_search(query: str, config: RunnableConfig = None) -> str
 - 调用 `RAGPipeline.query()`。
 - 返回带 SOURCE、CHUNK ID、METADATA、EXCERPT 和 Sources 列表的纯文本上下文。
 
-返回值是字符串，因为它会作为 researcher 的 `ToolMessage.content` 进入后续压缩和最终报告生成阶段。
+返回值是字符串，因为它会作为业务 Agent 的 `ToolMessage.content` 进入后续压缩和最终报告生成阶段。
 
 失败时不会抛出到 agent loop，而是返回：
 
@@ -102,14 +102,13 @@ Local RAG search failed: ...
 
 职责：
 
-- 让 supervisor 或 researcher 在工具调用之间记录反思。
+- 让业务 Agent 在工具调用之间记录反思。
 - 不做外部 IO。
 - 返回 `Reflection recorded: ...`。
 
 它是一个控制质量的工具，prompt 明确要求：
 
-- supervisor 在 `ConductResearch` 前后使用。
-- researcher 在检索后使用。
+- 业务 Agent 在检索后使用。
 - 不要和 search / RAG 工具并行调用。
 
 ### 2.5 `ResearchComplete`
@@ -120,9 +119,8 @@ Local RAG search failed: ...
 
 用途：
 
-- 作为控制工具绑定给 supervisor 和 researcher。
-- supervisor 调用它表示整体研究完成。
-- researcher 调用它表示当前子任务完成。
+- 作为控制工具绑定给四个业务 Agent。
+- 业务 Agent 调用它表示自己的角色研究完成。
 
 ## 3. 工具装配流程
 
@@ -214,7 +212,7 @@ class MCPConfig(BaseModel):
 - 对 MCP `interaction required` 错误做用户友好包装。
 - 连接失败时返回空工具列表，不中断主流程。
 
-## 6. Researcher 中的工具执行
+## 6. 业务 Agent 中的工具执行
 
 位置：
 
@@ -222,19 +220,18 @@ class MCPConfig(BaseModel):
 
 相关函数：
 
-- `researcher(...)`
-- `researcher_tools(...)`
+- `_run_public_opinion_agent(...)`
 - `execute_tool_safely(...)`
 
 执行流程：
 
-1. `researcher` 调用 `get_all_tools(config)` 获取工具列表。
+1. `_run_public_opinion_agent` 按角色调用工具装配函数获取工具列表。
 2. 模型基于工具列表生成 tool calls。
-3. `researcher_tools` 从最近一条 AI 消息取出 tool calls。
+3. Agent loop 从最近一条 AI 消息取出 tool calls。
 4. 通过 Budget Guard 过滤不可执行的 tool calls。
 5. 对允许执行的工具并行调用 `execute_tool_safely`。
 6. 把结果包装成 `ToolMessage`。
-7. 根据迭代次数、`ResearchComplete`、预算状态决定继续 researcher loop 或进入 `compress_research`。
+7. 根据迭代次数、`ResearchComplete`、预算状态决定继续当前角色循环或进入 `compress_research`。
 
 工具执行异常会被捕获成文本：
 
@@ -298,14 +295,14 @@ tool.metadata = {
 }
 ```
 
-1. 更新 researcher prompt 中的工具说明。
+1. 更新对应业务 Agent prompt 中的工具说明。
 2. 增加工具级测试和 agent loop 集成测试。
 
 ## 10. 常见问题
 
-### researcher 报没有外部研究工具
+### 业务 Agent 报没有外部研究工具
 
-`researcher` 会调用 `has_external_research_tool(tools)`。
+业务 Agent 会调用 `has_external_research_tool(tools)`。
 
 如果只有 `ResearchComplete` 和 `think_tool`，会抛出错误：
 

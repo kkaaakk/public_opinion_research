@@ -38,8 +38,9 @@ user messages
   -> query image context
   -> clarification
   -> research brief
-  -> supervisor
-  -> parallel researchers
+  -> report section plan
+  -> research phase (Public Opinion subgraph)
+  -> four role agents
   -> tools / RAG / web / MCP
   -> compressed research notes
   -> final report
@@ -100,11 +101,10 @@ packages = ["open_deep_research", "open_deep_research.rag", "legacy", "tests"]
 
 ### 3.1 LangGraph
 
-项目用 LangGraph `StateGraph` 构建三层 graph：
+项目用 LangGraph `StateGraph` 构建主图和一个 Public Opinion 子图：
 
 - main graph：完整 deep research 工作流。
-- supervisor subgraph：规划和分派研究任务。
-- researcher subgraph：执行具体检索任务。
+- Public Opinion subgraph：按固定业务拓扑执行四个角色 Agent。
 
 核心文件：
 
@@ -118,8 +118,23 @@ packages = ["open_deep_research", "open_deep_research.rag", "legacy", "tests"]
 | `enrich_query_images`     | 将用户问题里的图片识别为临时文本上下文 |
 | `clarify_with_user`       | 判断是否需要澄清                       |
 | `write_research_brief`    | 生成结构化 research brief              |
-| `research_supervisor`     | supervisor subgraph，调度子研究        |
-| `final_report_generation` | 汇总 notes 并生成最终报告              |
+| `plan_report_sections`    | 规划报告章节                           |
+| `research_phase`          | 执行 Public Opinion 子图并回写结果     |
+| `section_writer`          | 使用完整 role reports 撰写研究章节     |
+| `write_final_sections`    | 撰写非研究型章节                       |
+| `compile_final_report`    | 编译最终报告                           |
+
+`research_phase` 不是 Supervisor Agent。它只负责把主图 `AgentState` 转换为
+`PublicOpinionState`，进入并执行子图，再将 `role_reports`、`agent_memories`、
+`notes`、`raw_notes` 和 `budget_usage` 转换回主图。
+
+Public Opinion 子图的固定拓扑为：
+
+```text
+public_signal_agent + internal_knowledge_agent
+    -> risk_assessment_agent
+    -> response_strategy_agent
+```
 
 ### 3.2 LangChain Chat Model
 
@@ -968,7 +983,6 @@ Deep research bench：
 - `tests/run_evaluate.py`
 - `tests/evaluators.py`
 - `tests/pairwise_evaluation.py`
-- `tests/supervisor_parallel_evaluation.py`
 
 ## 22. 当前默认推荐栈
 

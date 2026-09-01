@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 
 import open_deep_research.deep_researcher as deep_researcher_module
-from open_deep_research.state import Section, role_reports_reducer
+from open_deep_research.state import ResearchReview, Section, role_reports_reducer
 
 
 def _public_opinion_config(*roles: str) -> dict:
@@ -107,7 +107,21 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
             "budget_usage": {},
         }
 
+    class FakeReviewModel:
+        def with_structured_output(self, _schema):
+            return self
+
+        def with_retry(self, **_kwargs):
+            return self
+
+        def with_config(self, _config):
+            return self
+
+        async def ainvoke(self, _messages):
+            return ResearchReview(research_complete=True)
+
     monkeypatch.setattr(deep_researcher_module, "_run_public_opinion_agent", fake_agent)
+    monkeypatch.setattr(deep_researcher_module, "configurable_model", FakeReviewModel())
     result = asyncio.run(
         deep_researcher_module.public_opinion_subgraph.ainvoke(
             {
@@ -118,6 +132,11 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
                 "notes": [],
                 "raw_notes": [],
                 "budget_usage": {},
+                "research_round": 1,
+                "research_mode": "initial",
+                "research_review": None,
+                "current_research_tasks": [],
+                "completed_research_tasks": [],
             },
             _public_opinion_config(*reports),
         )

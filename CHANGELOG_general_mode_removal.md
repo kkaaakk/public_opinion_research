@@ -39,8 +39,6 @@
 
 | 函数 | 修改内容 |
 |------|----------|
-| `_supervisor_system_prompt()` | 移除通用/舆情分支判断，始终使用 `public_opinion_supervisor_prompt` |
-| `_researcher_assignment()` | 移除 `general_research` 默认值和非舆情分支 |
 | `write_research_brief()` | 移除 domain_classifier_section、relevant_domains 字段、_public_opinion_mode 检查 |
 | `plan_report_sections()` | 移除非舆情模式的 passthrough 分支 |
 
@@ -102,8 +100,6 @@
 
 **保留的提示词：**
 
-- `public_opinion_supervisor_prompt` — 舆情 Supervisor
-- `public_opinion_researcher_prompt` — 舆情 Researcher
 - `public_opinion_final_report_generation_prompt` — 舆情最终报告
 - `compress_research_system_prompt` / `compress_research_simple_human_message` — 研究压缩
 - `report_planner_instructions` / `section_writer_*` / `final_section_writer_instructions` — 报告撰写
@@ -251,7 +247,7 @@ write_research_brief       ← 生成研究简报
 plan_report_sections       ← 章节规划（Plan-and-Execute 模式）
   │
   ▼
-research_supervisor        ← 执行 public_opinion_subgraph：
+research_phase             ← 执行 public_opinion_subgraph：
   │                          ┌─ public_signal      （舆情信号采集 Agent）
   │                          ├─ internal_knowledge  （内部知识检索 Agent）
   │                          ├─ risk_assessment     （风险评估 Agent）
@@ -332,7 +328,7 @@ Total:                               44 passed, 0 failed
 以下结构在本轮中被识别但不属于"模式收敛"范围，建议在后续轮次处理：
 
 1. **`business_scenario` 配置字段** — 现在只接受 `"public_opinion_risk"` 一个值，可考虑移除
-2. **`research_supervisor` 节点名** — 实际运行 PO 子图，名称有误导性，建议重命名为 `research_phase`
+2. **`research_phase` 节点及状态转换** — 已将实际运行 PO 子图的节点统一命名为 `research_phase`，并清理无消费者的协调者状态与配置
 3. **State 结构** — AgentState 保留大量通用字段，可按舆情业务语义重新设计（MonitoringTask、EventCluster 等）
 4. **web UI `mode` 选择器** — Fast/Normal/Deep 是研究深度，可重命名为"研究深度"避免歧义
 5. **`langchain_mcp_adapters` 依赖** — 当前环境存在版本不兼容（`ElicitationFnT` 导入失败）

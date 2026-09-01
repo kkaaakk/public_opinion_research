@@ -24,7 +24,7 @@ const modeSelect = document.getElementById('mode');
 /* ── Node → badge mapping ───────────────────────────────────────── */
 const NODE_BADGE = {
     write_research_brief: { label: 'Plan', cls: 'plan' },
-    research_supervisor:   { label: 'Analyze', cls: 'think' },
+    research_phase:        { label: 'Analyze', cls: 'think' },
     compress_research:     { label: 'Write', cls: 'write' },
     final_report_generation: { label: 'Write', cls: 'write' },
 };
