@@ -19,7 +19,7 @@ AGENT = PublicOpinionAgentSpec(
         "action plan, and monitoring keywords grounded in internal PR playbooks."
     ),
     input_contract=(
-        "Overall research brief from the supervisor.",
+        "Overall research brief for this public-opinion research phase.",
         "Upstream public_signal report with public narratives and monitoring keywords.",
         "Upstream internal_knowledge report with PR playbooks, FAQs, and approved language.",
         "Upstream risk_assessment report with verified facts, risk level, and red lines.",

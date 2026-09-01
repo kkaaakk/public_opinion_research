@@ -2,7 +2,7 @@
 
 Covers:
 1. Unique mode: no general/generic/deep_research mode accepted
-2. Graph structure: no supervisor/researcher/mode-router nodes
+2. Graph structure: no standalone supervisor/researcher/mode-router nodes
 3. Configuration: mode field not required
 4. API: mode-free request works
 5. State: no ConductResearch or general-mode state fields
@@ -11,7 +11,10 @@ Covers:
 import pytest
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.deep_researcher import deep_researcher_graph
+from open_deep_research.deep_researcher import (
+    deep_researcher_graph,
+    public_opinion_builder,
+)
 from open_deep_research.state import (
     AgentState,
     PublicOpinionState,
@@ -67,24 +70,23 @@ class TestGraphStructure:
 
     def test_no_standalone_supervisor_node(self):
         """Graph should not have a standalone 'supervisor' node (old general-mode).
-        
-        Note: 'research_supervisor' exists as a wrapper around the PO subgraph,
-        which is different from the old standalone 'supervisor' node.
+
+        The public-opinion subgraph is entered through the research_phase node;
+        there is no supervisor agent in the current workflow.
         """
         node_names = set(deep_researcher_graph.get_graph().nodes)
         assert "supervisor" not in node_names
-        # research_supervisor is the PO wrapper, not the old general-mode supervisor
-        assert "research_supervisor" in node_names
+        assert "research_phase" in node_names
 
     def test_no_standalone_researcher_node(self):
         """Graph should not have a standalone 'researcher' node (old general-mode).
         
         The old general-mode had separate supervisor/researcher nodes.
-        Now research_supervisor delegates directly to public_opinion_subgraph.
+        Now research_phase delegates directly to public_opinion_subgraph.
         """
         node_names = set(deep_researcher_graph.get_graph().nodes)
         assert "researcher" not in node_names
-        # No separate researcher node exists; PO agents run inside research_supervisor
+        # No separate researcher node exists; PO agents run inside research_phase
 
     def test_no_mode_router(self):
         """Graph should not contain any mode-routing conditional edges."""
@@ -98,7 +100,7 @@ class TestGraphStructure:
         # The public-opinion research phase now hands its formal reports to the
         # dedicated section_writer node before final-section writing.
         for edge in edges:
-            if edge.source == "research_supervisor":
+            if edge.source == "research_phase":
                 assert edge.target == "section_writer"
 
     def test_public_opinion_nodes_exist(self):
@@ -109,12 +111,37 @@ class TestGraphStructure:
             "clarify_with_user",
             "write_research_brief",
             "plan_report_sections",
-            "research_supervisor",
+            "research_phase",
             "section_writer",
             "write_final_sections",
             "compile_final_report",
         }
         assert expected.issubset(node_names), f"Missing nodes: {expected - node_names}"
+
+    def test_research_phase_is_the_only_public_opinion_wrapper(self):
+        """The main graph exposes the state-conversion phase under its real name."""
+        node_names = set(deep_researcher_graph.get_graph().nodes)
+        assert "research_phase" in node_names
+        assert not {name for name in node_names if name.endswith("_supervisor")}
+
+    def test_public_opinion_agent_topology_has_dynamic_research_review(self):
+        """The subgraph has a review loop without a supervisor or dispatch node."""
+        edges = {
+            (edge.source, edge.target)
+            for edge in public_opinion_builder.compile().get_graph().edges
+        }
+        assert {
+            ("__start__", "public_signal_agent"),
+            ("__start__", "internal_knowledge_agent"),
+            ("public_signal_agent", "research_review"),
+            ("internal_knowledge_agent", "research_review"),
+            ("research_review", "public_signal_agent"),
+            ("research_review", "internal_knowledge_agent"),
+            ("research_review", "risk_assessment_agent"),
+            ("risk_assessment_agent", "response_strategy_agent"),
+            ("response_strategy_agent", "__end__"),
+        }.issubset(edges)
+        assert "dispatch_followup_research" not in public_opinion_builder.nodes
 
 
 # ── 3. Configuration tests ────────────────────────────────────────────
@@ -143,6 +170,18 @@ class TestConfigurationNoMode:
         """tool_domain_filtering_enabled is no longer a config field."""
         config = Configuration()
         assert not hasattr(config, "tool_domain_filtering_enabled")
+
+    def test_supervisor_iteration_settings_removed(self):
+        """The removed supervisor loop has no configuration settings left."""
+        config = Configuration()
+        assert not hasattr(config, "max_researcher_iterations")
+        assert not hasattr(config, "max_concurrent_research_units")
+
+    def test_dynamic_research_round_safety_setting(self):
+        """Dynamic research defaults to two rounds and rejects non-positive limits."""
+        assert Configuration().max_research_rounds == 2
+        with pytest.raises(ValueError, match="max_research_rounds"):
+            Configuration(max_research_rounds=0)
 
 
 # ── 4. State tests ────────────────────────────────────────────────────
@@ -176,6 +215,10 @@ class TestStateCleanup:
         annotations = AgentState.__annotations__
         assert "relevant_domains" not in annotations
 
+    def test_agent_state_has_no_supervisor_messages(self):
+        """AgentState should not retain the unused supervisor message channel."""
+        assert "supervisor_messages" not in AgentState.__annotations__
+
     def test_public_opinion_state_no_relevant_domains(self):
         """PublicOpinionState should not have relevant_domains field."""
         annotations = PublicOpinionState.__annotations__
@@ -208,12 +251,17 @@ class TestPromptsCleanup:
         import open_deep_research.prompts as prompts_module
         assert not hasattr(prompts_module, "final_report_generation_prompt")
 
-    def test_public_opinion_prompts_still_exist(self):
-        """Public-opinion prompts must remain available."""
+    def test_public_opinion_prompts_are_agent_owned(self):
+        """The live public-opinion prompts are owned by the four agent specs."""
         import open_deep_research.prompts as prompts_module
-        assert hasattr(prompts_module, "public_opinion_supervisor_prompt")
-        assert hasattr(prompts_module, "public_opinion_researcher_prompt")
+        assert not hasattr(prompts_module, "public_opinion_supervisor_prompt")
+        assert not hasattr(prompts_module, "public_opinion_researcher_prompt")
         assert hasattr(prompts_module, "public_opinion_final_report_generation_prompt")
+
+    def test_supervisor_prompt_builder_removed(self):
+        """The main graph should not retain a dead coordinator prompt builder."""
+        import open_deep_research.deep_researcher as deep_researcher_module
+        assert not hasattr(deep_researcher_module, "_supervisor_system_prompt")
 
     def test_transform_prompt_no_domain_classifier(self):
         """transform_messages_into_research_topic_prompt should not reference domain_classifier_section."""

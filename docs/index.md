@@ -18,7 +18,7 @@ layout: doc
 
 1. 阅读 [项目 README](./guide/project-readme.md)，完成环境准备和基础运行。
 2. 阅读 [当前技术栈](./architecture/technical-stack.md)，理解当前默认链路、可选后端和关键依赖。
-3. 阅读 [Agent Loop](./architecture/agent-loop.md)，掌握主流程如何调度 supervisor、researcher、tools 和 final report。
+3. 阅读 [Agent Loop](./architecture/agent-loop.md)，掌握主流程如何进入 research phase、运行四个业务 Agent、使用 tools 并生成 final report。
 4. 阅读 [Tools 模块](./architecture/tools.md)，确认 web search、RAG、MCP 和控制工具如何装配。
 5. 阅读 [RAG 模块](./architecture/rag.md)，深入本地知识库、memory、hybrid retrieval、reranker 和 citation 链路。
 6. 阅读 [Memory 模块](./architecture/memory.md)，理解 MySQL memory 的写入、索引和回查边界。

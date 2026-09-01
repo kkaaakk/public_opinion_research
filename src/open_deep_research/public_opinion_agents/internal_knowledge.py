@@ -18,7 +18,7 @@ AGENT = PublicOpinionAgentSpec(
         "FAQs, prior cases, and memory, with local citations."
     ),
     input_contract=(
-        "Overall research brief from the supervisor.",
+        "Overall research brief for this public-opinion research phase.",
         "Organization context and any upstream public-signal report if available.",
         "Only cite facts that are returned by rag_search or explicitly present in the user request.",
     ),

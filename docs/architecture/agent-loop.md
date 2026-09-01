@@ -2,18 +2,21 @@
 
 ## 本页速览
 
-| 项目     | 内容                                                                             |
-| -------- | -------------------------------------------------------------------------------- |
-| 阅读目标 | 理解 deep research 主流程如何把用户请求变成研究 brief、并行子研究和最终报告。    |
+| 项目 | 内容 |
+| --- | --- |
+| 阅读目标 | 理解主图如何生成 research brief、执行 Public Opinion 多 Agent 子图并编译最终报告 |
 | 关键代码 | `src/open_deep_research/deep_researcher.py`、`state.py`、`utils.py`、`budget.py` |
-| 上游文档 | [当前技术栈说明](technical-stack.md)                                             |
+| 上游文档 | [当前技术栈说明](technical-stack.md) |
 | 下游文档 | [Tools 模块说明](tools.md)、[RAG 模块说明](rag.md)、[Memory 模块说明](memory.md) |
 
-建议先看第 2 节的三层 graph，再按 main graph、supervisor loop、researcher loop 的顺序阅读。若只排查预算或工具行为，可直接跳到第 8 节和第 7 节。
+当前实现只有主图和一个 Public Opinion 子图。主图中的
+`research_phase` 是子图的状态转换包装节点，不是负责规划或委派任务的
+Supervisor Agent。
 
 ## 1. 模块定位
 
-Agent loop 是 Open Deep Research 的主执行流程，负责把用户输入转成研究任务、调度子研究员、执行工具调用、压缩研究结果、生成最终报告，并可选写入 memory。
+Agent loop 负责把用户输入转换成研究简报，规划报告章节，执行固定的
+Public Opinion 四 Agent 工作流，使用工具/RAG/web/MCP 获取证据，并生成最终报告。
 
 核心文件：
 
@@ -30,15 +33,9 @@ Agent loop 是 Open Deep Research 的主执行流程，负责把用户输入转�
 - LangChain tool calling
 - `Command(goto=..., update=...)` 路由
 
-## 2. 三层 Graph 结构
+## 2. Graph 结构
 
-项目当前有三层 graph：
-
-1. Main graph：完整 deep research 流程。
-2. Supervisor subgraph：规划和分派研究任务。
-3. Researcher subgraph：执行具体检索任务并压缩结果。
-
-整体结构：
+### 2.1 主图
 
 ```mermaid
 flowchart TD
@@ -46,430 +43,239 @@ flowchart TD
     Enrich --> Clarify[clarify_with_user]
     Clarify --> Brief[write_research_brief]
     Clarify --> End1([END: ask clarification])
-    Brief --> SupervisorSubgraph[research_supervisor]
-    SupervisorSubgraph --> Final[final_report_generation]
-    Final --> End([END])
+    Brief --> Plan[plan_report_sections]
+    Plan --> Phase[research_phase]
+    Plan -. feedback .-> Plan
+    Phase --> SectionWriter[section_writer]
+    SectionWriter --> FinalSections[write_final_sections]
+    FinalSections --> Compile[compile_final_report]
+    Compile --> End([END])
 ```
 
-Supervisor subgraph：
+### 2.2 Public Opinion 子图
 
 ```mermaid
 flowchart TD
-    SStart([START]) --> Supervisor[supervisor]
-    Supervisor --> SupervisorTools[supervisor_tools]
-    SupervisorTools --> Supervisor
-    SupervisorTools --> SEnd([END])
+    Start([START]) --> Public[public_signal_agent]
+    Start --> Internal[internal_knowledge_agent]
+    Public --> Risk[risk_assessment_agent]
+    Internal --> Risk
+    Risk --> Response[response_strategy_agent]
+    Response --> End([END])
 ```
 
-Researcher subgraph：
+固定业务拓扑为：
 
-```mermaid
-flowchart TD
-    RStart([START]) --> Researcher[researcher]
-    Researcher --> ResearcherTools[researcher_tools]
-    ResearcherTools --> Researcher
-    ResearcherTools --> Compress[compress_research]
-    Compress --> REnd([END])
+```text
+public_signal_agent + internal_knowledge_agent
+    -> risk_assessment_agent
+    -> response_strategy_agent
 ```
+
+其中前两个 Agent 并行启动；风险评估等待两者完成；处置策略等待风险评估完成。
 
 ## 3. State 定义
 
-位置：
-
-- `src/open_deep_research/state.py`
+位置：`src/open_deep_research/state.py`
 
 ### 3.1 `AgentState`
 
-主 graph 状态：
+主图状态包括：
 
-| 字段                  | 含义                |
-| --------------------- | ------------------- |
-| `messages`            | 用户和 AI 消息      |
-| `supervisor_messages` | supervisor 内部消息 |
-| `research_brief`      | 研究简报            |
-| `raw_notes`           | 原始研究笔记        |
-| `notes`               | 压缩后的研究结果    |
-| `budget_usage`        | 预算使用情况        |
-| `final_report`        | 最终报告            |
+| 字段 | 含义 |
+| --- | --- |
+| `messages` | 用户和主图消息 |
+| `research_brief` | 研究简报 |
+| `role_reports` | 当前运行中四个业务角色的完整报告 |
+| `agent_memories` | 按角色隔离的紧凑私有记忆 |
+| `raw_notes` | 原始工具/Agent 输出 |
+| `notes` | 研究结果和报告编译使用的笔记 |
+| `budget_usage` | 模型、工具、搜索和 token 预算使用情况 |
+| `sections` | 规划的报告章节 |
+| `completed_sections` | 已完成的章节 |
+| `feedback_on_report_plan` | 章节计划反馈 |
+| `final_report` | 最终报告 |
 
-### 3.2 `SupervisorState`
+### 3.2 `PublicOpinionState`
 
-Supervisor subgraph 状态：
+子图状态只保留执行四个业务 Agent 所需的转换字段：
 
-| 字段                  | 含义                      |
-| --------------------- | ------------------------- |
-| `supervisor_messages` | supervisor 对话和工具消息 |
-| `research_brief`      | 研究任务                  |
-| `notes`               | 子研究员返回的压缩结果    |
-| `research_iterations` | supervisor 迭代次数       |
-| `raw_notes`           | 子研究员原始工具输出      |
-| `budget_usage`        | 预算使用情况              |
-
-### 3.3 `ResearcherState`
-
-Researcher subgraph 状态：
-
-| 字段                   | 含义                      |
-| ---------------------- | ------------------------- |
-| `researcher_messages`  | researcher 对话和工具消息 |
-| `tool_call_iterations` | researcher 工具调用轮数   |
-| `research_topic`       | 子研究主题                |
-| `compressed_research`  | 压缩后的结果              |
-| `raw_notes`            | 原始工具输出              |
-| `budget_usage`         | 预算使用情况              |
+| 字段 | 含义 |
+| --- | --- |
+| `messages` | 用户消息 |
+| `research_brief` | 研究简报 |
+| `role_reports` | 角色报告，供下游角色读取 |
+| `agent_memories` | 按角色隔离的紧凑记忆 |
+| `notes` | 角色报告汇总 |
+| `raw_notes` | 原始工具输出 |
+| `budget_usage` | 子图预算使用情况 |
 
 ## 4. Reducer 规则
 
 ### 4.1 `override_reducer`
 
-默认把 list 追加。
-
-如果新值是：
+默认把 list 追加；如果新值是：
 
 ```python
 {"type": "override", "value": ...}
 ```
 
-则直接覆盖旧值。
+则直接覆盖旧值。它用于覆盖本轮 raw notes 和最终需要清理的 notes。
 
-用途：
+### 4.2 `role_reports_reducer`
 
-- 清理 `notes`。
-- 初始化 `supervisor_messages`。
-- 覆盖 raw notes。
+角色报告按角色名合并。`research_phase` 使用 override 更新主图中的完整
+当前运行报告，避免旧运行的报告混入本轮结果。
 
-### 4.2 `budget_usage_reducer`
+### 4.3 `agent_memories_reducer`
 
-通过 `merge_budget_usage(...)` 累加预算。
+私有记忆按角色追加；`research_phase` 以 override 形式把子图结果写回主图，
+保证每个角色的记忆槽位彼此隔离。
 
-如果传入 override，则重置为指定值。
+### 4.4 `budget_usage_reducer`
 
-## 5. Main Graph 节点
+通过 `merge_budget_usage(...)` 累加预算；传入 override 时重置为指定值。
+
+## 5. 主图节点
 
 ### 5.1 `enrich_query_images`
 
-职责：
-
-- 在研究规划前识别用户问题中附带的图片。
-- 识别结果作为临时 query context 注入 `messages`。
+- 在规划前识别用户问题中的图片。
+- 将图片识别结果作为临时 query context 注入消息。
 - 不写入本地知识库或 memory。
+- 后续写 memory 时通过 `_messages_without_query_image_context(...)` 排除临时上下文。
 
-启用条件：
-
-- `rag_query_image_enabled=True`
-- `rag_multimodal_enabled=True`
-
-图片来源：
-
-- message content 中的 image URL / base64 / file path。
-
-输出：
-
-- 一条带 `additional_kwargs={"rag_query_image_context": True}` 的 `HumanMessage`。
-
-后续写 memory 时会通过 `_messages_without_query_image_context(...)` 排除这类临时图片上下文。
+启用条件由 `rag_query_image_enabled` 和 `rag_multimodal_enabled` 控制。
 
 ### 5.2 `clarify_with_user`
 
-职责：
-
 - 判断用户请求是否需要澄清。
-- 如果需要，直接结束本轮 graph 并返回澄清问题。
-- 如果不需要，生成确认消息并进入 `write_research_brief`。
+- 需要澄清时直接结束本轮并返回问题。
+- 不需要澄清时生成确认消息并进入 `write_research_brief`。
 
-结构化输出：
-
-```python
-class ClarifyWithUser(BaseModel):
-    need_clarification: bool
-    question: str
-    verification: str
-```
-
-跳过条件：
-
-- `allow_clarification=False`
-- Budget Guard 判断需要保留最终报告模型调用
+当 `allow_clarification=False` 或预算守卫需要保留最终报告调用时跳过模型调用。
 
 ### 5.3 `write_research_brief`
 
-职责：
+- 把用户消息转换成具体的 Public Opinion research brief。
+- 将 brief 交给 `plan_report_sections`。
+- 预算不足时直接使用原始消息文本作为 brief。
 
-- 把用户消息转换成更具体的研究简报。
-- 初始化 supervisor prompt。
+这个节点不初始化任何独立的协调者消息状态；四个业务 Agent 的 prompt 和输入契约
+由各自的 `PublicOpinionAgentSpec` 提供。
 
-结构化输出：
+### 5.4 `plan_report_sections`
 
-```python
-class ResearchQuestion(BaseModel):
-    research_brief: str
-```
+- 使用结构化输出规划报告章节。
+- 根据可用预算限制研究章节数量，并为章节写作预留调用。
+- `allow_plan_feedback=True` 时通过 `interrupt(...)` 等待用户批准或反馈。
+- 批准或无需反馈时进入 `research_phase`。
 
-输出到 state：
+### 5.5 `research_phase`
 
-- `research_brief`
-- 覆盖式 `supervisor_messages`
+这是主图进入 Public Opinion 子图的唯一节点。它的职责是：
 
-如果预算不足，会直接用原始消息文本作为 brief。
+1. 从 `AgentState` 读取 `messages`、`research_brief`、已有 `agent_memories` 和 `budget_usage`。
+2. 构造 `PublicOpinionState` 输入并调用 `public_opinion_subgraph.ainvoke(...)`。
+3. 将子图的 `role_reports`、`agent_memories`、`notes`、`raw_notes` 和预算差量转换回 `AgentState`。
 
-### 5.4 `research_supervisor`
+它不进行任务规划、工具委派或独立的 Supervisor 推理。
 
-这是 supervisor subgraph，不是单个普通函数。
+### 5.6 `section_writer`
 
-输入：
+从完整的 `role_reports` 中按章节的 `agent_role` 提取证据，生成研究型章节。
+完整报告与紧凑私有记忆分开传递，避免证据尾部因记忆截断而丢失。
 
-- `research_brief`
-- `supervisor_messages`
-- `budget_usage`
+### 5.7 `write_final_sections`
 
-输出：
+并行撰写 introduction、conclusion 等非研究型章节，并将完成的章节写回状态。
 
-- `notes`
-- `raw_notes`
-- `budget_usage`
+### 5.8 `compile_final_report`
 
-### 5.5 `final_report_generation`
+按规划顺序编译章节；当章节缺失或预算不足时，调用 `_fallback_report_generation`
+使用 role reports、notes 和 research brief 生成收束结果。
 
-职责：
+## 6. Public Opinion Agent 执行
 
-- 汇总 `notes`。
-- 根据 `research_brief`、原始消息和 findings 生成最终报告。
-- 处理 token limit retry。
-- 追加预算摘要。
-- 可选写入 MySQL memory。
-- 清空 `notes`。
+四个 Agent 的定义位于 `src/open_deep_research/public_opinion_agents/`，每个定义包含：
 
-失败策略：
+- 角色责任边界
+- 输入契约和输出 schema
+- 可用工具域与工具策略
+- 私有记忆策略
+- 固定执行和交接策略
 
-- 如果没有模型调用预算，返回 findings fallback。
-- 如果输出 token 预算耗尽且开启 final report reserve，会生成紧凑报告。
-- 如果 token limit 超出，会逐步截断 findings 后重试。
-- 非 token 错误会返回错误文本。
+### 6.1 `public_signal_agent`
 
-## 6. Supervisor Loop
+收集新闻、官方通知、社交讨论、投诉、传播信号和竞品/品类上下文。
 
-### 6.1 `supervisor`
+### 6.2 `internal_knowledge_agent`
 
-职责：
+从本地 RAG 获取公司事实、产品事实、历史事件、政策、FAQ、PR playbook 和记忆，
+并保留本地引用。
 
-- 使用 research model 规划研究。
-- 绑定工具：
-  - `ConductResearch`
-  - `ResearchComplete`
-  - `think_tool`
-- 生成 tool calls。
+### 6.3 `risk_assessment_agent`
 
-输出：
+核验上游事实，区分 confirmed、disputed、unsupported 和 follow-up 项，并建立风险登记表。
 
-- 追加 AI message。
-- `research_iterations + 1`。
+### 6.4 `response_strategy_agent`
 
-### 6.2 `supervisor_tools`
+基于公共信号、内部证据和风险结果生成 response posture、holding statement、FAQ、
+利益相关方消息、行动计划和后续监测关键词。
 
-职责：
+每个 Agent 在自己的节点内运行最多 `max_react_tool_calls` 轮工具调用；工具调用结束后，
+通过 `compress_research` 生成角色报告，并把紧凑摘要写入自己的私有记忆槽位。
 
-- 执行 supervisor 发出的工具调用。
-- 处理 reflection。
-- 并行启动 researcher subgraph。
-- 汇总 researcher 输出。
-- 判断是否结束 supervisor loop。
+## 7. Budget Guard
 
-退出条件：
+主图和子图都会在以下阶段检查预算：
 
-- `research_iterations > max_researcher_iterations`
-- 最近 AI message 没有 tool calls
-- 调用了 `ResearchComplete`
-- 预算已达上限
-- 研究任务全部因预算或并发限制无法执行
-
-### 6.3 `ConductResearch`
-
-结构化工具：
-
-```python
-class ConductResearch(BaseModel):
-    research_topic: str
-```
-
-每个 `ConductResearch` 会启动一个 researcher subgraph：
-
-```python
-researcher_subgraph.ainvoke({
-    "researcher_messages": [HumanMessage(content=research_topic)],
-    "research_topic": research_topic,
-    "budget_usage": projected_usage,
-}, config)
-```
-
-多个 researcher 会通过 `asyncio.gather` 并行执行。
-
-并发上限：
-
-- `max_concurrent_research_units`
-
-## 7. Researcher Loop
-
-### 7.1 `researcher`
-
-职责：
-
-- 根据当前子研究主题调用工具。
-- 加载当前配置下所有可用工具：
-  - `ResearchComplete`
-  - `think_tool`
-  - web search
-  - RAG search
-  - MCP tools
-- 生成 tool calls。
-
-如果没有任何外部研究工具，会抛出错误。
-
-外部研究工具是指除 `ResearchComplete` 和 `think_tool` 之外的工具。
-
-### 7.2 `researcher_tools`
-
-职责：
-
-- 执行 researcher 发出的工具调用。
-- 并行运行允许执行的工具。
-- 将结果包装成 `ToolMessage`。
-- 判断继续检索还是进入压缩。
-
-早退条件：
-
-- 最近 AI message 没有 tool calls。
-- 没有 native web search。
-- 预算已经用完。
-
-晚退条件：
-
-- `tool_call_iterations >= max_react_tool_calls`
-- 调用了 `ResearchComplete`
-- 工具执行后预算到达上限
-
-### 7.3 `execute_tool_safely`
-
-职责：
-
-- 统一执行工具。
-- 捕获异常，返回错误文本。
-- 捕获工具内部产生的 budget usage。
-
-返回：
-
-```python
-(observation, captured_budget)
-```
-
-### 7.4 `compress_research`
-
-职责：
-
-- 把 researcher 的工具输出和 AI 消息压缩成结构化研究摘要。
-- 保留来源和关键事实。
-- 输出 `compressed_research` 和 `raw_notes`。
-
-失败策略：
-
-- 预算不足时直接拼接 raw notes。
-- token limit 时移除较早消息后重试。
-- 最多重试 3 次。
-
-## 8. Budget Guard
-
-Agent loop 在多个阶段检查预算：
-
-- 澄清前
-- 生成 research brief 前
-- supervisor 规划前
-- supervisor 工具执行前
-- 启动 researcher 前
-- researcher 推理前
-- researcher 工具执行前后
-- 压缩前
-- 最终报告前
-
-预算类型：
-
-- 模型调用次数
-- 工具调用次数
-- 搜索调用次数
-- 输入 token
-- 输出 token
+- 澄清、brief 生成和章节规划前
+- 每个业务 Agent 推理和工具调用前后
+- 研究压缩前
+- 章节写作和最终报告前
 
 关键策略：
 
 - 默认保留一次最终报告模型调用。
-- 超预算工具会被替换为 synthetic ToolMessage。
-- findings 过长时会截断以适配剩余 input token。
-- 最终报告会追加预算摘要。
+- 超预算工具调用替换为 synthetic `ToolMessage`。
+- findings 过长时按剩余 input token 截断。
+- 最终报告追加预算摘要。
 
-## 9. Memory 写入集成
+## 8. Memory 写入集成
 
-位置：
+`maybe_persist_chat_memory(...)` 在最终报告生成后可选写入：
 
-- `maybe_persist_chat_memory(...)`
+- 用户和 AI 消息，不包括 query image 临时上下文。
+- 最终报告 summary。
+- `research_brief` 作为默认 project fact。
 
-调用时机：
+启用条件：`rag_memory_write_enabled=True`。Memory 写入失败只记录 warning，不改变报告输出。
 
-- `final_report_generation(...)` 成功生成最终报告后。
+## 9. 错误处理策略
 
-写入内容：
+总体策略是局部失败后尽量收束流程：
 
-- 用户和 AI 消息文本，不包括 query image 临时上下文。
-- 最终报告作为 summary。
-- `research_brief` 作为一个默认 project fact。
-- metadata：
-
-```python
-{
-    "workflow": "deep_researcher",
-    "date": get_today_str(),
-}
-```
-
-启用条件：
-
-- `rag_memory_write_enabled=True`
-
-## 10. 错误处理策略
-
-Agent loop 的总体设计是“局部失败，流程尽量收束”：
-
-- 工具异常变成工具结果文本。
-- RAG search 异常变成 `Local RAG search failed: ...`。
-- MCP 连接失败则不加载对应工具。
-- researcher 子图异常会结束 supervisor 研究阶段。
+- 工具异常转换为工具结果文本。
+- RAG 异常转换为 `Local RAG search failed: ...`。
+- MCP 连接失败时不加载对应工具。
+- 任一业务 Agent 的失败由主图调用方处理并遵循当前 fallback 策略。
 - final report token limit 会截断 findings 并重试。
 - memory 写入失败只记录 warning。
 
-## 11. 扩展建议
+## 10. 扩展建议
 
-### 新增主流程节点
+新增主流程节点时需要：
 
-需要考虑：
-
-- 在 `AgentState` 增加字段。
+- 在 `AgentState` 增加必要字段。
 - 在 `deep_researcher_builder` 中添加 node 和 edge。
-- 明确该节点是否消耗模型预算。
+- 明确节点是否消耗模型预算。
 - 定义失败时是结束、跳过还是 fallback。
 
-### 新增 supervisor 工具
+新增 Public Opinion 业务 Agent 时需要同时更新：
 
-需要考虑：
-
-- 是否是控制工具。
-- 是否会启动子任务。
-- 是否需要并发限制。
-- 是否需要计入 Budget Guard。
-- 是否影响 `get_notes_from_tool_calls(...)` 的最终 notes。
-
-### 新增 researcher 工具
-
-优先在工具装配层接入：
-
-- `get_retrieval_tools`
-- 或 `load_mcp_tools`
-- 或 `get_all_tools`
-
-并更新 `get_research_tool_prompt(...)`，让模型知道什么时候使用它。
+- Agent spec 和 registry 顺序。
+- `PublicOpinionState` 的输入/输出契约（如有必要）。
+- `public_opinion_builder` 的固定依赖边。
+- `research_phase` 的状态转换测试。
+- Observer topology 和相关文档。

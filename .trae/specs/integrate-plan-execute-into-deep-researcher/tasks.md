@@ -27,14 +27,14 @@
 
 - [x] Task 4: 实现 `plan_report_sections` 节点
   - [x] SubTask 4.1: 在 `deep_researcher.py` 实现 `plan_report_sections(state, config)` 函数
-  - [x] SubTask 4.2: 实现舆情模式判断（`_public_opinion_mode`），非舆情模式直接 passthrough 到 `research_supervisor`
+  - [x] SubTask 4.2: 主图统一使用 Public Opinion 流程，不再按业务模式 passthrough
   - [x] SubTask 4.3: 实现 Budget Guard 集成（预算不足时退化为单 section，agent_role 包含全部 4 角色）
   - [x] SubTask 4.4: 实现 section 数量限制逻辑（基于 `available_research_unit_slots`，None 时上限 5）
   - [x] SubTask 4.5: 实现 `planner_model` 配置回退逻辑（空则用 research_model）
   - [x] SubTask 4.6: 实现舆情模式 prompt 增强（要求每个 section 声明 agent_role，覆盖舆情风控典型维度）
   - [x] SubTask 4.7: 实现预算预留时序保护：先获取 `available_research_unit_slots`，再减去 section_writer 预留的 slots（等于 research=True 的 section 数量），扣除后 <=0 则退化为单 section
   - [x] SubTask 4.8: 实现可选的 `interrupt()` 人工反馈循环（内联于 plan_report_sections 节点中，不再需要独立的 human_feedback_on_plan 节点）
-  - [ ] SubTask 4.9: 编写单元测试覆盖：舆情正常规划、预算退化、section 截断、预算预留时序保护、人工批准、人工打回、通用模式 passthrough
+  - [ ] SubTask 4.9: 编写单元测试覆盖：正常规划、预算退化、section 截断、预算预留时序保护、人工批准和人工打回
 
 - [x] Task 5: 实现 `section_writer` 节点
   - [x] SubTask 5.1: 在 `deep_researcher.py` 实现 `section_writer(state, config)` 函数
@@ -79,8 +79,8 @@
 - [x] Task 9: 改造 `research_phase` 舆情模式路由
   - [x] SubTask 9.1: 修改 `research_phase` 在舆情模式下，调用 `public_opinion_subgraph` 后再调用 `section_writer`
   - [x] SubTask 9.2: 实现 `section_writer` 结果（completed_sections）合并到返回的 state update
-  - [x] SubTask 9.3: 通用模式保持当前行为（调用 `supervisor_subgraph`，不改动）
-  - [ ] SubTask 9.4: 编写测试覆盖：舆情模式调用 section_writer、通用模式不调用
+  - [x] SubTask 9.3: `research_phase` 直接调用 `public_opinion_subgraph` 并回写状态
+  - [ ] SubTask 9.4: 编写测试覆盖：`research_phase` 调用子图并正确回写主图状态
 
 - [x] Task 10: 组装主图
   - [x] SubTask 10.1: 在 `deep_researcher_builder` 增加 `plan_report_sections` 节点
@@ -89,13 +89,13 @@
   - [x] SubTask 10.4: 增加 `compile_final_report` 节点
   - [x] SubTask 10.5: 修改边：`write_research_brief → plan_report_sections`（通过 Command goto）
   - [x] SubTask 10.6: `plan_report_sections` 中通过 interrupt() 内联处理人工反馈路由
-  - [x] SubTask 10.7: `plan_report_sections → research_supervisor`（通过 Command goto）
+  - [x] SubTask 10.7: `plan_report_sections → research_phase`（通过 Command goto）
   - [x] SubTask 10.8: 人工反馈打回时通过 `goto="plan_report_sections"` 重新规划
-  - [x] SubTask 10.9: 修改边：`research_supervisor → write_final_sections`
+  - [x] SubTask 10.9: 修改边：`research_phase → section_writer → write_final_sections`
   - [x] SubTask 10.10: 修改边：`write_final_sections → compile_final_report`
   - [x] SubTask 10.11: 修改边：`compile_final_report → END`
   - [x] SubTask 10.12: 验证 `langgraph.json` 入口仍为 `deep_researcher`，无改动
-  - [x] SubTask 10.13: 验证通用模式流程不受影响（`plan_report_sections` 在非舆情模式下 passthrough）
+  - [x] SubTask 10.13: 验证固定 Public Opinion 四 Agent 拓扑和主图状态转换不受影响
 
 ## 阶段 4：集成验证
 
@@ -103,7 +103,7 @@
   - [ ] SubTask 11.1: 编写舆情模式端到端测试：plan → 4 角色 → section_writer → write_final_sections → compile
   - [ ] SubTask 11.2: 编写预算不足退化测试：舆情模式全量退化等价于当前行为
   - [ ] SubTask 11.3: 编写人工反馈测试：allow_plan_feedback=True 的批准和打回流程（含 interrupt/resume）
-  - [ ] SubTask 11.4: 编写通用模式回归测试：确保通用模式行为不变
+  - [ ] SubTask 11.4: 编写 Public Opinion 主流程回归测试：确保四 Agent 行为不变
   - [ ] SubTask 11.5: 运行 `ruff check` 确保无 lint 错误
   - [ ] SubTask 11.6: 运行 `mypy` 确保类型正确
   - [ ] SubTask 11.7: 运行现有测试套件确保无回归

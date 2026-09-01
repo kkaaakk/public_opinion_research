@@ -16,9 +16,7 @@ evaluators = [eval_overall_quality, eval_relevance, eval_structure, eval_correct
 # NOTE: Configure the right parameters for the experiment, these will be logged in the metadata
 max_structured_output_retries = 3
 allow_clarification = False
-max_concurrent_research_units = 10
 search_api = "tavily" # NOTE: We use Tavily to stay consistent
-max_researcher_iterations = 6
 max_react_tool_calls = 10
 summarization_model = "openai:gpt-4.1-mini"
 summarization_model_max_tokens = 8192
@@ -41,9 +39,7 @@ async def target(
     # NOTE: Configure the right dataset and evaluators
     config["configurable"]["max_structured_output_retries"] = max_structured_output_retries
     config["configurable"]["allow_clarification"] = allow_clarification
-    config["configurable"]["max_concurrent_research_units"] = max_concurrent_research_units
     config["configurable"]["search_api"] = search_api
-    config["configurable"]["max_researcher_iterations"] = max_researcher_iterations
     config["configurable"]["max_react_tool_calls"] = max_react_tool_calls
     config["configurable"]["summarization_model"] = summarization_model
     config["configurable"]["summarization_model_max_tokens"] = summarization_model_max_tokens
@@ -70,9 +66,7 @@ async def main():
         metadata={
             "max_structured_output_retries": max_structured_output_retries,
             "allow_clarification": allow_clarification,
-            "max_concurrent_research_units": max_concurrent_research_units,
             "search_api": search_api,
-            "max_researcher_iterations": max_researcher_iterations,
             "max_react_tool_calls": max_react_tool_calls,
             "summarization_model": summarization_model,
             "summarization_model_max_tokens": summarization_model_max_tokens,

@@ -116,19 +116,6 @@ class Configuration(BaseModel):
             }
         }
     )
-    max_concurrent_research_units: int = Field(
-        default=5,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "slider",
-                "default": 5,
-                "min": 1,
-                "max": 20,
-                "step": 1,
-                "description": "Maximum number of research units to run concurrently. This will allow the researcher to use multiple sub-agents to conduct research. Note: with more concurrency, you may run into rate limits."
-            }
-        }
-    )
     # Optional Agent Observer sidecar configuration. The integration is
     # deliberately disabled by default and must never affect business output.
     agent_observer_enabled: bool = Field(
@@ -188,19 +175,6 @@ class Configuration(BaseModel):
             }
         }
     )
-    max_researcher_iterations: int = Field(
-        default=6,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "slider",
-                "default": 6,
-                "min": 1,
-                "max": 10,
-                "step": 1,
-                "description": "Maximum number of research iterations for the Research Supervisor. This is the number of times the Research Supervisor will reflect on the research and ask follow-up questions."
-            }
-        }
-    )
     max_react_tool_calls: int = Field(
         default=10,
         metadata={
@@ -213,6 +187,22 @@ class Configuration(BaseModel):
                 "description": "Maximum number of tool calling iterations to make in a single researcher step."
             }
         }
+    )
+    max_research_rounds: int = Field(
+        default=2,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "slider",
+                "default": 2,
+                "min": 1,
+                "max": 10,
+                "step": 1,
+                "description": (
+                    "Maximum public-opinion research rounds, including the initial round. "
+                    "This is a workflow safety limit, not a token or call budget."
+                ),
+            }
+        },
     )
     # Business Scenario Configuration
     business_scenario: str = Field(
@@ -1384,6 +1374,8 @@ class Configuration(BaseModel):
     def validate_rag_chunk_settings(self) -> "Configuration":
         """Validate local RAG chunking and budget settings."""
         _apply_rag_path_compatibility(self)
+        if self.max_research_rounds <= 0:
+            raise ValueError("max_research_rounds must be greater than 0.")
         if self.rag_chunk_size <= 0:
             raise ValueError("rag_chunk_size must be greater than 0.")
         if self.rag_chunk_overlap < 0:

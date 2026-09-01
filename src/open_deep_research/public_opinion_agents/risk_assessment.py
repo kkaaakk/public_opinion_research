@@ -20,7 +20,7 @@ AGENT = PublicOpinionAgentSpec(
         "product-quality, privacy, advertising, and contract-risk signals."
     ),
     input_contract=(
-        "Overall research brief from the supervisor.",
+        "Overall research brief for this public-opinion research phase.",
         "Upstream public_signal report with public evidence and source URLs.",
         "Upstream internal_knowledge report with cited RAG facts and rule excerpts.",
     ),
