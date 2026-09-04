@@ -1,6 +1,7 @@
 """Utility functions and helpers for the Deep Research agent."""
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime
@@ -26,7 +27,21 @@ from open_deep_research.configuration import Configuration, RetrievalMode, Searc
 from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
-from open_deep_research.tools.rag_tool import rag_search
+
+# Importing rag_tool eagerly makes ``import open_deep_research.utils`` recurse
+# through rag.__init__.  Keep this tool lazy so the raw Research Graph search
+# path can be imported independently of the local RAG package.
+rag_search = None
+
+
+def _get_rag_search_tool():
+    """Load the local RAG tool only when a RAG retrieval mode needs it."""
+    global rag_search
+    if rag_search is None:
+        from open_deep_research.tools.rag_tool import rag_search as loaded_rag_search
+
+        rag_search = loaded_rag_search
+    return rag_search
 
 ##########################
 # Tavily Search Tool Utils
@@ -131,6 +146,53 @@ async def tavily_search(
         formatted_output += "\n\n" + "-" * 80 + "\n"
     
     return formatted_output
+
+
+@tool(
+    description=(
+        "Fetch raw, source-bound Tavily results for Research Graph extraction. "
+        "This path does not call a per-page summarization model."
+    )
+)
+async def tavily_search_raw(
+    queries: List[str],
+    max_results: Annotated[int, InjectedToolArg] = 5,
+    topic: Annotated[Literal["general", "news", "finance"], InjectedToolArg] = "general",
+    config: RunnableConfig = None,
+) -> str:
+    """Fetch raw Tavily results without the standard per-URL summary fan-out."""
+    search_results = await tavily_search_async(
+        queries,
+        max_results=max_results,
+        topic=topic,
+        include_raw_content=True,
+        config=config,
+    )
+    configurable = Configuration.from_runnable_config(config)
+    unique_results: dict[str, dict[str, Any]] = {}
+    for response in search_results:
+        for result in response.get("results", []):
+            url = str(result.get("url") or "").strip()
+            if not url or url in unique_results:
+                continue
+            raw_content = result.get("raw_content") or result.get("content") or ""
+            unique_results[url] = {
+                "url": url,
+                "title": result.get("title") or "",
+                "content": str(raw_content)[: configurable.max_content_length],
+                "query": response.get("query") or "",
+                "source_type": "web_search",
+                "retrieved_at": datetime.utcnow().isoformat() + "Z",
+            }
+    if not unique_results:
+        return json.dumps(
+            {"type": "research_raw_search", "results": []},
+            ensure_ascii=False,
+        )
+    return json.dumps(
+        {"type": "research_raw_search", "results": list(unique_results.values())},
+        ensure_ascii=False,
+    )
 
 async def tavily_search_async(
     search_queries, 
@@ -296,6 +358,26 @@ async def get_search_tool(search_api: SearchAPI):
     # Default fallback for unknown search API types
     return []
 
+
+async def get_raw_search_tool(search_api: SearchAPI):
+    """Return the Producer-specific raw/batch-friendly search tool.
+
+    Native provider tools do not expose a project-controlled raw result
+    envelope, so they remain unchanged and are handled as synthetic source
+    documents by the Research Graph adapter.
+    """
+    if search_api == SearchAPI.TAVILY:
+        raw_tool = tavily_search_raw
+        raw_tool.name = "web_search"
+        raw_tool.metadata = {
+            **(raw_tool.metadata or {}),
+            "type": "search",
+            "name": "web_search",
+            "research_graph_raw": True,
+        }
+        return [raw_tool]
+    return await get_search_tool(search_api)
+
 def rag_requested(configurable: Configuration) -> bool:
     """Determine whether the current configuration wants local RAG retrieval enabled."""
     retrieval_mode = RetrievalMode(get_config_value(configurable.retrieval_mode))
@@ -315,12 +397,13 @@ async def get_retrieval_tools(config: RunnableConfig):
         retrieval_tools.extend(await get_search_tool(search_api))
 
     if rag_requested(configurable):
-        rag_search.metadata = {
-            **(rag_search.metadata or {}),
+        rag_tool = _get_rag_search_tool()
+        rag_tool.metadata = {
+            **(rag_tool.metadata or {}),
             "type": "search",
             "name": "rag_search",
         }
-        retrieval_tools.append(rag_search)
+        retrieval_tools.append(rag_tool)
 
     return retrieval_tools
 

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from open_deep_research.budget import empty_budget_usage, merge_budget_usage
+from open_deep_research.research_graph.metrics import merge_research_graph_metrics
 
 ###################
 # Structured Outputs
@@ -257,6 +258,13 @@ def role_reports_reducer(current_value: Any, new_value: Any) -> dict[str, str]:
     if isinstance(new_value, dict) and new_value.get("type") == "override":
         replacement = new_value.get("value", {})
         return dict(replacement) if isinstance(replacement, Mapping) else {}
+    if isinstance(new_value, dict) and new_value.get("type") == "role_report_update":
+        role = str(new_value.get("role") or "").strip()
+        replacement = str(new_value.get("value") or "")
+        merged = dict(current_value) if isinstance(current_value, Mapping) else {}
+        if role:
+            merged[role] = replacement
+        return merged
     current_reports = current_value if isinstance(current_value, Mapping) else {}
     new_reports = new_value if isinstance(new_value, Mapping) else {}
     merged = dict(current_reports)
@@ -272,6 +280,17 @@ def role_reports_reducer(current_value: Any, new_value: Any) -> dict[str, str]:
                 f"--- Additional {normalized_role} research report ---\n"
                 f"{normalized_report}"
             )
+    return merged
+
+
+def mapping_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
+    """Merge per-role bounded context channels without concatenating strings."""
+    if isinstance(new_value, dict) and new_value.get("type") == "override":
+        replacement = new_value.get("value", {})
+        return dict(replacement) if isinstance(replacement, Mapping) else {}
+    merged = dict(current_value) if isinstance(current_value, Mapping) else {}
+    if isinstance(new_value, Mapping):
+        merged.update({str(key): value for key, value in new_value.items() if key != "type"})
     return merged
 
 def agent_memories_reducer(current_value: Any, new_value: Any):
@@ -303,6 +322,10 @@ class AgentState(MessagesState):
     role_reports: Annotated[dict[str, str], role_reports_reducer]
     # Compact private context; this channel may be truncated by design.
     agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
+    research_run_id: str
+    working_contexts: Annotated[dict[str, dict[str, Any]], mapping_reducer]
+    rolling_summaries: Annotated[dict[str, str], mapping_reducer]
+    research_graph_metrics: Annotated[dict[str, Any], merge_research_graph_metrics]
     raw_notes: Annotated[list[str], override_reducer] = []
     notes: Annotated[list[str], override_reducer] = []
     budget_usage: Annotated[dict[str, Any], budget_usage_reducer]
@@ -323,6 +346,10 @@ class PublicOpinionState(TypedDict):
     role_reports: Annotated[dict[str, str], role_reports_reducer]
     # Private per-agent memories remain compact and reducer-managed.
     agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
+    research_run_id: str
+    working_contexts: Annotated[dict[str, dict[str, Any]], mapping_reducer]
+    rolling_summaries: Annotated[dict[str, str], mapping_reducer]
+    research_graph_metrics: Annotated[dict[str, Any], merge_research_graph_metrics]
     notes: Annotated[list[str], override_reducer] = []
     raw_notes: Annotated[list[str], override_reducer] = []
     budget_usage: Annotated[dict[str, Any], budget_usage_reducer]

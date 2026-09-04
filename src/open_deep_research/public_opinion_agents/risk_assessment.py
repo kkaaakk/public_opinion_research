@@ -59,4 +59,5 @@ AGENT = PublicOpinionAgentSpec(
         "Pass verified facts, risk level, risk register, and unresolved gaps to response_strategy.",
         "Highlight claims that should not be repeated publicly because they are unsupported.",
     ),
+    context_strategy="research_graph_consumer",
 )

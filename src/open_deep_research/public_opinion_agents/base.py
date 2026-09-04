@@ -20,6 +20,7 @@ class PublicOpinionAgentSpec:
     memory_policy: tuple[str, ...]
     execution_strategy: tuple[str, ...]
     handoff_policy: tuple[str, ...]
+    context_strategy: str = "standard"
 
     def format_system_prompt(
         self,
@@ -48,6 +49,7 @@ class PublicOpinionAgentSpec:
             memory_policy=_bullet_lines(self.memory_policy),
             execution_strategy=_numbered_lines(self.execution_strategy),
             handoff_policy=_bullet_lines(self.handoff_policy),
+            context_strategy=self.context_strategy,
         )
 
 
@@ -118,10 +120,16 @@ Return a concise role report following this schema:
 {handoff_policy}
 </Handoff Policy>
 
+<Context Strategy>
+{context_strategy}
+</Context Strategy>
+
 <Evidence Rules>
 1. Do not overstate public sentiment from thin evidence.
 2. For local RAG findings, preserve source paths, page/heading/field metadata, and citations.
 3. If rag_search does not contain enough internal evidence, say so explicitly.
 4. Distinguish facts, allegations, rumors, interpretations, and recommendations.
 5. Keep dates concrete and absolute when available.
+6. The Context Strategy is a harness routing choice. Do not treat Research Graph
+   retrieval as a final answer or invent provenance metadata.
 </Evidence Rules>"""

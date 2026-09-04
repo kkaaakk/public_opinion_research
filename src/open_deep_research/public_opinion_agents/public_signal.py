@@ -65,4 +65,5 @@ AGENT = PublicOpinionAgentSpec(
         "Pass claims, representative posts, source URLs, and confidence notes to risk_assessment.",
         "Pass monitoring keywords and public narrative themes to response_strategy.",
     ),
+    context_strategy="research_graph_producer",
 )

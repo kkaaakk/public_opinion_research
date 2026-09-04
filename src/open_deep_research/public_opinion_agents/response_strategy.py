@@ -59,4 +59,5 @@ AGENT = PublicOpinionAgentSpec(
         "Produce the final business-facing response package for report generation.",
         "Call out any recommendation that requires human legal, PR, product, or customer-service approval.",
     ),
+    context_strategy="research_graph_consumer",
 )

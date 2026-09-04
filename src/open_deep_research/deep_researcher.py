@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import uuid
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from langchain.chat_models import init_chat_model
@@ -46,6 +48,18 @@ from open_deep_research.observability import (
     observe_model_ainvoke,
     observe_tool_ainvoke,
 )
+from open_deep_research.research_graph import (
+    ResearchContextHarness,
+    TaskDescriptor,
+    ToolBatchItem,
+    WorkingContext,
+    build_research_review_context,
+    create_context_strategy,
+    format_relevant_subgraph,
+    render_working_context,
+)
+from open_deep_research.research_graph.schema import stable_id
+from open_deep_research.research_graph.store import create_research_graph_store
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
@@ -82,6 +96,7 @@ from open_deep_research.utils import (
     get_api_key_for_model,
     get_model_token_limit,
     get_research_tool_prompt,
+    get_raw_search_tool,
     get_today_str,
     has_external_research_tool,
     is_token_limit_exceeded,
@@ -188,6 +203,69 @@ def _research_task_payload(task: ResearchTask) -> dict[str, Any]:
     return task.model_dump()
 
 
+def _resolve_research_run_id(
+    state: Mapping[str, Any] | dict[str, Any],
+    config: RunnableConfig | None = None,
+) -> str:
+    """Resolve one stable run scope without exposing credentials or raw history."""
+    state_run_id = str(state.get("research_run_id") or "").strip()
+    if state_run_id:
+        return state_run_id
+    configurable: Mapping[str, Any] = (
+        config.get("configurable", {}) if isinstance(config, Mapping) else {}
+    )
+    for key in ("research_run_id", "thread_id", "run_id"):
+        value = str(configurable.get(key) or "").strip()
+        if value:
+            return value
+    metadata = config.get("metadata", {}) if isinstance(config, Mapping) else {}
+    for key in ("research_run_id", "thread_id", "run_id"):
+        value = str(metadata.get(key) or "").strip() if isinstance(metadata, Mapping) else ""
+        if value:
+            return value
+    # A new root invocation without a LangGraph thread id still gets a unique
+    # scope.  research_phase writes it into state before parallel Sends begin.
+    return f"run_{uuid.uuid4().hex}"
+
+
+def _graph_task_descriptor(
+    state: PublicOpinionState,
+    role: str,
+    run_id: str,
+) -> TaskDescriptor:
+    """Build a role-neutral task descriptor for the graph harness."""
+    tasks = [
+        task
+        for task in _coerce_research_tasks(state.get("current_research_tasks", []))
+        if task.target_role == role
+    ]
+    if tasks:
+        task = tasks[0]
+        return TaskDescriptor(
+            task_id=task.task_id,
+            objective=task.objective,
+            evidence_needed=task.evidence_needed,
+            reason=task.reason,
+        )
+    return TaskDescriptor(
+        task_id=stable_id("TASK", run_id, role, state.get("research_round", 1)),
+        objective=str(state.get("research_brief", "") or ""),
+        evidence_needed="Evidence required by the role contract and current research brief.",
+        reason="Initial role research task.",
+    )
+
+
+def _effective_context_strategy(
+    configurable: Configuration,
+    role: str,
+) -> str:
+    """Resolve the one strategy used by all harness/tool lifecycle decisions."""
+    configured = configurable.context_strategy.strip().lower()
+    if configured != "auto":
+        return configured
+    return get_public_opinion_agent_spec(role).context_strategy
+
+
 def _enabled_research_roles(configurable: Configuration) -> set[str]:
     """Return enabled roles that can execute dynamic follow-up research."""
     enabled = configurable.enabled_business_agents or []
@@ -236,8 +314,12 @@ def _build_followup_send_payload(
     return {
         "messages": list(state.get("messages", [])),
         "research_brief": state.get("research_brief", ""),
+        "research_run_id": state.get("research_run_id", ""),
         "role_reports": dict(state.get("role_reports", {}) or {}),
         "agent_memories": dict(state.get("agent_memories", {}) or {}),
+        "working_contexts": dict(state.get("working_contexts", {}) or {}),
+        "rolling_summaries": dict(state.get("rolling_summaries", {}) or {}),
+        "research_graph_metrics": dict(state.get("research_graph_metrics", {}) or {}),
         "notes": list(state.get("notes", []) or []),
         "raw_notes": list(state.get("raw_notes", []) or []),
         "budget_usage": dict(state.get("budget_usage", {}) or {}),
@@ -296,13 +378,32 @@ def _agent_private_memory_context(agent_memories: dict[str, list[dict[str, Any]]
 def _build_public_opinion_agent_assignment(
     state: PublicOpinionState,
     role: str,
+    config: RunnableConfig | Configuration | None = None,
 ) -> str:
-    """Build an initial or gap-focused assignment with complete upstream context."""
+    """Build an initial or gap-focused assignment.
+
+    Standard mode keeps the historical full role-report contract for backwards
+    compatibility.  Research Graph mode keeps the assignment bounded and lets
+    the harness inject only the relevant graph subgraph.
+    """
     agent_spec = get_public_opinion_agent_spec(role)
-    upstream_context = _role_context(
-        state.get("role_reports", {}),
-        _PUBLIC_OPINION_UPSTREAM_ROLES.get(role),
-    )
+    if isinstance(config, Configuration):
+        graph_enabled = config.research_graph_enabled
+    elif isinstance(config, Mapping):
+        graph_enabled = Configuration.from_runnable_config(config).research_graph_enabled
+    else:
+        graph_enabled = False
+    if graph_enabled:
+        upstream_context = (
+            "Current-run upstream evidence is stored in the scoped Research Graph. "
+            "The harness will retrieve only the relevant subgraph; do not reconstruct "
+            "or request complete upstream role reports."
+        )
+    else:
+        upstream_context = _role_context(
+            state.get("role_reports", {}),
+            _PUBLIC_OPINION_UPSTREAM_ROLES.get(role),
+        )
     private_memory_context = _agent_private_memory_context(
         state.get("agent_memories", {}),
         role,
@@ -311,7 +412,7 @@ def _build_public_opinion_agent_assignment(
     review_context = review.model_dump_json(indent=2) if review else "No research review yet."
     assignment = (
         f"Overall research brief:\n{state.get('research_brief', '')}\n\n"
-        f"Upstream role reports (complete current-run outputs):\n{upstream_context}\n\n"
+        f"Upstream research context:\n{upstream_context}\n\n"
         f"Your private memory (compact supplemental context):\n{private_memory_context}\n\n"
         f"Latest research review:\n{review_context}\n\n"
         f"Input contract:\n{chr(10).join(f'- {item}' for item in agent_spec.input_contract)}\n\n"
@@ -341,7 +442,7 @@ def _build_public_opinion_agent_assignment(
         f"{assignment}\n\n"
         f"Current mode: follow-up research round {state.get('research_round', 2)}.\n"
         "Do not repeat the first-round comprehensive survey. Focus only on these unresolved, "
-        "decision-relevant research gaps and use the existing reports as context:\n"
+        "decision-relevant research gaps and use the existing scoped research context:\n"
         f"{chr(10).join(task_lines)}"
     )
 
@@ -382,8 +483,25 @@ def _role_tool_prompt(configurable: Configuration, role: str) -> str:
 
 async def _business_agent_tools(config: RunnableConfig, role: str):
     """Return the role-specific tool whitelist for an explicit business agent."""
-    allowed_domains = get_public_opinion_agent_spec(role).allowed_domains
+    agent_spec = get_public_opinion_agent_spec(role)
+    allowed_domains = agent_spec.allowed_domains
     all_tools = await get_all_tools(config)
+    configurable = Configuration.from_runnable_config(config)
+    if (
+        configurable.research_graph_enabled
+        and _effective_context_strategy(configurable, role) == "research_graph_producer"
+    ):
+        # The standard web_search contract remains unchanged.  Producer
+        # strategies explicitly swap only the Tavily implementation for a raw
+        # source-bound envelope so per-URL summarization does not fan out.
+        raw_search_tools = await get_raw_search_tool(configurable.search_api)
+        raw_names = {_tool_name(tool) for tool in raw_search_tools}
+        all_tools = [
+            available_tool
+            for available_tool in all_tools
+            if _tool_name(available_tool) not in raw_names
+        ]
+        all_tools.extend(raw_search_tools)
     if "social_media" in allowed_domains:
         all_tools.extend(tag_tools_with_domain(get_social_media_tools(), "social_media"))
 
@@ -913,6 +1031,72 @@ def _section_role_report_content(
     return content
 
 
+def _graph_section_evidence(
+    section: Section,
+    state: AgentState,
+    config: RunnableConfig,
+) -> str:
+    """Retrieve section-specific graph evidence without injecting role reports."""
+    configurable = Configuration.from_runnable_config(config)
+    run_id = _resolve_research_run_id(state, config)
+    store = create_research_graph_store(configurable, run_id=run_id)
+    roles = (section.agent_role or "").replace(",", " ")
+    query = " ".join(
+        value
+        for value in (
+            state.get("research_brief", ""),
+            section.name,
+            section.description,
+            roles,
+        )
+        if value
+    )
+    subgraph = store.retrieve(
+        query,
+        run_id=run_id,
+        max_nodes=configurable.research_graph_max_retrieved_nodes,
+        max_edges=configurable.research_graph_max_retrieved_edges,
+    )
+    return format_relevant_subgraph(subgraph)
+
+
+def _graph_report_context(
+    state: AgentState,
+    config: RunnableConfig,
+    *,
+    query_suffix: str = "final report",
+) -> str:
+    """Build bounded report context from graph nodes and Working Context."""
+    configurable = Configuration.from_runnable_config(config)
+    run_id = _resolve_research_run_id(state, config)
+    store = create_research_graph_store(configurable, run_id=run_id)
+    query = " ".join(
+        value
+        for value in (state.get("research_brief", ""), query_suffix)
+        if value
+    )
+    subgraph = store.retrieve(
+        query,
+        run_id=run_id,
+        max_nodes=configurable.research_graph_max_retrieved_nodes,
+        max_edges=configurable.research_graph_max_retrieved_edges,
+    )
+    contexts = state.get("working_contexts", {}) or {}
+    context_text = []
+    for role, value in contexts.items():
+        try:
+            parsed = value if isinstance(value, WorkingContext) else WorkingContext.model_validate(value)
+        except Exception:
+            continue
+        context_text.append(f"## {role}\n{render_working_context(parsed)}")
+    return (
+        "Research Graph report context (bounded, current run only):\n"
+        + ("\n\n".join(context_text) or "No Working Context has been recorded yet.")
+        + "\n\n"
+        + format_relevant_subgraph(subgraph)
+    )
+
+
 @observe_graph_node(name="section_writer", kind="writer")
 async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     """Write report sections from role evidence in public-opinion mode.
@@ -924,13 +1108,27 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     sections = state.get("sections", [])
     role_reports = state.get("role_reports", {}) or {}
     agent_memories = state.get("agent_memories", {}) or {}
-    # Formal role reports are the source of truth for current-run writing.
-    # Compact private memories are only a fallback for roles without a report.
-    role_report_content = _section_role_report_content(role_reports, agent_memories)
+    graph_mode = configurable.research_graph_enabled
+    # Formal role reports remain the compatibility path. Graph mode retrieves
+    # section-specific evidence and does not inject complete role reports.
+    role_report_content = (
+        {}
+        if graph_mode
+        else _section_role_report_content(role_reports, agent_memories)
+    )
     
     research_sections = [s for s in sections if s.research and s.status != "done"]
     if not research_sections:
         return {}
+
+    section_evidence = {
+        section.name: (
+            _graph_section_evidence(section, state, config)
+            if graph_mode
+            else _extract_section_evidence(section, role_report_content)
+        )
+        for section in research_sections
+    }
     
     # Budget guard: if no budget, copy role reports directly as content
     budget_usage = state.get("budget_usage", {})
@@ -940,7 +1138,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         )
         completed = []
         for section in research_sections:
-            evidence = _extract_section_evidence(section, role_report_content)
+            evidence = section_evidence[section.name]
             section.content = evidence
             section.status = "done"
             completed.append(section)
@@ -963,7 +1161,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     
     async def _write_one(section: Section) -> tuple[Section, dict[str, Any]]:
         try:
-            evidence = _extract_section_evidence(section, role_report_content)
+            evidence = section_evidence[section.name]
             prompt = section_writer_from_role_reports_prompt.format(
                 section_name=section.name,
                 section_description=section.description,
@@ -1035,7 +1233,11 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     )
     
     if not context:
-        context = _role_context(role_reports)
+        context = (
+            _graph_report_context(state, config, query_suffix="section writing")
+            if configurable.research_graph_enabled
+            else _role_context(role_reports)
+        )
     if not context or context == "No upstream role reports are available yet.":
         context = "No completed research sections are available yet."
     
@@ -1139,7 +1341,11 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                 # Try to fill missing sections with final_report_model
                 try:
                     notes = state.get("notes", [])
-                    findings = _role_context(state.get("role_reports", {}))
+                    findings = (
+                        _graph_report_context(state, config, query_suffix="missing sections")
+                        if configurable.research_graph_enabled
+                        else _role_context(state.get("role_reports", {}))
+                    )
                     if findings == "No upstream role reports are available yet.":
                         findings = "\n".join(notes)
                     
@@ -1319,15 +1525,23 @@ async def _run_public_opinion_agent(
 
     agent_spec = get_public_opinion_agent_spec(role)
     budget_usage = state.get("budget_usage", {})
-    role_budget_update = {}
+    role_budget_update: dict[str, Any] = {}
     expected_output = agent_spec.expected_output
     research_round = max(1, int(state.get("research_round", 1) or 1))
     research_mode = state.get("research_mode", "initial")
-    assignment = _build_public_opinion_agent_assignment(state, role)
+    assignment = _build_public_opinion_agent_assignment(state, role, config)
     private_memory_context = _agent_private_memory_context(
         state.get("agent_memories", {}),
         role,
     )
+
+    strategy_name = _effective_context_strategy(configurable, role)
+    context_strategy = create_context_strategy(
+        strategy_name,
+        graph_enabled=configurable.research_graph_enabled,
+    )
+    run_id = _resolve_research_run_id(state, config)
+    task = _graph_task_descriptor(state, role, run_id)
 
     tools = await _business_agent_tools(config, role)
     if not has_external_research_tool(tools):
@@ -1360,7 +1574,31 @@ async def _run_public_opinion_agent(
         .with_config(research_model_config)
     )
 
-    role_messages = [HumanMessage(content=assignment)]
+    def model_factory(model_name: str, max_tokens: int | None) -> Any:
+        model_config: dict[str, Any] = {
+            "model": model_name,
+            "api_key": get_api_key_for_model(model_name, config),
+            "tags": ["langsmith:nostream"],
+        }
+        if max_tokens is not None:
+            model_config["max_tokens"] = max_tokens
+        return configurable_model.with_config(model_config)
+
+    harness = ResearchContextHarness(
+        strategy=context_strategy,
+        state=dict(state),
+        role=role,
+        assignment=assignment,
+        agent_prompt=agent_prompt,
+        configurable=configurable,
+        runtime_config=config,
+        model_factory=model_factory,
+        task=task,
+        run_id=run_id,
+        store_factory=create_research_graph_store,
+    )
+
+    role_messages: list[Any] = [HumanMessage(content=assignment)]
     tools_by_name = {_tool_name(available_tool): available_tool for available_tool in tools}
 
     for _ in range(configurable.max_react_tool_calls):
@@ -1378,9 +1616,10 @@ async def _run_public_opinion_agent(
             )
             break
 
+        model_messages = await harness.before_model(role_messages)
         response = await observe_model_ainvoke(
             agent_model,
-            [SystemMessage(content=agent_prompt)] + role_messages,
+            model_messages,
             observer_model=configurable.research_model,
             observer_component=f"{role}_{research_mode}_round_{research_round}",
         )
@@ -1412,6 +1651,7 @@ async def _run_public_opinion_agent(
             budget_skip_tool_message(tool_call, "tool or search call budget exhausted")
             for tool_call in skipped_tool_calls
         ]
+        tool_batch: list[ToolBatchItem] = []
         if skipped_tool_calls:
             role_budget_update = merge_budget_usage(
                 role_budget_update,
@@ -1439,6 +1679,18 @@ async def _run_public_opinion_agent(
                     name=tool_call["name"],
                     tool_call_id=tool_call["id"],
                 ))
+                tool_batch.append(
+                    ToolBatchItem(
+                        tool_name=tool_call["name"],
+                        tool_call_id=tool_call["id"],
+                        args=tool_call.get("args", {}),
+                        observation=(
+                            f"Tool '{tool_call['name']}' is not available in the current "
+                            "configuration. Use one of the available tools instead."
+                        ),
+                        success=False,
+                    )
+                )
 
             if known_calls:
                 tool_execution_tasks = [
@@ -1451,7 +1703,6 @@ async def _run_public_opinion_agent(
                     for tool_call in known_calls
                 ]
                 tool_results = await asyncio.gather(*tool_execution_tasks)
-                observations = [observation for observation, _, _ in tool_results]
                 role_budget_update = merge_budget_usage(
                     role_budget_update,
                     budget_from_tool_calls(known_calls, tools_by_name),
@@ -1459,16 +1710,56 @@ async def _run_public_opinion_agent(
                 for _, captured_budget, _ in tool_results:
                     role_budget_update = merge_budget_usage(role_budget_update, captured_budget)
 
-                role_messages.extend([
-                    ToolMessage(
-                    content=observation,
-                    name=tool_call["name"],
-                    tool_call_id=tool_call["id"],
-                )
-                for observation, tool_call in zip(observations, known_calls)
-            ])
+                for (observation, captured_budget, success), tool_call in zip(
+                    tool_results,
+                    known_calls,
+                ):
+                    role_messages.append(
+                        ToolMessage(
+                        content=observation,
+                        name=tool_call["name"],
+                        tool_call_id=tool_call["id"],
+                        )
+                    )
+                    tool_batch.append(
+                        ToolBatchItem(
+                            tool_name=tool_call["name"],
+                            tool_call_id=tool_call["id"],
+                            args=tool_call.get("args", {}),
+                            observation=observation,
+                            success=success,
+                        )
+                    )
 
-        role_messages.extend(skipped_tool_outputs)
+        for skipped_message, skipped_call in zip(skipped_tool_outputs, skipped_tool_calls):
+            role_messages.append(skipped_message)
+            tool_batch.append(
+                ToolBatchItem(
+                    tool_name=skipped_call["name"],
+                    tool_call_id=skipped_call["id"],
+                    args=skipped_call.get("args", {}),
+                    observation=skipped_message.content,
+                    success=False,
+                )
+            )
+
+        if has_native_search:
+            tool_batch.append(
+                ToolBatchItem(
+                    tool_name="web_search",
+                    tool_call_id=f"native-search-{research_round}-{_}",
+                    args={},
+                    observation=getattr(response, "content", ""),
+                    success=True,
+                )
+            )
+
+        hook_result = await harness.after_tool_batch(role_messages, tool_batch)
+        role_messages = hook_result.messages
+        role_budget_update = merge_budget_usage(
+            role_budget_update,
+            hook_result.budget_usage,
+        )
 
         if any(tool_call["name"] == "ResearchComplete" for tool_call in response.tool_calls):
             break
@@ -1476,36 +1767,60 @@ async def _run_public_opinion_agent(
         if not allowed_tool_calls:
             break
 
-    compression_state = {
-        "researcher_messages": role_messages,
-        "research_topic": assignment,
-        "agent_role": role,
-        "expected_output": expected_output,
-        "budget_usage": merge_budget_usage(budget_usage, role_budget_update),
-    }
-    compressed = await compress_research(compression_state, config)
-    role_budget_update = merge_budget_usage(
-        role_budget_update,
-        compressed.get("budget_usage", {}),
-    )
-    report = (
-        f"Agent role: {role}\n"
-        f"Agent name: {agent_spec.display_name}\n"
-        f"Research round: {research_round}\n"
-        f"Research mode: {research_mode}\n"
-        f"Expected output: {expected_output}\n\n"
-        f"{compressed.get('compressed_research', '')}"
-    )
+    graph_final = await harness.finalize(role_messages, expected_output)
+    if graph_final is not None:
+        role_budget_update = merge_budget_usage(
+            role_budget_update,
+            graph_final.budget_usage,
+        )
+        report = (
+            f"Agent role: {role}\n"
+            f"Agent name: {agent_spec.display_name}\n"
+            f"Research round: {research_round}\n"
+            f"Research mode: {research_mode}\n"
+            f"Context strategy: {strategy_name}\n"
+            f"Expected output: {expected_output}\n\n"
+            f"{graph_final.report}"
+        )
+        raw_notes = graph_final.raw_notes
+        role_report_update: dict[str, Any] = {
+            "type": "role_report_update",
+            "role": role,
+            "value": report,
+        }
+    else:
+        compression_state = {
+            "researcher_messages": role_messages,
+            "research_topic": assignment,
+            "agent_role": role,
+            "expected_output": expected_output,
+            "budget_usage": merge_budget_usage(budget_usage, role_budget_update),
+        }
+        compressed = await compress_research(compression_state, config)
+        role_budget_update = merge_budget_usage(
+            role_budget_update,
+            compressed.get("budget_usage", {}),
+        )
+        report = (
+            f"Agent role: {role}\n"
+            f"Agent name: {agent_spec.display_name}\n"
+            f"Research round: {research_round}\n"
+            f"Research mode: {research_mode}\n"
+            f"Expected output: {expected_output}\n\n"
+            f"{compressed.get('compressed_research', '')}"
+        )
+        raw_notes = compressed.get("raw_notes", [])
+        role_report_update = {role: report}
     private_memory = _build_agent_private_memory(
         role,
         report,
-        compressed.get("raw_notes", []),
+        raw_notes,
     )
     result = {
-        "role_reports": {role: report},
+        "role_reports": role_report_update,
         "agent_memories": {role: [private_memory]},
         "notes": [report],
-        "raw_notes": compressed.get("raw_notes", []),
+        "raw_notes": raw_notes,
         "completed_research_tasks": (
             _coerce_research_tasks(state.get("current_research_tasks", []))
             if research_mode == "followup"
@@ -1513,6 +1828,8 @@ async def _run_public_opinion_agent(
         ),
         "budget_usage": role_budget_update,
     }
+    if context_strategy.graph_enabled:
+        result.update(harness.update_state_payload())
     if research_mode == "followup":
         result["research_round"] = research_round
     return result
@@ -1533,14 +1850,65 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     previous_review_text = (
         previous_review.model_dump_json(indent=2) if previous_review else "None"
     )
+    graph_review_metrics: dict[str, Any] = {}
+    if configurable.research_graph_enabled:
+        run_id = _resolve_research_run_id(state, config)
+        store = create_research_graph_store(
+            configurable,
+            run_id=run_id,
+        )
+        review_subgraph = store.retrieve(
+            state.get("research_brief", ""),
+            run_id=run_id,
+            max_nodes=configurable.research_graph_max_retrieved_nodes,
+            max_edges=configurable.research_graph_max_retrieved_edges,
+        )
+        graph_review_metrics = {
+            "graph_retrieval_calls": 1,
+            "retrieved_nodes": len(review_subgraph.nodes),
+            "retrieved_edges": len(review_subgraph.edges),
+            "graph_retrieval_latency": 0,
+            "quality": {"graph_retrieval_latency": "unavailable"},
+        }
+        working_context_values = state.get("working_contexts", {}) or {}
+        working_contexts = {}
+        for role, value in working_context_values.items():
+            try:
+                working_contexts[str(role)] = (
+                    value
+                    if isinstance(value, WorkingContext)
+                    else WorkingContext.model_validate(value)
+                )
+            except Exception:
+                continue
+        review_context = build_research_review_context(
+            run_id=run_id,
+            working_contexts=working_contexts,
+            relevant_subgraph=review_subgraph,
+        )
+        graph_context_text = (
+            f"{review_context.model_dump_json(indent=2)}\n\n"
+            f"{format_relevant_subgraph(review_subgraph)}"
+        )
+        public_signal_report = (
+            "Graph-mode review context (public signal nodes are scoped and retrieved):\n"
+            + graph_context_text
+        )
+        internal_knowledge_report = (
+            "Graph-mode review context (internal knowledge nodes are scoped and retrieved):\n"
+            + graph_context_text
+        )
+    else:
+        public_signal_report = (state.get("role_reports", {}) or {}).get(
+            "public_signal", "No public-signal report is available."
+        )
+        internal_knowledge_report = (state.get("role_reports", {}) or {}).get(
+            "internal_knowledge", "No internal-knowledge report is available."
+        )
     prompt = research_review_prompt.format(
         research_brief=state.get("research_brief", ""),
-        public_signal_report=(state.get("role_reports", {}) or {}).get(
-            "public_signal", "No public-signal report is available."
-        ),
-        internal_knowledge_report=(state.get("role_reports", {}) or {}).get(
-            "internal_knowledge", "No internal-knowledge report is available."
-        ),
+        public_signal_report=public_signal_report,
+        internal_knowledge_report=internal_knowledge_report,
         research_round=current_round,
         max_research_rounds=configurable.max_research_rounds,
         completed_research_tasks=completed_tasks_text,
@@ -1581,6 +1949,7 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
             "research_mode", "initial"
         ),
         "budget_usage": budget_from_model_response(response),
+        **({"research_graph_metrics": graph_review_metrics} if graph_review_metrics else {}),
     }
 
 
@@ -1704,12 +2073,17 @@ public_opinion_subgraph = public_opinion_builder.compile()
 async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     """Run initial and gap-driven public-opinion research before report writing."""
     input_budget = state.get("budget_usage", {})
+    research_run_id = _resolve_research_run_id(state, config)
     result = await public_opinion_subgraph.ainvoke(
         {
             "messages": state.get("messages", []),
             "research_brief": state.get("research_brief", ""),
+            "research_run_id": research_run_id,
             "role_reports": {},
             "agent_memories": state.get("agent_memories", {}),
+            "working_contexts": {},
+            "rolling_summaries": {},
+            "research_graph_metrics": {},
             "notes": [],
             "raw_notes": [],
             "budget_usage": input_budget,
@@ -1729,6 +2103,7 @@ async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     # private memories remain available for agent prompt memory only.
     return {
         "research_brief": result.get("research_brief", state.get("research_brief", "")),
+        "research_run_id": result.get("research_run_id", research_run_id),
         "role_reports": {
             "type": "override",
             "value": role_reports,
@@ -1739,6 +2114,17 @@ async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
             "type": "override",
             "value": agent_memories,
         },
+        "working_contexts": {
+            "type": "override",
+            "value": result.get("working_contexts", state.get("working_contexts", {})) or {},
+        },
+        "rolling_summaries": {
+            "type": "override",
+            "value": result.get("rolling_summaries", state.get("rolling_summaries", {})) or {},
+        },
+        "research_graph_metrics": result.get(
+            "research_graph_metrics", state.get("research_graph_metrics", {})
+        ),
         "budget_usage": budget_update,
     }
 
@@ -1782,10 +2168,14 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
     """
     notes = state.get("notes", [])
     cleared_state = {"notes": {"type": "override", "value": []}}
-    findings = _role_context(state.get("role_reports", {}))
+    configurable = Configuration.from_runnable_config(config)
+    findings = (
+        _graph_report_context(state, config)
+        if configurable.research_graph_enabled
+        else _role_context(state.get("role_reports", {}))
+    )
     if findings == "No upstream role reports are available yet.":
         findings = "\n".join(notes)
-    configurable = Configuration.from_runnable_config(config)
     budget_usage = state.get("budget_usage", {})
     budget_update = {}
 

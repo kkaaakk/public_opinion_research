@@ -204,6 +204,171 @@ class Configuration(BaseModel):
             }
         },
     )
+    # Research Graph / Context Harness configuration.  The feature is opt-in
+    # so existing standard and legacy workflows keep their current behavior.
+    context_strategy: str = Field(
+        default="auto",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "select",
+                "default": "auto",
+                "description": "Context strategy override. Auto uses each public-opinion AgentSpec routing.",
+                "options": [
+                    {"label": "Auto", "value": "auto"},
+                    {"label": "Standard", "value": "standard"},
+                    {"label": "Research Graph Producer", "value": "research_graph_producer"},
+                    {"label": "Research Graph Consumer", "value": "research_graph_consumer"},
+                ],
+            }
+        },
+    )
+    research_graph_enabled: bool = Field(
+        default=False,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "boolean",
+                "default": False,
+                "description": "Enable the per-run Neo4j Research Graph and bounded Context Harness.",
+            }
+        },
+    )
+    research_graph_backend: str = Field(
+        default="neo4j",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "select",
+                "default": "neo4j",
+                "description": "Research Graph adapter. Use memory for tests/local fixtures or neo4j for production.",
+                "options": [
+                    {"label": "Neo4j", "value": "neo4j"},
+                    {"label": "Memory (tests)", "value": "memory"},
+                ],
+            }
+        },
+    )
+    research_graph_uri: Optional[str] = Field(
+        default=None,
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": "Neo4j URI for Research Graph, for example bolt://localhost:7687.",
+            }
+        },
+    )
+    research_graph_username: Optional[str] = Field(
+        default="neo4j",
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "neo4j",
+                "description": "Neo4j username for Research Graph. Read from environment/secret config.",
+            }
+        },
+    )
+    research_graph_password: Optional[str] = Field(
+        default=None,
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "password",
+                "description": "Neo4j password for Research Graph. Never log this value.",
+            }
+        },
+    )
+    research_graph_database: Optional[str] = Field(
+        default=None,
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": "Optional Neo4j database for Research Graph.",
+            }
+        },
+    )
+    # Compatibility aliases for callers that follow the existing rag_neo4j
+    # naming convention.  Canonical code uses the research_graph_* fields.
+    research_graph_neo4j_uri: Optional[str] = Field(default=None, optional=True)
+    research_graph_neo4j_username: Optional[str] = Field(default=None, optional=True)
+    research_graph_neo4j_password: Optional[str] = Field(default=None, optional=True)
+    research_graph_neo4j_database: Optional[str] = Field(default=None, optional=True)
+    research_graph_extraction_model: str = Field(
+        default="deepseek:deepseek-chat",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": "Structured model used once per token-aware Research Graph extraction batch.",
+            }
+        },
+    )
+    research_graph_extraction_model_max_tokens: int = Field(
+        default=4096,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "number",
+                "default": 4096,
+                "description": "Maximum output tokens for one graph extraction batch.",
+            }
+        },
+    )
+    research_graph_extraction_batch_tokens: int = Field(
+        default=12000,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "number",
+                "default": 12000,
+                "description": "Estimated input-token ceiling for each batch of raw source material.",
+            }
+        },
+    )
+    context_manager_model: str = Field(
+        default="deepseek:deepseek-chat",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": "Structured model used to update bounded Working Context.",
+            }
+        },
+    )
+    context_manager_model_max_tokens: int = Field(default=2048, optional=True)
+    rolling_compaction_model: str = Field(
+        default="deepseek:deepseek-chat",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": "Model used for incremental rolling history compaction.",
+            }
+        },
+    )
+    rolling_compaction_model_max_tokens: int = Field(default=2048, optional=True)
+    research_graph_role_report_model: Optional[str] = Field(default=None, optional=True)
+    research_graph_role_report_max_tokens: int = Field(default=8192, optional=True)
+    context_compaction_threshold_ratio: float = Field(
+        default=0.75,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "number",
+                "default": 0.75,
+                "min": 0.70,
+                "max": 0.80,
+                "description": "Soft model-context threshold for Rolling Compact; never a research stop condition.",
+            }
+        },
+    )
+    research_graph_context_capacity_tokens: Optional[int] = Field(default=None, optional=True)
+    recent_raw_steps: int = Field(default=3, metadata={"x_oap_ui_config": {"type": "number", "default": 3}})
+    working_context_max_active_findings: int = Field(default=8, optional=True)
+    working_context_max_active_claims: int = Field(default=16, optional=True)
+    working_context_max_active_evidence: int = Field(default=24, optional=True)
+    working_context_max_open_gaps: int = Field(default=8, optional=True)
+    working_context_max_conflicts: int = Field(default=8, optional=True)
+    research_graph_max_retrieved_nodes: int = Field(default=24, optional=True)
+    research_graph_max_retrieved_edges: int = Field(default=48, optional=True)
+    research_graph_transcript_dir: str = Field(
+        default=".tmp/runtime/transcripts",
+        metadata={"x_oap_ui_config": {"type": "text", "default": ".tmp/runtime/transcripts"}},
+    )
     # Business Scenario Configuration
     business_scenario: str = Field(
         default="public_opinion_risk",
@@ -1374,6 +1539,48 @@ class Configuration(BaseModel):
     def validate_rag_chunk_settings(self) -> "Configuration":
         """Validate local RAG chunking and budget settings."""
         _apply_rag_path_compatibility(self)
+        if self.context_strategy.strip().lower() not in {
+            "auto",
+            "standard",
+            "research_graph_producer",
+            "research_graph_consumer",
+        }:
+            raise ValueError("context_strategy is not supported.")
+        if self.research_graph_backend.strip().lower() not in {"neo4j", "memory", "inmemory", "local"}:
+            raise ValueError("research_graph_backend must be either neo4j or memory.")
+        if self.research_graph_uri is None and self.research_graph_neo4j_uri:
+            self.research_graph_uri = self.research_graph_neo4j_uri
+        if self.research_graph_username == "neo4j" and self.research_graph_neo4j_username:
+            self.research_graph_username = self.research_graph_neo4j_username
+        if self.research_graph_password is None and self.research_graph_neo4j_password:
+            self.research_graph_password = self.research_graph_neo4j_password
+        if self.research_graph_database is None and self.research_graph_neo4j_database:
+            self.research_graph_database = self.research_graph_neo4j_database
+        if not 0.70 <= self.context_compaction_threshold_ratio <= 0.80:
+            raise ValueError("context_compaction_threshold_ratio must be between 0.70 and 0.80.")
+        positive_graph_fields = (
+            "research_graph_extraction_model_max_tokens",
+            "research_graph_extraction_batch_tokens",
+            "context_manager_model_max_tokens",
+            "rolling_compaction_model_max_tokens",
+            "research_graph_role_report_max_tokens",
+            "recent_raw_steps",
+            "working_context_max_active_findings",
+            "working_context_max_active_claims",
+            "working_context_max_active_evidence",
+            "working_context_max_open_gaps",
+            "working_context_max_conflicts",
+            "research_graph_max_retrieved_nodes",
+            "research_graph_max_retrieved_edges",
+        )
+        for field_name in positive_graph_fields:
+            if getattr(self, field_name) < 0:
+                raise ValueError(f"{field_name} must be greater than or equal to 0.")
+        if (
+            self.research_graph_context_capacity_tokens is not None
+            and self.research_graph_context_capacity_tokens <= 0
+        ):
+            raise ValueError("research_graph_context_capacity_tokens must be greater than 0 when set.")
         if self.max_research_rounds <= 0:
             raise ValueError("max_research_rounds must be greater than 0.")
         if self.rag_chunk_size <= 0:
