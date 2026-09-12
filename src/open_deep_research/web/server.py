@@ -249,10 +249,12 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
 
                     # ── Capture final report ──────────────────
                     if isinstance(node_output, dict):
-                        if "final_report" in node_output:
-                            final_report = node_output["final_report"]
-                        if "budget_usage" in node_output:
-                            budget = node_output["budget_usage"]
+                        report_update = node_output.get("report", {}) or {}
+                        runtime_update = node_output.get("runtime", {}) or {}
+                        if isinstance(report_update, dict) and report_update.get("final"):
+                            final_report = report_update["final"]
+                        if isinstance(runtime_update, dict) and runtime_update.get("budget"):
+                            budget = runtime_update["budget"]
 
             # ── Final result ────────────────────────────────────────
             usage = {

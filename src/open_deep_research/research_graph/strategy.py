@@ -1,15 +1,15 @@
-"""Context Strategy routing and the shared ReAct Harness lifecycle."""
+"""Producer/consumer strategies operating on a per-run Research Workspace."""
 
 from __future__ import annotations
 
 import json
 import logging
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
 from open_deep_research.budget import (
     budget_from_model_response,
@@ -20,64 +20,34 @@ from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.research_graph.compaction import (
     context_token_estimate,
     micro_compact_messages,
-    render_protected_context,
-    rolling_compact,
-    should_rolling_compact,
 )
 from open_deep_research.research_graph.context_manager import (
     ContextManager,
-    initial_working_context,
     render_working_context,
 )
 from open_deep_research.research_graph.extractor import (
     GraphExtractor,
     build_source_documents_from_raw_result,
 )
-from open_deep_research.research_graph.metrics import ResearchGraphMetrics
 from open_deep_research.research_graph.models import (
     RawResearchDocument,
-    RelevantSubgraph,
-    ResearchGraphScope,
-    WorkingContext,
     WriteReceipt,
 )
 from open_deep_research.research_graph.retriever import (
-    ResearchGraphRetriever,
     format_relevant_subgraph,
 )
-from open_deep_research.research_graph.schema import stable_id
-from open_deep_research.research_graph.store import (
-    ResearchGraphStore,
-    create_research_graph_store,
+from open_deep_research.research_graph.workspace import (
+    ResearchWorkspace,
+    TaskDescriptor,
+    ToolBatchItem,
 )
-from open_deep_research.research_graph.transcript import ResearchTranscript
 
 LOGGER = logging.getLogger(__name__)
 
 
-@dataclass
-class TaskDescriptor:
-    """Role-neutral task view used by graph strategies."""
-
-    task_id: str
-    objective: str
-    evidence_needed: str
-    reason: str = ""
-
 
 @dataclass
-class ToolBatchItem:
-    """One tool call and its observed result."""
-
-    tool_name: str
-    tool_call_id: str
-    args: Any
-    observation: Any
-    success: bool
-
-
-@dataclass
-class HarnessHookResult:
+class WorkspaceHookResult:
     """Lifecycle output returned after a tool batch."""
 
     messages: list[Any]
@@ -87,7 +57,7 @@ class HarnessHookResult:
 
 
 @dataclass
-class HarnessFinalResult:
+class WorkspaceFinalResult:
     """Final role report output from a graph strategy."""
 
     report: str
@@ -103,170 +73,25 @@ class ContextStrategy(Protocol):
     graph_enabled: bool
     is_producer: bool
 
-    async def before_model(self, harness: ResearchContextHarness, messages: list[Any]) -> list[Any]:
+    async def before_model(self, harness: ResearchWorkspace, messages: list[Any]) -> list[Any]:
         """Build the next bounded model input."""
 
     async def after_tool_batch(
         self,
-        harness: ResearchContextHarness,
+        harness: ResearchWorkspace,
         messages: list[Any],
         batch: list[ToolBatchItem],
-    ) -> HarnessHookResult:
+    ) -> WorkspaceHookResult:
         """Consume a completed tool batch."""
 
     async def finalize(
         self,
-        harness: ResearchContextHarness,
+        harness: ResearchWorkspace,
         messages: list[Any],
         expected_output: str,
-    ) -> HarnessFinalResult | None:
+    ) -> WorkspaceFinalResult | None:
         """Finalize a role report when the strategy owns report generation."""
 
-
-class ResearchContextHarness:
-    """Generic ReAct message lifecycle with pluggable context strategy."""
-
-    def __init__(
-        self,
-        *,
-        strategy: ContextStrategy,
-        state: dict[str, Any],
-        role: str,
-        assignment: str,
-        agent_prompt: str,
-        configurable: Any,
-        runtime_config: Any,
-        model_factory: Callable[[str, int | None], Any],
-        store: ResearchGraphStore | None = None,
-        task: TaskDescriptor | None = None,
-        run_id: str | None = None,
-        driver_factory: Callable[..., Any] | None = None,
-        store_factory: Callable[..., ResearchGraphStore] | None = None,
-    ) -> None:
-        """Initialize one role's scoped strategy state and context memory."""
-        self.strategy = strategy
-        self.state = state
-        self.role = role
-        self.assignment = assignment
-        self.agent_prompt = agent_prompt
-        self.configurable = configurable
-        self.runtime_config = runtime_config
-        self.model_factory = model_factory
-        self.driver_factory = driver_factory
-        self.store_factory = store_factory
-        self.run_id = run_id or stable_id("RUN", role, assignment)
-        self.task = task or TaskDescriptor(
-            task_id=stable_id("TASK", self.run_id, role),
-            objective=assignment,
-            evidence_needed="Evidence relevant to the role objective.",
-        )
-        self.scope = ResearchGraphScope(
-            run_id=self.run_id,
-            role=role,
-            research_round=max(1, int(state.get("research_round", 1) or 1)),
-            task_id=self.task.task_id,
-        )
-        self.store = store
-        self.retriever: ResearchGraphRetriever | None = None
-        if strategy.graph_enabled and self.store is None:
-            self.store = create_research_graph_store(
-                configurable,
-                run_id=self.run_id,
-                driver_factory=driver_factory,
-                store_factory=store_factory,
-            )
-        if self.store is not None:
-            self.retriever = ResearchGraphRetriever(
-                self.store,
-                max_nodes=int(getattr(configurable, "research_graph_max_retrieved_nodes", 24)),
-                max_edges=int(getattr(configurable, "research_graph_max_retrieved_edges", 48)),
-            )
-        self.working_context = self._load_working_context()
-        self.relevant_subgraph = RelevantSubgraph(run_id=self.run_id)
-        self.rolling_summary = str(
-            (state.get("rolling_summaries", {}) or {}).get(role, "")
-        )
-        self.receipts: dict[str, WriteReceipt] = {}
-        self.metrics = ResearchGraphMetrics()
-        self.transcript = (
-            ResearchTranscript(
-                getattr(configurable, "research_graph_transcript_dir", None),
-                self.run_id,
-            )
-            if strategy.graph_enabled
-            else None
-        )
-
-    def _load_working_context(self) -> WorkingContext:
-        values = self.state.get("working_contexts", {}) or {}
-        value = values.get(self.role) if isinstance(values, dict) else None
-        if isinstance(value, WorkingContext):
-            return value
-        if isinstance(value, dict):
-            try:
-                return WorkingContext.model_validate(value)
-            except Exception:
-                pass
-        return initial_working_context(self.task)
-
-    async def before_model(self, messages: list[Any]) -> list[Any]:
-        """Build the next strategy-specific model input."""
-        return await self.strategy.before_model(self, messages)
-
-    async def after_tool_batch(
-        self,
-        messages: list[Any],
-        batch: list[ToolBatchItem],
-    ) -> HarnessHookResult:
-        """Run the strategy's post-tool lifecycle hook."""
-        return await self.strategy.after_tool_batch(self, messages, batch)
-
-    async def finalize(
-        self,
-        messages: list[Any],
-        expected_output: str,
-    ) -> HarnessFinalResult | None:
-        """Finalize a graph report or return ``None`` for standard mode."""
-        return await self.strategy.finalize(self, messages, expected_output)
-
-    def protected_context(self) -> str:
-        """Return the context block protected from rolling history compaction."""
-        return render_protected_context(
-            current_task=self.task.objective,
-            working_context=render_working_context(self.working_context),
-            relevant_subgraph=format_relevant_subgraph(self.relevant_subgraph),
-            rolling_summary=self.rolling_summary,
-        )
-
-    def refresh_retrieval(self, *, query_suffix: str = "") -> RelevantSubgraph:
-        """Retrieve scoped graph memory for the current task."""
-        if self.retriever is None:
-            return self.relevant_subgraph
-        started_at = time.perf_counter()
-        self.relevant_subgraph = self.retriever.retrieve(
-            self.task,
-            scope=self.scope,
-            working_context=self.working_context,
-            query_suffix=query_suffix,
-        )
-        self.metrics.add("graph_retrieval_calls")
-        self.metrics.add(
-            "graph_retrieval_latency",
-            (time.perf_counter() - started_at) * 1000,
-            quality="exact",
-        )
-        self.metrics.add("retrieved_nodes", len(self.relevant_subgraph.nodes))
-        self.metrics.add("retrieved_edges", len(self.relevant_subgraph.edges))
-        return self.relevant_subgraph
-
-    def update_state_payload(self) -> dict[str, Any]:
-        """Return graph state channels without placing raw content in them."""
-        return {
-            "research_run_id": self.run_id,
-            "working_contexts": {self.role: self.working_context.model_dump(mode="json")},
-            "rolling_summaries": {self.role: self.rolling_summary},
-            "research_graph_metrics": self.metrics.as_dict(),
-        }
 
 
 class StandardContextStrategy:
@@ -276,25 +101,25 @@ class StandardContextStrategy:
     graph_enabled = False
     is_producer = False
 
-    async def before_model(self, harness: ResearchContextHarness, messages: list[Any]) -> list[Any]:
+    async def before_model(self, harness: ResearchWorkspace, messages: list[Any]) -> list[Any]:
         """Return the unmodified standard system-plus-history input."""
-        return [SystemMessage(content=harness.agent_prompt), *messages]
+        return list(messages)
 
     async def after_tool_batch(
         self,
-        harness: ResearchContextHarness,
+        harness: ResearchWorkspace,
         messages: list[Any],
         batch: list[ToolBatchItem],
-    ) -> HarnessHookResult:
+    ) -> WorkspaceHookResult:
         """Leave standard tool results unchanged."""
-        return HarnessHookResult(messages=list(messages))
+        return WorkspaceHookResult(messages=list(messages))
 
     async def finalize(
         self,
-        harness: ResearchContextHarness,
+        harness: ResearchWorkspace,
         messages: list[Any],
         expected_output: str,
-    ) -> HarnessFinalResult | None:
+    ) -> WorkspaceFinalResult | None:
         """Defer standard report compression to the legacy caller."""
         return None
 
@@ -304,9 +129,9 @@ class _ResearchGraphStrategyBase:
 
     graph_enabled = True
 
-    async def before_model(self, harness: ResearchContextHarness, messages: list[Any]) -> list[Any]:
+    async def before_model(self, harness: ResearchWorkspace, messages: list[Any]) -> list[Any]:
         if not harness.relevant_subgraph.nodes and harness.store is not None:
-            harness.refresh_retrieval()
+            harness.context_for()
         items = list(messages)
         assignment = items[:1]
         history = items[1:]
@@ -320,16 +145,16 @@ class _ResearchGraphStrategyBase:
                 "</Research Graph Working Context>"
             )
         )
-        return [SystemMessage(content=harness.agent_prompt), *assignment, context_message, *history]
+        return [*assignment, context_message, *history]
 
     async def finalize(
         self,
-        harness: ResearchContextHarness,
+        harness: ResearchWorkspace,
         messages: list[Any],
         expected_output: str,
-    ) -> HarnessFinalResult | None:
+    ) -> WorkspaceFinalResult | None:
         if harness.store is not None:
-            harness.refresh_retrieval(query_suffix="final role report")
+            harness.context_for(query_suffix="final role report")
         recent_text = _render_recent_messages(messages)
         prompt = (
             "Generate a bounded public-opinion role report from the current research "
@@ -366,80 +191,12 @@ class _ResearchGraphStrategyBase:
                 "role_report",
                 {"role": harness.role, "graph_node_ids": sorted(harness.relevant_subgraph.node_ids)},
             )
-        return HarnessFinalResult(
+        return WorkspaceFinalResult(
             report=str(getattr(response, "content", response) or ""),
             raw_notes=[],
             budget_usage=budget,
             metrics=harness.metrics.as_dict(),
         )
-
-    async def _maybe_rolling_compact(
-        self,
-        harness: ResearchContextHarness,
-        messages: list[Any],
-    ) -> list[Any]:
-        model_limit = getattr(harness.configurable, "research_graph_context_capacity_tokens", None)
-        if not model_limit:
-            # The existing model lookup is only a capacity hint, never a
-            # research stop condition.
-            try:
-                from open_deep_research.utils import get_model_token_limit
-
-                model_limit = get_model_token_limit(harness.configurable.research_model)
-            except Exception:
-                model_limit = None
-        if model_limit is None:
-            return messages
-        extra = harness.protected_context()
-        if not should_rolling_compact(
-            messages,
-            extra_context=extra,
-            model_context_capacity=model_limit,
-            threshold_ratio=float(
-                getattr(harness.configurable, "context_compaction_threshold_ratio", 0.75)
-            ),
-        ):
-            return messages
-        compaction_model_name = str(
-            getattr(harness.configurable, "rolling_compaction_model", None)
-            or getattr(harness.configurable, "compression_model", "")
-        )
-        compaction_model = harness.model_factory(
-            compaction_model_name,
-            int(getattr(harness.configurable, "rolling_compaction_model_max_tokens", 2048)),
-        )
-        before_tokens = context_token_estimate(messages, extra)
-        result = await rolling_compact(
-            messages,
-            previous_summary=harness.rolling_summary,
-            protected_context=extra,
-            model=compaction_model,
-            model_name=compaction_model_name,
-            max_retries=int(getattr(harness.configurable, "max_structured_output_retries", 3)),
-            recent_raw_steps=int(getattr(harness.configurable, "recent_raw_steps", 3)),
-        )
-        harness.rolling_summary = result.rolling_summary
-        harness.metrics.add("rolling_compact_count")
-        harness.metrics.add("rolling_compact_input_tokens", before_tokens, quality="estimated")
-        output_tokens = result.budget_usage.get("output_tokens")
-        if isinstance(output_tokens, int) and output_tokens > 0:
-            harness.metrics.add("rolling_compact_output_tokens", output_tokens, quality="exact")
-        else:
-            harness.metrics.add(
-                "rolling_compact_output_tokens",
-                estimate_tokens(result.rolling_summary),
-                quality="estimated",
-            )
-        harness.metrics.add("micro_compact_tokens_removed", result.tokens_removed)
-        if harness.transcript is not None:
-            harness.transcript.append(
-                "rolling_compact",
-                {
-                    "tokens_removed": result.tokens_removed,
-                    "rolling_summary": result.rolling_summary,
-                },
-            )
-        return result.messages
 
 
 class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
@@ -450,13 +207,13 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
 
     async def after_tool_batch(
         self,
-        harness: ResearchContextHarness,
+        harness: ResearchWorkspace,
         messages: list[Any],
         batch: list[ToolBatchItem],
-    ) -> HarnessHookResult:
+    ) -> WorkspaceHookResult:
         """Persist and compact one successful producer tool batch."""
         if not batch:
-            return HarnessHookResult(messages=list(messages))
+            return WorkspaceHookResult(messages=list(messages))
         if harness.transcript is not None:
             harness.transcript.append(
                 "raw_tool_batch",
@@ -528,7 +285,7 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
             )
             harness.metrics.add("micro_compact_count", len(compacted.compacted_tool_call_ids))
             harness.metrics.add("micro_compact_tokens_removed", compacted.tokens_removed)
-            return HarnessHookResult(
+            return WorkspaceHookResult(
                 messages=compacted.messages,
                 metrics=harness.metrics.as_dict(),
             )
@@ -602,7 +359,7 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
             if combined_deltas:
                 if harness.store is None:
                     raise RuntimeError("Producer strategy has no Research Graph store.")
-                harness.refresh_retrieval(query_suffix="new research delta")
+                harness.context_for(query_suffix="new research delta")
                 context_model_name = str(
                     getattr(harness.configurable, "context_manager_model", None)
                     or getattr(harness.configurable, "research_model", "")
@@ -662,8 +419,8 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                 context_token_estimate(compacted.messages),
                 quality="estimated",
             )
-            compacted_messages = await self._maybe_rolling_compact(harness, compacted.messages)
-            return HarnessHookResult(
+            compacted_messages = compacted.messages
+            return WorkspaceHookResult(
                 messages=compacted_messages,
                 budget_usage=merge_budget_usage(
                     extraction.budget_usage,
@@ -678,7 +435,7 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
             LOGGER.exception("Research Graph producer hook failed for role %s.", harness.role)
             if harness.transcript is not None:
                 harness.transcript.append("graph_hook_failure", {"role": harness.role})
-            return HarnessHookResult(
+            return WorkspaceHookResult(
                 messages=list(messages),
                 succeeded=False,
                 metrics=harness.metrics.as_dict(),
@@ -693,10 +450,10 @@ class ResearchGraphConsumerStrategy(_ResearchGraphStrategyBase):
 
     async def after_tool_batch(
         self,
-        harness: ResearchContextHarness,
+        harness: ResearchWorkspace,
         messages: list[Any],
         batch: list[ToolBatchItem],
-    ) -> HarnessHookResult:
+    ) -> WorkspaceHookResult:
         """Refresh scoped graph retrieval while preserving consumer raw results."""
         if harness.transcript is not None and batch:
             harness.transcript.append(
@@ -716,13 +473,13 @@ class ResearchGraphConsumerStrategy(_ResearchGraphStrategyBase):
                 },
             )
         if harness.store is not None:
-            harness.refresh_retrieval(query_suffix="consumer analysis")
+            harness.context_for(query_suffix="consumer analysis")
         # Consumer tool outputs are not source evidence by default.  Keep them
         # raw so a future consumer-specific evidence policy cannot lose data.
         # Under context pressure, incremental Rolling Compact can still replace
         # complete older steps; the transcript retains the original payload.
-        bounded_messages = await self._maybe_rolling_compact(harness, list(messages))
-        return HarnessHookResult(
+        bounded_messages = list(messages)
+        return WorkspaceHookResult(
             messages=bounded_messages,
             metrics=harness.metrics.as_dict(),
         )
@@ -779,9 +536,9 @@ def _render_recent_messages(messages: Iterable[Any], *, max_steps: int = 3) -> s
 
 __all__ = [
     "ContextStrategy",
-    "HarnessFinalResult",
-    "HarnessHookResult",
-    "ResearchContextHarness",
+    "WorkspaceFinalResult",
+    "WorkspaceHookResult",
+    "ResearchWorkspace",
     "ResearchGraphConsumerStrategy",
     "ResearchGraphProducerStrategy",
     "StandardContextStrategy",

@@ -1,8 +1,9 @@
-"""Graph state definitions and data structures for the Deep Research agent."""
+"""Serializable LangGraph state grouped by data ownership."""
 
-import operator
+from __future__ import annotations
+
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Literal
 
 from langchain_core.messages import MessageLikeRepresentation
 from langgraph.graph import MessagesState
@@ -12,205 +13,130 @@ from typing_extensions import TypedDict
 from open_deep_research.budget import empty_budget_usage, merge_budget_usage
 from open_deep_research.research_graph.metrics import merge_research_graph_metrics
 
-###################
-# Structured Outputs
-###################
 BusinessAgentRole = Literal[
-    "public_signal",
-    "internal_knowledge",
-    "risk_assessment",
-    "response_strategy",
+    "public_signal", "internal_knowledge", "risk_assessment", "response_strategy"
 ]
-
 
 
 class ResearchComplete(BaseModel):
     """Call this tool to indicate that the research is complete."""
 
+
 class Summary(BaseModel):
-    """Research summary with key findings."""
-    
+    """Research summary with representative excerpts."""
     summary: str
     key_excerpts: str
 
+
 class ClarifyWithUser(BaseModel):
-    """Model for user clarification requests."""
-    
-    need_clarification: bool = Field(
-        description="Whether the user needs to be asked a clarifying question.",
-    )
-    question: str = Field(
-        description="A question to ask the user to clarify the report scope",
-    )
-    verification: str = Field(
-        description="Verify message that we will start research after the user has provided the necessary information.",
-    )
+    """Structured clarification decision."""
+    need_clarification: bool = Field(description="Whether clarification is required.")
+    question: str = Field(description="Question used to clarify the report scope.")
+    verification: str = Field(description="Confirmation shown before research starts.")
+
 
 class ResearchQuestion(BaseModel):
-    """Research question and brief for guiding research."""
-
-    research_brief: str = Field(
-        description="A research question that will be used to guide the research.",
-    )
+    """Structured research brief output."""
+    research_brief: str = Field(description="Research question used to guide research.")
 
 
 class ResearchTask(BaseModel):
-    """One evidence-gap task assigned to a public-opinion research role."""
+    """One evidence-gap task assigned to a producer role."""
 
-    task_id: str = Field(
-        description="Stable identifier for this research task within the current run.",
-    )
-    objective: str = Field(
-        description="The specific unresolved question or claim to investigate.",
-    )
-    target_role: Literal["public_signal", "internal_knowledge"] = Field(
-        description="The public-opinion research role that should execute this task.",
-    )
-    evidence_needed: str = Field(
-        description="The evidence required to resolve the task.",
-    )
-    reason: str = Field(
-        description="Why resolving this task can affect the risk assessment.",
-    )
-    priority: Literal["high", "medium", "low"] = Field(
-        default="medium",
-        description="Relative priority of this research task.",
-    )
+    task_id: str = Field(description="Stable task identifier within the run.")
+    objective: str
+    target_role: Literal["public_signal", "internal_knowledge"]
+    evidence_needed: str
+    reason: str
+    priority: Literal["high", "medium", "low"] = "medium"
 
 
 class ResearchReview(BaseModel):
-    """Structured review of public-opinion evidence and remaining research gaps."""
-
-    research_complete: bool = Field(
-        description=(
-            "Whether the available evidence is sufficient to proceed to risk assessment. "
-            "Do not keep researching gaps that would not materially change the risk judgment."
-        ),
-    )
-    confirmed_findings: list[str] = Field(
-        default_factory=list,
-        description="Findings supported well enough for downstream risk assessment.",
-    )
-    unresolved_claims: list[str] = Field(
-        default_factory=list,
-        description="Important claims that remain unverified or weakly supported.",
-    )
-    conflicts: list[str] = Field(
-        default_factory=list,
-        description="Material conflicts between public signals and internal knowledge.",
-    )
-    research_gaps: list[str] = Field(
-        default_factory=list,
-        description="Evidence gaps that could materially change the risk judgment.",
-    )
-    next_tasks: list[ResearchTask] = Field(
-        default_factory=list,
-        description="Executable follow-up tasks, grouped later by target_role.",
-    )
+    """Evidence sufficiency review and optional follow-up tasks."""
+    research_complete: bool
+    confirmed_findings: list[str] = Field(default_factory=list)
+    unresolved_claims: list[str] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    research_gaps: list[str] = Field(default_factory=list)
+    next_tasks: list[ResearchTask] = Field(default_factory=list)
 
 
 class SearchQuery(BaseModel):
-    """A single web search query."""
-
-    search_query: str = Field(
-        description="Query for web search.",
-    )
+    """One follow-up search query."""
+    search_query: str
 
 
 class Section(BaseModel):
-    """A section of a structured research report.
+    """One planned report section."""
 
-    Used by the Plan-and-Execute workflow to represent one planned section.
-    In public-opinion mode, ``agent_role`` maps the section to the public-opinion
-    sub-agent roles whose evidence should be used when writing the section.
-    """
-
-    name: str = Field(
-        description="Name for this section of the report.",
-    )
-    description: str = Field(
-        description="Brief overview of the main topics and concepts to be covered in this section.",
-    )
-    research: bool = Field(
-        default=True,
-        description="Whether to perform research (e.g. role-based evidence) for this section.",
-    )
-    content: str = Field(
-        default="",
-        description="The content of the section. Empty during planning, filled after writing.",
-    )
-    agent_role: str = Field(
-        default="",
-        description=(
-            "Comma-separated public-opinion agent roles this section depends on. "
-            "Values are chosen from: public_signal, internal_knowledge, "
-            "risk_assessment, response_strategy."
-        ),
-    )
-    status: Literal["pending", "done"] = Field(
-        default="pending",
-        description="Completion status of the section.",
-    )
+    name: str
+    description: str
+    research: bool = True
+    content: str = ""
+    agent_role: str = ""
+    status: Literal["pending", "done"] = "pending"
 
 
 class Sections(BaseModel):
-    """Container for a list of report sections, used for structured output."""
-
-    sections: list[Section] = Field(
-        description="Sections of the report.",
-    )
+    """Structured section plan output."""
+    sections: list[Section]
 
 
 class Feedback(BaseModel):
-    """Reflection feedback on a research section.
-
-    Kept for future use; public-opinion mode does not strictly require it but
-    the prompts may reference it.
-    """
-
-    grade: Literal["pass", "fail"] = Field(
-        description="Evaluation result indicating whether the response meets requirements ('pass') or needs revision ('fail').",
-    )
-    follow_up_queries: list[SearchQuery] = Field(
-        description="List of follow-up search queries.",
-    )
+    """Section quality feedback."""
+    grade: Literal["pass", "fail"]
+    follow_up_queries: list[SearchQuery]
 
 
-###################
-# State Definitions
-###################
+class WorkflowState(TypedDict, total=False):
+    """Where the public-opinion workflow is in the current run."""
 
-def override_reducer(current_value, new_value):
-    """Reducer function that allows overriding values in state."""
-    if isinstance(new_value, dict) and new_value.get("type") == "override":
-        return new_value.get("value", new_value)
-    else:
-        return operator.add(current_value, new_value)
-
-def budget_usage_reducer(current_value: Any, new_value: Any):
-    """Reducer that accumulates budget counters across graph nodes."""
-    if isinstance(new_value, dict) and new_value.get("type") == "override":
-        return new_value.get("value", empty_budget_usage())
-    return merge_budget_usage(current_value, new_value)
+    brief: str
+    round: int
+    review: ResearchReview | None
+    pending_tasks: list[ResearchTask]
+    completed_tasks: list[ResearchTask]
 
 
-def research_round_reducer(current_value: Any, new_value: Any) -> int:
-    """Keep the greatest completed/current round across parallel follow-ups."""
-    if isinstance(new_value, dict) and new_value.get("type") == "override":
-        new_value = new_value.get("value", 1)
-    try:
-        current_round = int(current_value or 1)
-    except (TypeError, ValueError):
-        current_round = 1
-    try:
-        incoming_round = int(new_value or 1)
-    except (TypeError, ValueError):
-        incoming_round = 1
-    return max(1, current_round, incoming_round)
+class AgentRoleState(TypedDict, total=False):
+    """State privately owned by one business agent role."""
+
+    report: str
+    memory: list[dict[str, Any]]
+    rolling_summary: str
+
+
+class ResearchState(TypedDict, total=False):
+    """Serializable references and Working Context for a research run."""
+
+    run_id: str
+    working_contexts: dict[str, dict[str, Any]]
+
+
+class ReportState(TypedDict, total=False):
+    """Plan, section outputs, feedback, and final report."""
+    sections: list[Section]
+    completed_sections: list[Section]
+    plan_feedback: list[str]
+    final: str
+
+
+class RuntimeState(TypedDict, total=False):
+    """Non-business execution accounting and observability data."""
+
+    budget: dict[str, Any]
+    metrics: dict[str, Any]
+
+
+def _is_override(value: Any) -> bool:
+    return isinstance(value, Mapping) and value.get("type") == "override"
+
+
+def _override_value(value: Any, default: Any) -> Any:
+    return value.get("value", default) if _is_override(value) else value
 
 
 def _coerce_research_task(value: Any) -> ResearchTask | None:
-    """Convert a task-like value to the canonical structured task model."""
     if isinstance(value, ResearchTask):
         return value
     if isinstance(value, Mapping):
@@ -221,22 +147,18 @@ def _coerce_research_task(value: Any) -> ResearchTask | None:
     return None
 
 
-def _research_task_values(value: Any) -> list[Any]:
-    """Return task-like values from a state update without assuming its encoding."""
+def _task_values(value: Any) -> list[Any]:
+    value = _override_value(value, [])
     if value is None:
         return []
-    if isinstance(value, (list, tuple)):
-        return list(value)
-    return [value]
+    return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
 def research_tasks_reducer(current_value: Any, new_value: Any) -> list[ResearchTask]:
-    """Accumulate research tasks while de-duplicating stable task identifiers."""
-    if isinstance(new_value, dict) and new_value.get("type") == "override":
-        values = _research_task_values(new_value.get("value", []))
-    else:
-        values = _research_task_values(current_value) + _research_task_values(new_value)
-
+    """Merge and de-duplicate task values; an override token clears/replaces."""
+    values = _task_values(new_value) if _is_override(new_value) else (
+        _task_values(current_value) + _task_values(new_value)
+    )
     merged: list[ResearchTask] = []
     seen: set[str] = set()
     for value in values:
@@ -246,115 +168,193 @@ def research_tasks_reducer(current_value: Any, new_value: Any) -> list[ResearchT
         identity = task.task_id.strip() or (
             f"{task.target_role}:{task.objective.strip()}:{task.evidence_needed.strip()}"
         )
-        if identity in seen:
-            continue
-        seen.add(identity)
-        merged.append(task)
+        if identity not in seen:
+            seen.add(identity)
+            merged.append(task)
     return merged
 
 
-def role_reports_reducer(current_value: Any, new_value: Any) -> dict[str, str]:
-    """Reducer that preserves every public-opinion report produced for each role."""
-    if isinstance(new_value, dict) and new_value.get("type") == "override":
-        replacement = new_value.get("value", {})
+def _merge_round(current: Any, incoming: Any) -> int:
+    incoming = _override_value(incoming, 1)
+    try:
+        left = int(current or 1)
+    except (TypeError, ValueError):
+        left = 1
+    try:
+        right = int(incoming or 1)
+    except (TypeError, ValueError):
+        right = 1
+    return max(1, left, right)
+
+
+def workflow_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
+    """Merge workflow progress safely across parallel producer updates."""
+    if _is_override(new_value):
+        replacement = _override_value(new_value, {})
         return dict(replacement) if isinstance(replacement, Mapping) else {}
-    if isinstance(new_value, dict) and new_value.get("type") == "role_report_update":
-        role = str(new_value.get("role") or "").strip()
-        replacement = str(new_value.get("value") or "")
-        merged = dict(current_value) if isinstance(current_value, Mapping) else {}
-        if role:
-            merged[role] = replacement
-        return merged
-    current_reports = current_value if isinstance(current_value, Mapping) else {}
-    new_reports = new_value if isinstance(new_value, Mapping) else {}
-    merged = dict(current_reports)
-    for role, report in new_reports.items():
-        normalized_role = str(role)
-        normalized_report = str(report or "")
-        previous_report = str(merged.get(normalized_role) or "")
-        if not previous_report:
-            merged[normalized_role] = normalized_report
-        elif normalized_report and normalized_report != previous_report:
-            merged[normalized_role] = (
-                f"{previous_report}\n\n"
-                f"--- Additional {normalized_role} research report ---\n"
-                f"{normalized_report}"
+    current = dict(current_value) if isinstance(current_value, Mapping) else {}
+    incoming = dict(new_value) if isinstance(new_value, Mapping) else {}
+    merged: dict[str, Any] = dict(current)
+    for key in ("brief", "review"):
+        if key in incoming:
+            merged[key] = incoming[key]
+    if "round" in incoming:
+        merged["round"] = _merge_round(current.get("round"), incoming["round"])
+    if "pending_tasks" in incoming:
+        merged["pending_tasks"] = research_tasks_reducer(
+            current.get("pending_tasks", []), incoming["pending_tasks"]
+        )
+    if "completed_tasks" in incoming:
+        merged["completed_tasks"] = research_tasks_reducer(
+            current.get("completed_tasks", []), incoming["completed_tasks"]
+        )
+    return merged
+
+
+def _merge_role_state(current: Any, incoming: Any) -> dict[str, Any]:
+    left = dict(current) if isinstance(current, Mapping) else {}
+    right = dict(incoming) if isinstance(incoming, Mapping) else {}
+    merged: dict[str, Any] = dict(left)
+    if "report" in right:
+        report_update = right["report"]
+        if _is_override(report_update):
+            merged["report"] = str(_override_value(report_update, "") or "")
+        else:
+            previous = str(left.get("report") or "")
+            report = str(report_update or "")
+            merged["report"] = (
+                f"{previous}\n\n--- Additional role research report ---\n{report}"
+                if previous and report and report != previous
+                else report or previous
+            )
+    if "memory" in right:
+        memory_update = right["memory"]
+        if _is_override(memory_update):
+            merged["memory"] = list(_override_value(memory_update, []) or [])
+        else:
+            additions = memory_update if isinstance(memory_update, list) else [memory_update]
+            merged["memory"] = list(left.get("memory", []) or []) + list(additions)
+    if "rolling_summary" in right:
+        merged["rolling_summary"] = str(right["rolling_summary"] or "")
+    return merged
+
+
+def agents_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
+    """Merge per-role outputs without parallel-role overwrite."""
+    if _is_override(new_value):
+        replacement = _override_value(new_value, {})
+        return dict(replacement) if isinstance(replacement, Mapping) else {}
+    merged = dict(current_value) if isinstance(current_value, Mapping) else {}
+    if isinstance(new_value, Mapping):
+        for role, update in new_value.items():
+            if role != "type":
+                merged[str(role)] = _merge_role_state(merged.get(str(role)), update)
+    return merged
+
+
+def research_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
+    """Merge per-run references and role-scoped Working Context values."""
+    if _is_override(new_value):
+        replacement = _override_value(new_value, {})
+        return dict(replacement) if isinstance(replacement, Mapping) else {}
+    current = dict(current_value) if isinstance(current_value, Mapping) else {}
+    incoming = dict(new_value) if isinstance(new_value, Mapping) else {}
+    merged: dict[str, Any] = dict(current)
+    if incoming.get("run_id"):
+        merged["run_id"] = str(incoming["run_id"])
+    if "working_contexts" in incoming:
+        contexts = dict(current.get("working_contexts", {}) or {})
+        update = incoming["working_contexts"]
+        if _is_override(update):
+            contexts = dict(_override_value(update, {}) or {})
+        elif isinstance(update, Mapping):
+            contexts.update({str(role): value for role, value in update.items()})
+        merged["working_contexts"] = contexts
+    return merged
+
+
+def report_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
+    """Merge plan and section results, preserving parallel section output."""
+    if _is_override(new_value):
+        replacement = _override_value(new_value, {})
+        return dict(replacement) if isinstance(replacement, Mapping) else {}
+    current = dict(current_value) if isinstance(current_value, Mapping) else {}
+    incoming = dict(new_value) if isinstance(new_value, Mapping) else {}
+    merged: dict[str, Any] = dict(current)
+    for key in ("sections", "final"):
+        if key in incoming:
+            merged[key] = _override_value(incoming[key], [] if key == "sections" else "")
+    for key in ("completed_sections", "plan_feedback"):
+        if key in incoming:
+            value = incoming[key]
+            merged[key] = (
+                list(_override_value(value, []) or [])
+                if _is_override(value)
+                else list(current.get(key, []) or []) + list(value or [])
             )
     return merged
 
 
-def mapping_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
-    """Merge per-role bounded context channels without concatenating strings."""
-    if isinstance(new_value, dict) and new_value.get("type") == "override":
-        replacement = new_value.get("value", {})
+def runtime_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
+    """Accumulate budget and graph metrics independently of routing."""
+    if _is_override(new_value):
+        replacement = _override_value(new_value, {})
         return dict(replacement) if isinstance(replacement, Mapping) else {}
-    merged = dict(current_value) if isinstance(current_value, Mapping) else {}
-    if isinstance(new_value, Mapping):
-        merged.update({str(key): value for key, value in new_value.items() if key != "type"})
+    current = dict(current_value) if isinstance(current_value, Mapping) else {}
+    incoming = dict(new_value) if isinstance(new_value, Mapping) else {}
+    merged: dict[str, Any] = dict(current)
+    if "budget" in incoming:
+        budget = incoming["budget"]
+        merged["budget"] = (
+            dict(_override_value(budget, empty_budget_usage()))
+            if _is_override(budget)
+            else merge_budget_usage(current.get("budget", {}), budget)
+        )
+    if "metrics" in incoming:
+        metrics = incoming["metrics"]
+        merged["metrics"] = (
+            dict(_override_value(metrics, {}))
+            if _is_override(metrics)
+            else merge_research_graph_metrics(current.get("metrics", {}), metrics)
+        )
     return merged
 
-def agent_memories_reducer(current_value: Any, new_value: Any):
-    """Reducer that keeps short-term private memories separated by agent role."""
-    if isinstance(new_value, dict) and new_value.get("type") == "override":
-        return new_value.get("value", {})
-    merged = {
-        str(role): list(entries or [])
-        for role, entries in dict(current_value or {}).items()
-    }
-    for role, entries in dict(new_value or {}).items():
-        normalized_role = str(role)
-        if isinstance(entries, list):
-            new_entries = entries
-        else:
-            new_entries = [entries]
-        merged.setdefault(normalized_role, [])
-        merged[normalized_role].extend(new_entries)
-    return merged
-    
+
 class AgentInputState(MessagesState):
-    """InputState is only 'messages'."""
-
-class AgentState(MessagesState):
-    """Main agent state containing messages and research data."""
-
-    research_brief: Optional[str]
-    # Complete role outputs for the current public-opinion run.
-    role_reports: Annotated[dict[str, str], role_reports_reducer]
-    # Compact private context; this channel may be truncated by design.
-    agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
-    research_run_id: str
-    working_contexts: Annotated[dict[str, dict[str, Any]], mapping_reducer]
-    rolling_summaries: Annotated[dict[str, str], mapping_reducer]
-    research_graph_metrics: Annotated[dict[str, Any], merge_research_graph_metrics]
-    raw_notes: Annotated[list[str], override_reducer] = []
-    notes: Annotated[list[str], override_reducer] = []
-    budget_usage: Annotated[dict[str, Any], budget_usage_reducer]
-    final_report: str
-    # Plan-and-Execute fields (used by public-opinion mode)
-    sections: list[Section] = []
-    completed_sections: Annotated[list[Section], operator.add] = []
-    feedback_on_report_plan: Annotated[list[str], operator.add] = []
+    """External input remains LangGraph's native messages channel."""
 
 
+class DeepResearchState(MessagesState):
+    """Top-level graph state: five owned domains plus native messages."""
 
-class PublicOpinionState(TypedDict):
-    """State for the explicit public-opinion multi-agent workflow."""
+    workflow: Annotated[WorkflowState, workflow_reducer]
+    agents: Annotated[dict[str, AgentRoleState], agents_reducer]
+    research: Annotated[ResearchState, research_reducer]
+    report: Annotated[ReportState, report_reducer]
+    runtime: Annotated[RuntimeState, runtime_reducer]
+
+
+class PublicOpinionState(TypedDict, total=False):
+    """Public-opinion subgraph state using the same domain packets."""
 
     messages: list[MessageLikeRepresentation]
-    research_brief: str
-    # Complete role outputs are a formal subgraph input/output channel.
-    role_reports: Annotated[dict[str, str], role_reports_reducer]
-    # Private per-agent memories remain compact and reducer-managed.
-    agent_memories: Annotated[dict[str, list[dict[str, Any]]], agent_memories_reducer]
-    research_run_id: str
-    working_contexts: Annotated[dict[str, dict[str, Any]], mapping_reducer]
-    rolling_summaries: Annotated[dict[str, str], mapping_reducer]
-    research_graph_metrics: Annotated[dict[str, Any], merge_research_graph_metrics]
-    notes: Annotated[list[str], override_reducer] = []
-    raw_notes: Annotated[list[str], override_reducer] = []
-    budget_usage: Annotated[dict[str, Any], budget_usage_reducer]
-    research_round: Annotated[int, research_round_reducer]
-    research_mode: Literal["initial", "followup"]
-    research_review: ResearchReview | None
-    current_research_tasks: Annotated[list[ResearchTask], research_tasks_reducer]
-    completed_research_tasks: Annotated[list[ResearchTask], research_tasks_reducer]
+    workflow: Annotated[WorkflowState, workflow_reducer]
+    agents: Annotated[dict[str, AgentRoleState], agents_reducer]
+    research: Annotated[ResearchState, research_reducer]
+    report: Annotated[ReportState, report_reducer]
+    runtime: Annotated[RuntimeState, runtime_reducer]
+
+
+# Compatibility for imports only; the state schema itself contains no flat fields.
+AgentState = DeepResearchState
+
+
+__all__ = [
+    "AgentInputState", "AgentRoleState", "AgentState", "BusinessAgentRole",
+    "ClarifyWithUser", "DeepResearchState", "Feedback", "PublicOpinionState",
+    "ReportState", "ResearchComplete", "ResearchQuestion", "ResearchReview",
+    "ResearchState", "ResearchTask", "RuntimeState", "SearchQuery", "Section",
+    "Sections", "Summary", "WorkflowState", "agents_reducer", "report_reducer",
+    "research_reducer", "research_tasks_reducer", "runtime_reducer",
+    "workflow_reducer",
+]

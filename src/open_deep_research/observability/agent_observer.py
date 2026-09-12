@@ -273,6 +273,9 @@ def _extract_prompt(value: Any) -> str:
         for key in ("topic", "research_brief", "input"):
             if value.get(key):
                 return str(value[key])[:2_000]
+        workflow = value.get("workflow")
+        if isinstance(workflow, Mapping) and workflow.get("brief"):
+            return str(workflow["brief"])[:2_000]
     return "public opinion research"
 
 
@@ -364,6 +367,9 @@ def _find_final_report(value: Any) -> str | None:
         final_report = value.get("final_report")
         if isinstance(final_report, str):
             return final_report
+        report = value.get("report")
+        if isinstance(report, Mapping) and isinstance(report.get("final"), str):
+            return report["final"]
         for nested in value.values():
             found = _find_final_report(nested)
             if found is not None:

@@ -43,11 +43,9 @@ def _writer_config() -> dict:
 
 def _section_state(section: Section) -> dict:
     return {
-        "sections": [section],
-        "role_reports": {"risk_assessment": "risk evidence"},
-        "agent_memories": {},
-        "completed_sections": [],
-        "budget_usage": {},
+        "report": {"sections": [section], "completed_sections": []},
+        "agents": {"risk_assessment": {"report": "risk evidence"}},
+        "runtime": {"budget": {}},
     }
 
 
@@ -80,14 +78,13 @@ def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> 
     final_result = asyncio.run(
         deep_researcher_module.write_final_sections(
             {
-                "sections": [
+                "report": {"sections": [
                     Section(
                         name="Conclusion",
                         description="Summarize the report",
                         research=False,
                     )
-                ],
-                "completed_sections": [
+                ], "completed_sections": [
                     Section(
                         name="Risk",
                         description="Risk evidence",
@@ -95,19 +92,19 @@ def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> 
                         content="risk section",
                         status="done",
                     )
-                ],
-                "role_reports": {},
-                "budget_usage": {},
+                ]},
+                "agents": {},
+                "runtime": {"budget": {}},
             },
             _writer_config(),
         )
     )
 
     for result in (research_result, final_result):
-        assert result["budget_usage"]["model_calls"] == 1
-        assert result["budget_usage"]["input_tokens"] == 11
-        assert result["budget_usage"]["output_tokens"] == 7
-        assert result["budget_usage"]["total_tokens"] == 18
+        assert result["runtime"]["budget"]["model_calls"] == 1
+        assert result["runtime"]["budget"]["input_tokens"] == 11
+        assert result["runtime"]["budget"]["output_tokens"] == 7
+        assert result["runtime"]["budget"]["total_tokens"] == 18
 
 
 def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
@@ -129,10 +126,10 @@ def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
         )
     )
 
-    assert result["budget_usage"]["model_calls"] == 1
-    assert result["budget_usage"]["input_tokens"] == 0
-    assert result["budget_usage"]["output_tokens"] == 0
-    assert result["budget_usage"]["total_tokens"] == 0
+    assert result["runtime"]["budget"]["model_calls"] == 1
+    assert result["runtime"]["budget"]["input_tokens"] == 0
+    assert result["runtime"]["budget"]["output_tokens"] == 0
+    assert result["runtime"]["budget"]["total_tokens"] == 0
 
 
 def test_hybrid_alpha_is_removed_from_pure_rrf_configuration() -> None:

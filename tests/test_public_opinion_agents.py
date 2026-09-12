@@ -10,10 +10,10 @@ from open_deep_research.public_opinion_agents import (
     PUBLIC_OPINION_AGENT_SPECS,
     get_public_opinion_agent_spec,
 )
+from open_deep_research.runtime import AgentRuntime
 from open_deep_research.state import (
     Section,
-    agent_memories_reducer,
-    role_reports_reducer,
+    agents_reducer,
 )
 
 
@@ -60,13 +60,11 @@ def test_each_public_opinion_agent_owns_prompt_contract_and_policy() -> None:
             mcp_prompt="",
             date="June 3, 2026",
             organization_context="Test organization context.",
-            private_memory_context="Previous private note for this agent.",
         )
 
         assert spec.role in prompt
         assert spec.display_name in prompt
-        assert "<Private Agent Memory>" in prompt
-        assert "Previous private note for this agent." in prompt
+        assert "<Private Agent Memory>" not in prompt
         assert "<Input Contract>" in prompt
         assert "<Tool Policy>" in prompt
         assert "<Memory Policy>" in prompt
@@ -75,27 +73,27 @@ def test_each_public_opinion_agent_owns_prompt_contract_and_policy() -> None:
         assert spec.expected_output in prompt
 
 
-def test_agent_memories_reducer_keeps_private_memory_by_role() -> None:
+def test_agents_reducer_keeps_private_memory_by_role() -> None:
     """Private agent memory is appended under each role without cross-role mixing."""
     current = {
-        "public_signal": [{"content": "old public memory"}],
-        "risk_assessment": [{"content": "old risk memory"}],
+        "public_signal": {"memory": [{"content": "old public memory"}]},
+        "risk_assessment": {"memory": [{"content": "old risk memory"}]},
     }
     update = {
-        "public_signal": [{"content": "new public memory"}],
-        "response_strategy": {"content": "new response memory"},
+        "public_signal": {"memory": [{"content": "new public memory"}]},
+        "response_strategy": {"memory": [{"content": "new response memory"}]},
     }
 
-    merged = agent_memories_reducer(current, update)
+    merged = agents_reducer(current, update)
 
-    assert [entry["content"] for entry in merged["public_signal"]] == [
+    assert [entry["content"] for entry in merged["public_signal"]["memory"]] == [
         "old public memory",
         "new public memory",
     ]
-    assert [entry["content"] for entry in merged["risk_assessment"]] == [
+    assert [entry["content"] for entry in merged["risk_assessment"]["memory"]] == [
         "old risk memory",
     ]
-    assert [entry["content"] for entry in merged["response_strategy"]] == [
+    assert [entry["content"] for entry in merged["response_strategy"]["memory"]] == [
         "new response memory",
     ]
 
@@ -117,24 +115,21 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     full_report = "A" * 2_000 + "\nTAIL_EVIDENCE_MUST_REACH_SECTION_WRITER"
     compact_memory = full_report[:1_800] + "\n[truncated]"
     state = {
-        "sections": [
-            Section(
+        "report": {"sections": [Section(
                 name="Risk evidence",
                 description="Summarize risk evidence.",
                 research=True,
                 agent_role="public_signal",
-            )
-        ],
-        "role_reports": {"public_signal": full_report},
-        "agent_memories": {
-            "public_signal": [
+            )]},
+        "agents": {
+            "public_signal": {"report": full_report, "memory": [
                 {
                     "source": "current_public_opinion_run",
                     "content": compact_memory,
                 }
-            ]
+            ]}
         },
-        "budget_usage": {},
+        "runtime": {"budget": {}},
     }
 
     asyncio.run(
@@ -152,7 +147,7 @@ def test_private_memory_remains_compact() -> None:
     """Private memory keeps its bounded representation after P0-2."""
 
     report = "B" * 2_000
-    memory = deep_researcher_module._build_agent_private_memory("public_signal", report, [])
+    memory = AgentRuntime.build_private_memory("public_signal", report, [])
 
     assert len(memory["content"]) <= 1_820
     assert memory["content"].endswith("[truncated]")
@@ -161,12 +156,12 @@ def test_private_memory_remains_compact() -> None:
 def test_role_reports_override_previous_run() -> None:
     """A new research phase replaces prior formal reports instead of merging them."""
 
-    merged = role_reports_reducer(
-        {"public_signal": "OLD_REPORT", "risk_assessment": "STALE_REPORT"},
+    merged = agents_reducer(
+        {"public_signal": {"report": "OLD_REPORT"}, "risk_assessment": {"report": "STALE_REPORT"}},
         {
             "type": "override",
-            "value": {"public_signal": "NEW_REPORT"},
+            "value": {"public_signal": {"report": "NEW_REPORT"}},
         },
     )
 
-    assert merged == {"public_signal": "NEW_REPORT"}
+    assert merged == {"public_signal": {"report": "NEW_REPORT"}}

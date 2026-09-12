@@ -151,7 +151,7 @@ async def rolling_compact(
     summary = output.rolling_summary.strip()
     replacement = HumanMessage(
         content=(
-            "[Rolling Research Harness Summary]\n"
+            "[Rolling Agent Runtime Summary]\n"
             f"{summary}\n"
             "[Older ReAct steps compacted; durable provenance remains in the Research Graph.]"
         )

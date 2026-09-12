@@ -68,15 +68,17 @@ from open_deep_research.research_graph.store import (
 )
 from open_deep_research.research_graph.strategy import (
     ContextStrategy,
-    HarnessFinalResult,
-    HarnessHookResult,
-    ResearchContextHarness,
+    WorkspaceFinalResult,
+    WorkspaceHookResult,
     ResearchGraphConsumerStrategy,
     ResearchGraphProducerStrategy,
     StandardContextStrategy,
+    create_context_strategy,
+)
+from open_deep_research.research_graph.workspace import (
+    ResearchWorkspace,
     TaskDescriptor,
     ToolBatchItem,
-    create_context_strategy,
 )
 
 __all__ = [
@@ -87,11 +89,11 @@ __all__ = [
     "ContextStrategy",
     "ExtractionResult",
     "GraphExtractor",
-    "HarnessFinalResult",
-    "HarnessHookResult",
+    "WorkspaceFinalResult",
+    "WorkspaceHookResult",
     "InMemoryResearchGraphStore",
     "Neo4jResearchGraphStore",
-    "ResearchContextHarness",
+    "ResearchWorkspace",
     "ResearchGraphConsumerStrategy",
     "ResearchGraphError",
     "ResearchGraphRetriever",

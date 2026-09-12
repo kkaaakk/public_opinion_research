@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 
 import open_deep_research.deep_researcher as deep_researcher_module
-from open_deep_research.state import ResearchReview, Section, role_reports_reducer
+from open_deep_research.state import ResearchReview, Section, agents_reducer
 
 
 def _public_opinion_config(*roles: str) -> dict:
@@ -52,18 +52,18 @@ def test_full_role_report_is_not_replaced_by_compact_memory(monkeypatch) -> None
     result = asyncio.run(
         deep_researcher_module._run_public_opinion_agent(
             {
-                "research_brief": "brand risk",
-                "role_reports": {},
-                "agent_memories": {},
-                "budget_usage": {},
+                "workflow": {"brief": "brand risk", "round": 1},
+                "agents": {},
+                "research": {"working_contexts": {}},
+                "runtime": {"budget": {}},
             },
             _public_opinion_config("public_signal"),
             "public_signal",
         )
     )
 
-    formal_report = result["role_reports"]["public_signal"]
-    private_memory = result["agent_memories"]["public_signal"][0]["content"]
+    formal_report = result["agents"]["public_signal"]["report"]
+    private_memory = result["agents"]["public_signal"]["memory"][0]["content"]
     assert full_report_body in formal_report
     assert len(formal_report) > 1_800
     assert len(private_memory) < len(formal_report)
@@ -72,18 +72,17 @@ def test_full_role_report_is_not_replaced_by_compact_memory(monkeypatch) -> None
 
 def test_parallel_role_reports_merge_by_role() -> None:
     """Concurrent partial updates retain every role's complete report."""
-    merged = role_reports_reducer(
-        {},
-        {"public_signal": "PUBLIC_SIGNAL_FULL"},
+    merged = agents_reducer(
+        {}, {"public_signal": {"report": "PUBLIC_SIGNAL_FULL"}},
     )
-    merged = role_reports_reducer(
+    merged = agents_reducer(
         merged,
-        {"internal_knowledge": "INTERNAL_KNOWLEDGE_FULL"},
+        {"internal_knowledge": {"report": "INTERNAL_KNOWLEDGE_FULL"}},
     )
 
     assert merged == {
-        "public_signal": "PUBLIC_SIGNAL_FULL",
-        "internal_knowledge": "INTERNAL_KNOWLEDGE_FULL",
+        "public_signal": {"report": "PUBLIC_SIGNAL_FULL"},
+        "internal_knowledge": {"report": "INTERNAL_KNOWLEDGE_FULL"},
     }
 
 
@@ -98,13 +97,13 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
     seen_states: dict[str, dict[str, str]] = {}
 
     async def fake_agent(state, _config, role):
-        seen_states[role] = dict(state.get("role_reports", {}))
+        seen_states[role] = {
+            name: value.get("report", "")
+            for name, value in state.get("agents", {}).items()
+        }
         return {
-            "role_reports": {role: reports[role]},
-            "agent_memories": {role: [{"content": reports[role][:1_800]}]},
-            "notes": [],
-            "raw_notes": [],
-            "budget_usage": {},
+            "agents": {role: {"report": reports[role], "memory": [{"content": reports[role][:1_800]}]}},
+            "runtime": {"budget": {}},
         }
 
     class FakeReviewModel:
@@ -126,23 +125,18 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
         deep_researcher_module.public_opinion_subgraph.ainvoke(
             {
                 "messages": [],
-                "research_brief": "brand risk",
-                "role_reports": {},
-                "agent_memories": {},
-                "notes": [],
-                "raw_notes": [],
-                "budget_usage": {},
-                "research_round": 1,
-                "research_mode": "initial",
-                "research_review": None,
-                "current_research_tasks": [],
-                "completed_research_tasks": [],
+                "workflow": {"brief": "brand risk", "round": 1, "review": None,
+                             "pending_tasks": [], "completed_tasks": []},
+                "agents": {},
+                "research": {"working_contexts": {}},
+                "report": {},
+                "runtime": {"budget": {}, "metrics": {}},
             },
             _public_opinion_config(*reports),
         )
     )
 
-    assert result["role_reports"] == reports
+    assert {role: value["report"] for role, value in result["agents"].items()} == reports
     assert seen_states["risk_assessment"]["public_signal"] == reports["public_signal"]
     assert seen_states["risk_assessment"]["internal_knowledge"] == reports[
         "internal_knowledge"
@@ -157,15 +151,12 @@ def test_risk_assessment_assignment_uses_full_upstream_reports() -> None:
     public_signal_report = "A" * 1_800 + "CRITICAL_EVIDENCE_AT_END"
     prompt = deep_researcher_module._build_public_opinion_agent_assignment(
         {
-            "research_brief": "brand risk",
-            "role_reports": {
-                "public_signal": public_signal_report,
-                "internal_knowledge": "INTERNAL_FACTS",
-            },
-            "agent_memories": {
-                "public_signal": [
+            "workflow": {"brief": "brand risk", "round": 1},
+            "agents": {
+                "public_signal": {"report": public_signal_report, "memory": [
                     {"content": public_signal_report[:1_800] + "\n[truncated]"}
-                ]
+                ]},
+                "internal_knowledge": {"report": "INTERNAL_FACTS", "memory": []},
             },
         },
         "risk_assessment",
@@ -179,16 +170,13 @@ def test_response_strategy_assignment_uses_full_risk_report() -> None:
     risk_report = "R" * 1_800 + "HIGH_PRIORITY_RESPONSE_ACTION"
     prompt = deep_researcher_module._build_public_opinion_agent_assignment(
         {
-            "research_brief": "brand risk",
-            "role_reports": {
-                "public_signal": "PUBLIC_SIGNAL_FULL",
-                "internal_knowledge": "INTERNAL_FACTS",
-                "risk_assessment": risk_report,
-            },
-            "agent_memories": {
-                "risk_assessment": [
+            "workflow": {"brief": "brand risk", "round": 1},
+            "agents": {
+                "public_signal": {"report": "PUBLIC_SIGNAL_FULL"},
+                "internal_knowledge": {"report": "INTERNAL_FACTS"},
+                "risk_assessment": {"report": risk_report, "memory": [
                     {"content": risk_report[:1_800] + "\n[truncated]"}
-                ]
+                ]},
             },
         },
         "response_strategy",
@@ -215,21 +203,20 @@ def test_section_writer_prefers_full_role_report_over_memory(monkeypatch) -> Non
     asyncio.run(
         deep_researcher_module.section_writer(
             {
-                "sections": [
+                "report": {"sections": [
                     Section(
                         name="Risk evidence",
                         description="Summarize risk evidence.",
                         research=True,
                         agent_role="risk_assessment",
                     )
-                ],
-                "role_reports": {"risk_assessment": full_report},
-                "agent_memories": {
-                    "risk_assessment": [
+                ]},
+                "agents": {
+                    "risk_assessment": {"report": full_report, "memory": [
                         {"content": full_report[:1_800] + "\n[truncated]"}
-                    ]
+                    ]}
                 },
-                "budget_usage": {},
+                "runtime": {"budget": {}},
             },
             {"configurable": {"section_writer_model": "fixture:model"}},
         )
@@ -245,15 +232,16 @@ def test_research_phase_propagates_subgraph_role_reports(monkeypatch) -> None:
 
     class FakeSubgraph:
         async def ainvoke(self, payload, _config):
-            assert payload["role_reports"] == {}
+            assert payload["agents"] == {}
             return {
-                "role_reports": {"public_signal": full_report},
-                "agent_memories": {
-                    "public_signal": [{"content": full_report[:1_800] + "\n[truncated]"}]
+                "workflow": payload["workflow"],
+                "agents": {
+                    "public_signal": {"report": full_report, "memory": [
+                        {"content": full_report[:1_800] + "\n[truncated]"}
+                    ]}
                 },
-                "notes": [],
-                "raw_notes": [],
-                "budget_usage": {},
+                "research": payload["research"],
+                "runtime": {"budget": {}, "metrics": {}},
             }
 
     monkeypatch.setattr(deep_researcher_module, "public_opinion_subgraph", FakeSubgraph())
@@ -262,19 +250,21 @@ def test_research_phase_propagates_subgraph_role_reports(monkeypatch) -> None:
         deep_researcher_module.research_phase(
             {
                 "messages": [],
-                "research_brief": "brand risk",
-                "agent_memories": {},
-                "budget_usage": {},
+                "workflow": {"brief": "brand risk"},
+                "agents": {},
+                "research": {},
+                "report": {},
+                "runtime": {"budget": {}},
             },
             _public_opinion_config("public_signal"),
         )
     )
 
-    role_reports_update = result["role_reports"]
-    assert role_reports_update["type"] == "override"
-    assert role_reports_update["value"]["public_signal"] == full_report
-    assert len(role_reports_update["value"]["public_signal"]) == 4_021
-    assert result["agent_memories"]["value"]["public_signal"][0]["content"].endswith(
+    agents_update = result["agents"]
+    assert agents_update["type"] == "override"
+    assert agents_update["value"]["public_signal"]["report"] == full_report
+    assert len(agents_update["value"]["public_signal"]["report"]) == 4_021
+    assert agents_update["value"]["public_signal"]["memory"][0]["content"].endswith(
         "[truncated]"
     )
 
@@ -296,14 +286,14 @@ def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
     asyncio.run(
         deep_researcher_module._fallback_report_generation(
             {
-                "role_reports": {"risk_assessment": full_report},
-                "agent_memories": {
-                    "risk_assessment": [{"content": "compact memory only"}]
-                },
-                "notes": ["legacy note without the final evidence"],
-                "messages": [],
-                "research_brief": "brand risk",
-                "budget_usage": {},
+                    "agents": {
+                        "risk_assessment": {"report": full_report, "memory": [
+                            {"content": "compact memory only"}
+                        ]}
+                    },
+                    "messages": [],
+                    "workflow": {"brief": "brand risk"},
+                    "runtime": {"budget": {}},
             },
             {
                 "configurable": {

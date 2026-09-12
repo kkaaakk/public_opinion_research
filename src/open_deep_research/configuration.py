@@ -204,7 +204,7 @@ class Configuration(BaseModel):
             }
         },
     )
-    # Research Graph / Context Harness configuration.  The feature is opt-in
+    # Research Graph / Workspace configuration.  The feature is opt-in
     # so existing standard and legacy workflows keep their current behavior.
     context_strategy: str = Field(
         default="auto",
@@ -228,7 +228,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": False,
-                "description": "Enable the per-run Neo4j Research Graph and bounded Context Harness.",
+                "description": "Enable the per-run Neo4j Research Graph and bounded Research Workspace.",
             }
         },
     )

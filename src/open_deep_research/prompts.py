@@ -311,7 +311,7 @@ research_review_prompt = """You are the research-review node in an enterprise pu
 Current research round: {research_round}
 Workflow safety limit: {max_research_rounds}
 Completed follow-up tasks:
-{completed_research_tasks}
+{completed_tasks}
 </Research progress>
 
 <Previous review>

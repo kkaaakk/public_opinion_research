@@ -29,7 +29,6 @@ class PublicOpinionAgentSpec:
         mcp_prompt: str,
         date: str,
         organization_context: str,
-        private_memory_context: str = "No private memory has been recorded for this agent yet.",
     ) -> str:
         """Render this agent's dedicated system prompt."""
         return AGENT_SYSTEM_PROMPT_TEMPLATE.format(
@@ -39,7 +38,6 @@ class PublicOpinionAgentSpec:
             responsibility=self.responsibility,
             expected_output=self.expected_output,
             organization_context=organization_context,
-            private_memory_context=private_memory_context,
             retrieval_tool_prompt=retrieval_tool_prompt,
             mcp_prompt=mcp_prompt,
             input_contract=_bullet_lines(self.input_contract),
@@ -78,10 +76,6 @@ AGENT_SYSTEM_PROMPT_TEMPLATE = """You are {display_name}, a specialized enterpri
 <Business Context>
 {organization_context}
 </Business Context>
-
-<Private Agent Memory>
-{private_memory_context}
-</Private Agent Memory>
 
 <Available Tools>
 You have access to the configured research tools for this run:

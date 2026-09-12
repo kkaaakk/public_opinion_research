@@ -1,4 +1,4 @@
-"""Focused tests for the Research Graph Context Harness refactor."""
+"""Focused tests for ResearchWorkspace graph/context behavior."""
 
 import json
 import re
@@ -12,9 +12,9 @@ from open_deep_research.research_graph import (
     ContextConflict,
     GraphExtractionOutput,
     InMemoryResearchGraphStore,
-    ResearchContextHarness,
     ResearchGraphProducerStrategy,
     ResearchGraphScope,
+    ResearchWorkspace,
     ToolBatchItem,
     WorkingContext,
     WorkingContextDelta,
@@ -26,7 +26,7 @@ from open_deep_research.research_graph import (
 )
 from open_deep_research.research_graph.models import RawResearchDocument
 from open_deep_research.research_graph.schema import content_hash
-from open_deep_research.state import role_reports_reducer
+from open_deep_research.state import agents_reducer
 
 
 def _scope(run_id: str = "run-a") -> ResearchGraphScope:
@@ -272,17 +272,15 @@ def test_producer_hook_persists_then_compacts_raw_tool_result(tmp_path) -> None:
         recent_raw_steps=0,
     )
     store = InMemoryResearchGraphStore()
-    harness = ResearchContextHarness(
+    harness = ResearchWorkspace(
         strategy=ResearchGraphProducerStrategy(),
-        state={"research_round": 1, "working_contexts": {}, "rolling_summaries": {}},
+        research_state={"working_contexts": {}},
         role="public_signal",
-        assignment="Investigate brake safety reports.",
-        agent_prompt="agent",
         configurable=config,
-        runtime_config={},
         model_factory=lambda _name, _max_tokens: model,
         store=store,
         run_id="run-fixture",
+        research_round=1,
     )
     tool_call = {"name": "web_search", "args": {"queries": ["brake"]}, "id": "call-1"}
     observation = json.dumps(
@@ -303,7 +301,7 @@ def test_producer_hook_persists_then_compacts_raw_tool_result(tmp_path) -> None:
         ToolMessage(content=observation, name="web_search", tool_call_id="call-1"),
     ]
     result = __import__("asyncio").run(
-        harness.after_tool_batch(
+        harness.ingest(
             messages,
             [ToolBatchItem("web_search", "call-1", tool_call["args"], observation, True)],
         )
@@ -316,13 +314,17 @@ def test_producer_hook_persists_then_compacts_raw_tool_result(tmp_path) -> None:
 
 
 def test_graph_report_updates_replace_same_role_but_legacy_mapping_still_appends() -> None:
-    updated = role_reports_reducer(
-        {"public_signal": "old"},
-        {"type": "role_report_update", "role": "public_signal", "value": "new"},
+    updated = agents_reducer(
+        {"public_signal": {"report": "old"}},
+        {"public_signal": {"report": {"type": "override", "value": "new"}}},
     )
-    assert updated == {"public_signal": "new"}
-    legacy = role_reports_reducer({"public_signal": "old"}, {"public_signal": "new"})
-    assert "old" in legacy["public_signal"] and "new" in legacy["public_signal"]
+    assert updated == {"public_signal": {"report": "new"}}
+    legacy = agents_reducer(
+        {"public_signal": {"report": "old"}},
+        {"public_signal": {"report": "new"}},
+    )
+    assert "old" in legacy["public_signal"]["report"]
+    assert "new" in legacy["public_signal"]["report"]
 
 
 def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tmp_path) -> None:
@@ -413,16 +415,11 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
     result = asyncio.run(
         deep_researcher_module._run_public_opinion_agent(
             {
-                "research_brief": "Investigate brake safety.",
-                "research_run_id": "run-graph-agent",
-                "role_reports": {},
-                "agent_memories": {},
-                "working_contexts": {},
-                "rolling_summaries": {},
-                "budget_usage": {},
-                "research_round": 1,
-                "research_mode": "initial",
-                "current_research_tasks": [],
+                "workflow": {"brief": "Investigate brake safety.", "round": 1,
+                             "pending_tasks": [], "completed_tasks": []},
+                "research": {"run_id": "run-graph-agent", "working_contexts": {}},
+                "agents": {},
+                "runtime": {"budget": {}, "metrics": {}},
             },
             {
                 "configurable": {
@@ -437,6 +434,6 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
             "public_signal",
         )
     )
-    assert result["role_reports"]["type"] == "role_report_update"
-    assert "bounded graph report" in result["role_reports"]["value"]
-    assert result["working_contexts"]["public_signal"]["recent_progress"] == "updated"
+    assert result["agents"]["public_signal"]["report"]["type"] == "override"
+    assert "bounded graph report" in result["agents"]["public_signal"]["report"]["value"]
+    assert result["research"]["working_contexts"]["public_signal"]["recent_progress"] == "updated"

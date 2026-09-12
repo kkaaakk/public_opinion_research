@@ -23,14 +23,10 @@ from open_deep_research.budget import (
     append_budget_summary,
     available_research_unit_slots,
     budget_from_model_response,
-    budget_from_native_search,
-    budget_from_tool_calls,
     budget_usage_with_reason,
     can_spend_model_call,
     diff_budget_usage,
     estimate_tokens,
-    filter_tool_calls_for_budget,
-    is_over_budget,
     merge_budget_usage,
     remaining_input_tokens,
     remaining_output_tokens,
@@ -48,18 +44,6 @@ from open_deep_research.observability import (
     observe_model_ainvoke,
     observe_tool_ainvoke,
 )
-from open_deep_research.research_graph import (
-    ResearchContextHarness,
-    TaskDescriptor,
-    ToolBatchItem,
-    WorkingContext,
-    build_research_review_context,
-    create_context_strategy,
-    format_relevant_subgraph,
-    render_working_context,
-)
-from open_deep_research.research_graph.schema import stable_id
-from open_deep_research.research_graph.store import create_research_graph_store
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
@@ -75,6 +59,17 @@ from open_deep_research.public_opinion_agents import (
     get_public_opinion_agent_spec,
 )
 from open_deep_research.rag import query_images
+from open_deep_research.research_graph import (
+    ResearchWorkspace,
+    TaskDescriptor,
+    WorkingContext,
+    build_research_review_context,
+    create_context_strategy,
+    format_relevant_subgraph,
+    render_working_context,
+)
+from open_deep_research.research_graph.schema import stable_id
+from open_deep_research.runtime import AgentRuntime
 from open_deep_research.social_media.tools import (
     SOCIAL_MEDIA_TOOL_NAMES,
     get_social_media_tools,
@@ -91,16 +86,14 @@ from open_deep_research.state import (
     Sections,
 )
 from open_deep_research.utils import (
-    anthropic_websearch_called,
     get_all_tools,
     get_api_key_for_model,
     get_model_token_limit,
-    get_research_tool_prompt,
     get_raw_search_tool,
+    get_research_tool_prompt,
     get_today_str,
     has_external_research_tool,
     is_token_limit_exceeded,
-    openai_websearch_called,
     remove_up_to_last_ai_message,
 )
 
@@ -109,6 +102,55 @@ configurable_model = init_chat_model(
     configurable_fields=("model", "max_tokens", "api_key"),
 )
 LOGGER = logging.getLogger(__name__)
+
+
+def _workflow(state: Mapping[str, Any]) -> dict[str, Any]:
+    return dict(state.get("workflow", {}) or {})
+
+
+def _agents(state: Mapping[str, Any]) -> dict[str, Any]:
+    return dict(state.get("agents", {}) or {})
+
+
+def _research(state: Mapping[str, Any]) -> dict[str, Any]:
+    return dict(state.get("research", {}) or {})
+
+
+def _report(state: Mapping[str, Any]) -> dict[str, Any]:
+    return dict(state.get("report", {}) or {})
+
+
+def _runtime(state: Mapping[str, Any]) -> dict[str, Any]:
+    return dict(state.get("runtime", {}) or {})
+
+
+def _role_reports(state: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        str(role): str(value.get("report") or "")
+        for role, value in _agents(state).items()
+        if isinstance(value, Mapping) and value.get("report")
+    }
+
+
+def _role_memories(state: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    return {
+        str(role): list(value.get("memory", []) or [])
+        for role, value in _agents(state).items()
+        if isinstance(value, Mapping)
+    }
+
+
+def _agents_for_new_run(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Carry private memory forward while clearing run-scoped reports/summaries."""
+    return {
+        role: {"memory": list(value.get("memory", []) or [])}
+        for role, value in _agents(state).items()
+        if isinstance(value, Mapping) and value.get("memory")
+    }
+
+
+def _is_followup(state: Mapping[str, Any]) -> bool:
+    return int(_workflow(state).get("round", 1) or 1) > 1
 
 
 def _business_context(configurable: Configuration) -> str:
@@ -208,7 +250,7 @@ def _resolve_research_run_id(
     config: RunnableConfig | None = None,
 ) -> str:
     """Resolve one stable run scope without exposing credentials or raw history."""
-    state_run_id = str(state.get("research_run_id") or "").strip()
+    state_run_id = str(_research(state).get("run_id") or "").strip()
     if state_run_id:
         return state_run_id
     configurable: Mapping[str, Any] = (
@@ -236,7 +278,7 @@ def _graph_task_descriptor(
     """Build a role-neutral task descriptor for the graph harness."""
     tasks = [
         task
-        for task in _coerce_research_tasks(state.get("current_research_tasks", []))
+        for task in _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
         if task.target_role == role
     ]
     if tasks:
@@ -248,8 +290,8 @@ def _graph_task_descriptor(
             reason=task.reason,
         )
     return TaskDescriptor(
-        task_id=stable_id("TASK", run_id, role, state.get("research_round", 1)),
-        objective=str(state.get("research_brief", "") or ""),
+        task_id=stable_id("TASK", run_id, role, _workflow(state).get("round", 1)),
+        objective=str(_workflow(state).get("brief", "") or ""),
         evidence_needed="Evidence required by the role contract and current research brief.",
         reason="Initial role research task.",
     )
@@ -279,13 +321,13 @@ def _effective_followup_tasks(
     configurable: Configuration,
 ) -> list[ResearchTask]:
     """Filter review tasks to new, executable, decision-relevant follow-up work."""
-    current_round = max(1, int(state.get("research_round", 1) or 1))
+    current_round = max(1, int(_workflow(state).get("round", 1) or 1))
     if current_round >= configurable.max_research_rounds:
         return []
 
     completed_ids = {
         _research_task_identity(task)
-        for task in _coerce_research_tasks(state.get("completed_research_tasks", []))
+        for task in _coerce_research_tasks(_workflow(state).get("completed_tasks", []))
     }
     seen_ids = set(completed_ids)
     effective_tasks: list[ResearchTask] = []
@@ -310,29 +352,21 @@ def _build_followup_send_payload(
     tasks: list[ResearchTask],
     next_round: int,
 ) -> dict[str, Any]:
-    """Build the minimal complete state packet for one role's follow-up Send."""
+    """Build one follow-up packet from domain aggregates, not individual fields."""
+    workflow = _workflow(state)
+    workflow.update(
+        {
+            "round": next_round,
+            "pending_tasks": [_research_task_payload(task) for task in tasks],
+        }
+    )
     return {
         "messages": list(state.get("messages", [])),
-        "research_brief": state.get("research_brief", ""),
-        "research_run_id": state.get("research_run_id", ""),
-        "role_reports": dict(state.get("role_reports", {}) or {}),
-        "agent_memories": dict(state.get("agent_memories", {}) or {}),
-        "working_contexts": dict(state.get("working_contexts", {}) or {}),
-        "rolling_summaries": dict(state.get("rolling_summaries", {}) or {}),
-        "research_graph_metrics": dict(state.get("research_graph_metrics", {}) or {}),
-        "notes": list(state.get("notes", []) or []),
-        "raw_notes": list(state.get("raw_notes", []) or []),
-        "budget_usage": dict(state.get("budget_usage", {}) or {}),
-        "research_round": next_round,
-        "research_mode": "followup",
-        "research_review": state.get("research_review"),
-        "current_research_tasks": [_research_task_payload(task) for task in tasks],
-        "completed_research_tasks": [
-            _research_task_payload(task)
-            for task in _coerce_research_tasks(
-                state.get("completed_research_tasks", [])
-            )
-        ],
+        "workflow": workflow,
+        "agents": _agents(state),
+        "research": _research(state),
+        "report": _report(state),
+        "runtime": _runtime(state),
     }
 
 
@@ -356,23 +390,9 @@ def _role_context(
 
 def _agent_private_memory_context(agent_memories: dict[str, list[dict[str, Any]]], role: str) -> str:
     """Format one agent's private short-term memory for prompt injection."""
-    role_memories = (agent_memories or {}).get(role, [])
-    if isinstance(role_memories, (str, bytes)):
-        memories = [role_memories]
-    else:
-        memories = list(role_memories or [])
-    if not memories:
-        return "No private memory has been recorded for this agent yet."
-    formatted_entries = []
-    for index, memory in enumerate(memories[-5:], start=1):
-        if isinstance(memory, dict):
-            title = str(memory.get("title") or f"Memory {index}")
-            content = str(memory.get("content") or "")
-            source = str(memory.get("source") or "agent_private_memory")
-            formatted_entries.append(f"{index}. {title} [{source}]\n{content}")
-        else:
-            formatted_entries.append(f"{index}. {memory}")
-    return "\n\n".join(formatted_entries)
+    return AgentRuntime.format_private_memory(
+        {"memory": list((agent_memories or {}).get(role, []) or [])}
+    )
 
 
 def _build_public_opinion_agent_assignment(
@@ -401,29 +421,24 @@ def _build_public_opinion_agent_assignment(
         )
     else:
         upstream_context = _role_context(
-            state.get("role_reports", {}),
+            _role_reports(state),
             _PUBLIC_OPINION_UPSTREAM_ROLES.get(role),
         )
-    private_memory_context = _agent_private_memory_context(
-        state.get("agent_memories", {}),
-        role,
-    )
-    review = _coerce_research_review(state.get("research_review"))
+    review = _coerce_research_review(_workflow(state).get("review"))
     review_context = review.model_dump_json(indent=2) if review else "No research review yet."
     assignment = (
-        f"Overall research brief:\n{state.get('research_brief', '')}\n\n"
+        f"Overall research brief:\n{_workflow(state).get('brief', '')}\n\n"
         f"Upstream research context:\n{upstream_context}\n\n"
-        f"Your private memory (compact supplemental context):\n{private_memory_context}\n\n"
         f"Latest research review:\n{review_context}\n\n"
         f"Input contract:\n{chr(10).join(f'- {item}' for item in agent_spec.input_contract)}\n\n"
         f"Your role-specific objective:\n{agent_spec.expected_output}"
     )
-    if state.get("research_mode") != "followup":
+    if not _is_followup(state):
         return assignment
 
     followup_tasks = [
         task
-        for task in _coerce_research_tasks(state.get("current_research_tasks", []))
+        for task in _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
         if task.target_role == role
     ]
     if not followup_tasks:
@@ -440,24 +455,11 @@ def _build_public_opinion_agent_assignment(
         )
     return (
         f"{assignment}\n\n"
-        f"Current mode: follow-up research round {state.get('research_round', 2)}.\n"
+        f"Current mode: follow-up research round {_workflow(state).get('round', 2)}.\n"
         "Do not repeat the first-round comprehensive survey. Focus only on these unresolved, "
         "decision-relevant research gaps and use the existing scoped research context:\n"
         f"{chr(10).join(task_lines)}"
     )
-
-
-def _build_agent_private_memory(role: str, report: str, raw_notes: list[str]) -> dict[str, Any]:
-    """Create a compact private memory entry from an agent's completed report."""
-    report_text = str(report or "").strip()
-    if len(report_text) > 1800:
-        report_text = report_text[:1800].rstrip() + "\n[truncated]"
-    return {
-        "title": f"{role} completed role report",
-        "content": report_text or "No report content was produced.",
-        "source": "current_public_opinion_run",
-        "raw_note_count": len(raw_notes or []),
-    }
 
 
 def _role_tool_prompt(configurable: Configuration, role: str) -> str:
@@ -640,7 +642,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     if not configurable.allow_clarification:
         # Skip clarification step and proceed directly to research
         return Command(goto="write_research_brief")
-    budget_usage = state.get("budget_usage", {})
+    budget_usage = _runtime(state).get("budget", {})
     if not can_spend_model_call(
         configurable,
         budget_usage,
@@ -649,9 +651,9 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         return Command(
             goto="write_research_brief",
             update={
-                "budget_usage": budget_usage_with_reason(
+                "runtime": {"budget": budget_usage_with_reason(
                     "Skipped clarification to preserve the final report model call."
-                )
+                )}
             },
         )
     
@@ -693,7 +695,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
             goto=END, 
             update={
                 "messages": [AIMessage(content=response.question)],
-                "budget_usage": budget_update,
+                "runtime": {"budget": budget_update},
             }
         )
     else:
@@ -702,7 +704,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
             goto="write_research_brief", 
             update={
                 "messages": [AIMessage(content=response.verification)],
-                "budget_usage": budget_update,
+                "runtime": {"budget": budget_update},
             }
         )
 
@@ -723,7 +725,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     """
     # Step 1: Set up the research model for structured output
     configurable = Configuration.from_runnable_config(config)
-    budget_usage = state.get("budget_usage", {})
+    budget_usage = _runtime(state).get("budget", {})
     if not can_spend_model_call(
         configurable,
         budget_usage,
@@ -733,10 +735,10 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         return Command(
             goto="research_phase",
             update={
-                "research_brief": research_brief,
-                "budget_usage": budget_usage_with_reason(
+                "workflow": {"brief": research_brief},
+                "runtime": {"budget": budget_usage_with_reason(
                     "Skipped research brief generation to preserve the final report model call."
-                ),
+                )},
             },
         )
 
@@ -779,8 +781,8 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     return Command(
         goto="plan_report_sections",
         update={
-            "research_brief": response.research_brief,
-            "budget_usage": budget_update,
+            "workflow": {"brief": response.research_brief},
+            "runtime": {"budget": budget_update},
         }
     )
 
@@ -793,7 +795,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
     with optional human feedback via LangGraph interrupt().
     """
     configurable = Configuration.from_runnable_config(config)
-    budget_usage = state.get("budget_usage", {})
+    budget_usage = _runtime(state).get("budget", {})
     
     # Budget guard: degrade to single section if we can't reserve final report call
     if not can_spend_model_call(configurable, budget_usage, reserve_final_report_call=True):
@@ -802,7 +804,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         )
         single_section = Section(
             name="Research Report",
-            description=state.get("research_brief", ""),
+            description=_workflow(state).get("brief", ""),
             research=True,
             agent_role="public_signal,internal_knowledge,risk_assessment,response_strategy",
             status="pending",
@@ -810,8 +812,8 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         return Command(
             goto="research_phase",
             update={
-                "sections": [single_section],
-                "budget_usage": budget_update,
+                "report": {"sections": [single_section]},
+                "runtime": {"budget": budget_update},
             },
         )
     
@@ -827,10 +829,10 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
     if planner_max_tokens is not None:
         planner_model_config["max_tokens"] = planner_max_tokens
     
-    feedback_text = "\n///\n".join(state.get("feedback_on_report_plan", [])) or "No feedback yet."
+    feedback_text = "\n///\n".join(_report(state).get("plan_feedback", [])) or "No feedback yet."
     
     prompt = report_planner_instructions.format(
-        topic=state.get("research_brief", ""),
+        topic=_workflow(state).get("brief", ""),
         report_organization=configurable.report_structure,
         feedback=feedback_text,
         date=get_today_str(),
@@ -865,7 +867,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         )
         single_section = Section(
             name="Research Report",
-            description=state.get("research_brief", ""),
+            description=_workflow(state).get("brief", ""),
             research=True,
             agent_role="public_signal,internal_knowledge,risk_assessment,response_strategy",
             status="pending",
@@ -873,8 +875,8 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         return Command(
             goto="research_phase",
             update={
-                "sections": [single_section],
-                "budget_usage": budget_update,
+                "report": {"sections": [single_section]},
+                "runtime": {"budget": budget_update},
             },
         )
     
@@ -899,7 +901,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         )
         single_section = Section(
             name="Research Report",
-            description=state.get("research_brief", ""),
+            description=_workflow(state).get("brief", ""),
             research=True,
             agent_role="public_signal,internal_knowledge,risk_assessment,response_strategy",
             status="pending",
@@ -907,8 +909,8 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         return Command(
             goto="research_phase",
             update={
-                "sections": [single_section],
-                "budget_usage": budget_update,
+                "report": {"sections": [single_section]},
+                "runtime": {"budget": budget_update},
             },
         )
     
@@ -927,16 +929,16 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             return Command(
                 goto="research_phase",
                 update={
-                    "sections": sections,
-                    "budget_usage": total_budget_update,
+                    "report": {"sections": sections},
+                    "runtime": {"budget": total_budget_update},
                 },
             )
         elif isinstance(feedback, str):
             return Command(
                 goto="plan_report_sections",
                 update={
-                    "feedback_on_report_plan": [feedback],
-                    "budget_usage": total_budget_update,
+                    "report": {"plan_feedback": [feedback]},
+                    "runtime": {"budget": total_budget_update},
                 },
             )
         else:
@@ -948,8 +950,8 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
     return Command(
         goto="research_phase",
         update={
-            "sections": sections,
-            "budget_usage": total_budget_update,
+            "report": {"sections": sections},
+            "runtime": {"budget": total_budget_update},
         },
     )
 
@@ -1039,23 +1041,19 @@ def _graph_section_evidence(
     """Retrieve section-specific graph evidence without injecting role reports."""
     configurable = Configuration.from_runnable_config(config)
     run_id = _resolve_research_run_id(state, config)
-    store = create_research_graph_store(configurable, run_id=run_id)
     roles = (section.agent_role or "").replace(",", " ")
     query = " ".join(
         value
         for value in (
-            state.get("research_brief", ""),
+            _workflow(state).get("brief", ""),
             section.name,
             section.description,
             roles,
         )
         if value
     )
-    subgraph = store.retrieve(
-        query,
-        run_id=run_id,
-        max_nodes=configurable.research_graph_max_retrieved_nodes,
-        max_edges=configurable.research_graph_max_retrieved_edges,
+    subgraph = ResearchWorkspace.retrieve(
+        configurable, run_id=run_id, query=query
     )
     return format_relevant_subgraph(subgraph)
 
@@ -1069,19 +1067,15 @@ def _graph_report_context(
     """Build bounded report context from graph nodes and Working Context."""
     configurable = Configuration.from_runnable_config(config)
     run_id = _resolve_research_run_id(state, config)
-    store = create_research_graph_store(configurable, run_id=run_id)
     query = " ".join(
         value
-        for value in (state.get("research_brief", ""), query_suffix)
+        for value in (_workflow(state).get("brief", ""), query_suffix)
         if value
     )
-    subgraph = store.retrieve(
-        query,
-        run_id=run_id,
-        max_nodes=configurable.research_graph_max_retrieved_nodes,
-        max_edges=configurable.research_graph_max_retrieved_edges,
+    subgraph = ResearchWorkspace.retrieve(
+        configurable, run_id=run_id, query=query
     )
-    contexts = state.get("working_contexts", {}) or {}
+    contexts = _research(state).get("working_contexts", {}) or {}
     context_text = []
     for role, value in contexts.items():
         try:
@@ -1105,9 +1099,9 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     the section's agent_role field, then write the section content in parallel.
     """
     configurable = Configuration.from_runnable_config(config)
-    sections = state.get("sections", [])
-    role_reports = state.get("role_reports", {}) or {}
-    agent_memories = state.get("agent_memories", {}) or {}
+    sections = _report(state).get("sections", [])
+    role_reports = _role_reports(state)
+    agent_memories = _role_memories(state)
     graph_mode = configurable.research_graph_enabled
     # Formal role reports remain the compatibility path. Graph mode retrieves
     # section-specific evidence and does not inject complete role reports.
@@ -1131,7 +1125,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     }
     
     # Budget guard: if no budget, copy role reports directly as content
-    budget_usage = state.get("budget_usage", {})
+    budget_usage = _runtime(state).get("budget", {})
     if not can_spend_model_call(configurable, budget_usage, reserve_final_report_call=True):
         budget_update = budget_usage_with_reason(
             "Skipped section_writer model calls due to budget constraints; using role reports as section content."
@@ -1143,8 +1137,8 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
             section.status = "done"
             completed.append(section)
         return {
-            "completed_sections": completed,
-            "budget_usage": budget_update,
+            "report": {"completed_sections": completed},
+            "runtime": {"budget": budget_update},
         }
     
     # Write sections in parallel using section_writer_model
@@ -1201,8 +1195,8 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         budget_usage_with_reason(f"Wrote {len(completed)} sections via section_writer."),
     )
     return {
-        "completed_sections": completed,
-        "budget_usage": budget_update,
+        "report": {"completed_sections": completed},
+        "runtime": {"budget": budget_update},
     }
 
 
@@ -1213,9 +1207,9 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     Uses completed research sections as context for writing intro/conclusion.
     """
     configurable = Configuration.from_runnable_config(config)
-    sections = state.get("sections", [])
-    completed_sections = state.get("completed_sections", [])
-    role_reports = state.get("role_reports", {}) or {}
+    sections = _report(state).get("sections", [])
+    completed_sections = _report(state).get("completed_sections", [])
+    role_reports = _role_reports(state)
     
     final_sections = [s for s in sections if not s.research]
     if not final_sections:
@@ -1241,14 +1235,14 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     if not context or context == "No upstream role reports are available yet.":
         context = "No completed research sections are available yet."
     
-    budget_usage = state.get("budget_usage", {})
+    budget_usage = _runtime(state).get("budget", {})
     
     # Budget guard
     if not can_spend_model_call(configurable, budget_usage, reserve_final_report_call=True):
         budget_update = budget_usage_with_reason(
             "Skipped final section writing due to budget constraints."
         )
-        return {"budget_usage": budget_update}
+        return {"runtime": {"budget": budget_update}}
     
     writer_model_config: dict[str, Any] = {
         "model": configurable.final_report_model,
@@ -1297,8 +1291,8 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
         budget_usage_with_reason(f"Wrote {len(completed)} final sections."),
     )
     return {
-        "completed_sections": completed,
-        "budget_usage": budget_update,
+        "report": {"completed_sections": completed},
+        "runtime": {"budget": budget_update},
     }
 
 
@@ -1311,10 +1305,9 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
     """
     configurable = Configuration.from_runnable_config(config)
     
-    sections = state.get("sections", [])
-    completed_sections = state.get("completed_sections", [])
-    budget_usage = state.get("budget_usage", {})
-    cleared_state = {"notes": {"type": "override", "value": []}}
+    sections = _report(state).get("sections", [])
+    completed_sections = _report(state).get("completed_sections", [])
+    budget_usage = _runtime(state).get("budget", {})
     
     # Build deduped content map: take the latest content for each section name
     content_map: dict[str, str] = {}
@@ -1340,17 +1333,14 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
             if can_spend_model_call(configurable, budget_usage):
                 # Try to fill missing sections with final_report_model
                 try:
-                    notes = state.get("notes", [])
                     findings = (
                         _graph_report_context(state, config, query_suffix="missing sections")
                         if configurable.research_graph_enabled
-                        else _role_context(state.get("role_reports", {}))
+                        else _role_context(_role_reports(state))
                     )
-                    if findings == "No upstream role reports are available yet.":
-                        findings = "\n".join(notes)
                     
                     final_report_prompt = public_opinion_final_report_generation_prompt.format(
-                        research_brief=state.get("research_brief", ""),
+                        research_brief=_workflow(state).get("brief", ""),
                         organization_context=_business_context(configurable),
                         messages=get_buffer_string(state.get("messages", [])),
                         findings=f"已有报告内容:\n{report}\n\n补充证据:\n{findings}",
@@ -1379,10 +1369,9 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                     )
                     await maybe_persist_chat_memory(state, config, report)
                     return {
-                        "final_report": report,
+                        "report": {"final": report},
                         "messages": [AIMessage(content=report)],
-                        "budget_usage": budget_update,
-                        **cleared_state,
+                        "runtime": {"budget": budget_update},
                     }
                 except Exception as exc:
                     if not is_token_limit_exceeded(exc, configurable.final_report_model):
@@ -1398,14 +1387,13 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
         
         await maybe_persist_chat_memory(state, config, report)
         return {
-            "final_report": report,
+            "report": {"final": report},
             "messages": [AIMessage(content=report)],
-            "budget_usage": {},
-            **cleared_state,
+            "runtime": {"budget": {}},
         }
     
-    # All sections missing: full degradation to notes-based synthesis
-    LOGGER.warning("No sections completed; falling back to notes-based report generation.")
+    # All sections missing: degrade from role reports (or scoped graph context).
+    LOGGER.warning("No sections completed; falling back to role-report synthesis.")
     return await _fallback_report_generation(state, config)
 
 
@@ -1425,7 +1413,7 @@ async def compress_research(state: dict, config: RunnableConfig):
     """
     # Step 1: Configure the compression model
     configurable = Configuration.from_runnable_config(config)
-    budget_usage = state.get("budget_usage", {})
+    budget_usage = _runtime(state).get("budget", {})
     if not can_spend_model_call(
         configurable,
         budget_usage,
@@ -1524,17 +1512,10 @@ async def _run_public_opinion_agent(
         return {}
 
     agent_spec = get_public_opinion_agent_spec(role)
-    budget_usage = state.get("budget_usage", {})
-    role_budget_update: dict[str, Any] = {}
-    expected_output = agent_spec.expected_output
-    research_round = max(1, int(state.get("research_round", 1) or 1))
-    research_mode = state.get("research_mode", "initial")
+    budget_usage = _runtime(state).get("budget", {})
+    research_round = max(1, int(_workflow(state).get("round", 1) or 1))
+    execution_mode = "followup" if _is_followup(state) else "initial"
     assignment = _build_public_opinion_agent_assignment(state, role, config)
-    private_memory_context = _agent_private_memory_context(
-        state.get("agent_memories", {}),
-        role,
-    )
-
     strategy_name = _effective_context_strategy(configurable, role)
     context_strategy = create_context_strategy(
         strategy_name,
@@ -1565,7 +1546,6 @@ async def _run_public_opinion_agent(
         mcp_prompt=configurable.mcp_prompt or "",
         date=get_today_str(),
         organization_context=_business_context(configurable),
-        private_memory_context=private_memory_context,
     )
     agent_model = (
         configurable_model
@@ -1584,254 +1564,80 @@ async def _run_public_opinion_agent(
             model_config["max_tokens"] = max_tokens
         return configurable_model.with_config(model_config)
 
-    harness = ResearchContextHarness(
+    workspace = ResearchWorkspace(
         strategy=context_strategy,
-        state=dict(state),
+        research_state=_research(state),
         role=role,
-        assignment=assignment,
-        agent_prompt=agent_prompt,
         configurable=configurable,
-        runtime_config=config,
         model_factory=model_factory,
         task=task,
         run_id=run_id,
-        store_factory=create_research_graph_store,
+        research_round=research_round,
     )
 
-    role_messages: list[Any] = [HumanMessage(content=assignment)]
-    tools_by_name = {_tool_name(available_tool): available_tool for available_tool in tools}
-
-    for _ in range(configurable.max_react_tool_calls):
-        projected_budget = merge_budget_usage(budget_usage, role_budget_update)
-        if not can_spend_model_call(
-            configurable,
-            projected_budget,
-            reserve_final_report_call=True,
-        ):
-            role_budget_update = merge_budget_usage(
-                role_budget_update,
-                budget_usage_with_reason(
-                    f"Stopped {role} agent reasoning to preserve the final report model call."
-                ),
-            )
-            break
-
-        model_messages = await harness.before_model(role_messages)
-        response = await observe_model_ainvoke(
-            agent_model,
-            model_messages,
-            observer_model=configurable.research_model,
-            observer_component=f"{role}_{research_mode}_round_{research_round}",
+    async def compress_report(
+        messages: list[Any],
+        task_text: str,
+        output_contract: str,
+        cumulative_budget: dict[str, Any],
+    ) -> tuple[str, list[str], dict[str, Any]]:
+        compressed = await compress_research(
+            {
+                "researcher_messages": messages,
+                "research_topic": task_text,
+                "agent_role": role,
+                "expected_output": output_contract,
+                "budget_usage": cumulative_budget,
+            },
+            config,
         )
-        role_messages.append(response)
-        response_budget = budget_from_model_response(response)
-        if openai_websearch_called(response) or anthropic_websearch_called(response):
-            response_budget = merge_budget_usage(response_budget, budget_from_native_search())
-        role_budget_update = merge_budget_usage(role_budget_update, response_budget)
-
-        has_tool_calls = bool(response.tool_calls)
-        has_native_search = openai_websearch_called(response) or anthropic_websearch_called(response)
-        if not has_tool_calls and not has_native_search:
-            break
-
-        if is_over_budget(configurable, merge_budget_usage(budget_usage, role_budget_update)):
-            role_budget_update = merge_budget_usage(
-                role_budget_update,
-                budget_usage_with_reason(f"Stopped {role} agent because a budget was reached."),
-            )
-            break
-
-        allowed_tool_calls, skipped_tool_calls = filter_tool_calls_for_budget(
-            configurable,
-            merge_budget_usage(budget_usage, role_budget_update),
-            response.tool_calls,
-            tools_by_name,
-        )
-        skipped_tool_outputs = [
-            budget_skip_tool_message(tool_call, "tool or search call budget exhausted")
-            for tool_call in skipped_tool_calls
-        ]
-        tool_batch: list[ToolBatchItem] = []
-        if skipped_tool_calls:
-            role_budget_update = merge_budget_usage(
-                role_budget_update,
-                budget_usage_with_reason(
-                    f"Skipped {role} agent tools because a tool or search budget was exhausted."
-                ),
-            )
-
-        if allowed_tool_calls:
-            # Split into known vs unknown tools so a missing tool doesn't crash
-            known_calls: list[dict[str, Any]] = []
-            unknown_calls: list[dict[str, Any]] = []
-            for tool_call in allowed_tool_calls:
-                if tool_call["name"] in tools_by_name:
-                    known_calls.append(tool_call)
-                else:
-                    unknown_calls.append(tool_call)
-
-            for tool_call in unknown_calls:
-                role_messages.append(ToolMessage(
-                    content=(
-                        f"Tool '{tool_call['name']}' is not available in the current "
-                        "configuration. Use one of the available tools instead."
-                    ),
-                    name=tool_call["name"],
-                    tool_call_id=tool_call["id"],
-                ))
-                tool_batch.append(
-                    ToolBatchItem(
-                        tool_name=tool_call["name"],
-                        tool_call_id=tool_call["id"],
-                        args=tool_call.get("args", {}),
-                        observation=(
-                            f"Tool '{tool_call['name']}' is not available in the current "
-                            "configuration. Use one of the available tools instead."
-                        ),
-                        success=False,
-                    )
-                )
-
-            if known_calls:
-                tool_execution_tasks = [
-                    execute_tool_safely(
-                        tools_by_name[tool_call["name"]],
-                        tool_call["args"],
-                        config,
-                        tool_call_id=tool_call["id"],
-                    )
-                    for tool_call in known_calls
-                ]
-                tool_results = await asyncio.gather(*tool_execution_tasks)
-                role_budget_update = merge_budget_usage(
-                    role_budget_update,
-                    budget_from_tool_calls(known_calls, tools_by_name),
-                )
-                for _, captured_budget, _ in tool_results:
-                    role_budget_update = merge_budget_usage(role_budget_update, captured_budget)
-
-                for (observation, captured_budget, success), tool_call in zip(
-                    tool_results,
-                    known_calls,
-                ):
-                    role_messages.append(
-                        ToolMessage(
-                        content=observation,
-                        name=tool_call["name"],
-                        tool_call_id=tool_call["id"],
-                        )
-                    )
-                    tool_batch.append(
-                        ToolBatchItem(
-                            tool_name=tool_call["name"],
-                            tool_call_id=tool_call["id"],
-                            args=tool_call.get("args", {}),
-                            observation=observation,
-                            success=success,
-                        )
-                    )
-
-        for skipped_message, skipped_call in zip(skipped_tool_outputs, skipped_tool_calls):
-            role_messages.append(skipped_message)
-            tool_batch.append(
-                ToolBatchItem(
-                    tool_name=skipped_call["name"],
-                    tool_call_id=skipped_call["id"],
-                    args=skipped_call.get("args", {}),
-                    observation=skipped_message.content,
-                    success=False,
-                )
-            )
-
-        if has_native_search:
-            tool_batch.append(
-                ToolBatchItem(
-                    tool_name="web_search",
-                    tool_call_id=f"native-search-{research_round}-{_}",
-                    args={},
-                    observation=getattr(response, "content", ""),
-                    success=True,
-                )
-            )
-
-        hook_result = await harness.after_tool_batch(role_messages, tool_batch)
-        role_messages = hook_result.messages
-        role_budget_update = merge_budget_usage(
-            role_budget_update,
-            hook_result.budget_usage,
+        return (
+            str(compressed.get("compressed_research", "")),
+            list(compressed.get("raw_notes", []) or []),
+            dict(compressed.get("budget_usage", {}) or {}),
         )
 
-        if any(tool_call["name"] == "ResearchComplete" for tool_call in response.tool_calls):
-            break
-
-        if not allowed_tool_calls:
-            break
-
-    graph_final = await harness.finalize(role_messages, expected_output)
-    if graph_final is not None:
-        role_budget_update = merge_budget_usage(
-            role_budget_update,
-            graph_final.budget_usage,
-        )
-        report = (
-            f"Agent role: {role}\n"
-            f"Agent name: {agent_spec.display_name}\n"
-            f"Research round: {research_round}\n"
-            f"Research mode: {research_mode}\n"
-            f"Context strategy: {strategy_name}\n"
-            f"Expected output: {expected_output}\n\n"
-            f"{graph_final.report}"
-        )
-        raw_notes = graph_final.raw_notes
-        role_report_update: dict[str, Any] = {
-            "type": "role_report_update",
-            "role": role,
-            "value": report,
-        }
-    else:
-        compression_state = {
-            "researcher_messages": role_messages,
-            "research_topic": assignment,
-            "agent_role": role,
-            "expected_output": expected_output,
-            "budget_usage": merge_budget_usage(budget_usage, role_budget_update),
-        }
-        compressed = await compress_research(compression_state, config)
-        role_budget_update = merge_budget_usage(
-            role_budget_update,
-            compressed.get("budget_usage", {}),
-        )
-        report = (
-            f"Agent role: {role}\n"
-            f"Agent name: {agent_spec.display_name}\n"
-            f"Research round: {research_round}\n"
-            f"Research mode: {research_mode}\n"
-            f"Expected output: {expected_output}\n\n"
-            f"{compressed.get('compressed_research', '')}"
-        )
-        raw_notes = compressed.get("raw_notes", [])
-        role_report_update = {role: report}
-    private_memory = _build_agent_private_memory(
-        role,
-        report,
-        raw_notes,
+    runtime = AgentRuntime(
+        role=role,
+        spec=agent_spec,
+        agent_state=_agents(state).get(role, {}),
+        workspace=workspace,
+        config=configurable,
+        runtime_config=config,
+        model=agent_model,
+        system_prompt=agent_prompt,
+        tools=tools,
+        initial_budget=budget_usage,
+        execute_tool=execute_tool_safely,
+        compress_report=compress_report,
     )
-    result = {
-        "role_reports": role_report_update,
-        "agent_memories": {role: [private_memory]},
-        "notes": [report],
-        "raw_notes": raw_notes,
-        "completed_research_tasks": (
-            _coerce_research_tasks(state.get("current_research_tasks", []))
-            if research_mode == "followup"
-            else []
-        ),
-        "budget_usage": role_budget_update,
+    runtime_result = await runtime.run(assignment)
+    result: dict[str, Any] = {
+        "agents": {
+            role: {
+                "report": (
+                    {"type": "override", "value": runtime_result.report}
+                    if runtime_result.replace_report
+                    else runtime_result.report
+                ),
+                "memory": [runtime_result.memory],
+                "rolling_summary": runtime_result.rolling_summary,
+            }
+        },
+        "workflow": {
+            "completed_tasks": (
+                _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
+                if execution_mode == "followup"
+                else []
+            ),
+            **({"round": research_round} if execution_mode == "followup" else {}),
+        },
+        "runtime": {"budget": runtime_result.budget},
     }
     if context_strategy.graph_enabled:
-        result.update(harness.update_state_payload())
-    if research_mode == "followup":
-        result["research_round"] = research_round
+        workspace_update = workspace.state_update()
+        result["research"] = workspace_update["research"]
+        result["runtime"]["metrics"] = workspace_update["runtime"]["metrics"]
     return result
 
 
@@ -1839,10 +1645,10 @@ async def _run_public_opinion_agent(
 async def research_review(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Review collected evidence and optionally create targeted follow-up tasks."""
     configurable = Configuration.from_runnable_config(config)
-    current_round = max(1, int(state.get("research_round", 1) or 1))
-    previous_review = _coerce_research_review(state.get("research_review"))
+    current_round = max(1, int(_workflow(state).get("round", 1) or 1))
+    previous_review = _coerce_research_review(_workflow(state).get("review"))
     completed_tasks = _coerce_research_tasks(
-        state.get("completed_research_tasks", [])
+        _workflow(state).get("completed_tasks", [])
     )
     completed_tasks_text = "\n".join(
         f"- {task.model_dump_json()}" for task in completed_tasks
@@ -1853,15 +1659,10 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     graph_review_metrics: dict[str, Any] = {}
     if configurable.research_graph_enabled:
         run_id = _resolve_research_run_id(state, config)
-        store = create_research_graph_store(
+        review_subgraph = ResearchWorkspace.retrieve(
             configurable,
             run_id=run_id,
-        )
-        review_subgraph = store.retrieve(
-            state.get("research_brief", ""),
-            run_id=run_id,
-            max_nodes=configurable.research_graph_max_retrieved_nodes,
-            max_edges=configurable.research_graph_max_retrieved_edges,
+            query=_workflow(state).get("brief", ""),
         )
         graph_review_metrics = {
             "graph_retrieval_calls": 1,
@@ -1870,7 +1671,7 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
             "graph_retrieval_latency": 0,
             "quality": {"graph_retrieval_latency": "unavailable"},
         }
-        working_context_values = state.get("working_contexts", {}) or {}
+        working_context_values = _research(state).get("working_contexts", {}) or {}
         working_contexts = {}
         for role, value in working_context_values.items():
             try:
@@ -1899,19 +1700,19 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
             + graph_context_text
         )
     else:
-        public_signal_report = (state.get("role_reports", {}) or {}).get(
+        public_signal_report = _role_reports(state).get(
             "public_signal", "No public-signal report is available."
         )
-        internal_knowledge_report = (state.get("role_reports", {}) or {}).get(
+        internal_knowledge_report = _role_reports(state).get(
             "internal_knowledge", "No internal-knowledge report is available."
         )
     prompt = research_review_prompt.format(
-        research_brief=state.get("research_brief", ""),
+        research_brief=_workflow(state).get("brief", ""),
         public_signal_report=public_signal_report,
         internal_knowledge_report=internal_knowledge_report,
         research_round=current_round,
         max_research_rounds=configurable.max_research_rounds,
-        completed_research_tasks=completed_tasks_text,
+        completed_tasks=completed_tasks_text,
         previous_review=previous_review_text,
     )
     review_model_config: dict[str, Any] = {
@@ -1941,15 +1742,15 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
             "Research review model returned an invalid ResearchReview structured output."
         )
 
-    effective_tasks = _effective_followup_tasks(state, review, configurable)
     return {
-        "research_review": review,
-        "current_research_tasks": {"type": "override", "value": []},
-        "research_mode": "followup" if effective_tasks else state.get(
-            "research_mode", "initial"
-        ),
-        "budget_usage": budget_from_model_response(response),
-        **({"research_graph_metrics": graph_review_metrics} if graph_review_metrics else {}),
+        "workflow": {
+            "review": review,
+            "pending_tasks": {"type": "override", "value": []},
+        },
+        "runtime": {
+            "budget": budget_from_model_response(response),
+            **({"metrics": graph_review_metrics} if graph_review_metrics else {}),
+        },
     }
 
 
@@ -1958,7 +1759,7 @@ def route_after_research_review(
     config: RunnableConfig | None = None,
 ) -> list[Send | str]:
     """Route a review to risk assessment or grouped role-specific Sends."""
-    review = _coerce_research_review(state.get("research_review"))
+    review = _coerce_research_review(_workflow(state).get("review"))
     if review is None or review.research_complete:
         return ["risk_assessment_agent"]
 
@@ -1974,7 +1775,7 @@ def route_after_research_review(
     if not effective_tasks:
         return ["risk_assessment_agent"]
 
-    current_round = max(1, int(state.get("research_round", 1) or 1))
+    current_round = max(1, int(_workflow(state).get("round", 1) or 1))
     next_round = current_round + 1
     grouped_tasks = {
         role: [task for task in effective_tasks if task.target_role == role]
@@ -1999,7 +1800,7 @@ def route_after_research_review(
 
 def route_after_research_agent(state: PublicOpinionState) -> list[str]:
     """Return to review only for agents launched by a follow-up Send."""
-    if state.get("research_mode") == "followup":
+    if _is_followup(state):
         return ["research_review"]
     return []
 
@@ -2072,60 +1873,35 @@ public_opinion_subgraph = public_opinion_builder.compile()
 @observe_graph_node(name="research_phase", kind="subgraph")
 async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     """Run initial and gap-driven public-opinion research before report writing."""
-    input_budget = state.get("budget_usage", {})
+    input_budget = _runtime(state).get("budget", {})
     research_run_id = _resolve_research_run_id(state, config)
     result = await public_opinion_subgraph.ainvoke(
         {
             "messages": state.get("messages", []),
-            "research_brief": state.get("research_brief", ""),
-            "research_run_id": research_run_id,
-            "role_reports": {},
-            "agent_memories": state.get("agent_memories", {}),
-            "working_contexts": {},
-            "rolling_summaries": {},
-            "research_graph_metrics": {},
-            "notes": [],
-            "raw_notes": [],
-            "budget_usage": input_budget,
-            "research_round": 1,
-            "research_mode": "initial",
-            "research_review": None,
-            "current_research_tasks": [],
-            "completed_research_tasks": [],
+            "workflow": {
+                "brief": _workflow(state).get("brief", ""),
+                "round": 1,
+                "review": None,
+                "pending_tasks": [],
+                "completed_tasks": [],
+            },
+            "agents": _agents_for_new_run(state),
+            "research": {"run_id": research_run_id, "working_contexts": {}},
+            "report": _report(state),
+            "runtime": {"budget": input_budget, "metrics": {}},
         },
         config,
     )
-    budget_update = diff_budget_usage(result.get("budget_usage", {}), input_budget)
-    role_reports = result.get("role_reports") or {}
-    agent_memories = result.get("agent_memories", state.get("agent_memories", {}))
-
-    # Keep the full current-run reports in the formal state channel. The compact
-    # private memories remain available for agent prompt memory only.
+    result_runtime = result.get("runtime", {}) or {}
+    budget_update = diff_budget_usage(result_runtime.get("budget", {}), input_budget)
     return {
-        "research_brief": result.get("research_brief", state.get("research_brief", "")),
-        "research_run_id": result.get("research_run_id", research_run_id),
-        "role_reports": {
-            "type": "override",
-            "value": role_reports,
+        "workflow": {"type": "override", "value": result.get("workflow", {})},
+        "agents": {"type": "override", "value": result.get("agents", {})},
+        "research": {"type": "override", "value": result.get("research", {})},
+        "runtime": {
+            "budget": budget_update,
+            "metrics": result_runtime.get("metrics", {}),
         },
-        "notes": result.get("notes", []),
-        "raw_notes": result.get("raw_notes", []),
-        "agent_memories": {
-            "type": "override",
-            "value": agent_memories,
-        },
-        "working_contexts": {
-            "type": "override",
-            "value": result.get("working_contexts", state.get("working_contexts", {})) or {},
-        },
-        "rolling_summaries": {
-            "type": "override",
-            "value": result.get("rolling_summaries", state.get("rolling_summaries", {})) or {},
-        },
-        "research_graph_metrics": result.get(
-            "research_graph_metrics", state.get("research_graph_metrics", {})
-        ),
-        "budget_usage": budget_update,
     }
 
 
@@ -2142,7 +1918,7 @@ async def maybe_persist_chat_memory(
     messages_text = get_buffer_string(
         _messages_without_query_image_context(state.get("messages", []))
     )
-    research_brief = (state.get("research_brief") or "").strip()
+    research_brief = str(_workflow(state).get("brief") or "").strip()
     memories = [research_brief] if research_brief else []
     try:
         await asyncio.to_thread(
@@ -2162,21 +1938,14 @@ async def maybe_persist_chat_memory(
 
 
 async def _fallback_report_generation(state: AgentState, config: RunnableConfig):
-    """Generate a fallback report from raw notes when section-based compilation fails.
-
-    Uses the public-opinion report prompt directly.
-    """
-    notes = state.get("notes", [])
-    cleared_state = {"notes": {"type": "override", "value": []}}
+    """Generate a fallback report from graph context or formal role reports."""
     configurable = Configuration.from_runnable_config(config)
     findings = (
         _graph_report_context(state, config)
         if configurable.research_graph_enabled
-        else _role_context(state.get("role_reports", {}))
+        else _role_context(_role_reports(state))
     )
-    if findings == "No upstream role reports are available yet.":
-        findings = "\n".join(notes)
-    budget_usage = state.get("budget_usage", {})
+    budget_usage = _runtime(state).get("budget", {})
     budget_update = {}
 
     if not can_spend_model_call(configurable, budget_usage):
@@ -2191,17 +1960,16 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
             final_usage,
         )
         return {
-            "final_report": final_report_content,
+            "report": {"final": final_report_content},
             "messages": [AIMessage(content=final_report_content)],
-            "budget_usage": budget_update,
-            **cleared_state,
+            "runtime": {"budget": budget_update},
         }
 
     messages_text = get_buffer_string(state.get("messages", []))
     remaining_input_budget = remaining_input_tokens(configurable, budget_usage)
     if remaining_input_budget is not None:
         reserved_prompt_tokens = (
-            estimate_tokens(state.get("research_brief", ""))
+            estimate_tokens(_workflow(state).get("brief", ""))
             + estimate_tokens(messages_text)
             + 1000
         )
@@ -2250,10 +2018,9 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                 final_usage,
             )
             return {
-                "final_report": final_report_content,
+                "report": {"final": final_report_content},
                 "messages": [AIMessage(content=final_report_content)],
-                "budget_usage": budget_update,
-                **cleared_state,
+                "runtime": {"budget": budget_update},
             }
 
     writer_model_config = {
@@ -2272,7 +2039,7 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
         try:
             # Create comprehensive prompt with all research context
             final_report_prompt = public_opinion_final_report_generation_prompt.format(
-                research_brief=state.get("research_brief", ""),
+                research_brief=_workflow(state).get("brief", ""),
                 organization_context=_business_context(configurable),
                 messages=messages_text,
                 findings=findings,
@@ -2299,10 +2066,9 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
             
             # Return successful report generation
             return {
-                "final_report": final_report_content,
+                "report": {"final": final_report_content},
                 "messages": [AIMessage(content=final_report_content)],
-                "budget_usage": final_budget_update,
-                **cleared_state
+                "runtime": {"budget": final_budget_update},
             }
             
         except Exception as exc:
@@ -2318,10 +2084,9 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                             "Final report model exceeded its context limit and no model limit is configured."
                         )
                         return {
-                            "final_report": "Error generating final report due to a model context limit.",
+                            "report": {"final": "Error generating final report due to a model context limit."},
                             "messages": [AIMessage(content="Report generation failed due to token limits")],
-                            "budget_usage": budget_update,
-                            **cleared_state
+                            "runtime": {"budget": budget_update},
                         }
                     # Use 4x token limit as character approximation for truncation
                     findings_token_limit = model_token_limit * 4
@@ -2338,13 +2103,12 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
     
     # Step 4: Return failure result if all retries exhausted
     return {
-        "final_report": "Error generating final report: Maximum retries exceeded",
+        "report": {"final": "Error generating final report: Maximum retries exceeded"},
         "messages": [AIMessage(content="Report generation failed after maximum retries")],
-        "budget_usage": merge_budget_usage(
+        "runtime": {"budget": merge_budget_usage(
             budget_update,
             budget_usage_with_reason("Final report generation failed after maximum retries."),
-        ),
-        **cleared_state
+        )},
     }
 
 # Main Deep Researcher Graph Construction
@@ -2353,7 +2117,6 @@ def _create_deep_researcher_builder(
     lifecycle: ObserverRunLifecycle | None = None,
 ) -> StateGraph:
     """Build a native LangGraph, optionally binding one invocation lifecycle."""
-
     builder = StateGraph(
         AgentState,
         input=AgentInputState,
@@ -2422,7 +2185,6 @@ def deep_researcher(config: Any = None):
     constructs the graph; the Observer Run starts lazily at the first node so a
     server-side graph load cannot create a shared Run.
     """
-
     del config  # The node-level RunnableConfig carries the invocation settings.
     lifecycle = ObserverRunLifecycle()
     return _create_deep_researcher_builder(lifecycle).compile()
