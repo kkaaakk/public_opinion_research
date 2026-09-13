@@ -7,7 +7,9 @@ from langchain_core.messages import HumanMessage
 import open_deep_research.deep_researcher as deep_researcher_module
 from open_deep_research.runtime import AgentRuntime
 from open_deep_research.state import (
+    AgentState,
     DeepResearchState,
+    PublicOpinionState,
     ResearchReview,
     ResearchTask,
     agents_reducer,
@@ -32,6 +34,14 @@ def test_top_level_state_contains_only_owned_domains_and_messages() -> None:
     assert set(DeepResearchState.__annotations__) == {
         "messages", "workflow", "agents", "research", "report", "runtime"
     }
+
+
+def test_state_aliases_share_one_schema_source_of_truth() -> None:
+    """Main, subgraph, and compatibility names resolve to one schema object."""
+    assert AgentState is DeepResearchState
+    assert PublicOpinionState is DeepResearchState
+    assert deep_researcher_module.deep_researcher_builder.state_schema is DeepResearchState
+    assert deep_researcher_module.public_opinion_builder.state_schema is DeepResearchState
 
 
 def test_parallel_agents_merge_report_memory_and_summary_by_role() -> None:

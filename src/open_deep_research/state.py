@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from langchain_core.messages import MessageLikeRepresentation
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -334,19 +333,9 @@ class DeepResearchState(MessagesState):
     runtime: Annotated[RuntimeState, runtime_reducer]
 
 
-class PublicOpinionState(TypedDict, total=False):
-    """Public-opinion subgraph state using the same domain packets."""
-
-    messages: list[MessageLikeRepresentation]
-    workflow: Annotated[WorkflowState, workflow_reducer]
-    agents: Annotated[dict[str, AgentRoleState], agents_reducer]
-    research: Annotated[ResearchState, research_reducer]
-    report: Annotated[ReportState, report_reducer]
-    runtime: Annotated[RuntimeState, runtime_reducer]
-
-
-# Compatibility for imports only; the state schema itself contains no flat fields.
+# Compatibility and semantic aliases only; DeepResearchState is the sole schema.
 AgentState = DeepResearchState
+PublicOpinionState = DeepResearchState
 
 
 __all__ = [

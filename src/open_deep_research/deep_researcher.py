@@ -78,6 +78,7 @@ from open_deep_research.state import (
     AgentInputState,
     AgentState,
     ClarifyWithUser,
+    DeepResearchState,
     PublicOpinionState,
     ResearchQuestion,
     ResearchReview,
@@ -1829,7 +1830,7 @@ async def response_strategy_agent(state: PublicOpinionState, config: RunnableCon
     return await _run_public_opinion_agent(state, config, "response_strategy")
 
 
-public_opinion_builder = StateGraph(PublicOpinionState, config_schema=Configuration)
+public_opinion_builder = StateGraph(DeepResearchState, config_schema=Configuration)
 public_opinion_builder.add_node("public_signal_agent", public_signal_agent)
 public_opinion_builder.add_node("internal_knowledge_agent", internal_knowledge_agent)
 public_opinion_builder.add_node("research_review", research_review)
@@ -2118,7 +2119,7 @@ def _create_deep_researcher_builder(
 ) -> StateGraph:
     """Build a native LangGraph, optionally binding one invocation lifecycle."""
     builder = StateGraph(
-        AgentState,
+        DeepResearchState,
         input=AgentInputState,
         config_schema=Configuration,
     )
