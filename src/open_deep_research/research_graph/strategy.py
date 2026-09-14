@@ -73,12 +73,12 @@ class ContextStrategy(Protocol):
     graph_enabled: bool
     is_producer: bool
 
-    async def before_model(self, harness: ResearchWorkspace, messages: list[Any]) -> list[Any]:
+    async def before_model(self, workspace: ResearchWorkspace, messages: list[Any]) -> list[Any]:
         """Build the next bounded model input."""
 
     async def after_tool_batch(
         self,
-        harness: ResearchWorkspace,
+        workspace: ResearchWorkspace,
         messages: list[Any],
         batch: list[ToolBatchItem],
     ) -> WorkspaceHookResult:
@@ -86,7 +86,7 @@ class ContextStrategy(Protocol):
 
     async def finalize(
         self,
-        harness: ResearchWorkspace,
+        workspace: ResearchWorkspace,
         messages: list[Any],
         expected_output: str,
     ) -> WorkspaceFinalResult | None:
@@ -101,13 +101,13 @@ class StandardContextStrategy:
     graph_enabled = False
     is_producer = False
 
-    async def before_model(self, harness: ResearchWorkspace, messages: list[Any]) -> list[Any]:
+    async def before_model(self, workspace: ResearchWorkspace, messages: list[Any]) -> list[Any]:
         """Return the unmodified standard system-plus-history input."""
         return list(messages)
 
     async def after_tool_batch(
         self,
-        harness: ResearchWorkspace,
+        workspace: ResearchWorkspace,
         messages: list[Any],
         batch: list[ToolBatchItem],
     ) -> WorkspaceHookResult:
@@ -116,7 +116,7 @@ class StandardContextStrategy:
 
     async def finalize(
         self,
-        harness: ResearchWorkspace,
+        workspace: ResearchWorkspace,
         messages: list[Any],
         expected_output: str,
     ) -> WorkspaceFinalResult | None:
@@ -129,19 +129,19 @@ class _ResearchGraphStrategyBase:
 
     graph_enabled = True
 
-    async def before_model(self, harness: ResearchWorkspace, messages: list[Any]) -> list[Any]:
-        if not harness.relevant_subgraph.nodes and harness.store is not None:
-            harness.context_for()
+    async def before_model(self, workspace: ResearchWorkspace, messages: list[Any]) -> list[Any]:
+        if not workspace.relevant_subgraph.nodes and workspace.store is not None:
+            workspace.context_for()
         items = list(messages)
         assignment = items[:1]
         history = items[1:]
         context_message = HumanMessage(
             content=(
                 "<Research Graph Working Context>\n"
-                f"Current task: {harness.task.objective}\n"
-                f"Working Context:\n{render_working_context(harness.working_context)}\n\n"
-                f"Relevant Research Memory:\n{format_relevant_subgraph(harness.relevant_subgraph)}\n\n"
-                f"Rolling Summary:\n{harness.rolling_summary or 'None'}\n"
+                f"Current task: {workspace.task.objective}\n"
+                f"Working Context:\n{render_working_context(workspace.working_context)}\n\n"
+                f"Relevant Research Memory:\n{format_relevant_subgraph(workspace.relevant_subgraph)}\n\n"
+                f"Rolling Summary:\n{workspace.rolling_summary or 'None'}\n"
                 "</Research Graph Working Context>"
             )
         )
@@ -149,12 +149,12 @@ class _ResearchGraphStrategyBase:
 
     async def finalize(
         self,
-        harness: ResearchWorkspace,
+        workspace: ResearchWorkspace,
         messages: list[Any],
         expected_output: str,
     ) -> WorkspaceFinalResult | None:
-        if harness.store is not None:
-            harness.context_for(query_suffix="final role report")
+        if workspace.store is not None:
+            workspace.context_for(query_suffix="final role report")
         recent_text = _render_recent_messages(messages)
         prompt = (
             "Generate a bounded public-opinion role report from the current research "
@@ -163,39 +163,39 @@ class _ResearchGraphStrategyBase:
             "and Recommendation/Strategy distinct. Any fact or analytical conclusion "
             "must retain graph IDs so it can be traced Finding -> Claim -> Evidence -> Source. "
             "Do not invent URLs or source metadata.\n\n"
-            f"Role: {harness.role}\n"
+            f"Role: {workspace.role}\n"
             f"Expected output: {expected_output}\n"
-            f"Task:\n{harness.task.objective}\n\n"
-            f"Working Context:\n{render_working_context(harness.working_context)}\n\n"
-            f"Relevant subgraph:\n{format_relevant_subgraph(harness.relevant_subgraph)}\n\n"
+            f"Task:\n{workspace.task.objective}\n\n"
+            f"Working Context:\n{render_working_context(workspace.working_context)}\n\n"
+            f"Relevant subgraph:\n{format_relevant_subgraph(workspace.relevant_subgraph)}\n\n"
             f"Recent analysis only:\n{recent_text}\n\n"
             "Return the concise role report."
         )
         model_name = str(
-            getattr(harness.configurable, "research_graph_role_report_model", None)
-            or getattr(harness.configurable, "compression_model", "")
+            getattr(workspace.configurable, "research_graph_role_report_model", None)
+            or getattr(workspace.configurable, "compression_model", "")
         )
         max_tokens = int(
-            getattr(harness.configurable, "research_graph_role_report_max_tokens", 0)
-            or getattr(harness.configurable, "compression_model_max_tokens", 8192)
+            getattr(workspace.configurable, "research_graph_role_report_max_tokens", 0)
+            or getattr(workspace.configurable, "compression_model_max_tokens", 8192)
         )
         response = await observe_model_ainvoke(
-            harness.model_factory(model_name, max_tokens),
+            workspace.model_factory(model_name, max_tokens),
             [HumanMessage(content=prompt)],
             observer_model=model_name,
             observer_component="graph_role_report",
         )
         budget = budget_from_model_response(response)
-        if harness.transcript is not None:
-            harness.transcript.append(
+        if workspace.transcript is not None:
+            workspace.transcript.append(
                 "role_report",
-                {"role": harness.role, "graph_node_ids": sorted(harness.relevant_subgraph.node_ids)},
+                {"role": workspace.role, "graph_node_ids": sorted(workspace.relevant_subgraph.node_ids)},
             )
         return WorkspaceFinalResult(
             report=str(getattr(response, "content", response) or ""),
             raw_notes=[],
             budget_usage=budget,
-            metrics=harness.metrics.as_dict(),
+            metrics=workspace.metrics.as_dict(),
         )
 
 
@@ -207,18 +207,18 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
 
     async def after_tool_batch(
         self,
-        harness: ResearchWorkspace,
+        workspace: ResearchWorkspace,
         messages: list[Any],
         batch: list[ToolBatchItem],
     ) -> WorkspaceHookResult:
         """Persist and compact one successful producer tool batch."""
         if not batch:
             return WorkspaceHookResult(messages=list(messages))
-        if harness.transcript is not None:
-            harness.transcript.append(
+        if workspace.transcript is not None:
+            workspace.transcript.append(
                 "raw_tool_batch",
                 {
-                    "role": harness.role,
+                    "role": workspace.role,
                     "items": [
                         {
                             "tool_name": item.tool_name,
@@ -238,100 +238,100 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
             if not item.success:
                 continue
             source_documents = build_source_documents_from_raw_result(
-                run_id=harness.run_id,
-                role=harness.role,
-                research_round=harness.scope.research_round,
-                task_id=harness.scope.task_id,
+                run_id=workspace.run_id,
+                role=workspace.role,
+                research_round=workspace.scope.research_round,
+                task_id=workspace.scope.task_id,
                 tool_name=item.tool_name,
                 tool_call_id=item.tool_call_id,
                 args=item.args,
                 observation=item.observation,
             )
             for document in source_documents:
-                harness.metrics.add("raw_tool_tokens_before_compact", estimate_tokens(document.content), quality="estimated")
+                workspace.metrics.add("raw_tool_tokens_before_compact", estimate_tokens(document.content), quality="estimated")
                 source_key = document.url or document.source_id
                 if source_key in seen_source_versions and seen_source_versions[source_key] == document.content_hash:
                     skipped_by_call.setdefault(item.tool_call_id, []).append(document.source_id)
-                    harness.metrics.add("duplicate_source_skipped")
+                    workspace.metrics.add("duplicate_source_skipped")
                     if document.url:
-                        harness.metrics.add("cache_hit_url")
+                        workspace.metrics.add("cache_hit_url")
                     continue
                 seen_source_versions[source_key] = document.content_hash
                 if document.url:
-                    if harness.store is not None and harness.store.source_is_persisted(harness.scope, document):
+                    if workspace.store is not None and workspace.store.source_is_persisted(workspace.scope, document):
                         skipped_by_call.setdefault(item.tool_call_id, []).append(document.source_id)
-                        harness.metrics.add("cache_hit_url")
-                        harness.metrics.add("duplicate_source_skipped")
+                        workspace.metrics.add("cache_hit_url")
+                        workspace.metrics.add("duplicate_source_skipped")
                         continue
-                    harness.metrics.add("cache_miss_url")
+                    workspace.metrics.add("cache_miss_url")
                 documents.append((item, document))
 
         if not documents:
             # Exact duplicates can still be compacted; failures and empty tools
             # have no receipt and therefore remain raw.
             for call_id, source_ids in skipped_by_call.items():
-                harness.receipts[call_id] = WriteReceipt(
-                    run_id=harness.run_id,
-                    role=harness.role,
-                    research_round=harness.scope.research_round,
-                    task_id=harness.scope.task_id,
+                workspace.receipts[call_id] = WriteReceipt(
+                    run_id=workspace.run_id,
+                    role=workspace.role,
+                    research_round=workspace.scope.research_round,
+                    task_id=workspace.scope.task_id,
                     source_ids=source_ids,
                     duplicate_source_ids=source_ids,
                 )
             compacted = micro_compact_messages(
                 messages,
-                harness.receipts,
-                recent_raw_steps=int(getattr(harness.configurable, "recent_raw_steps", 3)),
+                workspace.receipts,
+                recent_raw_steps=int(getattr(workspace.configurable, "recent_raw_steps", 3)),
             )
-            harness.metrics.add("micro_compact_count", len(compacted.compacted_tool_call_ids))
-            harness.metrics.add("micro_compact_tokens_removed", compacted.tokens_removed)
+            workspace.metrics.add("micro_compact_count", len(compacted.compacted_tool_call_ids))
+            workspace.metrics.add("micro_compact_tokens_removed", compacted.tokens_removed)
             return WorkspaceHookResult(
                 messages=compacted.messages,
-                metrics=harness.metrics.as_dict(),
+                metrics=workspace.metrics.as_dict(),
             )
 
         graph_model_name = str(
-            getattr(harness.configurable, "research_graph_extraction_model", None)
-            or getattr(harness.configurable, "research_model", "")
+            getattr(workspace.configurable, "research_graph_extraction_model", None)
+            or getattr(workspace.configurable, "research_model", "")
         )
-        graph_model = harness.model_factory(
+        graph_model = workspace.model_factory(
             graph_model_name,
-            int(getattr(harness.configurable, "research_graph_extraction_model_max_tokens", 4096)),
+            int(getattr(workspace.configurable, "research_graph_extraction_model_max_tokens", 4096)),
         )
         extractor = GraphExtractor(
             model=graph_model,
             model_name=graph_model_name,
-            max_tokens=int(getattr(harness.configurable, "research_graph_extraction_model_max_tokens", 4096)),
-            max_retries=int(getattr(harness.configurable, "max_structured_output_retries", 3)),
-            batch_token_limit=int(getattr(harness.configurable, "research_graph_extraction_batch_tokens", 12_000)),
+            max_tokens=int(getattr(workspace.configurable, "research_graph_extraction_model_max_tokens", 4096)),
+            max_retries=int(getattr(workspace.configurable, "max_structured_output_retries", 3)),
+            batch_token_limit=int(getattr(workspace.configurable, "research_graph_extraction_batch_tokens", 12_000)),
         )
         source_only_documents = [document for _, document in documents]
         try:
-            extraction = await extractor.extract(source_only_documents, scope=harness.scope)
+            extraction = await extractor.extract(source_only_documents, scope=workspace.scope)
             receipts_by_call: dict[str, WriteReceipt] = {}
             combined_deltas = []
             for batch_result in extraction.batches:
                 delta = batch_result.delta
-                if harness.store is None:
+                if workspace.store is None:
                     raise RuntimeError("Producer strategy has no Research Graph store.")
                 write_started_at = time.perf_counter()
-                receipt = harness.store.write_delta(delta)
-                harness.metrics.add(
+                receipt = workspace.store.write_delta(delta)
+                workspace.metrics.add(
                     "graph_write_latency",
                     (time.perf_counter() - write_started_at) * 1000,
                     quality="exact",
                 )
                 combined_deltas.append(delta)
-                harness.metrics.add("graph_nodes_written", len(receipt.node_ids))
-                harness.metrics.add("graph_edges_written", len(receipt.edge_ids))
+                workspace.metrics.add("graph_nodes_written", len(receipt.node_ids))
+                workspace.metrics.add("graph_edges_written", len(receipt.edge_ids))
                 input_tokens = batch_result.input_tokens
                 output_tokens = batch_result.output_tokens
-                harness.metrics.add(
+                workspace.metrics.add(
                     "graph_extraction_input_tokens",
                     input_tokens if input_tokens else estimate_tokens(_render_documents(source_only_documents)),
                     quality="exact" if input_tokens else "estimated",
                 )
-                harness.metrics.add(
+                workspace.metrics.add(
                     "graph_extraction_output_tokens",
                     output_tokens if output_tokens else estimate_tokens(json.dumps(delta.model_dump(mode="json"), ensure_ascii=False)),
                     quality="exact" if output_tokens else "estimated",
@@ -342,79 +342,79 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                             receipts_by_call.get(item.tool_call_id),
                             receipt,
                         )
-            harness.metrics.add("graph_extraction_calls", len(extraction.batches))
+            workspace.metrics.add("graph_extraction_calls", len(extraction.batches))
             for call_id, source_ids in skipped_by_call.items():
                 receipts_by_call[call_id] = _merge_receipts(
                     receipts_by_call.get(call_id),
                     WriteReceipt(
-                        run_id=harness.run_id,
-                        role=harness.role,
-                        research_round=harness.scope.research_round,
-                        task_id=harness.scope.task_id,
+                        run_id=workspace.run_id,
+                        role=workspace.role,
+                        research_round=workspace.scope.research_round,
+                        task_id=workspace.scope.task_id,
                         source_ids=source_ids,
                         duplicate_source_ids=source_ids,
                     ),
                 )
-            harness.receipts.update(receipts_by_call)
+            workspace.receipts.update(receipts_by_call)
             if combined_deltas:
-                if harness.store is None:
+                if workspace.store is None:
                     raise RuntimeError("Producer strategy has no Research Graph store.")
-                harness.context_for(query_suffix="new research delta")
+                workspace.context_for(query_suffix="new research delta")
                 context_model_name = str(
-                    getattr(harness.configurable, "context_manager_model", None)
-                    or getattr(harness.configurable, "research_model", "")
+                    getattr(workspace.configurable, "context_manager_model", None)
+                    or getattr(workspace.configurable, "research_model", "")
                 )
                 context_manager = ContextManager(
-                    model=harness.model_factory(
+                    model=workspace.model_factory(
                         context_model_name,
-                        int(getattr(harness.configurable, "context_manager_model_max_tokens", 2048)),
+                        int(getattr(workspace.configurable, "context_manager_model_max_tokens", 2048)),
                     ),
                     model_name=context_model_name,
-                    max_retries=int(getattr(harness.configurable, "max_structured_output_retries", 3)),
-                    max_active_findings=int(getattr(harness.configurable, "working_context_max_active_findings", 8)),
-                    max_active_claims=int(getattr(harness.configurable, "working_context_max_active_claims", 16)),
-                    max_active_evidence=int(getattr(harness.configurable, "working_context_max_active_evidence", 24)),
-                    max_open_gaps=int(getattr(harness.configurable, "working_context_max_open_gaps", 8)),
-                    max_conflicts=int(getattr(harness.configurable, "working_context_max_conflicts", 8)),
+                    max_retries=int(getattr(workspace.configurable, "max_structured_output_retries", 3)),
+                    max_active_findings=int(getattr(workspace.configurable, "working_context_max_active_findings", 8)),
+                    max_active_claims=int(getattr(workspace.configurable, "working_context_max_active_claims", 16)),
+                    max_active_evidence=int(getattr(workspace.configurable, "working_context_max_active_evidence", 24)),
+                    max_open_gaps=int(getattr(workspace.configurable, "working_context_max_open_gaps", 8)),
+                    max_conflicts=int(getattr(workspace.configurable, "working_context_max_conflicts", 8)),
                 )
                 context_result = await context_manager.update(
-                    task=harness.task,
-                    current=harness.working_context,
-                    relevant_subgraph=harness.relevant_subgraph,
+                    task=workspace.task,
+                    current=workspace.working_context,
+                    relevant_subgraph=workspace.relevant_subgraph,
                     research_delta=combined_deltas,
                 )
-                harness.working_context = context_result.context
-                harness.metrics.add("context_manager_calls")
+                workspace.working_context = context_result.context
+                workspace.metrics.add("context_manager_calls")
                 context_input_tokens = estimate_tokens(
                     json.dumps(
                         {
-                            "task": harness.task.objective,
-                            "context": harness.working_context.model_dump(mode="json"),
-                            "subgraph": harness.relevant_subgraph.model_dump(mode="json"),
+                            "task": workspace.task.objective,
+                            "context": workspace.working_context.model_dump(mode="json"),
+                            "subgraph": workspace.relevant_subgraph.model_dump(mode="json"),
                         },
                         ensure_ascii=False,
                     )
                 )
-                harness.metrics.add("context_manager_input_tokens", context_input_tokens, quality="estimated")
+                workspace.metrics.add("context_manager_input_tokens", context_input_tokens, quality="estimated")
                 output_tokens = context_result.budget_usage.get("output_tokens")
-                harness.metrics.add(
+                workspace.metrics.add(
                     "context_manager_output_tokens",
                     output_tokens if isinstance(output_tokens, int) and output_tokens > 0 else estimate_tokens(context_result.delta.model_dump_json()),
                     quality="exact" if isinstance(output_tokens, int) and output_tokens > 0 else "estimated",
                 )
-                harness.metrics.set(
+                workspace.metrics.set(
                     "working_context_tokens",
-                    estimate_tokens(render_working_context(harness.working_context)),
+                    estimate_tokens(render_working_context(workspace.working_context)),
                     quality="estimated",
                 )
             compacted = micro_compact_messages(
                 messages,
-                harness.receipts,
-                recent_raw_steps=int(getattr(harness.configurable, "recent_raw_steps", 3)),
+                workspace.receipts,
+                recent_raw_steps=int(getattr(workspace.configurable, "recent_raw_steps", 3)),
             )
-            harness.metrics.add("micro_compact_count", len(compacted.compacted_tool_call_ids))
-            harness.metrics.add("micro_compact_tokens_removed", compacted.tokens_removed)
-            harness.metrics.add(
+            workspace.metrics.add("micro_compact_count", len(compacted.compacted_tool_call_ids))
+            workspace.metrics.add("micro_compact_tokens_removed", compacted.tokens_removed)
+            workspace.metrics.add(
                 "raw_tool_tokens_after_compact",
                 context_token_estimate(compacted.messages),
                 quality="estimated",
@@ -426,19 +426,19 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                     extraction.budget_usage,
                     context_result.budget_usage if combined_deltas else {},
                 ),
-                metrics=harness.metrics.as_dict(),
+                metrics=workspace.metrics.as_dict(),
             )
         except Exception:
             # Preserve the raw messages when extraction, writing, or context
             # update fails.  A receipt is only issued after the entire pipeline
             # succeeds, so retry/debug tooling still has the original material.
-            LOGGER.exception("Research Graph producer hook failed for role %s.", harness.role)
-            if harness.transcript is not None:
-                harness.transcript.append("graph_hook_failure", {"role": harness.role})
+            LOGGER.exception("Research Graph producer hook failed for role %s.", workspace.role)
+            if workspace.transcript is not None:
+                workspace.transcript.append("graph_hook_failure", {"role": workspace.role})
             return WorkspaceHookResult(
                 messages=list(messages),
                 succeeded=False,
-                metrics=harness.metrics.as_dict(),
+                metrics=workspace.metrics.as_dict(),
             )
 
 
@@ -450,16 +450,16 @@ class ResearchGraphConsumerStrategy(_ResearchGraphStrategyBase):
 
     async def after_tool_batch(
         self,
-        harness: ResearchWorkspace,
+        workspace: ResearchWorkspace,
         messages: list[Any],
         batch: list[ToolBatchItem],
     ) -> WorkspaceHookResult:
         """Refresh scoped graph retrieval while preserving consumer raw results."""
-        if harness.transcript is not None and batch:
-            harness.transcript.append(
+        if workspace.transcript is not None and batch:
+            workspace.transcript.append(
                 "consumer_tool_batch",
                 {
-                    "role": harness.role,
+                    "role": workspace.role,
                     "items": [
                         {
                             "tool_name": item.tool_name,
@@ -472,8 +472,8 @@ class ResearchGraphConsumerStrategy(_ResearchGraphStrategyBase):
                     ],
                 },
             )
-        if harness.store is not None:
-            harness.context_for(query_suffix="consumer analysis")
+        if workspace.store is not None:
+            workspace.context_for(query_suffix="consumer analysis")
         # Consumer tool outputs are not source evidence by default.  Keep them
         # raw so a future consumer-specific evidence policy cannot lose data.
         # Under context pressure, incremental Rolling Compact can still replace
@@ -481,7 +481,7 @@ class ResearchGraphConsumerStrategy(_ResearchGraphStrategyBase):
         bounded_messages = list(messages)
         return WorkspaceHookResult(
             messages=bounded_messages,
-            metrics=harness.metrics.as_dict(),
+            metrics=workspace.metrics.as_dict(),
         )
 
 
@@ -490,7 +490,7 @@ def create_context_strategy(
     *,
     graph_enabled: bool,
 ) -> ContextStrategy:
-    """Resolve the strategy once at harness initialization."""
+    """Resolve the strategy once at workspace initialization."""
     normalized = str(strategy_name or "standard").strip().lower()
     if not graph_enabled or normalized == "standard":
         return StandardContextStrategy()

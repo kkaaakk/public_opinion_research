@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.configuration import Configuration
 from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
 from open_deep_research.research_graph import (
@@ -272,7 +273,7 @@ def test_producer_hook_persists_then_compacts_raw_tool_result(tmp_path) -> None:
         recent_raw_steps=0,
     )
     store = InMemoryResearchGraphStore()
-    harness = ResearchWorkspace(
+    workspace = ResearchWorkspace(
         strategy=ResearchGraphProducerStrategy(),
         research_state={"working_contexts": {}},
         role="public_signal",
@@ -301,7 +302,7 @@ def test_producer_hook_persists_then_compacts_raw_tool_result(tmp_path) -> None:
         ToolMessage(content=observation, name="web_search", tool_call_id="call-1"),
     ]
     result = __import__("asyncio").run(
-        harness.ingest(
+        workspace.ingest(
             messages,
             [ToolBatchItem("web_search", "call-1", tool_call["args"], observation, True)],
         )
@@ -329,8 +330,6 @@ def test_graph_report_updates_replace_same_role_but_legacy_mapping_still_appends
 
 def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tmp_path) -> None:
     import asyncio
-
-    import open_deep_research.deep_researcher as deep_researcher_module
 
     class FixtureTool:
         name = "web_search"
@@ -401,27 +400,27 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
             return AIMessage(content="done")
 
     fixture_model = AgentFixtureModel()
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", fixture_model)
+    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", fixture_model)
     monkeypatch.setattr(
-        deep_researcher_module,
+        business_agent_module,
         "_business_agent_tools",
-        lambda _config, _role: asyncio.sleep(0, result=[FixtureTool()]),
+        lambda _config, _role, _spec=None: asyncio.sleep(0, result=[FixtureTool()]),
     )
 
-    async def fail_legacy_compression(_state, _config):
+    async def fail_legacy_compression(*_args, **_kwargs):
         raise AssertionError("Graph Producer must not invoke compress_research")
 
-    monkeypatch.setattr(deep_researcher_module, "compress_research", fail_legacy_compression)
+    monkeypatch.setattr(business_agent_module, "_compress_research", fail_legacy_compression)
     result = asyncio.run(
-        deep_researcher_module._run_public_opinion_agent(
-            {
+        business_agent_module.run_business_agent(
+            state={
                 "workflow": {"brief": "Investigate brake safety.", "round": 1,
                              "pending_tasks": [], "completed_tasks": []},
                 "research": {"run_id": "run-graph-agent", "working_contexts": {}},
                 "agents": {},
                 "runtime": {"budget": {}, "metrics": {}},
             },
-            {
+            config={
                 "configurable": {
                     "research_graph_enabled": True,
                     "research_graph_backend": "memory",
@@ -431,7 +430,7 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
                     "thread_id": "run-graph-agent",
                 }
             },
-            "public_signal",
+            role="public_signal",
         )
     )
     assert result["agents"]["public_signal"]["report"]["type"] == "override"

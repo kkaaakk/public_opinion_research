@@ -10,9 +10,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
-    SystemMessage,
     ToolMessage,
-    filter_messages,
     get_buffer_string,
 )
 from langchain_core.runnables import RunnableConfig
@@ -30,24 +28,18 @@ from open_deep_research.budget import (
     merge_budget_usage,
     remaining_input_tokens,
     remaining_output_tokens,
-    start_budget_capture,
-    stop_budget_capture,
     truncate_text_to_token_budget,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
 from open_deep_research.memory.writer import persist_conversation_memory
 from open_deep_research.observability import (
     ObservedGraph,
     ObserverRunLifecycle,
     observe_graph_node,
     observe_model_ainvoke,
-    observe_tool_ainvoke,
 )
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
-    compress_research_simple_human_message,
-    compress_research_system_prompt,
     final_section_writer_instructions,
     public_opinion_final_report_generation_prompt,
     report_planner_instructions,
@@ -55,25 +47,15 @@ from open_deep_research.prompts import (
     section_writer_from_role_reports_prompt,
     transform_messages_into_research_topic_prompt,
 )
-from open_deep_research.public_opinion_agents import (
-    get_public_opinion_agent_spec,
-)
 from open_deep_research.rag import query_images
 from open_deep_research.research_graph import (
-    ResearchWorkspace,
-    TaskDescriptor,
     WorkingContext,
     build_research_review_context,
-    create_context_strategy,
     format_relevant_subgraph,
     render_working_context,
+    retrieve_research_context,
 )
-from open_deep_research.research_graph.schema import stable_id
-from open_deep_research.runtime import AgentRuntime
-from open_deep_research.social_media.tools import (
-    SOCIAL_MEDIA_TOOL_NAMES,
-    get_social_media_tools,
-)
+from open_deep_research.runtime import format_private_memory, run_business_agent
 from open_deep_research.state import (
     AgentInputState,
     AgentState,
@@ -87,15 +69,10 @@ from open_deep_research.state import (
     Sections,
 )
 from open_deep_research.utils import (
-    get_all_tools,
     get_api_key_for_model,
     get_model_token_limit,
-    get_raw_search_tool,
-    get_research_tool_prompt,
     get_today_str,
-    has_external_research_tool,
     is_token_limit_exceeded,
-    remove_up_to_last_ai_message,
 )
 
 # Initialize a configurable model that we will use throughout the agent
@@ -171,23 +148,6 @@ def _tool_name(available_tool) -> str:
         return available_tool.get("name") or "web_search"
     return getattr(available_tool, "name", "")
 
-
-def _role_enabled(configurable: Configuration, role: str) -> bool:
-    """Return whether a public-opinion role should run for this configuration."""
-    enabled_agents = configurable.enabled_business_agents or []
-    return role in {str(agent).strip().lower() for agent in enabled_agents}
-
-
-_PUBLIC_OPINION_UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
-    "public_signal": (),
-    "internal_knowledge": (),
-    "risk_assessment": ("public_signal", "internal_knowledge"),
-    "response_strategy": (
-        "public_signal",
-        "internal_knowledge",
-        "risk_assessment",
-    ),
-}
 
 _RESEARCH_TASK_ROLES = ("public_signal", "internal_knowledge")
 
@@ -269,44 +229,6 @@ def _resolve_research_run_id(
     # A new root invocation without a LangGraph thread id still gets a unique
     # scope.  research_phase writes it into state before parallel Sends begin.
     return f"run_{uuid.uuid4().hex}"
-
-
-def _graph_task_descriptor(
-    state: PublicOpinionState,
-    role: str,
-    run_id: str,
-) -> TaskDescriptor:
-    """Build a role-neutral task descriptor for the graph harness."""
-    tasks = [
-        task
-        for task in _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
-        if task.target_role == role
-    ]
-    if tasks:
-        task = tasks[0]
-        return TaskDescriptor(
-            task_id=task.task_id,
-            objective=task.objective,
-            evidence_needed=task.evidence_needed,
-            reason=task.reason,
-        )
-    return TaskDescriptor(
-        task_id=stable_id("TASK", run_id, role, _workflow(state).get("round", 1)),
-        objective=str(_workflow(state).get("brief", "") or ""),
-        evidence_needed="Evidence required by the role contract and current research brief.",
-        reason="Initial role research task.",
-    )
-
-
-def _effective_context_strategy(
-    configurable: Configuration,
-    role: str,
-) -> str:
-    """Resolve the one strategy used by all harness/tool lifecycle decisions."""
-    configured = configurable.context_strategy.strip().lower()
-    if configured != "auto":
-        return configured
-    return get_public_opinion_agent_spec(role).context_strategy
 
 
 def _enabled_research_roles(configurable: Configuration) -> set[str]:
@@ -391,169 +313,9 @@ def _role_context(
 
 def _agent_private_memory_context(agent_memories: dict[str, list[dict[str, Any]]], role: str) -> str:
     """Format one agent's private short-term memory for prompt injection."""
-    return AgentRuntime.format_private_memory(
+    return format_private_memory(
         {"memory": list((agent_memories or {}).get(role, []) or [])}
     )
-
-
-def _build_public_opinion_agent_assignment(
-    state: PublicOpinionState,
-    role: str,
-    config: RunnableConfig | Configuration | None = None,
-) -> str:
-    """Build an initial or gap-focused assignment.
-
-    Standard mode keeps the historical full role-report contract for backwards
-    compatibility.  Research Graph mode keeps the assignment bounded and lets
-    the harness inject only the relevant graph subgraph.
-    """
-    agent_spec = get_public_opinion_agent_spec(role)
-    if isinstance(config, Configuration):
-        graph_enabled = config.research_graph_enabled
-    elif isinstance(config, Mapping):
-        graph_enabled = Configuration.from_runnable_config(config).research_graph_enabled
-    else:
-        graph_enabled = False
-    if graph_enabled:
-        upstream_context = (
-            "Current-run upstream evidence is stored in the scoped Research Graph. "
-            "The harness will retrieve only the relevant subgraph; do not reconstruct "
-            "or request complete upstream role reports."
-        )
-    else:
-        upstream_context = _role_context(
-            _role_reports(state),
-            _PUBLIC_OPINION_UPSTREAM_ROLES.get(role),
-        )
-    review = _coerce_research_review(_workflow(state).get("review"))
-    review_context = review.model_dump_json(indent=2) if review else "No research review yet."
-    assignment = (
-        f"Overall research brief:\n{_workflow(state).get('brief', '')}\n\n"
-        f"Upstream research context:\n{upstream_context}\n\n"
-        f"Latest research review:\n{review_context}\n\n"
-        f"Input contract:\n{chr(10).join(f'- {item}' for item in agent_spec.input_contract)}\n\n"
-        f"Your role-specific objective:\n{agent_spec.expected_output}"
-    )
-    if not _is_followup(state):
-        return assignment
-
-    followup_tasks = [
-        task
-        for task in _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
-        if task.target_role == role
-    ]
-    if not followup_tasks:
-        return assignment
-
-    task_lines = []
-    for index, task in enumerate(followup_tasks, start=1):
-        task_lines.append(
-            f"{index}. {task.objective}\n"
-            f"   Evidence needed: {task.evidence_needed}\n"
-            f"   Why it matters: {task.reason}\n"
-            f"   Priority: {task.priority}\n"
-            f"   Task ID: {task.task_id}"
-        )
-    return (
-        f"{assignment}\n\n"
-        f"Current mode: follow-up research round {_workflow(state).get('round', 2)}.\n"
-        "Do not repeat the first-round comprehensive survey. Focus only on these unresolved, "
-        "decision-relevant research gaps and use the existing scoped research context:\n"
-        f"{chr(10).join(task_lines)}"
-    )
-
-
-def _role_tool_prompt(configurable: Configuration, role: str) -> str:
-    """Describe the role-specific tool whitelist for the researcher prompt."""
-    allowed_domains = get_public_opinion_agent_spec(role).allowed_domains
-    allowed_tools = []
-    if "core" in allowed_domains:
-        allowed_tools.extend(["think_tool", "ResearchComplete"])
-    if "web_search" in allowed_domains:
-        allowed_tools.append("web_search")
-    if "rag" in allowed_domains:
-        allowed_tools.append("rag_search")
-    if "social_media" in allowed_domains:
-        allowed_tools.extend(sorted(SOCIAL_MEDIA_TOOL_NAMES))
-    return (
-        f"{get_research_tool_prompt(configurable)}\n\n"
-        f"Role-specific allowed domains: {', '.join(sorted(allowed_domains))}. "
-        "Role-specific tool whitelist: "
-        f"{', '.join(allowed_tools)}. "
-        "Do not attempt to use tools outside this whitelist."
-    )
-
-
-async def _business_agent_tools(config: RunnableConfig, role: str):
-    """Return the role-specific tool whitelist for an explicit business agent."""
-    agent_spec = get_public_opinion_agent_spec(role)
-    allowed_domains = agent_spec.allowed_domains
-    all_tools = await get_all_tools(config)
-    configurable = Configuration.from_runnable_config(config)
-    if (
-        configurable.research_graph_enabled
-        and _effective_context_strategy(configurable, role) == "research_graph_producer"
-    ):
-        # The standard web_search contract remains unchanged.  Producer
-        # strategies explicitly swap only the Tavily implementation for a raw
-        # source-bound envelope so per-URL summarization does not fan out.
-        raw_search_tools = await get_raw_search_tool(configurable.search_api)
-        raw_names = {_tool_name(tool) for tool in raw_search_tools}
-        all_tools = [
-            available_tool
-            for available_tool in all_tools
-            if _tool_name(available_tool) not in raw_names
-        ]
-        all_tools.extend(raw_search_tools)
-    if "social_media" in allowed_domains:
-        all_tools.extend(tag_tools_with_domain(get_social_media_tools(), "social_media"))
-
-    tools_before = len(all_tools)
-    filtered_tools = []
-    rejected_tools = []
-
-    for available_tool in all_tools:
-        tool_domain = get_tool_domain(available_tool)
-        if tool_domain in allowed_domains:
-            filtered_tools.append(available_tool)
-        else:
-            rejected_tools.append(
-                (_tool_name(available_tool), tool_domain or "unclassified")
-            )
-
-    LOGGER.debug(
-        "Public-opinion agent %s: allowed_domains=%s tools_before=%d "
-        "tools_after=%d rejected=%s",
-        role,
-        sorted(allowed_domains),
-        tools_before,
-        len(filtered_tools),
-        rejected_tools,
-    )
-
-    return filtered_tools
-
-
-async def execute_tool_safely(tool, args, config, *, tool_call_id: str | None = None):
-    """Safely execute a tool with error handling."""
-    capture_token = start_budget_capture()
-    try:
-        observation = await observe_tool_ainvoke(
-            tool,
-            args,
-            config,
-            tool_call_id=tool_call_id,
-        )
-        captured_budget = stop_budget_capture(capture_token)
-        return observation, captured_budget, True
-    except asyncio.CancelledError:
-        stop_budget_capture(capture_token)
-        raise
-    except Exception as e:
-        captured_budget = stop_budget_capture(capture_token)
-        error_result = f"Error executing tool: {str(e)}"
-        LOGGER.exception("Unexpected tool execution failure for '%s'.", _tool_name(tool))
-        return error_result, captured_budget, False
 
 
 def _has_query_image_context(messages) -> bool:
@@ -1053,9 +815,7 @@ def _graph_section_evidence(
         )
         if value
     )
-    subgraph = ResearchWorkspace.retrieve(
-        configurable, run_id=run_id, query=query
-    )
+    subgraph = retrieve_research_context(configurable, run_id=run_id, query=query)
     return format_relevant_subgraph(subgraph)
 
 
@@ -1073,9 +833,7 @@ def _graph_report_context(
         for value in (_workflow(state).get("brief", ""), query_suffix)
         if value
     )
-    subgraph = ResearchWorkspace.retrieve(
-        configurable, run_id=run_id, query=query
-    )
+    subgraph = retrieve_research_context(configurable, run_id=run_id, query=query)
     contexts = _research(state).get("working_contexts", {}) or {}
     context_text = []
     for role, value in contexts.items():
@@ -1398,250 +1156,6 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
     return await _fallback_report_generation(state, config)
 
 
-async def compress_research(state: dict, config: RunnableConfig):
-    """Compress and synthesize research findings into a concise, structured summary.
-    
-    This function takes all the research findings, tool outputs, and AI messages from
-    a researcher's work and distills them into a clean, comprehensive summary while
-    preserving all important information and findings.
-    
-    Args:
-        state: Current researcher state with accumulated research messages
-        config: Runtime configuration with compression model settings
-        
-    Returns:
-        Dictionary containing compressed research summary and raw notes
-    """
-    # Step 1: Configure the compression model
-    configurable = Configuration.from_runnable_config(config)
-    budget_usage = _runtime(state).get("budget", {})
-    if not can_spend_model_call(
-        configurable,
-        budget_usage,
-        reserve_final_report_call=True,
-    ):
-        researcher_messages = state.get("researcher_messages", [])
-        raw_notes_content = "\n".join([
-            str(message.content) 
-            for message in filter_messages(researcher_messages, include_types=["tool", "ai"])
-        ])
-        return {
-            "compressed_research": raw_notes_content or "Budget guard skipped research compression before any research notes were collected.",
-            "raw_notes": [raw_notes_content],
-            "budget_usage": budget_usage_with_reason(
-                "Skipped research compression to preserve the final report model call."
-            ),
-        }
-
-    synthesizer_model = configurable_model.with_config({
-        "model": configurable.compression_model,
-        "max_tokens": configurable.compression_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.compression_model, config),
-        "tags": ["langsmith:nostream"]
-    })
-    
-    # Step 2: Prepare messages for compression
-    researcher_messages = state.get("researcher_messages", [])
-    
-    # Add instruction to switch from research mode to compression mode
-    researcher_messages.append(HumanMessage(content=compress_research_simple_human_message))
-    
-    # Step 3: Attempt compression with retry logic for token limit issues
-    synthesis_attempts = 0
-    max_attempts = 3
-    
-    while synthesis_attempts < max_attempts:
-        try:
-            # Create system prompt focused on compression task
-            compression_prompt = compress_research_system_prompt.format(date=get_today_str())
-            messages = [SystemMessage(content=compression_prompt)] + researcher_messages
-            
-            # Execute compression
-            response = await observe_model_ainvoke(
-                synthesizer_model,
-                messages,
-                observer_model=configurable.compression_model,
-            )
-            budget_update = budget_from_model_response(response)
-            
-            # Extract raw notes from all tool and AI messages
-            raw_notes_content = "\n".join([
-                str(message.content) 
-                for message in filter_messages(researcher_messages, include_types=["tool", "ai"])
-            ])
-            
-            # Return successful compression result
-            return {
-                "compressed_research": str(response.content),
-                "raw_notes": [raw_notes_content],
-                "budget_usage": budget_update,
-            }
-            
-        except Exception as exc:
-            synthesis_attempts += 1
-            
-            # Handle token limit exceeded by removing older messages
-            if is_token_limit_exceeded(exc, configurable.compression_model):
-                researcher_messages = remove_up_to_last_ai_message(researcher_messages)
-                continue
-            
-            LOGGER.exception("Unexpected research compression failure.")
-            raise
-    
-    # Step 4: Return error result if all attempts failed
-    raw_notes_content = "\n".join([
-        str(message.content) 
-        for message in filter_messages(researcher_messages, include_types=["tool", "ai"])
-    ])
-    
-    return {
-        "compressed_research": "Error synthesizing research report: Maximum retries exceeded",
-        "raw_notes": [raw_notes_content],
-        "budget_usage": budget_usage_with_reason(
-            "Research compression failed after maximum retries."
-        ),
-    }
-
-async def _run_public_opinion_agent(
-    state: PublicOpinionState,
-    config: RunnableConfig,
-    role: str,
-) -> dict:
-    """Run one explicit public-opinion business agent with a role-specific toolset."""
-    configurable = Configuration.from_runnable_config(config)
-    if not _role_enabled(configurable, role):
-        return {}
-
-    agent_spec = get_public_opinion_agent_spec(role)
-    budget_usage = _runtime(state).get("budget", {})
-    research_round = max(1, int(_workflow(state).get("round", 1) or 1))
-    execution_mode = "followup" if _is_followup(state) else "initial"
-    assignment = _build_public_opinion_agent_assignment(state, role, config)
-    strategy_name = _effective_context_strategy(configurable, role)
-    context_strategy = create_context_strategy(
-        strategy_name,
-        graph_enabled=configurable.research_graph_enabled,
-    )
-    run_id = _resolve_research_run_id(state, config)
-    task = _graph_task_descriptor(state, role, run_id)
-
-    tools = await _business_agent_tools(config, role)
-    if not has_external_research_tool(tools):
-        spec = get_public_opinion_agent_spec(role)
-        required = sorted(spec.allowed_domains - {"core"})
-        raise ValueError(
-            f"Public Opinion agent '{role}' ({spec.display_name}) requires "
-            f"tool domains: {', '.join(required)}. "
-            f"Missing tools — ensure RAG is enabled (rag_enabled=true) "
-            f"and/or web search is configured (search_api=tavily)."
-        )
-
-    research_model_config = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
-        "tags": ["langsmith:nostream"],
-    }
-    agent_prompt = agent_spec.format_system_prompt(
-        retrieval_tool_prompt=_role_tool_prompt(configurable, role),
-        mcp_prompt=configurable.mcp_prompt or "",
-        date=get_today_str(),
-        organization_context=_business_context(configurable),
-    )
-    agent_model = (
-        configurable_model
-        .bind_tools(tools)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(research_model_config)
-    )
-
-    def model_factory(model_name: str, max_tokens: int | None) -> Any:
-        model_config: dict[str, Any] = {
-            "model": model_name,
-            "api_key": get_api_key_for_model(model_name, config),
-            "tags": ["langsmith:nostream"],
-        }
-        if max_tokens is not None:
-            model_config["max_tokens"] = max_tokens
-        return configurable_model.with_config(model_config)
-
-    workspace = ResearchWorkspace(
-        strategy=context_strategy,
-        research_state=_research(state),
-        role=role,
-        configurable=configurable,
-        model_factory=model_factory,
-        task=task,
-        run_id=run_id,
-        research_round=research_round,
-    )
-
-    async def compress_report(
-        messages: list[Any],
-        task_text: str,
-        output_contract: str,
-        cumulative_budget: dict[str, Any],
-    ) -> tuple[str, list[str], dict[str, Any]]:
-        compressed = await compress_research(
-            {
-                "researcher_messages": messages,
-                "research_topic": task_text,
-                "agent_role": role,
-                "expected_output": output_contract,
-                "budget_usage": cumulative_budget,
-            },
-            config,
-        )
-        return (
-            str(compressed.get("compressed_research", "")),
-            list(compressed.get("raw_notes", []) or []),
-            dict(compressed.get("budget_usage", {}) or {}),
-        )
-
-    runtime = AgentRuntime(
-        role=role,
-        spec=agent_spec,
-        agent_state=_agents(state).get(role, {}),
-        workspace=workspace,
-        config=configurable,
-        runtime_config=config,
-        model=agent_model,
-        system_prompt=agent_prompt,
-        tools=tools,
-        initial_budget=budget_usage,
-        execute_tool=execute_tool_safely,
-        compress_report=compress_report,
-    )
-    runtime_result = await runtime.run(assignment)
-    result: dict[str, Any] = {
-        "agents": {
-            role: {
-                "report": (
-                    {"type": "override", "value": runtime_result.report}
-                    if runtime_result.replace_report
-                    else runtime_result.report
-                ),
-                "memory": [runtime_result.memory],
-                "rolling_summary": runtime_result.rolling_summary,
-            }
-        },
-        "workflow": {
-            "completed_tasks": (
-                _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
-                if execution_mode == "followup"
-                else []
-            ),
-            **({"round": research_round} if execution_mode == "followup" else {}),
-        },
-        "runtime": {"budget": runtime_result.budget},
-    }
-    if context_strategy.graph_enabled:
-        workspace_update = workspace.state_update()
-        result["research"] = workspace_update["research"]
-        result["runtime"]["metrics"] = workspace_update["runtime"]["metrics"]
-    return result
-
-
 @observe_graph_node(name="research_review", kind="graph_node")
 async def research_review(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Review collected evidence and optionally create targeted follow-up tasks."""
@@ -1660,10 +1174,8 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     graph_review_metrics: dict[str, Any] = {}
     if configurable.research_graph_enabled:
         run_id = _resolve_research_run_id(state, config)
-        review_subgraph = ResearchWorkspace.retrieve(
-            configurable,
-            run_id=run_id,
-            query=_workflow(state).get("brief", ""),
+        review_subgraph = retrieve_research_context(
+            configurable, run_id=run_id, query=_workflow(state).get("brief", "")
         )
         graph_review_metrics = {
             "graph_retrieval_calls": 1,
@@ -1809,25 +1321,25 @@ def route_after_research_agent(state: PublicOpinionState) -> list[str]:
 @observe_graph_node(name="public_signal_agent", kind="agent")
 async def public_signal_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Collect integrated news, social, complaint, competitor, and spread evidence."""
-    return await _run_public_opinion_agent(state, config, "public_signal")
+    return await run_business_agent(role="public_signal", state=state, config=config)
 
 
 @observe_graph_node(name="internal_knowledge_agent", kind="agent")
 async def internal_knowledge_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Collect internal RAG evidence from company knowledge, playbooks, and memory."""
-    return await _run_public_opinion_agent(state, config, "internal_knowledge")
+    return await run_business_agent(role="internal_knowledge", state=state, config=config)
 
 
 @observe_graph_node(name="risk_assessment_agent", kind="agent")
 async def risk_assessment_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Verify claims and assess compliance, legal, and product-risk signals."""
-    return await _run_public_opinion_agent(state, config, "risk_assessment")
+    return await run_business_agent(role="risk_assessment", state=state, config=config)
 
 
 @observe_graph_node(name="response_strategy_agent", kind="agent")
 async def response_strategy_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Create PR response posture, FAQ points, actions, and monitoring keywords."""
-    return await _run_public_opinion_agent(state, config, "response_strategy")
+    return await run_business_agent(role="response_strategy", state=state, config=config)
 
 
 public_opinion_builder = StateGraph(DeepResearchState, config_schema=Configuration)

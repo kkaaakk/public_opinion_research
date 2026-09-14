@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 
 import open_deep_research.deep_researcher as deep_researcher_module
+import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.state import ResearchReview, Section, agents_reducer
 
 
@@ -35,30 +36,26 @@ def test_full_role_report_is_not_replaced_by_compact_memory(monkeypatch) -> None
         async def ainvoke(self, _messages):
             return AIMessage(content="agent step")
 
-    async def fake_tools(_config, _role):
+    async def fake_tools(_config, _role, _spec=None):
         return [SimpleNamespace(name="web_search")]
 
-    async def fake_compress(_state, _config):
-        return {
-            "compressed_research": full_report_body,
-            "raw_notes": [],
-            "budget_usage": {},
-        }
+    async def fake_compress(*_args, **_kwargs):
+        return full_report_body, [], {}
 
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", FakeModel())
-    monkeypatch.setattr(deep_researcher_module, "_business_agent_tools", fake_tools)
-    monkeypatch.setattr(deep_researcher_module, "compress_research", fake_compress)
+    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", FakeModel())
+    monkeypatch.setattr(business_agent_module, "_business_agent_tools", fake_tools)
+    monkeypatch.setattr(business_agent_module, "_compress_research", fake_compress)
 
     result = asyncio.run(
-        deep_researcher_module._run_public_opinion_agent(
-            {
+        business_agent_module.run_business_agent(
+            state={
                 "workflow": {"brief": "brand risk", "round": 1},
                 "agents": {},
                 "research": {"working_contexts": {}},
                 "runtime": {"budget": {}},
             },
-            _public_opinion_config("public_signal"),
-            "public_signal",
+            config=_public_opinion_config("public_signal"),
+            role="public_signal",
         )
     )
 
@@ -68,6 +65,57 @@ def test_full_role_report_is_not_replaced_by_compact_memory(monkeypatch) -> None
     assert len(formal_report) > 1_800
     assert len(private_memory) < len(formal_report)
     assert "COMPLETE_REPORT_TAIL" not in private_memory
+
+
+def test_business_agent_preserves_private_memory_and_rolling_summary(monkeypatch) -> None:
+    """The assembly entry keeps agent-owned dynamic context and summary state."""
+    captured_messages = []
+
+    class CapturingModel:
+        def bind_tools(self, _tools):
+            return self
+
+        def with_retry(self, **_kwargs):
+            return self
+
+        def with_config(self, _config):
+            return self
+
+        async def ainvoke(self, messages):
+            captured_messages.extend(messages)
+            return AIMessage(content="done")
+
+    async def fake_tools(_config, _role, _spec=None):
+        return [SimpleNamespace(name="web_search")]
+
+    async def fake_compress(*_args, **_kwargs):
+        return "report", [], {"model_calls": 1}
+
+    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", CapturingModel())
+    monkeypatch.setattr(business_agent_module, "_business_agent_tools", fake_tools)
+    monkeypatch.setattr(business_agent_module, "_compress_research", fake_compress)
+
+    result = asyncio.run(
+        business_agent_module.run_business_agent(
+            role="public_signal",
+            state={
+                "workflow": {"brief": "brand risk", "round": 1},
+                "agents": {
+                    "public_signal": {
+                        "memory": [{"content": "PRIVATE_SENTINEL"}],
+                        "rolling_summary": "PRIOR_SUMMARY",
+                    }
+                },
+                "research": {"working_contexts": {}},
+                "runtime": {"budget": {}},
+            },
+            config=_public_opinion_config("public_signal"),
+        )
+    )
+
+    assert sum("PRIVATE_SENTINEL" in str(message.content) for message in captured_messages) == 1
+    assert result["agents"]["public_signal"]["rolling_summary"] == "PRIOR_SUMMARY"
+    assert result["runtime"]["budget"]["model_calls"] >= 1
 
 
 def test_parallel_role_reports_merge_by_role() -> None:
@@ -96,7 +144,8 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
     }
     seen_states: dict[str, dict[str, str]] = {}
 
-    async def fake_agent(state, _config, role):
+    async def fake_agent(*, state, config, role):
+        del config
         seen_states[role] = {
             name: value.get("report", "")
             for name, value in state.get("agents", {}).items()
@@ -119,7 +168,7 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
         async def ainvoke(self, _messages):
             return ResearchReview(research_complete=True)
 
-    monkeypatch.setattr(deep_researcher_module, "_run_public_opinion_agent", fake_agent)
+    monkeypatch.setattr(deep_researcher_module, "run_business_agent", fake_agent)
     monkeypatch.setattr(deep_researcher_module, "configurable_model", FakeReviewModel())
     result = asyncio.run(
         deep_researcher_module.public_opinion_subgraph.ainvoke(
@@ -149,7 +198,7 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
 def test_risk_assessment_assignment_uses_full_upstream_reports() -> None:
     """Risk assessment receives evidence after the memory truncation boundary."""
     public_signal_report = "A" * 1_800 + "CRITICAL_EVIDENCE_AT_END"
-    prompt = deep_researcher_module._build_public_opinion_agent_assignment(
+    prompt = business_agent_module._build_business_agent_assignment(
         {
             "workflow": {"brief": "brand risk", "round": 1},
             "agents": {
@@ -168,7 +217,7 @@ def test_risk_assessment_assignment_uses_full_upstream_reports() -> None:
 def test_response_strategy_assignment_uses_full_risk_report() -> None:
     """Response strategy receives the complete risk assessment output."""
     risk_report = "R" * 1_800 + "HIGH_PRIORITY_RESPONSE_ACTION"
-    prompt = deep_researcher_module._build_public_opinion_agent_assignment(
+    prompt = business_agent_module._build_business_agent_assignment(
         {
             "workflow": {"brief": "brand risk", "round": 1},
             "agents": {

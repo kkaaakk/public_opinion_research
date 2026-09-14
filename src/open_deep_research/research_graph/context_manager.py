@@ -1,4 +1,4 @@
-"""Bounded Working Context updates for the Research Graph harness."""
+"""Bounded Working Context updates for ResearchWorkspace."""
 
 from __future__ import annotations
 
@@ -227,7 +227,7 @@ def build_context_manager_prompt(
         )
     objective = str(getattr(task, "objective", "") or task or "")
     return (
-        "You are a structured Working Context updater inside a research harness. "
+        "You are a structured Working Context updater inside ResearchWorkspace. "
         "Do not call tools, make a final risk assessment, create follow-up tasks, "
         "or write a report. Compare the current context with this step's new graph "
         "delta and the retrieved subgraph. Decide what findings, conflicts, gaps, "

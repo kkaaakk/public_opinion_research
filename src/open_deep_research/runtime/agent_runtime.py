@@ -380,3 +380,11 @@ class AgentRuntime:
             budget=budget_update,
             replace_report=replace_report,
         )
+
+
+def format_private_memory(agent_state: Mapping[str, Any]) -> str:
+    """Format private agent memory without exposing AgentRuntime to callers."""
+    return AgentRuntime.format_private_memory(agent_state)
+
+
+__all__ = ["AgentRuntime", "AgentRuntimeResult", "format_private_memory"]

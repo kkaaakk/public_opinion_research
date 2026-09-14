@@ -5,6 +5,8 @@ import asyncio
 from langchain_core.messages import HumanMessage
 
 import open_deep_research.deep_researcher as deep_researcher_module
+import open_deep_research.runtime.business_agent as business_agent_module
+from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
 from open_deep_research.runtime import AgentRuntime
 from open_deep_research.state import (
     AgentState,
@@ -127,10 +129,10 @@ def test_private_memory_has_one_dynamic_context_entry() -> None:
         "workflow": {"brief": "brief", "round": 1},
         "agents": {"public_signal": {"memory": [{"content": "PRIVATE_SENTINEL"}]}},
     }
-    assignment = deep_researcher_module._build_public_opinion_agent_assignment(
+    assignment = business_agent_module._build_business_agent_assignment(
         state, "public_signal"
     )
-    spec = deep_researcher_module.get_public_opinion_agent_spec("public_signal")
+    spec = get_public_opinion_agent_spec("public_signal")
     system_prompt = spec.format_system_prompt(
         retrieval_tool_prompt="tools", mcp_prompt="", date="2026-09-12",
         organization_context="org",

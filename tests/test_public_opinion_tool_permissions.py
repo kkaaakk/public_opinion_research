@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-import open_deep_research.deep_researcher as deep_researcher_module
+import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.mcp.domain_filter import get_tool_domain
 from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
 from open_deep_research.utils import get_all_tools
@@ -34,9 +34,9 @@ def _patch_tool_source(monkeypatch, tools, social_tools=()) -> None:
     async def fake_get_all_tools(_config):
         return list(tools)
 
-    monkeypatch.setattr(deep_researcher_module, "get_all_tools", fake_get_all_tools)
+    monkeypatch.setattr(business_agent_module, "get_all_tools", fake_get_all_tools)
     monkeypatch.setattr(
-        deep_researcher_module,
+        business_agent_module,
         "get_social_media_tools",
         lambda: list(social_tools),
     )
@@ -57,7 +57,7 @@ def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
     _patch_tool_source(monkeypatch, tools, [FixtureTool("social_search")])
 
     filtered = asyncio.run(
-        deep_researcher_module._business_agent_tools(_config(), "public_signal")
+        business_agent_module._business_agent_tools(_config(), "public_signal")
     )
 
     assert _names(filtered) == {
@@ -86,7 +86,7 @@ def test_internal_knowledge_gets_only_core_and_rag(monkeypatch) -> None:
     _patch_tool_source(monkeypatch, tools)
 
     filtered = asyncio.run(
-        deep_researcher_module._business_agent_tools(_config(), "internal_knowledge")
+        business_agent_module._business_agent_tools(_config(), "internal_knowledge")
     )
 
     assert _names(filtered) == {"ResearchComplete", "think_tool", "rag_search"}
@@ -107,7 +107,7 @@ def test_response_strategy_does_not_get_mcp_write_tools(monkeypatch) -> None:
     _patch_tool_source(monkeypatch, tools)
 
     filtered = asyncio.run(
-        deep_researcher_module._business_agent_tools(_config(), "response_strategy")
+        business_agent_module._business_agent_tools(_config(), "response_strategy")
     )
 
     assert _names(filtered) == {"ResearchComplete", "think_tool", "rag_search"}
@@ -124,7 +124,7 @@ def test_unknown_domain_is_denied_for_every_business_agent(monkeypatch, role: st
     _patch_tool_source(monkeypatch, tools)
 
     filtered = asyncio.run(
-        deep_researcher_module._business_agent_tools(_config(), role)
+        business_agent_module._business_agent_tools(_config(), role)
     )
 
     assert _names(filtered) == {"ResearchComplete"}
@@ -139,7 +139,7 @@ def test_unlabeled_tool_is_denied_by_default(monkeypatch) -> None:
     )
 
     filtered = asyncio.run(
-        deep_researcher_module._business_agent_tools(_config(), "response_strategy")
+        business_agent_module._business_agent_tools(_config(), "response_strategy")
     )
 
     assert _names(filtered) == {"ResearchComplete", "think_tool"}
@@ -159,7 +159,7 @@ def test_mcp_source_does_not_grant_public_signal_authorization(monkeypatch) -> N
     _patch_tool_source(monkeypatch, tools)
 
     filtered = asyncio.run(
-        deep_researcher_module._business_agent_tools(_config(), "public_signal")
+        business_agent_module._business_agent_tools(_config(), "public_signal")
     )
 
     assert _names(filtered) == {

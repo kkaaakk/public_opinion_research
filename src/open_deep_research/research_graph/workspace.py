@@ -200,4 +200,20 @@ class ResearchWorkspace:
             "runtime": {"metrics": self.metrics.as_dict()},
         }
 
-__all__ = ["ResearchWorkspace", "TaskDescriptor", "ToolBatchItem"]
+
+def retrieve_research_context(
+    configurable: Any,
+    *,
+    run_id: str,
+    query: str,
+) -> RelevantSubgraph:
+    """Retrieve scoped graph context without exposing workspace construction."""
+    return ResearchWorkspace.retrieve(configurable, run_id=run_id, query=query)
+
+
+__all__ = [
+    "ResearchWorkspace",
+    "TaskDescriptor",
+    "ToolBatchItem",
+    "retrieve_research_context",
+]

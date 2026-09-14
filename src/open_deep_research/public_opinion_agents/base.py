@@ -124,6 +124,6 @@ Return a concise role report following this schema:
 3. If rag_search does not contain enough internal evidence, say so explicitly.
 4. Distinguish facts, allegations, rumors, interpretations, and recommendations.
 5. Keep dates concrete and absolute when available.
-6. The Context Strategy is a harness routing choice. Do not treat Research Graph
+6. The Context Strategy is a runtime/workspace routing choice. Do not treat Research Graph
    retrieval as a final answer or invent provenance metadata.
 </Evidence Rules>"""

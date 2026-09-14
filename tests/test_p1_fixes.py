@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 
 import open_deep_research.deep_researcher as deep_researcher_module
+import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.configuration import Configuration
 from open_deep_research.rag import mcp_server
 from open_deep_research.rag.config import HybridRetrievalConfig
@@ -259,12 +260,17 @@ def test_unknown_compression_error_is_not_swallowed(monkeypatch) -> None:
         async def ainvoke(self, _messages):
             raise NameError("test compression bug")
 
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", FailingModel())
+    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", FailingModel())
 
     with pytest.raises(NameError, match="test compression bug"):
         asyncio.run(
-            deep_researcher_module.compress_research(
-                {"researcher_messages": [], "budget_usage": {}}, {}
+            business_agent_module._compress_research(
+                [],
+                "task",
+                "output",
+                {},
+                configurable=Configuration.from_runnable_config({}),
+                config={},
             )
         )
 
@@ -279,25 +285,30 @@ def test_token_limit_compression_error_keeps_graceful_degradation(monkeypatch) -
         async def ainvoke(self, _messages):
             raise RuntimeError("context length exceeded")
 
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", FailingModel())
+    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", FailingModel())
     monkeypatch.setattr(
-        deep_researcher_module,
+        business_agent_module,
         "is_token_limit_exceeded",
         lambda *_args: True,
     )
     monkeypatch.setattr(
-        deep_researcher_module,
+        business_agent_module,
         "remove_up_to_last_ai_message",
         lambda messages: messages,
     )
 
     result = asyncio.run(
-        deep_researcher_module.compress_research(
-            {"researcher_messages": [], "budget_usage": {}}, {}
+        business_agent_module._compress_research(
+            [],
+            "task",
+            "output",
+            {},
+            configurable=Configuration.from_runnable_config({}),
+            config={},
         )
     )
 
-    assert "Maximum retries exceeded" in result["compressed_research"]
+    assert "Maximum retries exceeded" in result[0]
 
 
 def test_web_request_model_and_prompt_limits() -> None:

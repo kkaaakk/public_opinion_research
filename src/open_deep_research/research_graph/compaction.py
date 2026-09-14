@@ -125,7 +125,7 @@ async def rolling_compact(
     compactable = items[1:keep_start]
     compactable_text = _render_messages(compactable)
     prompt = (
-        "You are the incremental rolling context compactor for a ReAct harness. "
+        "You are the incremental rolling context compactor for AgentRuntime. "
         "Summarize only the newly compactable reasoning/progress below and merge it "
         "into the previous rolling summary. Do not invent evidence, URLs, IDs, or "
         "research conclusions. Durable evidence lives in the Research Graph; retain "

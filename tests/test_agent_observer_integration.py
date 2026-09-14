@@ -16,6 +16,7 @@ from typing_extensions import TypedDict
 
 import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.observability.agent_observer as observer_module
+import open_deep_research.runtime.business_agent as business_agent_module
 
 agent_observer_sdk = pytest.importorskip("agent_observer.sdk")
 langgraph_adapter = pytest.importorskip("integrations.langgraph")
@@ -277,7 +278,8 @@ def test_parallel_agents_have_distinct_spans_and_real_upstreams(monkeypatch):
 
     observer, run, events = _recording_run()
 
-    async def fake_agent(state, config, role):
+    async def fake_agent(*, state, config, role):
+        del state, config
         span = get_current_observed_span()
         assert span is not None
         await asyncio.sleep(0)
@@ -294,7 +296,7 @@ def test_parallel_agents_have_distinct_spans_and_real_upstreams(monkeypatch):
         span.model_response(request_id=f"request-{role}", output_tokens=1, duration_ms=1)
         return {"role_reports": {role: f"{role} report"}, "agent_memories": {}}
 
-    monkeypatch.setattr(deep_researcher_module, "_run_public_opinion_agent", fake_agent)
+    monkeypatch.setattr(deep_researcher_module, "run_business_agent", fake_agent)
     register_graph_topology(
         {
             "edges": [
@@ -650,7 +652,7 @@ def test_execute_tool_safely_is_runtime_tool_boundary():
     async def exercise():
         with run_context(run):
             async with run.span("agent", kind="agent"):
-                return await deep_researcher_module.execute_tool_safely(
+                return await business_agent_module._execute_tool_safely(
                     FakeTool(),
                     {"query": "fixture"},
                     {},

@@ -5,6 +5,7 @@ import asyncio
 from langgraph.types import Send
 
 import open_deep_research.deep_researcher as deep_researcher_module
+import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.state import ResearchReview, ResearchTask, agents_reducer
 
 
@@ -61,7 +62,8 @@ class _ReviewModel:
 def _fake_agent(calls: list[tuple[str, str, list[str]]]):
     """Return a fake formal agent implementation while preserving loop state."""
 
-    async def run(state, _config, role):
+    async def run(*, state, config, role):
+        del config
         workflow = state.get("workflow", {})
         mode = "followup" if workflow.get("round", 1) > 1 else "initial"
         tasks = workflow.get("pending_tasks", []) or []
@@ -107,7 +109,7 @@ def _invoke_with_fixtures(
     monkeypatch.setattr(deep_researcher_module, "configurable_model", reviewer)
     monkeypatch.setattr(
         deep_researcher_module,
-        "_run_public_opinion_agent",
+        "run_business_agent",
         _fake_agent(calls),
     )
     result = asyncio.run(
@@ -294,7 +296,7 @@ def test_role_report_reducer_preserves_initial_and_followup_reports() -> None:
 def test_followup_assignment_contains_only_gap_tasks() -> None:
     """Follow-up assignments explain the gap and avoid a generic repeat survey."""
     task = _task("regulator-notice", "public_signal")
-    assignment = deep_researcher_module._build_public_opinion_agent_assignment(
+    assignment = business_agent_module._build_business_agent_assignment(
         {
             "workflow": {"brief": "brand risk", "round": 2, "pending_tasks": [task]},
             "agents": {"public_signal": {"report": "round one", "memory": []}},

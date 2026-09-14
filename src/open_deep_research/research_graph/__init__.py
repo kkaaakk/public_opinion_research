@@ -68,17 +68,18 @@ from open_deep_research.research_graph.store import (
 )
 from open_deep_research.research_graph.strategy import (
     ContextStrategy,
-    WorkspaceFinalResult,
-    WorkspaceHookResult,
     ResearchGraphConsumerStrategy,
     ResearchGraphProducerStrategy,
     StandardContextStrategy,
+    WorkspaceFinalResult,
+    WorkspaceHookResult,
     create_context_strategy,
 )
 from open_deep_research.research_graph.workspace import (
     ResearchWorkspace,
     TaskDescriptor,
     ToolBatchItem,
+    retrieve_research_context,
 )
 
 __all__ = [
@@ -142,6 +143,7 @@ __all__ = [
     "micro_compact_messages",
     "normalize_extraction_output",
     "render_working_context",
+    "retrieve_research_context",
     "rolling_compact",
     "should_rolling_compact",
 ]
