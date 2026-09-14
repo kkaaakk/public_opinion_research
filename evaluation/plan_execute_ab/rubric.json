@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "name": "public_opinion_dynamic_plan_execute_ab",
+  "description": "Fixed, transparent rubric for comparing the two committed workflow versions. Dimension coverage is lexical evidence screening; it is not a substitute for expert fact checking.",
+  "quality_scale": {
+    "min": 1,
+    "max": 5,
+    "dimensions": [
+      "fact_completeness",
+      "evidence_sufficiency",
+      "risk_judgment_reasonableness",
+      "uncertainty_expression",
+      "source_traceability"
+    ]
+  },
+  "coverage_rule": "A dimension is counted as covered only when the final report contains at least one configured dimension keyword. Results must be interpreted with the keyword hits and not as semantic proof.",
+  "unsupported_claim_rule": "Sentence-level heuristic: candidate factual/risk sentences are counted unsupported when they contain dates, quantities, concrete allegations, regulatory outcomes, or risk conclusions but no nearby URL, source marker, citation marker, or explicit evidence qualifier.",
+  "conflict_rule": "Conflict detection is counted when the report or Research Review explicitly compares public, official, regulatory, media, social, or internal evidence and marks agreement, inconsistency, contradiction, or unresolved verification.",
+  "source_type_markers": {
+    "news_media": ["新闻", "媒体", "报道", "记者", "news", "reuters", "财联社", "界面", "央视"],
+    "social_media": ["社交媒体", "微博", "抖音", "小红书", "帖子", "评论", "投诉平台", "social"],
+    "official": ["官方", "公告", "声明", "官网", "企业回应", "客服", "公司口径"],
+    "regulatory": ["监管", "监管机构", "处罚", "通报", "抽检", "市场监管", "法院", "工信部", "网信", "DSA"],
+    "internal_knowledge": ["内部", "知识库", "RAG", "FAQ", "playbook", "本地资料", "产品资料", "data/knowledge"],
+    "historical_cases": ["历史", "此前", "过往", "同类事故", "历史案例", "案例背景"]
+  },
+  "quality_markers": {
+    "evidence": ["来源", "证据", "链接", "http://", "https://", "引用", "据", "原文"],
+    "risk": ["风险", "高风险", "中风险", "低风险", "责任", "影响", "升级条件"],
+    "uncertainty": ["不确定", "尚未", "需核实", "证据不足", "无法确认", "待核验", "可能", "置信度", "局限"],
+    "comparison": ["冲突", "矛盾", "不一致", "一致", "交叉核验", "相互印证", "对照", "口径"]
+  }
+}

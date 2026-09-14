@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "artifact": "plan_execute_ab_comparison",
+  "status": "blocked",
+  "decision": {
+    "value": "BLOCKED",
+    "reason": "Zero valid paired runs and no final reports. KEEP, KEEP_WITH_CHANGES, or ROLLBACK would be an unsupported architectural conclusion."
+  },
+  "before": {
+    "commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+    "valid_run_count": 0
+  },
+  "after": {
+    "commit": "5989480e523909661153eb23f3dea374d842a887",
+    "valid_run_count": 0
+  },
+  "benchmark": {
+    "configured_cases": 10,
+    "repeat_count": 1,
+    "valid_paired_runs": 0,
+    "quality_metrics": "N/A",
+    "cost_metrics": "N/A",
+    "dynamic_loop_metrics": "N/A"
+  },
+  "blocker": {
+    "deepseek": "HTTP 402 Insufficient Balance",
+    "google": "HTTP 429 quota exceeded for gemini-2.5-flash and HTTP 503 UNAVAILABLE on complex graph requests",
+    "observer_sidecar": "127.0.0.1:8766 actively refused connection; in-process SDK recorder was available",
+    "social_api": "127.0.0.1:9000 actively refused connection; fixed local fixture was available"
+  },
+  "artifact_paths": {
+    "cases": "evaluation/plan_execute_ab/cases.jsonl",
+    "rubric": "evaluation/plan_execute_ab/rubric.json",
+    "runner": "evaluation/plan_execute_ab/run_benchmark.py",
+    "evaluator": "evaluation/plan_execute_ab/evaluate_results.py",
+    "comparator": "evaluation/plan_execute_ab/compare_results.py",
+    "before_diagnostics": "evaluation/plan_execute_ab/results/smoke_before.json"
+  }
+}

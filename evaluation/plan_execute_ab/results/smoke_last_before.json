@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "artifact": "before_after_plan_execute_benchmark_raw",
+  "version": "before",
+  "commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+  "commit_short": "d0270b6",
+  "commit_subject": "fix: address P1 reliability and web security issues",
+  "worktree_status": "",
+  "expected_commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+  "commit_matches_expected": true,
+  "benchmark_started_at_utc": "2026-09-02T03:48:23.056873+00:00",
+  "environment": {
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "python_executable": "C:\\develop\\python311\\python.exe",
+    "env_file": "C:\\codex_workspace\\Public Opinion Research\\.env",
+    "env_file_exists": true
+  },
+  "cases_path": "C:\\codex_workspace\\Public Opinion Research\\evaluation\\plan_execute_ab\\cases.jsonl",
+  "repeat_count": 1,
+  "case_timeout_seconds": 180,
+  "configuration_template": {
+    "search_api": "none",
+    "max_react_tool_calls": 1,
+    "max_research_rounds": 2,
+    "max_structured_output_retries": 1,
+    "allow_clarification": false,
+    "allow_plan_feedback": false,
+    "business_scenario": "public_opinion_risk",
+    "organization_context": "Benchmark context: use cited public sources and the configured local knowledge base. Do not invent private company facts; separate facts, inferences, and unresolved items.",
+    "enabled_business_agents": [
+      "public_signal",
+      "internal_knowledge",
+      "risk_assessment",
+      "response_strategy"
+    ],
+    "rag_enabled": true,
+    "retrieval_mode": "hybrid",
+    "rag_knowledge_base_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\knowledge\\public_opinion"
+    ],
+    "rag_memory_enabled": true,
+    "rag_memory_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\memory\\public_opinion\\memories.jsonl"
+    ],
+    "rag_embedding_provider": "hash",
+    "rag_vectorstore_provider": "memory",
+    "rag_reranker_provider": "simple",
+    "rag_graph_enabled": false,
+    "rag_query_rewrite_enabled": false,
+    "rag_memory_write_enabled": false,
+    "agent_observer_enabled": true,
+    "agent_observer_endpoint": "in-process-recording",
+    "agent_observer_project": "public-opinion-research-ab-benchmark",
+    "agent_observer_timeout": 0.35,
+    "research_model": "google_genai:gemini-2.5-flash",
+    "summarization_model": "google_genai:gemini-2.5-flash",
+    "compression_model": "google_genai:gemini-2.5-flash",
+    "final_report_model": "google_genai:gemini-2.5-flash",
+    "original_env_models": {
+      "research_model": "deepseek:deepseek-chat",
+      "summarization_model": "deepseek:deepseek-chat",
+      "compression_model": "deepseek:deepseek-chat",
+      "final_report_model": "deepseek:deepseek-chat"
+    },
+    "model_override_reason": "DeepSeek returned HTTP 402 Insufficient Balance during smoke run; Google fallback was used uniformly for both versions.",
+    "original_env_search_api": "<unset>",
+    "search_api_override_reason": "Tavily summary fan-out repeatedly hit provider availability limits during smoke validation; local social fixtures and RAG remain enabled uniformly for both versions.",
+    "max_content_length": 10000,
+    "research_model_max_tokens": 512,
+    "summarization_model_max_tokens": 256,
+    "compression_model_max_tokens": 512,
+    "final_report_model_max_tokens": 800,
+    "section_writer_model_max_tokens": 600,
+    "temperature": null,
+    "temperature_note": "N/A: Configuration and model boundary do not expose a temperature parameter.",
+    "social_media_data_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\social_media\\bulk_mock_posts.jsonl",
+      "C:\\codex_workspace\\POR-after\\data\\social_media\\sample_posts.jsonl"
+    ],
+    "max_concurrency": 1,
+    "social_media_mode": "local JSON fixtures",
+    "observer_mode": "Agent Observer v0.2 SDK with in-process event recorder"
+  },
+  "runs": []
+}

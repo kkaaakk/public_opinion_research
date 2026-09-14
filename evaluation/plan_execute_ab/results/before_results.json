@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "artifact": "plan_execute_ab_benchmark_raw",
+  "status": "blocked",
+  "version": "before",
+  "commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+  "expected_commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+  "commit_matches_expected": true,
+  "configured_case_count": 10,
+  "completed_runs": 0,
+  "valid_completed_runs": 0,
+  "repeat_count": 1,
+  "runs": [],
+  "diagnostic_smoke_artifacts": [
+    {
+      "path": "smoke_before.json",
+      "status": "timeout",
+      "duration_ms": 300503,
+      "model_calls": 85,
+      "tool_calls": 41,
+      "final_report_present": false
+    },
+    {
+      "path": "smoke_before_2.json",
+      "status": "timeout",
+      "duration_ms": 240074,
+      "model_calls": 43,
+      "tool_calls": 16,
+      "final_report_present": false
+    },
+    {
+      "path": "smoke_before_3.json",
+      "status": "error",
+      "error": "HTTP 402 Insufficient Balance from api.deepseek.com",
+      "final_report_present": false
+    },
+    {
+      "path": "smoke_google_before.json",
+      "status": "error",
+      "error": "Google model HTTP 503 UNAVAILABLE during graph execution",
+      "final_report_present": false
+    },
+    {
+      "path": "smoke_gemma_before.json",
+      "status": "error",
+      "error": "Google model HTTP 503 UNAVAILABLE during graph execution",
+      "final_report_present": false
+    }
+  ],
+  "blocker": {
+    "kind": "model_provider_unavailable",
+    "message": "No stable model quota was available for a complete paired run. DeepSeek returned HTTP 402 Insufficient Balance; Google fallback requests hit HTTP 429 quota exceeded and HTTP 503 UNAVAILABLE.",
+    "paired_comparison_allowed": false
+  }
+}
