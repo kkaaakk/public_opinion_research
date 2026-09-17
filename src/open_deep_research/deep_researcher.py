@@ -24,7 +24,7 @@ from open_deep_research.budget import (
     budget_usage_with_reason,
     can_spend_model_call,
     diff_budget_usage,
-    estimate_tokens,
+    estimate_text_tokens,
     merge_budget_usage,
     remaining_input_tokens,
     remaining_output_tokens,
@@ -1479,14 +1479,26 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
         }
 
     messages_text = get_buffer_string(state.get("messages", []))
+    context_window = (
+        configurable.research_graph_context_capacity_tokens
+        or get_model_token_limit(configurable.final_report_model)
+    )
+    output_reserve = int(configurable.final_report_model_max_tokens or 0)
+    reserved_prompt_tokens = estimate_text_tokens(
+        _workflow(state).get("brief", "")
+    ) + estimate_text_tokens(messages_text)
     remaining_input_budget = remaining_input_tokens(configurable, budget_usage)
-    if remaining_input_budget is not None:
-        reserved_prompt_tokens = (
-            estimate_tokens(_workflow(state).get("brief", ""))
-            + estimate_tokens(messages_text)
-            + 1000
+    findings_budget = (
+        max(0, remaining_input_budget - reserved_prompt_tokens)
+        if remaining_input_budget is not None
+        else None
+    )
+    if context_window:
+        window_budget = max(0, context_window - output_reserve - reserved_prompt_tokens)
+        findings_budget = (
+            window_budget if findings_budget is None else min(findings_budget, window_budget)
         )
-        findings_budget = max(0, remaining_input_budget - reserved_prompt_tokens)
+    if findings_budget is not None:
         findings, findings_truncated = truncate_text_to_token_budget(
             findings,
             findings_budget,
@@ -1601,14 +1613,13 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                             "messages": [AIMessage(content="Report generation failed due to token limits")],
                             "runtime": {"budget": budget_update},
                         }
-                    # Use 4x token limit as character approximation for truncation
-                    findings_token_limit = model_token_limit * 4
+                    findings_token_limit = max(0, model_token_limit - output_reserve)
                 else:
                     # Subsequent retries: reduce by 10% each time
                     findings_token_limit = int(findings_token_limit * 0.9)
-                
-                # Truncate findings and retry
-                findings = findings[:findings_token_limit]
+
+                # Truncate findings by token budget and retry
+                findings, _ = truncate_text_to_token_budget(findings, findings_token_limit)
                 continue
             else:
                 LOGGER.exception("Unexpected final report generation failure.")

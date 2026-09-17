@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 
 from open_deep_research.budget import (
     budget_from_model_response,
-    estimate_tokens,
+    estimate_text_tokens,
     merge_budget_usage,
 )
 from open_deep_research.observability import observe_model_ainvoke
@@ -248,7 +248,7 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                 observation=item.observation,
             )
             for document in source_documents:
-                workspace.metrics.add("raw_tool_tokens_before_compact", estimate_tokens(document.content), quality="estimated")
+                workspace.metrics.add("raw_tool_tokens_before_compact", estimate_text_tokens(document.content), quality="estimated")
                 source_key = document.url or document.source_id
                 if source_key in seen_source_versions and seen_source_versions[source_key] == document.content_hash:
                     skipped_by_call.setdefault(item.tool_call_id, []).append(document.source_id)
@@ -328,12 +328,12 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                 output_tokens = batch_result.output_tokens
                 workspace.metrics.add(
                     "graph_extraction_input_tokens",
-                    input_tokens if input_tokens else estimate_tokens(_render_documents(source_only_documents)),
+                    input_tokens if input_tokens else estimate_text_tokens(_render_documents(source_only_documents)),
                     quality="exact" if input_tokens else "estimated",
                 )
                 workspace.metrics.add(
                     "graph_extraction_output_tokens",
-                    output_tokens if output_tokens else estimate_tokens(json.dumps(delta.model_dump(mode="json"), ensure_ascii=False)),
+                    output_tokens if output_tokens else estimate_text_tokens(json.dumps(delta.model_dump(mode="json"), ensure_ascii=False)),
                     quality="exact" if output_tokens else "estimated",
                 )
                 for item, document in documents:
@@ -385,7 +385,7 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                 )
                 workspace.working_context = context_result.context
                 workspace.metrics.add("context_manager_calls")
-                context_input_tokens = estimate_tokens(
+                context_input_tokens = estimate_text_tokens(
                     json.dumps(
                         {
                             "task": workspace.task.objective,
@@ -399,12 +399,12 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                 output_tokens = context_result.budget_usage.get("output_tokens")
                 workspace.metrics.add(
                     "context_manager_output_tokens",
-                    output_tokens if isinstance(output_tokens, int) and output_tokens > 0 else estimate_tokens(context_result.delta.model_dump_json()),
+                    output_tokens if isinstance(output_tokens, int) and output_tokens > 0 else estimate_text_tokens(context_result.delta.model_dump_json()),
                     quality="exact" if isinstance(output_tokens, int) and output_tokens > 0 else "estimated",
                 )
                 workspace.metrics.set(
                     "working_context_tokens",
-                    estimate_tokens(render_working_context(workspace.working_context)),
+                    estimate_text_tokens(render_working_context(workspace.working_context)),
                     quality="estimated",
                 )
             compacted = micro_compact_messages(

@@ -356,6 +356,18 @@ class Configuration(BaseModel):
             }
         },
     )
+    context_warning_ratio: float = Field(
+        default=0.60,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "number",
+                "default": 0.60,
+                "min": 0.0,
+                "max": 1.0,
+                "description": "Context pressure ratio that raises a warning before compaction triggers.",
+            }
+        },
+    )
     research_graph_context_capacity_tokens: Optional[int] = Field(default=None, optional=True)
     recent_raw_steps: int = Field(default=3, metadata={"x_oap_ui_config": {"type": "number", "default": 3}})
     working_context_max_active_findings: int = Field(default=8, optional=True)
@@ -1558,6 +1570,10 @@ class Configuration(BaseModel):
             self.research_graph_database = self.research_graph_neo4j_database
         if not 0.70 <= self.context_compaction_threshold_ratio <= 0.80:
             raise ValueError("context_compaction_threshold_ratio must be between 0.70 and 0.80.")
+        if not 0.0 < self.context_warning_ratio < self.context_compaction_threshold_ratio:
+            raise ValueError(
+                "context_warning_ratio must be between 0 and context_compaction_threshold_ratio."
+            )
         positive_graph_fields = (
             "research_graph_extraction_model_max_tokens",
             "research_graph_extraction_batch_tokens",

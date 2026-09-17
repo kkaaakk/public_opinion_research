@@ -738,24 +738,18 @@ def _raw_response(response: Any) -> Any:
 
 
 def _response_usage(response: Any) -> dict[str, int | None]:
+    """Read LangChain-standardized usage; provider-specific token fields are not parsed."""
     response = _raw_response(response)
-    usage: Mapping[str, Any] = {}
-    candidate = getattr(response, "usage_metadata", None)
-    if isinstance(candidate, Mapping):
-        usage = candidate
-    if not usage:
-        metadata = getattr(response, "response_metadata", None)
-        if isinstance(metadata, Mapping):
-            nested = metadata.get("token_usage") or metadata.get("usage") or metadata.get("usage_metadata")
-            if isinstance(nested, Mapping):
-                usage = nested
-            else:
-                usage = metadata
+    usage = getattr(response, "usage_metadata", None)
+    if not isinstance(usage, Mapping):
+        usage = {}
+    input_details = usage.get("input_token_details")
+    input_details = input_details if isinstance(input_details, Mapping) else {}
     return {
-        "input_tokens": _usage_value(usage, "input_tokens", "prompt_tokens"),
-        "output_tokens": _usage_value(usage, "output_tokens", "completion_tokens"),
-        "cache_read_tokens": _usage_value(usage, "cache_read_tokens", "cached_tokens", "cache_read_input_tokens"),
-        "cache_write_tokens": _usage_value(usage, "cache_write_tokens", "cache_creation_input_tokens"),
+        "input_tokens": _usage_value(usage, "input_tokens"),
+        "output_tokens": _usage_value(usage, "output_tokens"),
+        "cache_read_tokens": _usage_value(input_details, "cache_read"),
+        "cache_write_tokens": _usage_value(input_details, "cache_creation"),
     }
 
 
@@ -891,6 +885,7 @@ def observe_model_invoke(runnable: Any, payload: Any, **kwargs: Any) -> Any:
             structured_output=structured_output,
             component=component,
         )
+        _capture_response_usage(response)
         return response
     finally:
         _MODEL_BOUNDARY_DEPTH.reset(token)
@@ -940,9 +935,25 @@ async def observe_model_ainvoke(runnable: Any, payload: Any, **kwargs: Any) -> A
             structured_output=structured_output,
             component=component,
         )
+        _capture_response_usage(response)
         return response
     finally:
         _MODEL_BOUNDARY_DEPTH.reset(token)
+
+
+def _capture_response_usage(response: Any) -> None:
+    """Record this model response into the active Budget Guard capture, if any.
+
+    This is the single accounting point for nested model calls (for example the
+    per-URL summarizer inside ``tavily_search``) whose ``AIMessage`` never reaches
+    the graph node that owns the budget delta.
+    """
+    try:
+        from open_deep_research.budget import capture_model_response
+
+        capture_model_response(response)
+    except Exception:  # pragma: no cover - budget capture must never break a call
+        LOGGER.debug("Budget capture failed", exc_info=True)
 
 
 def _safe_args_summary(args: Any) -> dict[str, Any]:

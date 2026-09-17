@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 
 from open_deep_research.budget import (
     budget_from_model_response,
-    estimate_tokens,
+    estimate_text_tokens,
     merge_budget_usage,
     truncate_text_to_token_budget,
 )
@@ -89,7 +89,7 @@ def batch_documents_by_tokens(
     current: list[RawResearchDocument] = []
     current_tokens = 0
     for document in documents:
-        source_tokens = max(1, estimate_tokens(document.content))
+        source_tokens = max(1, estimate_text_tokens(document.content))
         candidate = document
         if source_tokens > limit:
             truncated, _ = truncate_text_to_token_budget(document.content, limit)
@@ -102,7 +102,7 @@ def batch_documents_by_tokens(
                     },
                 }
             )
-            source_tokens = max(1, estimate_tokens(candidate.content))
+            source_tokens = max(1, estimate_text_tokens(candidate.content))
         if current and current_tokens + source_tokens > limit:
             batches.append(current)
             current = []

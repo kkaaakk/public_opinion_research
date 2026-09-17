@@ -22,7 +22,6 @@ from langchain_core.tools import (
 )
 from tavily import AsyncTavilyClient
 
-from open_deep_research.budget import capture_model_response
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
 from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.prompts import summarize_webpage_prompt
@@ -264,8 +263,7 @@ async def summarize_webpage(
             ),
             timeout=60.0  # 60 second timeout for summarization
         )
-        capture_model_response(summary)
-        
+
         # Format the summary with structured sections
         formatted_summary = (
             f"<summary>\n{summary.summary}\n</summary>\n\n"

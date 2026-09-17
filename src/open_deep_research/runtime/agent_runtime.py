@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,7 +16,8 @@ from open_deep_research.budget import (
     budget_from_tool_calls,
     budget_usage_with_reason,
     can_spend_model_call,
-    estimate_tokens,
+    context_pressure_ratio,
+    estimate_text_tokens,
     filter_tool_calls_for_budget,
     is_over_budget,
     merge_budget_usage,
@@ -32,6 +34,8 @@ from open_deep_research.utils import (
     get_model_token_limit,
     openai_websearch_called,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 ToolExecutor = Callable[..., Awaitable[tuple[str, dict[str, Any], bool]]]
 CompressionCallback = Callable[
@@ -133,27 +137,40 @@ class AgentRuntime:
     async def _compact_history(
         self, messages: list[Any]
     ) -> tuple[list[Any], dict[str, Any]]:
-        """Compress ReAct history while preserving Workspace-derived context."""
+        """Compact ReAct history before the next model call when context pressure is high."""
         model_limit = getattr(
             self.config, "research_graph_context_capacity_tokens", None
         ) or get_model_token_limit(self.config.research_model)
         if model_limit is None:
             return messages, {}
         protected = self.workspace.protected_context()
+        estimated_tokens = context_token_estimate(messages, protected, tools=self.tools)
+        pressure = context_pressure_ratio(estimated_tokens, model_limit)
+        warning_ratio = float(getattr(self.config, "context_warning_ratio", 0.6))
+        compaction_ratio = float(
+            getattr(self.config, "context_compaction_threshold_ratio", 0.75)
+        )
+        if pressure >= warning_ratio:
+            LOGGER.warning(
+                "Agent %s context pressure %.2f (estimated=%d window=%d).",
+                self.role,
+                pressure,
+                estimated_tokens,
+                model_limit,
+            )
         if not should_rolling_compact(
             messages,
             extra_context=protected,
             model_context_capacity=model_limit,
-            threshold_ratio=float(
-                getattr(self.config, "context_compaction_threshold_ratio", 0.75)
-            ),
+            threshold_ratio=compaction_ratio,
+            tools=self.tools,
         ):
             return messages, {}
         model_name = str(
             getattr(self.config, "rolling_compaction_model", None)
             or getattr(self.config, "compression_model", "")
         )
-        before_tokens = context_token_estimate(messages, protected)
+        before_tokens = context_token_estimate(messages, protected, tools=self.tools)
         result = await rolling_compact(
             messages,
             previous_summary=self.rolling_summary,
@@ -175,7 +192,7 @@ class AgentRuntime:
         metrics.add(
             "rolling_compact_output_tokens",
             output_tokens if isinstance(output_tokens, int) and output_tokens > 0
-            else estimate_tokens(result.rolling_summary),
+            else estimate_text_tokens(result.rolling_summary),
             quality="exact" if isinstance(output_tokens, int) and output_tokens > 0
             else "estimated",
         )
@@ -223,6 +240,9 @@ class AgentRuntime:
                 )
                 break
 
+            messages, compaction_budget = await self._compact_history(messages)
+            if compaction_budget:
+                budget_update = merge_budget_usage(budget_update, compaction_budget)
             model_messages = [
                 SystemMessage(content=self.system_prompt),
                 *await self.workspace.before_model(messages),
@@ -339,9 +359,8 @@ class AgentRuntime:
                 )
 
             hook = await self.workspace.ingest(messages, batch)
-            messages, compaction_budget = await self._compact_history(hook.messages)
+            messages = hook.messages
             budget_update = merge_budget_usage(budget_update, hook.budget_usage)
-            budget_update = merge_budget_usage(budget_update, compaction_budget)
             if any(call["name"] == "ResearchComplete" for call in tool_calls):
                 break
             if not allowed:

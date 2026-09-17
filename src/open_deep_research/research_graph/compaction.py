@@ -9,7 +9,12 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from open_deep_research.budget import budget_from_model_response, estimate_tokens
+from open_deep_research.budget import (
+    budget_from_model_response,
+    context_pressure_ratio,
+    estimate_context_tokens,
+    estimate_text_tokens,
+)
 from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.research_graph.models import (
     RollingCompactOutput,
@@ -66,7 +71,10 @@ def micro_compact_messages(
             replacement = _replace_message_content(message, receipt_text)
             compacted.append(replacement)
             compacted_ids.append(tool_call_id)
-            removed += max(0, estimate_tokens(old_text) - estimate_tokens(receipt_text))
+            removed += max(
+                0,
+                estimate_text_tokens(old_text) - estimate_text_tokens(receipt_text),
+            )
         else:
             compacted.append(message)
     return CompactionResult(
@@ -76,12 +84,21 @@ def micro_compact_messages(
     )
 
 
-def context_token_estimate(messages: Iterable[Any], extra_context: str = "") -> int:
-    """Estimate the model input size without serializing provider metadata."""
-    text = extra_context + "\n" + "\n".join(
-        str(getattr(message, "content", message) or "") for message in messages
-    )
-    return estimate_tokens(text)
+def context_token_estimate(
+    messages: Iterable[Any],
+    extra_context: str = "",
+    *,
+    tools: list[Any] | None = None,
+) -> int:
+    """Estimate the model input size from the real message objects.
+
+    Extra context is counted as one additional message, so the estimate matches
+    the structure of the next model request instead of concatenated strings.
+    """
+    payload = list(messages)
+    if extra_context:
+        payload.append(HumanMessage(content=extra_context))
+    return estimate_context_tokens(payload, tools=tools)
 
 
 def should_rolling_compact(
@@ -90,13 +107,13 @@ def should_rolling_compact(
     extra_context: str = "",
     model_context_capacity: int | None,
     threshold_ratio: float = 0.75,
+    tools: list[Any] | None = None,
 ) -> bool:
     """Return whether context capacity, not research budget, crossed the trigger."""
     if not model_context_capacity or model_context_capacity <= 0:
         return False
-    return context_token_estimate(messages, extra_context) >= int(
-        model_context_capacity * threshold_ratio
-    )
+    estimated = context_token_estimate(messages, extra_context, tools=tools)
+    return context_pressure_ratio(estimated, model_context_capacity) >= threshold_ratio
 
 
 async def rolling_compact(
@@ -162,7 +179,10 @@ async def rolling_compact(
         messages=result_messages,
         rolling_summary=summary,
         budget_usage=budget_from_model_response(response),
-        tokens_removed=max(0, estimate_tokens(compactable_text) - estimate_tokens(summary)),
+        tokens_removed=max(
+            0,
+            estimate_text_tokens(compactable_text) - estimate_text_tokens(summary),
+        ),
     )
 
 
