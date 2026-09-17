@@ -10,12 +10,10 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from open_deep_research.budget import (
-    budget_from_model_response,
-    context_pressure_ratio,
-    estimate_context_tokens,
+    ainvoke_model_with_budget,
     estimate_text_tokens,
+    structured_output_chain,
 )
-from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.research_graph.models import (
     RollingCompactOutput,
     WriteReceipt,
@@ -84,38 +82,6 @@ def micro_compact_messages(
     )
 
 
-def context_token_estimate(
-    messages: Iterable[Any],
-    extra_context: str = "",
-    *,
-    tools: list[Any] | None = None,
-) -> int:
-    """Estimate the model input size from the real message objects.
-
-    Extra context is counted as one additional message, so the estimate matches
-    the structure of the next model request instead of concatenated strings.
-    """
-    payload = list(messages)
-    if extra_context:
-        payload.append(HumanMessage(content=extra_context))
-    return estimate_context_tokens(payload, tools=tools)
-
-
-def should_rolling_compact(
-    messages: Iterable[Any],
-    *,
-    extra_context: str = "",
-    model_context_capacity: int | None,
-    threshold_ratio: float = 0.75,
-    tools: list[Any] | None = None,
-) -> bool:
-    """Return whether context capacity, not research budget, crossed the trigger."""
-    if not model_context_capacity or model_context_capacity <= 0:
-        return False
-    estimated = context_token_estimate(messages, extra_context, tools=tools)
-    return context_pressure_ratio(estimated, model_context_capacity) >= threshold_ratio
-
-
 async def rolling_compact(
     messages: Iterable[Any],
     *,
@@ -152,19 +118,17 @@ async def rolling_compact(
         f"New compactable steps:\n{compactable_text}\n\n"
         "Return RollingCompactOutput."
     )
-    structured = model
-    if hasattr(structured, "with_structured_output"):
-        structured = structured.with_structured_output(RollingCompactOutput)
-    if hasattr(structured, "with_retry"):
-        structured = structured.with_retry(stop_after_attempt=max_retries)
-    response = await observe_model_ainvoke(
+    structured = structured_output_chain(
+        model, RollingCompactOutput, max_attempts=max_retries
+    )
+    response, budget_usage = await ainvoke_model_with_budget(
         structured,
         [HumanMessage(content=prompt)],
         observer_model=model_name,
         observer_structured_output=True,
         observer_component="rolling_compact",
     )
-    output = _coerce_rolling_output(response)
+    output = _coerce_rolling_output(response["parsed"])
     summary = output.rolling_summary.strip()
     replacement = HumanMessage(
         content=(
@@ -178,7 +142,7 @@ async def rolling_compact(
     return RollingCompactionResult(
         messages=result_messages,
         rolling_summary=summary,
-        budget_usage=budget_from_model_response(response),
+        budget_usage=budget_usage,
         tokens_removed=max(
             0,
             estimate_text_tokens(compactable_text) - estimate_text_tokens(summary),
@@ -276,9 +240,7 @@ def _coerce_rolling_output(response: Any) -> RollingCompactOutput:
 __all__ = [
     "CompactionResult",
     "RollingCompactionResult",
-    "context_token_estimate",
     "micro_compact_messages",
     "render_protected_context",
     "rolling_compact",
-    "should_rolling_compact",
 ]

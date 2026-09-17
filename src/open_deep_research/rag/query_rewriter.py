@@ -10,7 +10,7 @@ from typing import Any
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 
-from open_deep_research.observability import observe_model_invoke
+from open_deep_research.budget import invoke_model_with_budget
 
 LOGGER = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def rewrite_query_with_model(
             api_key=api_key,
             tags=["langsmith:nostream"],
         )
-        response = observe_model_invoke(
+        response, _budget = invoke_model_with_budget(
             model,
             [HumanMessage(content=prompt.format(query=original_query))],
             observer_model=model_name,

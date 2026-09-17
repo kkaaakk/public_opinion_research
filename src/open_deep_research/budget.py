@@ -1,8 +1,9 @@
 """Budget policy and enforcement for bounded deep research runs.
 
-Token usage authority is LangChain's ``UsageMetadata`` (``AIMessage.usage_metadata``).
-Token aggregation goes through LangChain's ``add_usage``; this module only adds the
-project-owned policy layer: model/tool/search call limits, token budgets, warnings,
+LangChain owns the model-call facts: ``AIMessage.usage_metadata`` for tokens and the
+``on_chat_model_start`` callback lifecycle for real chat-model attempts.  Token
+aggregation goes through LangChain's ``add_usage``; this module only adds the
+project-owned policy layer: model/tool/search limits, token budgets, warnings,
 degradation reasons, and per-node budget deltas for the LangGraph reducers.
 """
 
@@ -12,9 +13,12 @@ import logging
 from contextvars import ContextVar, Token
 from typing import Any, Mapping, cast
 
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.ai import UsageMetadata, add_usage
 from langchain_core.messages.utils import count_tokens_approximately
+from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables.config import ensure_config, merge_configs
 
 from open_deep_research.configuration import Configuration
 
@@ -27,12 +31,12 @@ BUDGET_LIST_FIELDS = ("budget_warnings", "degradation_reasons")
 SEARCH_TOOL_NAMES = {"web_search", "rag_search"}
 MIN_MODEL_CALLS_PER_RESEARCH_UNIT = 2
 
-# Minimal per-tool-call attribution for model calls that are executed *inside* a
-# tool (e.g. per-URL webpage summarization in ``tavily_search``).  LangChain's
-# official UsageMetadataCallbackHandler cannot replace this: it aggregates a whole
-# run per model name, silently drops usage when ``response_metadata["model_name"]``
-# is absent, and cannot attribute a usage delta to one specific tool result.  The
-# Budget Guard needs exactly that per-tool delta, mid-run, so the capture stays.
+# Per-tool-call attribution for model calls executed *inside* a tool (e.g. per-URL
+# webpage summarization in ``tavily_search``).  Model attempts and provider tokens
+# are recorded here while a capture is active, so the enclosing node can merge one
+# delta for the tool.  LangChain's UsageMetadataCallbackHandler cannot replace this:
+# it aggregates a whole run per model name and cannot attribute a delta to one tool
+# result, which is exactly what the Budget Guard needs mid-run.
 _BUDGET_CAPTURE: ContextVar[dict[str, Any] | None] = ContextVar(
     "open_deep_research_budget_capture",
     default=None,
@@ -178,11 +182,6 @@ def capture_budget_usage(usage: Any) -> None:
     captured_usage.update(merged_usage)
 
 
-def capture_model_response(response: Any) -> None:
-    """Record a nested model response when a capture context is active."""
-    capture_budget_usage(budget_from_model_response(response))
-
-
 def budget_usage_with_reason(reason: str) -> dict[str, Any]:
     """Create a budget payload that only records a degradation reason."""
     usage = empty_budget_usage()
@@ -220,12 +219,142 @@ def usage_metadata_from_response(response: Any) -> UsageMetadata | None:
     return None
 
 
-def budget_from_model_response(response: Any) -> dict[str, Any]:
-    """Create a budget payload for one model response."""
+def budget_tokens_from_response(response: Any) -> dict[str, Any]:
+    """Create a token-only budget payload from a model response.
+
+    Model-call counting is owned by the LangChain ``on_chat_model_start`` attempt
+    event (see :class:`ModelAttemptCounter`); this function contributes token usage
+    only, so a retried call is never double counted.
+    """
     usage = empty_budget_usage()
-    usage["model_calls"] = 1
     _apply_usage_metadata(usage, usage_metadata_from_response(response))
     return usage
+
+
+class ModelAttemptCounter(BaseCallbackHandler):
+    """Count real model attempts through LangChain's official start lifecycle.
+
+    One ``on_chat_model_start`` (or ``on_llm_start`` for non-chat LLMs) equals one
+    underlying model attempt, so ``Runnable.with_retry`` attempts are counted
+    naturally without re-implementing any retry logic.  A chat model emits only
+    ``on_chat_model_start``, so a single attempt is never counted twice.
+    """
+
+    def __init__(self) -> None:
+        """Initialize the attempt counter."""
+        super().__init__()
+        self.starts = 0
+
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[Any]],
+        *,
+        run_id: Any,
+        parent_run_id: Any = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Count one chat-model attempt."""
+        self.starts += 1
+
+    def on_llm_start(
+        self,
+        serialized: dict[str, Any],
+        prompts: list[str],
+        *,
+        run_id: Any,
+        parent_run_id: Any = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Count one non-chat LLM attempt (chat models use ``on_chat_model_start``)."""
+        self.starts += 1
+
+
+def model_attempt_config(config: Any = None) -> tuple[Any, ModelAttemptCounter]:
+    """Return ``(config_with_attempt_counter, counter)`` for one model invocation."""
+    counter = ModelAttemptCounter()
+    merged = merge_configs(ensure_config(config), {"callbacks": [counter]})
+    return merged, counter
+
+
+def require_valid_structured_output(envelope: Any) -> Any:
+    """Validate a LangChain ``include_raw=True`` structured envelope.
+
+    Raises the parsing error (or a ``ValueError`` when nothing was parsed) so that
+    a surrounding ``with_retry`` re-invokes the model instead of re-checking the
+    same invalid envelope.
+    """
+    if not isinstance(envelope, Mapping):
+        raise ValueError("Structured output did not return a raw/parsed envelope.")
+    parsing_error = envelope.get("parsing_error")
+    if parsing_error is not None:
+        raise parsing_error
+    if envelope.get("parsed") is None:
+        raise ValueError("Structured output did not contain a parsed result.")
+    return envelope
+
+
+def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -> Any:
+    """Build a structured-output chain that keeps raw usage and retries real calls.
+
+    Composition: ``with_structured_output(include_raw=True)`` (official raw/parsed/
+    parsing_error envelope) ``|`` validation, wrapped in ``with_retry`` so the retry
+    covers both the model call and parse validation.
+    """
+    chain = model.with_structured_output(schema, include_raw=True) | RunnableLambda(
+        require_valid_structured_output
+    )
+    if max_attempts and max_attempts > 0:
+        chain = chain.with_retry(stop_after_attempt=max_attempts)
+    return chain
+
+
+async def ainvoke_model_with_budget(
+    runnable: Any,
+    payload: Any,
+    *,
+    config: Any = None,
+    **observer_kwargs: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Invoke one model runnable through the Observer boundary and account its budget.
+
+    Returns ``(response, budget_delta)``: ``model_calls`` counts real provider
+    attempts (retries included, from the LangChain start event) and tokens come
+    from ``AIMessage.usage_metadata``.  Nested calls (inside a tool) additionally
+    record the delta into the active Budget Capture for per-tool attribution.
+    """
+    from open_deep_research.observability import observe_model_ainvoke
+
+    merged, counter = model_attempt_config(config)
+    response = await observe_model_ainvoke(
+        runnable, payload, config=merged, **observer_kwargs
+    )
+    delta = budget_tokens_from_response(response)
+    delta["model_calls"] = counter.starts
+    capture_budget_usage(delta)
+    return response, delta
+
+
+def invoke_model_with_budget(
+    runnable: Any,
+    payload: Any,
+    *,
+    config: Any = None,
+    **observer_kwargs: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Invoke one model synchronously through the Observer boundary and account its budget."""
+    from open_deep_research.observability import observe_model_invoke
+
+    merged, counter = model_attempt_config(config)
+    response = observe_model_invoke(runnable, payload, config=merged, **observer_kwargs)
+    delta = budget_tokens_from_response(response)
+    delta["model_calls"] = counter.starts
+    capture_budget_usage(delta)
+    return response, delta
 
 
 def budget_from_native_search() -> dict[str, Any]:

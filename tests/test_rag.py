@@ -524,7 +524,7 @@ def test_query_rewriter_cleans_model_output_and_preserves_prompt():
     captured = {}
 
     class FakeModel:
-        def invoke(self, messages):
+        def invoke(self, messages, config=None):
             captured["messages"] = messages
             return types.SimpleNamespace(
                 content="Rewritten query: Milvus vector index path"

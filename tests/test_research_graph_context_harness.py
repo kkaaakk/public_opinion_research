@@ -5,8 +5,10 @@ import re
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableLambda
 
 import open_deep_research.runtime.business_agent as business_agent_module
+from open_deep_research.budget import context_pressure_ratio, estimate_context_tokens
 from open_deep_research.configuration import Configuration
 from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
 from open_deep_research.research_graph import (
@@ -23,7 +25,6 @@ from open_deep_research.research_graph import (
     batch_documents_by_tokens,
     micro_compact_messages,
     normalize_extraction_output,
-    should_rolling_compact,
 )
 from open_deep_research.research_graph.models import RawResearchDocument
 from open_deep_research.research_graph.schema import content_hash
@@ -172,16 +173,9 @@ def test_micro_compact_replaces_old_tool_body_and_keeps_recent_step() -> None:
 
 def test_rolling_compact_threshold_is_context_only() -> None:
     messages = [HumanMessage(content="x" * 400)]
-    assert not should_rolling_compact(
-        messages,
-        model_context_capacity=10_000,
-        threshold_ratio=0.75,
-    )
-    assert should_rolling_compact(
-        messages,
-        model_context_capacity=10,
-        threshold_ratio=0.75,
-    )
+    estimated = estimate_context_tokens(messages)
+    assert context_pressure_ratio(estimated, 10_000) < 0.75
+    assert context_pressure_ratio(estimated, 10) >= 0.75
 
 
 def test_extraction_batches_by_tokens_instead_of_fixed_document_count() -> None:
@@ -229,13 +223,15 @@ def test_tavily_raw_tool_keeps_source_boundaries_without_page_summarization(monk
 
 
 class _GraphFixtureModel:
+    """Fixture structured model emitting real ``include_raw=True`` envelopes."""
+
     def __init__(self) -> None:
         self.schema = None
         self.extraction_calls = 0
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, include_raw=False):
         self.schema = schema
-        return self
+        return RunnableLambda(self._structured_call)
 
     def with_retry(self, **_kwargs):
         return self
@@ -243,7 +239,19 @@ class _GraphFixtureModel:
     def with_config(self, _config):
         return self
 
-    async def ainvoke(self, messages):
+    async def _structured_call(self, messages, config=None):
+        parsed = await self.ainvoke(messages)
+        return {
+            "raw": AIMessage(
+                content="",
+                response_metadata={"model_name": "fixture"},
+                usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+            ),
+            "parsed": parsed,
+            "parsing_error": None,
+        }
+
+    async def ainvoke(self, messages, config=None):
         prompt = str(messages[0].content)
         if self.schema is GraphExtractionOutput:
             self.extraction_calls += 1
@@ -361,13 +369,26 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
         def with_retry(self, **_kwargs):
             return self
 
-        def with_structured_output(self, schema):
-            return AgentFixtureModel(self.model_name, schema=schema)
+        def with_structured_output(self, schema, include_raw=False):
+            structured = AgentFixtureModel(self.model_name, schema=schema)
+            return RunnableLambda(structured._structured_call)
 
         def with_config(self, config):
             return AgentFixtureModel(config.get("model", self.model_name))
 
-        async def ainvoke(self, messages):
+        async def _structured_call(self, messages, config=None):
+            parsed = await self._parse(messages)
+            return {
+                "raw": AIMessage(
+                    content="",
+                    response_metadata={"model_name": "fixture"},
+                    usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+                ),
+                "parsed": parsed,
+                "parsing_error": None,
+            }
+
+        async def _parse(self, messages):
             if self.schema is GraphExtractionOutput:
                 source_id = re.search(r'"source_id":\s*"([^"]+)"', str(messages[0].content)).group(1)
                 return GraphExtractionOutput(
@@ -383,6 +404,11 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
                 )
             if self.schema is WorkingContextDelta:
                 return WorkingContextDelta(recent_progress="updated")
+            return None
+
+        async def ainvoke(self, messages, config=None):
+            if self.schema is not None:
+                return await self._structured_call(messages, config)
             if "Generate a bounded public-opinion role report" in str(messages[0].content):
                 return SimpleNamespace(content="bounded graph report")
             self.agent_calls += 1

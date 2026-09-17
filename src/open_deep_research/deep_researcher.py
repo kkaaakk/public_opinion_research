@@ -18,9 +18,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Send, interrupt
 
 from open_deep_research.budget import (
+    ainvoke_model_with_budget,
     append_budget_summary,
     available_research_unit_slots,
-    budget_from_model_response,
     budget_usage_with_reason,
     can_spend_model_call,
     diff_budget_usage,
@@ -28,6 +28,7 @@ from open_deep_research.budget import (
     merge_budget_usage,
     remaining_input_tokens,
     remaining_output_tokens,
+    structured_output_chain,
     truncate_text_to_token_budget,
 )
 from open_deep_research.configuration import Configuration
@@ -36,7 +37,6 @@ from open_deep_research.observability import (
     ObservedGraph,
     ObserverRunLifecycle,
     observe_graph_node,
-    observe_model_ainvoke,
 )
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
@@ -430,11 +430,10 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     }
     
     # Configure model with structured output and retry logic
-    clarification_model = (
-        configurable_model
-        .with_structured_output(ClarifyWithUser)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(model_config)
+    clarification_model = structured_output_chain(
+        configurable_model.with_config(model_config),
+        ClarifyWithUser,
+        max_attempts=configurable.max_structured_output_retries,
     )
     
     # Step 3: Analyze whether clarification is needed
@@ -442,14 +441,14 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         messages=get_buffer_string(messages), 
         date=get_today_str()
     )
-    response = await observe_model_ainvoke(
+    response, budget_update = await ainvoke_model_with_budget(
         clarification_model,
         [HumanMessage(content=prompt_content)],
         observer_model=configurable.research_model,
         observer_structured_output=True,
         observer_component="clarification",
     )
-    budget_update = budget_from_model_response(response)
+    response = response["parsed"]
     
     # Step 4: Route based on clarification analysis
     if response.need_clarification:
@@ -513,11 +512,10 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     }
     
     # Configure model for structured research question generation
-    research_model = (
-        configurable_model
-        .with_structured_output(ResearchQuestion)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(research_model_config)
+    research_model = structured_output_chain(
+        configurable_model.with_config(research_model_config),
+        ResearchQuestion,
+        max_attempts=configurable.max_structured_output_retries,
     )
     
     # Step 2: Generate structured research brief from user messages.
@@ -532,14 +530,14 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         "and any internal-knowledge requirements. If a detail is unspecified, "
         "state that it is unspecified rather than inventing it."
     )
-    response = await observe_model_ainvoke(
+    response, budget_update = await ainvoke_model_with_budget(
         research_model,
         [HumanMessage(content=prompt_content)],
         observer_model=configurable.research_model,
         observer_structured_output=True,
         observer_component="research_brief",
     )
-    budget_update = budget_from_model_response(response)
+    response = response["parsed"]
 
     return Command(
         goto="plan_report_sections",
@@ -601,22 +599,21 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         date=get_today_str(),
     )
     
-    planner = (
-        configurable_model
-        .with_structured_output(Sections)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(planner_model_config)
+    planner = structured_output_chain(
+        configurable_model.with_config(planner_model_config),
+        Sections,
+        max_attempts=configurable.max_structured_output_retries,
     )
     
     try:
-        response = await observe_model_ainvoke(
+        response, budget_update = await ainvoke_model_with_budget(
             planner,
             [HumanMessage(content=prompt)],
             observer_model=planner_model_name,
             observer_structured_output=True,
             observer_component="report_planner",
         )
-        budget_update = budget_from_model_response(response)
+        response = response["parsed"]
     except Exception as exc:
         if not is_token_limit_exceeded(exc, planner_model_name):
             LOGGER.exception("Unexpected report section planning failure.")
@@ -921,14 +918,13 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
                 evidence=evidence,
             )
             writer = configurable_model.with_config(writer_model_config)
-            response = await observe_model_ainvoke(
+            response, response_budget = await ainvoke_model_with_budget(
                 writer,
                 [HumanMessage(content=prompt)],
                 observer_model=writer_model_name,
             )
             section.content = str(response.content)
             section.status = "done"
-            response_budget = budget_from_model_response(response)
         except Exception as exc:
             if is_token_limit_exceeded(exc, writer_model_name):
                 LOGGER.warning("Section '%s' exceeded the model context limit: %s", section.name, exc)
@@ -1017,14 +1013,13 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
                 context=context,
             )
             writer = configurable_model.with_config(writer_model_config)
-            response = await observe_model_ainvoke(
+            response, response_budget = await ainvoke_model_with_budget(
                 writer,
                 [HumanMessage(content=prompt)],
                 observer_model=configurable.final_report_model,
             )
             section.content = str(response.content)
             section.status = "done"
-            response_budget = budget_from_model_response(response)
         except Exception as exc:
             if is_token_limit_exceeded(exc, configurable.final_report_model):
                 LOGGER.warning("Final section '%s' exceeded the model context limit: %s", section.name, exc)
@@ -1111,13 +1106,13 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                         "api_key": get_api_key_for_model(configurable.final_report_model, config),
                         "tags": ["langsmith:nostream"],
                     }
-                    fill_response = await observe_model_ainvoke(
+                    fill_response, fill_budget = await ainvoke_model_with_budget(
                         configurable_model.with_config(writer_config),
                         [HumanMessage(content=final_report_prompt)],
                         observer_model=configurable.final_report_model,
                     )
                     budget_update = merge_budget_usage(
-                        budget_from_model_response(fill_response),
+                        fill_budget,
                         budget_usage_with_reason(f"Filled {len(missing_names)} missing sections via final_report_model."),
                     )
                     final_usage = merge_budget_usage(budget_usage, budget_update)
@@ -1236,20 +1231,19 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     if configurable.research_model_max_tokens is not None:
         review_model_config["max_tokens"] = configurable.research_model_max_tokens
 
-    reviewer = (
-        configurable_model
-        .with_structured_output(ResearchReview)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(review_model_config)
+    reviewer = structured_output_chain(
+        configurable_model.with_config(review_model_config),
+        ResearchReview,
+        max_attempts=configurable.max_structured_output_retries,
     )
-    response = await observe_model_ainvoke(
+    response, review_budget = await ainvoke_model_with_budget(
         reviewer,
         [HumanMessage(content=prompt)],
         observer_model=configurable.research_model,
         observer_structured_output=True,
         observer_component=f"research_review_round_{current_round}",
     )
-    review = _coerce_research_review(response)
+    review = _coerce_research_review(response["parsed"])
     if review is None:
         raise TypeError(
             "Research review model returned an invalid ResearchReview structured output."
@@ -1261,7 +1255,7 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
             "pending_tasks": {"type": "override", "value": []},
         },
         "runtime": {
-            "budget": budget_from_model_response(response),
+            "budget": review_budget,
             **({"metrics": graph_review_metrics} if graph_review_metrics else {}),
         },
     }
@@ -1484,17 +1478,17 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
         or get_model_token_limit(configurable.final_report_model)
     )
     output_reserve = int(configurable.final_report_model_max_tokens or 0)
-    reserved_prompt_tokens = estimate_text_tokens(
+    reserved_prompt_budget = estimate_text_tokens(
         _workflow(state).get("brief", "")
     ) + estimate_text_tokens(messages_text)
     remaining_input_budget = remaining_input_tokens(configurable, budget_usage)
     findings_budget = (
-        max(0, remaining_input_budget - reserved_prompt_tokens)
+        max(0, remaining_input_budget - reserved_prompt_budget)
         if remaining_input_budget is not None
         else None
     )
     if context_window:
-        window_budget = max(0, context_window - output_reserve - reserved_prompt_tokens)
+        window_budget = max(0, context_window - output_reserve - reserved_prompt_budget)
         findings_budget = (
             window_budget if findings_budget is None else min(findings_budget, window_budget)
         )
@@ -1572,14 +1566,14 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
             )
             
             # Generate the final report
-            final_report = await observe_model_ainvoke(
+            final_report, report_budget = await ainvoke_model_with_budget(
                 configurable_model.with_config(writer_model_config),
                 [HumanMessage(content=final_report_prompt)],
                 observer_model=configurable.final_report_model,
             )
             final_budget_update = merge_budget_usage(
                 budget_update,
-                budget_from_model_response(final_report),
+                report_budget,
             )
             final_usage = merge_budget_usage(budget_usage, final_budget_update)
             final_report_content = append_budget_summary(

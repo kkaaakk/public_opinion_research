@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, filter_messages
 from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.budget import (
-    budget_from_model_response,
+    ainvoke_model_with_budget,
     budget_usage_with_reason,
     can_spend_model_call,
     start_budget_capture,
@@ -21,7 +21,7 @@ from open_deep_research.budget import (
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
-from open_deep_research.observability import observe_model_ainvoke, observe_tool_ainvoke
+from open_deep_research.observability import observe_tool_ainvoke
 from open_deep_research.prompts import (
     compress_research_simple_human_message,
     compress_research_system_prompt,
@@ -401,7 +401,7 @@ async def _compress_research(
     ]
     for _attempt in range(3):
         try:
-            response = await observe_model_ainvoke(
+            response, response_budget = await ainvoke_model_with_budget(
                 model,
                 [
                     SystemMessage(
@@ -420,7 +420,7 @@ async def _compress_research(
             return (
                 str(response.content),
                 [raw_notes],
-                budget_from_model_response(response),
+                response_budget,
             )
         except Exception as exc:
             if is_token_limit_exceeded(exc, configurable.compression_model):

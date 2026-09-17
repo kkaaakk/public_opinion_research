@@ -460,7 +460,7 @@ def test_rag_query_rewrite_model_is_observed():
     observer, run, events = _recording_run()
 
     class FakeModel:
-        def invoke(self, payload):
+        def invoke(self, payload, config=None):
             return AIMessage(
                 content="Rewritten query: battery warranty complaint",
                 usage_metadata={"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
@@ -492,7 +492,7 @@ def test_vision_model_is_observed(monkeypatch):
     observer, run, events = _recording_run()
 
     class FakeVisionModel:
-        def invoke(self, payload):
+        def invoke(self, payload, config=None):
             return AIMessage(
                 content="a product diagram",
                 usage_metadata={"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
@@ -522,8 +522,12 @@ def test_utils_structured_model_is_observed_and_missing_usage_stays_na():
     observer, run, events = _recording_run()
 
     class FakeStructuredModel:
-        async def ainvoke(self, payload):
-            return SimpleNamespace(summary="short", key_excerpts=["evidence"])
+        async def ainvoke(self, payload, config=None):
+            return {
+                "raw": AIMessage(content=""),
+                "parsed": SimpleNamespace(summary="short", key_excerpts=["evidence"]),
+                "parsing_error": None,
+            }
 
     async def exercise():
         with run_context(run):

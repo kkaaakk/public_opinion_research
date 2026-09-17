@@ -22,8 +22,8 @@ from langchain_core.tools import (
 )
 from tavily import AsyncTavilyClient
 
+from open_deep_research.budget import ainvoke_model_with_budget, structured_output_chain
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
-from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
 
@@ -92,13 +92,15 @@ async def tavily_search(
     
     # Initialize summarization model with retry logic
     model_api_key = get_api_key_for_model(configurable.summarization_model, config)
-    summarization_model = init_chat_model(
-        model=configurable.summarization_model,
-        max_tokens=configurable.summarization_model_max_tokens,
-        api_key=model_api_key,
-        tags=["langsmith:nostream"]
-    ).with_structured_output(Summary).with_retry(
-        stop_after_attempt=configurable.max_structured_output_retries
+    summarization_model = structured_output_chain(
+        init_chat_model(
+            model=configurable.summarization_model,
+            max_tokens=configurable.summarization_model_max_tokens,
+            api_key=model_api_key,
+            tags=["langsmith:nostream"],
+        ),
+        Summary,
+        max_attempts=configurable.max_structured_output_retries,
     )
     
     # Step 4: Create summarization tasks (skip empty content)
@@ -253,8 +255,8 @@ async def summarize_webpage(
         )
         
         # Execute summarization with timeout to prevent hanging
-        summary = await asyncio.wait_for(
-            observe_model_ainvoke(
+        response, _budget = await asyncio.wait_for(
+            ainvoke_model_with_budget(
                 model,
                 [HumanMessage(content=prompt_content)],
                 observer_model=observer_model,
@@ -263,6 +265,7 @@ async def summarize_webpage(
             ),
             timeout=60.0  # 60 second timeout for summarization
         )
+        summary = response["parsed"]
 
         # Format the summary with structured sections
         formatted_summary = (

@@ -885,7 +885,6 @@ def observe_model_invoke(runnable: Any, payload: Any, **kwargs: Any) -> Any:
             structured_output=structured_output,
             component=component,
         )
-        _capture_response_usage(response)
         return response
     finally:
         _MODEL_BOUNDARY_DEPTH.reset(token)
@@ -935,25 +934,9 @@ async def observe_model_ainvoke(runnable: Any, payload: Any, **kwargs: Any) -> A
             structured_output=structured_output,
             component=component,
         )
-        _capture_response_usage(response)
         return response
     finally:
         _MODEL_BOUNDARY_DEPTH.reset(token)
-
-
-def _capture_response_usage(response: Any) -> None:
-    """Record this model response into the active Budget Guard capture, if any.
-
-    This is the single accounting point for nested model calls (for example the
-    per-URL summarizer inside ``tavily_search``) whose ``AIMessage`` never reaches
-    the graph node that owns the budget delta.
-    """
-    try:
-        from open_deep_research.budget import capture_model_response
-
-        capture_model_response(response)
-    except Exception:  # pragma: no cover - budget capture must never break a call
-        LOGGER.debug("Budget capture failed", exc_info=True)
 
 
 def _safe_args_summary(args: Any) -> dict[str, Any]:

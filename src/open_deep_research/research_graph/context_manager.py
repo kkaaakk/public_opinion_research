@@ -9,8 +9,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from open_deep_research.budget import budget_from_model_response
-from open_deep_research.observability import observe_model_ainvoke
+from open_deep_research.budget import ainvoke_model_with_budget, structured_output_chain
 from open_deep_research.research_graph.models import (
     ContextConflict,
     ContextFinding,
@@ -80,19 +79,17 @@ class ContextManager:
             research_delta=deltas,
             capacity=self.capacity,
         )
-        model = self.model
-        if hasattr(model, "with_structured_output"):
-            model = model.with_structured_output(WorkingContextDelta)
-        if hasattr(model, "with_retry"):
-            model = model.with_retry(stop_after_attempt=self.max_retries)
-        response = await observe_model_ainvoke(
-            model,
+        structured = structured_output_chain(
+            self.model, WorkingContextDelta, max_attempts=self.max_retries
+        )
+        response, budget_usage = await ainvoke_model_with_budget(
+            structured,
             [HumanMessage(content=prompt)],
             observer_model=self.model_name,
             observer_structured_output=True,
             observer_component="context_manager",
         )
-        delta = _coerce_context_delta(response)
+        delta = _coerce_context_delta(response["parsed"])
         available_ids = _available_graph_ids(current, relevant_subgraph, deltas)
         context = apply_working_context_delta(
             current,
@@ -103,7 +100,7 @@ class ContextManager:
         return ContextManagerResult(
             context=context,
             delta=delta,
-            budget_usage=budget_from_model_response(response),
+            budget_usage=budget_usage,
         )
 
 

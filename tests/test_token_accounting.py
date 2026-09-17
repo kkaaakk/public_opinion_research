@@ -1,204 +1,453 @@
-"""Token accounting paths: retries, nested calls, proactive compaction, error routing."""
+"""Token accounting paths: structured raw usage, retries, context pressure, nesting.
+
+Test doubles are real LangChain ``BaseChatModel`` subclasses so the official
+lifecycle (``bind_tools``, ``include_raw`` envelopes, ``on_chat_model_start``,
+``with_retry``) is exercised instead of faked metadata.
+"""
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
-from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.callbacks import UsageMetadataCallbackHandler
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import tool
 
 from open_deep_research.budget import (
-    budget_from_model_response,
+    ainvoke_model_with_budget,
+    budget_tokens_from_response,
+    estimate_context_tokens,
+    model_attempt_config,
     start_budget_capture,
     stop_budget_capture,
+    structured_output_chain,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.observability import observe_model_ainvoke
+from open_deep_research.research_graph.context_manager import ContextManager
+from open_deep_research.research_graph.extractor import GraphExtractor
 from open_deep_research.research_graph.metrics import ResearchGraphMetrics
-from open_deep_research.research_graph.models import RollingCompactOutput
+from open_deep_research.research_graph.models import (
+    ResearchGraphScope,
+    WorkingContext,
+)
 from open_deep_research.runtime.agent_runtime import AgentRuntime
 from open_deep_research.utils import summarize_webpage
 
-_ATTEMPTS = {"count": 0}
+LARGE_USAGE = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+SMALL_USAGE = {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6}
+
+_SCRIPT: list = []
 
 
-class _AttemptCounter(BaseCallbackHandler):
-    def __init__(self):
-        self.starts = 0
-
-    def on_llm_start(self, *_args, **_kwargs):
-        self.starts += 1
+def _script(*steps: Any) -> None:
+    _SCRIPT[:] = list(steps)
 
 
-class _FlakyModel(GenericFakeChatModel):
-    """Fails once, then succeeds; used to observe retry accounting."""
+class ScriptedChat(BaseChatModel):
+    """Real LangChain ChatModel returning queued scripted results."""
 
-    def _generate(self, *args, **kwargs):
-        _ATTEMPTS["count"] += 1
-        if _ATTEMPTS["count"] < 2:
-            raise ValueError("transient provider error")
-        return super()._generate(*args, **kwargs)
+    @property
+    def _llm_type(self) -> str:
+        return "scripted"
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        if not _SCRIPT:
+            raise AssertionError("scripted model has no queued response")
+        return _SCRIPT.pop(0)()
 
 
-def _flaky_model() -> _FlakyModel:
-    return _FlakyModel(
-        messages=iter(
-            [
-                AIMessage(
-                    content="ok",
-                    response_metadata={"model_name": "flaky-model"},
-                    usage_metadata={"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
-                )
-            ]
+def _chat_result(message: AIMessage) -> ChatResult:
+    return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+def _tool_step(name: str, args: dict, usage: dict | None = None):
+    message = AIMessage(
+        content="",
+        tool_calls=[{"name": name, "args": args, "id": "call-1"}],
+        response_metadata={"model_name": "scripted"},
+        usage_metadata=usage or LARGE_USAGE,
+    )
+    return lambda: _chat_result(message)
+
+
+def _text_step(content: str = "done", usage: dict | None = None):
+    message = AIMessage(
+        content=content,
+        response_metadata={"model_name": "scripted"},
+        usage_metadata=usage or LARGE_USAGE,
+    )
+    return lambda: _chat_result(message)
+
+
+def _error_step(error: Exception):
+    def step():
+        raise error
+
+    return step
+
+
+# ---------------------------------------------------------------------------
+# Structured output keeps raw usage
+# ---------------------------------------------------------------------------
+
+
+def test_structured_raw_usage_is_preserved_and_parsed_still_works():
+    from open_deep_research.state import ClarifyWithUser
+
+    _script(
+        _tool_step(
+            "ClarifyWithUser",
+            {"need_clarification": False, "question": "", "verification": "ok"},
         )
     )
+    chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=2)
+
+    envelope = asyncio.run(chain.ainvoke([HumanMessage(content="hi")]))
+
+    assert envelope["raw"].usage_metadata == LARGE_USAGE
+    assert envelope["parsed"].verification == "ok"
+    usage = budget_tokens_from_response(envelope)
+    assert usage["input_tokens"] == 10
+    assert usage["output_tokens"] == 5
+    assert usage["total_tokens"] == 15
 
 
-def test_retry_counts_successful_usage_without_fabricating_failed_attempts():
-    """Two provider attempts are visible; only the successful response has usage."""
-    _ATTEMPTS["count"] = 0
-    counter = _AttemptCounter()
-    response = asyncio.run(
-        _flaky_model()
-        .with_retry(stop_after_attempt=5)
-        .ainvoke([HumanMessage(content="hi")], config={"callbacks": [counter]})
+def test_parsing_error_retries_the_real_model_call():
+    from open_deep_research.state import ClarifyWithUser
+
+    _script(
+        _tool_step("ClarifyWithUser", {"wrong_field": True}, usage=SMALL_USAGE),
+        _tool_step(
+            "ClarifyWithUser",
+            {"need_clarification": False, "question": "", "verification": "second"},
+            usage=LARGE_USAGE,
+        ),
     )
+    chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=3)
 
-    usage = budget_from_model_response(response)
+    envelope = asyncio.run(chain.ainvoke([HumanMessage(content="hi")]))
 
-    assert counter.starts == 2  # one failed attempt + one successful attempt
-    assert usage["model_calls"] == 1  # one successful model response is accounted
-    assert usage["input_tokens"] == 4
-    assert usage["output_tokens"] == 2
-    assert usage["total_tokens"] == 6
+    assert envelope["parsed"].verification == "second"
+    # The retry re-ran the real model call; the successful envelope keeps its usage.
+    assert envelope["raw"].usage_metadata == LARGE_USAGE
 
 
-def test_failed_model_call_never_fabricates_tokens():
-    """All attempts failing yields no usage at all, never a guessed value."""
-    _ATTEMPTS["count"] = 0
+def test_parsing_error_retry_exhaustion_raises():
+    from open_deep_research.state import ClarifyWithUser
 
-    class _AlwaysFailing(GenericFakeChatModel):
-        def _generate(self, *args, **kwargs):
-            raise ValueError("provider unavailable")
+    _script(
+        _tool_step("ClarifyWithUser", {"wrong_field": 1}),
+        _tool_step("ClarifyWithUser", {"wrong_field": 2}),
+    )
+    chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=2)
 
-    model = _AlwaysFailing(messages=iter([AIMessage(content="never")]))
+    with pytest.raises(Exception):
+        asyncio.run(chain.ainvoke([HumanMessage(content="hi")]))
+
+
+# ---------------------------------------------------------------------------
+# model_calls equals real chat-model attempts
+# ---------------------------------------------------------------------------
+
+
+def test_model_calls_counts_real_attempts_after_provider_error():
+    _script(_error_step(ValueError("transient")), _text_step())
+    model = ScriptedChat().with_retry(stop_after_attempt=3)
+
+    async def exercise():
+        return await ainvoke_model_with_budget(model, [HumanMessage(content="hi")])
+
+    response, delta = asyncio.run(exercise())
+
+    assert response.content == "done"
+    assert delta["model_calls"] == 2
+    assert delta["input_tokens"] == 10
+    assert delta["output_tokens"] == 5
+
+
+def test_model_calls_counts_real_attempts_after_parsing_error():
+    from open_deep_research.state import ClarifyWithUser
+
+    _script(
+        _tool_step("ClarifyWithUser", {"wrong_field": 1}),
+        _tool_step(
+            "ClarifyWithUser",
+            {"need_clarification": False, "question": "", "verification": "ok"},
+        ),
+    )
+    chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=3)
+
+    async def exercise():
+        return await ainvoke_model_with_budget(chain, [HumanMessage(content="hi")])
+
+    _response, delta = asyncio.run(exercise())
+
+    assert delta["model_calls"] == 2
+    assert delta["input_tokens"] == 10
+
+
+def test_retry_exhaustion_observes_all_attempts_without_fabricating_tokens():
+    """Three failing attempts: the boundary observes 3 starts and no token deltas."""
+    _script(
+        _error_step(ValueError("fail 1")),
+        _error_step(ValueError("fail 2")),
+        _error_step(ValueError("fail 3")),
+    )
+    config, counter = model_attempt_config()
+    model = ScriptedChat().with_retry(stop_after_attempt=3)
+
+    async def exercise():
+        return await ainvoke_model_with_budget(
+            model, [HumanMessage(content="hi")], config=config
+        )
+
     with pytest.raises(ValueError):
-        asyncio.run(model.with_retry(stop_after_attempt=2).ainvoke([HumanMessage(content="hi")]))
+        asyncio.run(exercise())
+
+    assert counter.starts == 3
 
 
-def test_nested_model_call_usage_is_captured_at_the_model_boundary():
-    """summarize_webpage usage reaches the budget capture without manual recording."""
+def test_failed_attempts_without_usage_do_not_fabricate_tokens():
+    """A successful retry after a failure only carries provider-reported usage."""
+    _script(_error_step(ValueError("transient")), _text_step(usage=SMALL_USAGE))
+    model = ScriptedChat().with_retry(stop_after_attempt=3)
 
-    class _FakeSummaryModel:
-        async def ainvoke(self, _messages):
-            return SimpleNamespace(
-                summary="short summary",
-                key_excerpts="evidence",
-                usage_metadata={"input_tokens": 9, "output_tokens": 3, "total_tokens": 12},
-            )
+    async def exercise():
+        return await ainvoke_model_with_budget(model, [HumanMessage(content="hi")])
+
+    _response, delta = asyncio.run(exercise())
+
+    assert delta["model_calls"] == 2
+    assert delta["input_tokens"] == 4
+    assert delta["total_tokens"] == 6
+
+
+def test_official_usage_callback_stays_a_separate_observability_channel():
+    handler = UsageMetadataCallbackHandler()
+    _script(_text_step(usage=LARGE_USAGE))
+
+    async def exercise():
+        return await ainvoke_model_with_budget(
+            ScriptedChat(),
+            [HumanMessage(content="hi")],
+            config={"callbacks": [handler]},
+        )
+
+    _response, delta = asyncio.run(exercise())
+
+    assert delta["model_calls"] == 1
+    assert delta["input_tokens"] == 10
+    # The official run-level handler observes the same single call.
+    assert handler.usage_metadata["scripted"]["input_tokens"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Nested tool model calls
+# ---------------------------------------------------------------------------
+
+
+def test_nested_structured_model_with_retry_does_not_double_count():
+    from open_deep_research.state import Summary
+
+    _script(
+        _tool_step("Summary", {"wrong_field": "x"}),
+        _tool_step(
+            "Summary",
+            {"summary": "short summary", "key_excerpts": "evidence"},
+            usage={"input_tokens": 9, "output_tokens": 3, "total_tokens": 12},
+        ),
+    )
+    model = structured_output_chain(ScriptedChat(), Summary, max_attempts=3)
 
     async def exercise() -> dict:
         token = start_budget_capture()
         try:
-            await summarize_webpage(_FakeSummaryModel(), "page text")
+            await summarize_webpage(model, "page text")
         finally:
             return stop_budget_capture(token)
 
     captured = asyncio.run(exercise())
 
-    assert captured["model_calls"] == 1
+    # 2 real attempts, tokens counted once (from the successful raw envelope).
+    assert captured["model_calls"] == 2
     assert captured["input_tokens"] == 9
     assert captured["output_tokens"] == 3
     assert captured["total_tokens"] == 12
 
 
-def test_official_usage_callback_and_budget_capture_each_count_once():
-    """Run-level observability and state enforcement stay separate, without double counting."""
-    handler = UsageMetadataCallbackHandler()
-    model = GenericFakeChatModel(
-        messages=iter(
-            [
-                AIMessage(
-                    content="observed",
-                    response_metadata={"model_name": "fixture-model"},
-                    usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
-                )
-            ]
+# ---------------------------------------------------------------------------
+# Research Graph structured calls keep exact usage
+# ---------------------------------------------------------------------------
+
+
+def _scope() -> ResearchGraphScope:
+    return ResearchGraphScope(run_id="run-a", role="public_signal", research_round=1, task_id="t1")
+
+
+def test_graph_extractor_reports_exact_usage():
+    _script(
+        _tool_step(
+            "GraphExtractionOutput",
+            {},
+            usage={"input_tokens": 120, "output_tokens": 30, "total_tokens": 150},
+        )
+    )
+    extractor = GraphExtractor(
+        model=ScriptedChat(),
+        model_name="scripted",
+        max_tokens=512,
+        max_retries=2,
+        batch_token_limit=10_000,
+    )
+    from open_deep_research.research_graph.models import RawResearchDocument
+
+    documents = [
+        RawResearchDocument(source_id="SRC1", content="Official notice confirms a brake investigation.")
+    ]
+
+    result = asyncio.run(extractor.extract(documents, scope=_scope()))
+    batch = result.batches[0]
+
+    assert batch.input_tokens == 120
+    assert batch.output_tokens == 30
+    assert batch.input_token_quality == "exact"
+    assert batch.output_token_quality == "exact"
+    assert batch.budget_usage["model_calls"] == 1
+
+
+def test_context_manager_reports_exact_usage():
+    from open_deep_research.research_graph.models import RelevantSubgraph
+
+    _script(
+        _tool_step(
+            "WorkingContextDelta",
+            {"recent_progress": "updated"},
+            usage={"input_tokens": 40, "output_tokens": 12, "total_tokens": 52},
+        )
+    )
+    manager = ContextManager(model=ScriptedChat(), model_name="scripted", max_retries=2)
+
+    result = asyncio.run(
+        manager.update(
+            task=SimpleNamespace(objective="assess safety"),
+            current=WorkingContext(current_objective="assess safety"),
+            relevant_subgraph=RelevantSubgraph(run_id="run-a"),
+            research_delta=[],
         )
     )
 
-    async def exercise() -> dict:
-        token = start_budget_capture()
-        try:
-            await observe_model_ainvoke(
-                model,
-                [HumanMessage(content="hi")],
-                config={"callbacks": [handler]},
-            )
-        finally:
-            return stop_budget_capture(token)
-
-    captured = asyncio.run(exercise())
-
-    assert captured["model_calls"] == 1
-    assert captured["input_tokens"] == 7
-    assert handler.usage_metadata["fixture-model"]["input_tokens"] == 7
-    assert handler.usage_metadata["fixture-model"]["total_tokens"] == 10
+    assert result.budget_usage["model_calls"] == 1
+    assert result.budget_usage["input_tokens"] == 40
+    assert result.budget_usage["output_tokens"] == 12
 
 
-class _CompactionModel:
-    """Structured rolling-compaction model fixture."""
+def test_rolling_compact_reports_exact_usage():
+    from open_deep_research.research_graph.compaction import rolling_compact
 
-    def __init__(self, calls: list[str], summary: str = "compacted history") -> None:
-        self.calls = calls
-        self.summary = summary
+    _script(
+        _tool_step(
+            "RollingCompactOutput",
+            {"rolling_summary": "compacted history"},
+            usage={"input_tokens": 70, "output_tokens": 20, "total_tokens": 90},
+        )
+    )
+    messages = [
+        HumanMessage(content="assignment"),
+        AIMessage(
+            content="step 0",
+            tool_calls=[{"name": "web_search", "args": {}, "id": "call-0"}],
+        ),
+        ToolMessage(content="raw 0", name="web_search", tool_call_id="call-0"),
+        AIMessage(
+            content="step 1",
+            tool_calls=[{"name": "web_search", "args": {}, "id": "call-1"}],
+        ),
+        ToolMessage(content="raw 1", name="web_search", tool_call_id="call-1"),
+    ]
 
-    def with_structured_output(self, _schema):
-        return self
+    result = asyncio.run(
+        rolling_compact(
+            messages,
+            previous_summary="",
+            protected_context="task",
+            model=ScriptedChat(),
+            model_name="scripted",
+            max_retries=2,
+            recent_raw_steps=1,
+        )
+    )
 
-    def with_retry(self, **_kwargs):
-        return self
-
-    def with_config(self, _config):
-        return self
-
-    async def ainvoke(self, _messages):
-        self.calls.append("compact")
-        return RollingCompactOutput(rolling_summary=self.summary)
-
-
-class _MainModel:
-    def __init__(self, calls: list[str]) -> None:
-        self.calls = calls
-
-    def with_config(self, _config):
-        return self
-
-    async def ainvoke(self, _messages):
-        self.calls.append("model")
-        return AIMessage(content="done")
+    assert result.budget_usage["model_calls"] == 1
+    assert result.budget_usage["input_tokens"] == 70
+    assert result.budget_usage["output_tokens"] == 20
 
 
-class _FakeWorkspace:
-    """Minimal ResearchWorkspace surface used by AgentRuntime."""
+def test_research_review_node_reports_structured_usage(monkeypatch):
+    import open_deep_research.deep_researcher as module
 
-    def __init__(self, compaction_model, protected: str = "", events: list | None = None) -> None:
+    monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
+    _script(
+        _tool_step(
+            "ResearchReview",
+            {"research_complete": True},
+            usage={"input_tokens": 55, "output_tokens": 15, "total_tokens": 70},
+        )
+    )
+    monkeypatch.setattr(module, "configurable_model", ScriptedChat())
+    state = {
+        "messages": [HumanMessage(content="brand risk")],
+        "workflow": {"brief": "brand risk", "round": 1},
+        "agents": {
+            "public_signal": {"report": "signal"},
+            "internal_knowledge": {"report": "internal"},
+        },
+        "research": {},
+        "report": {},
+        "runtime": {"budget": {}, "metrics": {}},
+    }
+    config = {
+        "configurable": {
+            "research_graph_enabled": False,
+            "research_model": "scripted:model",
+            "max_structured_output_retries": 2,
+        }
+    }
+
+    result = asyncio.run(module.research_review(state, config))
+
+    assert result["workflow"]["review"].research_complete is True
+    budget = result["runtime"]["budget"]
+    assert budget["model_calls"] == 1
+    assert budget["input_tokens"] == 55
+    assert budget["output_tokens"] == 15
+
+
+# ---------------------------------------------------------------------------
+# Context pressure uses the exact next request
+# ---------------------------------------------------------------------------
+
+
+class _CompactionWorkspace:
+    """Minimal workspace whose model_factory returns a scripted compactor."""
+
+    def __init__(self, protected: str = "") -> None:
         self.rolling_summary = ""
         self.metrics = ResearchGraphMetrics()
         self.transcript = None
         self.scope = SimpleNamespace(research_round=1)
-        self.compaction_model = compaction_model
         self.protected = protected
-        self.events = events
 
     def protected_context(self) -> str:
-        if self.events is not None:
-            self.events.append("context_check")
         return self.protected
 
     def model_factory(self, _model_name, _max_tokens):
-        return self.compaction_model
+        return ScriptedChat()
 
     async def before_model(self, messages):
         return list(messages)
@@ -210,7 +459,7 @@ class _FakeWorkspace:
         return None
 
 
-def _runtime(workspace, calls: list[str], configurable: Configuration) -> AgentRuntime:
+def _runtime(workspace, configurable: Configuration, *, model=None, system_prompt="system", tools=None):
     async def compress_report(_messages, _task, _contract, _budget):
         return "compressed report", [], {}
 
@@ -221,9 +470,9 @@ def _runtime(workspace, calls: list[str], configurable: Configuration) -> AgentR
         workspace=workspace,
         config=configurable,
         runtime_config={},
-        model=_MainModel(calls),
-        system_prompt="system",
-        tools=[],
+        model=model or ScriptedChat(),
+        system_prompt=system_prompt,
+        tools=tools or [],
         initial_budget={},
         execute_tool=None,
         compress_report=compress_report,
@@ -249,63 +498,159 @@ def _history(steps: int) -> list:
     return messages
 
 
-def test_high_context_pressure_triggers_compaction_before_model_call():
-    calls: list[str] = []
-    workspace = _FakeWorkspace(_CompactionModel(calls))
-    configurable = Configuration(
-        research_graph_context_capacity_tokens=300,
-        context_compaction_threshold_ratio=0.75,
-        context_warning_ratio=0.6,
-        recent_raw_steps=1,
+def _compaction_step(summary: str = "compacted history"):
+    return _tool_step("RollingCompactOutput", {"rolling_summary": summary})
+
+
+def test_high_context_pressure_triggers_compaction():
+    _script(_compaction_step())
+    runtime = _runtime(
+        _CompactionWorkspace(),
+        Configuration(
+            research_graph_context_capacity_tokens=300,
+            context_compaction_threshold_ratio=0.75,
+            context_warning_ratio=0.6,
+            recent_raw_steps=1,
+        ),
     )
-    runtime = _runtime(workspace, calls, configurable)
+    messages = _history(steps=4)
+    model_messages = [SystemMessage(content="system"), *messages]
 
-    compacted, budget = asyncio.run(runtime._compact_history(_history(steps=4)))
+    compacted, budget = asyncio.run(runtime._compact_history(messages, model_messages))
 
-    assert calls == ["compact"]
     assert budget["model_calls"] == 1
-    # Older raw steps collapse into the rolling summary; the newest AI/tool step stays raw.
     assert len(compacted) == 4
     assert compacted[0].content == "assignment"
-    assert compacted[-1].tool_call_id == "call-3"
 
 
 def test_low_context_pressure_skips_compaction():
-    calls: list[str] = []
-    workspace = _FakeWorkspace(_CompactionModel(calls))
-    configurable = Configuration(
-        research_graph_context_capacity_tokens=1_000_000,
-        context_compaction_threshold_ratio=0.75,
+    _script()
+    runtime = _runtime(
+        _CompactionWorkspace(),
+        Configuration(
+            research_graph_context_capacity_tokens=1_000_000,
+            context_compaction_threshold_ratio=0.75,
+        ),
     )
-    runtime = _runtime(workspace, calls, configurable)
-
     messages = _history(steps=1)
-    compacted, budget = asyncio.run(runtime._compact_history(messages))
 
-    assert calls == []
+    compacted, budget = asyncio.run(runtime._compact_history(messages, messages))
+
     assert compacted == messages
     assert budget == {}
 
 
+def test_system_prompt_is_part_of_context_pressure():
+    """Small history + huge system prompt must trigger compaction."""
+    _script(_compaction_step())
+    runtime = _runtime(
+        _CompactionWorkspace(),
+        Configuration(
+            research_graph_context_capacity_tokens=500,
+            context_compaction_threshold_ratio=0.75,
+            context_warning_ratio=0.6,
+            recent_raw_steps=1,
+        ),
+        system_prompt="system policy " * 2000,
+    )
+    messages = _history(steps=2)
+    model_messages = [SystemMessage(content=runtime.system_prompt), *messages]
+
+    compacted, budget = asyncio.run(runtime._compact_history(messages, model_messages))
+
+    assert budget["model_calls"] == 1
+    assert len(compacted) < len(messages)
+
+
+def test_tools_are_part_of_context_pressure():
+    @tool(description="huge schema " * 3000)
+    def huge_tool(query: str) -> str:
+        """A tool with a large schema."""
+        return ""
+
+    messages = _history(steps=2)
+    model_messages = [SystemMessage(content="system"), *messages]
+    without_tools = estimate_context_tokens(model_messages)
+    with_tools = estimate_context_tokens(model_messages, tools=[huge_tool])
+    assert with_tools > without_tools
+
+    _script(_compaction_step())
+    # Capacity chosen between the two estimates: only the tool schema triggers compaction.
+    capacity = max(1, int(with_tools / 0.75) - 10)
+    runtime = _runtime(
+        _CompactionWorkspace(),
+        Configuration(
+            research_graph_context_capacity_tokens=capacity,
+            context_compaction_threshold_ratio=0.75,
+            context_warning_ratio=0.6,
+            recent_raw_steps=1,
+        ),
+        tools=[huge_tool],
+    )
+
+    compacted, budget = asyncio.run(runtime._compact_history(messages, model_messages))
+
+    assert budget["model_calls"] == 1
+    assert len(compacted) < len(messages)
+
+
+def test_pressure_estimation_uses_the_same_message_structure_as_the_call():
+    _script(_compaction_step())
+    capacity = 500
+    runtime = _runtime(
+        _CompactionWorkspace(),
+        Configuration(
+            research_graph_context_capacity_tokens=capacity,
+            context_compaction_threshold_ratio=0.75,
+            context_warning_ratio=0.6,
+            recent_raw_steps=1,
+        ),
+        system_prompt="system policy " * 2000,
+    )
+    messages = _history(steps=2)
+    model_messages = [SystemMessage(content=runtime.system_prompt), *messages]
+
+    asyncio.run(runtime._compact_history(messages, model_messages))
+
+    # The estimate the runtime used is exactly the official counter over model_messages.
+    assert estimate_context_tokens(model_messages) >= capacity * 0.75
+
+
 def test_agent_runtime_checks_context_before_invoking_the_model():
-    calls: list[str] = []
-    # A large protected context forces the pressure check above the compaction ratio.
-    workspace = _FakeWorkspace(
-        _CompactionModel(calls), protected="schema " * 500, events=calls
+    events: list[str] = []
+    _script(_text_step("done"))
+
+    class _RecordingModel(ScriptedChat):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            events.append("model")
+            return super()._generate(messages, stop, run_manager, **kwargs)
+
+    workspace = _CompactionWorkspace()
+
+    async def _before_model(messages):
+        events.append("build_request")
+        return list(messages)
+
+    workspace.before_model = _before_model
+    runtime = _runtime(
+        workspace,
+        Configuration(research_graph_context_capacity_tokens=10_000),
+        model=_RecordingModel(),
     )
-    configurable = Configuration(
-        research_graph_context_capacity_tokens=200,
-        context_compaction_threshold_ratio=0.75,
-        context_warning_ratio=0.6,
-    )
-    runtime = _runtime(workspace, calls, configurable)
+
+    original_compact = runtime._compact_history
+
+    async def _record_compact(messages, model_messages):
+        events.append("pressure_check")
+        return await original_compact(messages, model_messages)
+
+    runtime._compact_history = _record_compact
 
     asyncio.run(runtime.run("collect evidence"))
 
-    # The context pressure hook must run before the first model invocation.
-    assert "context_check" in calls
-    assert "model" in calls
-    assert calls.index("context_check") < calls.index("model")
+    # Pressure is estimated on the exact request, before the model is invoked.
+    assert events.index("build_request") < events.index("pressure_check")
+    assert events.index("pressure_check") < events.index("model")
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +703,7 @@ def test_ordinary_exception_is_not_routed_to_token_limit_recovery(monkeypatch):
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, _messages):
+        async def ainvoke(self, _messages, config=None):
             raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(module, "configurable_model", _FailingModel())
@@ -376,7 +721,7 @@ def test_token_limit_exception_still_enters_context_recovery(monkeypatch):
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, _messages):
+        async def ainvoke(self, _messages, config=None):
             raise _token_limit_error()
 
     monkeypatch.setattr(module, "configurable_model", _TokenLimitModel())
@@ -412,7 +757,7 @@ def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             captured["prompt"] = messages[0].content
             return AIMessage(content="final report body")
 
@@ -441,3 +786,33 @@ def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
         result["report"]["final"]
     )
     assert len(captured["prompt"]) < len(huge_findings)
+
+
+# ---------------------------------------------------------------------------
+# Reducer stays delta-only
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_reducer_remains_delta_only():
+    from open_deep_research.state import runtime_reducer
+
+    def delta(calls: int, tokens: int) -> dict:
+        payload = budget_tokens_from_response(
+            AIMessage(
+                content="x",
+                usage_metadata={
+                    "input_tokens": tokens,
+                    "output_tokens": 0,
+                    "total_tokens": tokens,
+                },
+            )
+        )
+        payload["model_calls"] = calls
+        return payload
+
+    state: dict = {}
+    for value in (delta(2, 10), delta(1, 5), delta(1, 7)):
+        state = runtime_reducer(state, {"budget": value})
+
+    assert state["budget"]["model_calls"] == 4
+    assert state["budget"]["input_tokens"] == 22

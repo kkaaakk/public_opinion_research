@@ -3,10 +3,8 @@
 from open_deep_research.research_graph.compaction import (
     CompactionResult,
     RollingCompactionResult,
-    context_token_estimate,
     micro_compact_messages,
     rolling_compact,
-    should_rolling_compact,
 )
 from open_deep_research.research_graph.context_manager import (
     ContextManager,
@@ -135,7 +133,6 @@ __all__ = [
     "build_research_review_context",
     "build_source_documents_from_raw_result",
     "clear_research_graph_store_cache",
-    "context_token_estimate",
     "create_context_strategy",
     "create_research_graph_store",
     "format_relevant_subgraph",
@@ -145,5 +142,4 @@ __all__ = [
     "render_working_context",
     "retrieve_research_context",
     "rolling_compact",
-    "should_rolling_compact",
 ]

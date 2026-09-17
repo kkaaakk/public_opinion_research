@@ -12,13 +12,12 @@ from typing import Any, Protocol
 from langchain_core.messages import HumanMessage
 
 from open_deep_research.budget import (
-    budget_from_model_response,
+    ainvoke_model_with_budget,
+    estimate_context_tokens,
     estimate_text_tokens,
     merge_budget_usage,
 )
-from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.research_graph.compaction import (
-    context_token_estimate,
     micro_compact_messages,
 )
 from open_deep_research.research_graph.context_manager import (
@@ -179,13 +178,12 @@ class _ResearchGraphStrategyBase:
             getattr(workspace.configurable, "research_graph_role_report_max_tokens", 0)
             or getattr(workspace.configurable, "compression_model_max_tokens", 8192)
         )
-        response = await observe_model_ainvoke(
+        response, budget = await ainvoke_model_with_budget(
             workspace.model_factory(model_name, max_tokens),
             [HumanMessage(content=prompt)],
             observer_model=model_name,
             observer_component="graph_role_report",
         )
-        budget = budget_from_model_response(response)
         if workspace.transcript is not None:
             workspace.transcript.append(
                 "role_report",
@@ -416,7 +414,7 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
             workspace.metrics.add("micro_compact_tokens_removed", compacted.tokens_removed)
             workspace.metrics.add(
                 "raw_tool_tokens_after_compact",
-                context_token_estimate(compacted.messages),
+                estimate_context_tokens(compacted.messages),
                 quality="estimated",
             )
             compacted_messages = compacted.messages

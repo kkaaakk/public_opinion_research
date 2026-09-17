@@ -257,7 +257,7 @@ def test_unknown_compression_error_is_not_swallowed(monkeypatch) -> None:
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, _messages):
+        async def ainvoke(self, _messages, config=None):
             raise NameError("test compression bug")
 
     monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", FailingModel())
@@ -282,7 +282,7 @@ def test_token_limit_compression_error_keeps_graceful_degradation(monkeypatch) -
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, _messages):
+        async def ainvoke(self, _messages, config=None):
             raise RuntimeError("context length exceeded")
 
     monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", FailingModel())

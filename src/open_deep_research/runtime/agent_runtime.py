@@ -11,24 +11,20 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from open_deep_research.budget import (
-    budget_from_model_response,
+    ainvoke_model_with_budget,
     budget_from_native_search,
     budget_from_tool_calls,
     budget_usage_with_reason,
     can_spend_model_call,
     context_pressure_ratio,
+    estimate_context_tokens,
     estimate_text_tokens,
     filter_tool_calls_for_budget,
     is_over_budget,
     merge_budget_usage,
 )
-from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.research_graph import ResearchWorkspace, ToolBatchItem
-from open_deep_research.research_graph.compaction import (
-    context_token_estimate,
-    rolling_compact,
-    should_rolling_compact,
-)
+from open_deep_research.research_graph.compaction import rolling_compact
 from open_deep_research.utils import (
     anthropic_websearch_called,
     get_model_token_limit,
@@ -135,21 +131,25 @@ class AgentRuntime:
         }
 
     async def _compact_history(
-        self, messages: list[Any]
+        self, messages: list[Any], model_messages: list[Any]
     ) -> tuple[list[Any], dict[str, Any]]:
-        """Compact ReAct history before the next model call when context pressure is high."""
+        """Compact raw ReAct history when the real next request is over budget.
+
+        ``model_messages`` is the exact message list the next ChatModel call would
+        send (SystemMessage + dynamic context + tools), so the pressure estimate
+        and the request share the same structure.
+        """
         model_limit = getattr(
             self.config, "research_graph_context_capacity_tokens", None
         ) or get_model_token_limit(self.config.research_model)
         if model_limit is None:
             return messages, {}
-        protected = self.workspace.protected_context()
-        estimated_tokens = context_token_estimate(messages, protected, tools=self.tools)
-        pressure = context_pressure_ratio(estimated_tokens, model_limit)
         warning_ratio = float(getattr(self.config, "context_warning_ratio", 0.6))
         compaction_ratio = float(
             getattr(self.config, "context_compaction_threshold_ratio", 0.75)
         )
+        estimated_tokens = estimate_context_tokens(model_messages, tools=self.tools)
+        pressure = context_pressure_ratio(estimated_tokens, model_limit)
         if pressure >= warning_ratio:
             LOGGER.warning(
                 "Agent %s context pressure %.2f (estimated=%d window=%d).",
@@ -158,19 +158,13 @@ class AgentRuntime:
                 estimated_tokens,
                 model_limit,
             )
-        if not should_rolling_compact(
-            messages,
-            extra_context=protected,
-            model_context_capacity=model_limit,
-            threshold_ratio=compaction_ratio,
-            tools=self.tools,
-        ):
+        if pressure < compaction_ratio:
             return messages, {}
         model_name = str(
             getattr(self.config, "rolling_compaction_model", None)
             or getattr(self.config, "compression_model", "")
         )
-        before_tokens = context_token_estimate(messages, protected, tools=self.tools)
+        protected = self.workspace.protected_context()
         result = await rolling_compact(
             messages,
             previous_summary=self.rolling_summary,
@@ -187,7 +181,7 @@ class AgentRuntime:
         self.workspace.rolling_summary = self.rolling_summary
         metrics = self.workspace.metrics
         metrics.add("rolling_compact_count")
-        metrics.add("rolling_compact_input_tokens", before_tokens, quality="estimated")
+        metrics.add("rolling_compact_input_tokens", estimated_tokens, quality="estimated")
         output_tokens = result.budget_usage.get("output_tokens")
         metrics.add(
             "rolling_compact_output_tokens",
@@ -240,21 +234,27 @@ class AgentRuntime:
                 )
                 break
 
-            messages, compaction_budget = await self._compact_history(messages)
-            if compaction_budget:
-                budget_update = merge_budget_usage(budget_update, compaction_budget)
             model_messages = [
                 SystemMessage(content=self.system_prompt),
                 *await self.workspace.before_model(messages),
             ]
-            response = await observe_model_ainvoke(
+            messages, compaction_budget = await self._compact_history(
+                messages, model_messages
+            )
+            if compaction_budget:
+                budget_update = merge_budget_usage(budget_update, compaction_budget)
+                # History changed: rebuild the exact request for the actual call.
+                model_messages = [
+                    SystemMessage(content=self.system_prompt),
+                    *await self.workspace.before_model(messages),
+                ]
+            response, response_budget = await ainvoke_model_with_budget(
                 self.model,
                 model_messages,
                 observer_model=self.config.research_model,
                 observer_component=f"{self.role}_{mode}_round_{research_round}",
             )
             messages.append(response)
-            response_budget = budget_from_model_response(response)
             native_search = openai_websearch_called(response) or anthropic_websearch_called(response)
             if native_search:
                 response_budget = merge_budget_usage(

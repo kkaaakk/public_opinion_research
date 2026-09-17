@@ -12,12 +12,12 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 
 from open_deep_research.budget import (
-    budget_from_model_response,
+    ainvoke_model_with_budget,
     estimate_text_tokens,
     merge_budget_usage,
+    structured_output_chain,
     truncate_text_to_token_budget,
 )
-from open_deep_research.observability import observe_model_ainvoke
 from open_deep_research.research_graph.models import (
     Claim,
     Coverage,
@@ -264,20 +264,17 @@ class GraphExtractor:
         scope: ResearchGraphScope,
     ) -> ExtractionBatchResult:
         prompt = _build_extraction_prompt(documents, scope)
-        model = self.model
-        if hasattr(model, "with_structured_output"):
-            model = model.with_structured_output(GraphExtractionOutput)
-        if hasattr(model, "with_retry"):
-            model = model.with_retry(stop_after_attempt=self.max_retries)
-        response = await observe_model_ainvoke(
-            model,
+        structured = structured_output_chain(
+            self.model, GraphExtractionOutput, max_attempts=self.max_retries
+        )
+        response, budget_usage = await ainvoke_model_with_budget(
+            structured,
             [HumanMessage(content=prompt)],
             observer_model=self.model_name,
             observer_structured_output=True,
             observer_component="graph_extraction",
         )
-        budget_usage = budget_from_model_response(response)
-        output = _coerce_extraction_output(response)
+        output = _coerce_extraction_output(response["parsed"])
         delta = normalize_extraction_output(output, documents, scope=scope)
         input_tokens = _usage_token(budget_usage, "input_tokens")
         output_tokens = _usage_token(budget_usage, "output_tokens")
