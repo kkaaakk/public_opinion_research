@@ -13,7 +13,7 @@ import logging
 from contextvars import ContextVar, Token
 from typing import Any, Mapping, cast
 
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.ai import UsageMetadata, add_usage
 from langchain_core.messages.utils import count_tokens_approximately
@@ -196,41 +196,6 @@ def budget_usage_with_warning(warning: str) -> dict[str, Any]:
     return usage
 
 
-def usage_metadata_from_response(response: Any) -> UsageMetadata | None:
-    """Return the LangChain ``UsageMetadata`` a model response actually carries.
-
-    ``AIMessage.usage_metadata`` is the single authoritative source.  Structured
-    output keeps the raw message only with ``include_raw=True``, so that envelope
-    is unwrapped; no provider token field is read and nothing is ever fabricated.
-    """
-    candidates: list[Any] = [response]
-    raw = response.get("raw") if isinstance(response, Mapping) else getattr(response, "raw", None)
-    if raw is not None and raw is not response:
-        candidates.append(raw)
-
-    for candidate in candidates:
-        metadata = (
-            candidate.get("usage_metadata")
-            if isinstance(candidate, Mapping)
-            else getattr(candidate, "usage_metadata", None)
-        )
-        if isinstance(metadata, Mapping) and metadata:
-            return cast(UsageMetadata, dict(metadata))
-    return None
-
-
-def budget_tokens_from_response(response: Any) -> dict[str, Any]:
-    """Create a token-only budget payload from a model response.
-
-    Model-call counting is owned by the LangChain ``on_chat_model_start`` attempt
-    event (see :class:`ModelAttemptCounter`); this function contributes token usage
-    only, so a retried call is never double counted.
-    """
-    usage = empty_budget_usage()
-    _apply_usage_metadata(usage, usage_metadata_from_response(response))
-    return usage
-
-
 class ModelAttemptCounter(BaseCallbackHandler):
     """Count real model attempts through LangChain's official start lifecycle.
 
@@ -274,11 +239,101 @@ class ModelAttemptCounter(BaseCallbackHandler):
         self.starts += 1
 
 
-def model_attempt_config(config: Any = None) -> tuple[Any, ModelAttemptCounter]:
-    """Return ``(config_with_attempt_counter, counter)`` for one model invocation."""
+def model_accounting_config(
+    config: Any = None,
+) -> tuple[Any, ModelAttemptCounter, UsageMetadataCallbackHandler]:
+    """Return ``(config, attempt_counter, usage_handler)`` for one model invocation.
+
+    Both handlers are LangChain official: ``ModelAttemptCounter`` consumes the
+    ``on_chat_model_start`` lifecycle and ``UsageMetadataCallbackHandler`` consumes
+    ``AIMessage.usage_metadata`` from every call, including attempts whose
+    structured output fails to parse.  A fresh usage handler per invocation keeps
+    parallel agents, section writers, and tools isolated from each other.
+    """
     counter = ModelAttemptCounter()
-    merged = merge_configs(ensure_config(config), {"callbacks": [counter]})
-    return merged, counter
+    usage_handler = UsageMetadataCallbackHandler()
+    merged = merge_configs(
+        ensure_config(config), {"callbacks": [counter, usage_handler]}
+    )
+    return merged, counter, usage_handler
+
+
+def budget_from_model_accounting(
+    attempts: int,
+    usage_handler: UsageMetadataCallbackHandler,
+) -> dict[str, Any]:
+    """Bridge the official attempt count and usage metadata into one Budget delta.
+
+    Token aggregation is LangChain's ``add_usage`` over the handler's reported
+    ``UsageMetadata`` values; missing usage stays zero and is never estimated.
+    """
+    usage = empty_budget_usage()
+    usage["model_calls"] = max(0, int(attempts or 0))
+    combined: UsageMetadata | None = None
+    for metadata in usage_handler.usage_metadata.values():
+        combined = add_usage(combined, metadata)
+    _apply_usage_metadata(usage, combined)
+    return usage
+
+
+async def ainvoke_model_with_budget(
+    runnable: Any,
+    payload: Any,
+    *,
+    config: Any = None,
+    **observer_kwargs: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Invoke one model runnable through the Observer boundary and account its budget.
+
+    Returns ``(response, budget_delta)`` where real attempts come from the official
+    chat-model start lifecycle and tokens come from the official
+    ``UsageMetadataCallbackHandler`` (every provider-reported ``AIMessage``, not only
+    the final response).  Nested calls record the delta into the active Budget
+    Capture; if the call raises after real attempts, that fact is captured before
+    the original exception is re-raised.
+    """
+    from open_deep_research.observability import observe_model_ainvoke
+
+    merged, counter, usage_handler = model_accounting_config(config)
+    try:
+        response = await observe_model_ainvoke(
+            runnable, payload, config=merged, **observer_kwargs
+        )
+    except BaseException:
+        capture_budget_usage(
+            budget_from_model_accounting(counter.starts, usage_handler)
+        )
+        raise
+    delta = budget_from_model_accounting(counter.starts, usage_handler)
+    capture_budget_usage(delta)
+    return response, delta
+
+
+def invoke_model_with_budget(
+    runnable: Any,
+    payload: Any,
+    *,
+    config: Any = None,
+    **observer_kwargs: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Invoke one model synchronously through the Observer boundary and account its budget.
+
+    Mirrors :func:`ainvoke_model_with_budget`, including attempt and usage
+    accounting when the call raises.
+    """
+    from open_deep_research.observability import observe_model_invoke
+
+    merged, counter, usage_handler = model_accounting_config(config)
+    try:
+        response = observe_model_invoke(runnable, payload, config=merged, **observer_kwargs)
+    except BaseException:
+        capture_budget_usage(
+            budget_from_model_accounting(counter.starts, usage_handler)
+        )
+        raise
+    delta = budget_from_model_accounting(counter.starts, usage_handler)
+    capture_budget_usage(delta)
+    return response, delta
 
 
 def require_valid_structured_output(envelope: Any) -> Any:
@@ -311,81 +366,6 @@ def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -
     if max_attempts and max_attempts > 0:
         chain = chain.with_retry(stop_after_attempt=max_attempts)
     return chain
-
-
-def budget_from_model_attempts(attempts: int) -> dict[str, Any]:
-    """Create a budget payload that counts real model attempts only.
-
-    Failed attempts usually have no ``AIMessage.usage_metadata``, so this payload
-    never carries tokens: the counters are authoritative, tokens stay zero.
-    """
-    usage = empty_budget_usage()
-    usage["model_calls"] = max(0, int(attempts or 0))
-    return usage
-
-
-async def ainvoke_model_with_budget(
-    runnable: Any,
-    payload: Any,
-    *,
-    config: Any = None,
-    **observer_kwargs: Any,
-) -> tuple[Any, dict[str, Any]]:
-    """Invoke one model runnable through the Observer boundary and account its budget.
-
-    Returns ``(response, budget_delta)``: ``model_calls`` counts real provider
-    attempts (retries included, from the LangChain start event) and tokens come
-    from ``AIMessage.usage_metadata``.  Nested calls (inside a tool) additionally
-    record the delta into the active Budget Capture for per-tool attribution.
-
-    If the call raises after real attempts (for example ``with_retry`` exhaustion),
-    the attempts are recorded into the active Budget Capture before the original
-    exception is re-raised, so a caller that recovers keeps accurate counts.
-    """
-    from open_deep_research.observability import observe_model_ainvoke
-
-    merged, counter = model_attempt_config(config)
-    try:
-        response = await observe_model_ainvoke(
-            runnable, payload, config=merged, **observer_kwargs
-        )
-    except BaseException:
-        capture_budget_usage(budget_from_model_attempts(counter.starts))
-        raise
-    delta = merge_budget_usage(
-        budget_from_model_attempts(counter.starts),
-        budget_tokens_from_response(response),
-    )
-    capture_budget_usage(delta)
-    return response, delta
-
-
-def invoke_model_with_budget(
-    runnable: Any,
-    payload: Any,
-    *,
-    config: Any = None,
-    **observer_kwargs: Any,
-) -> tuple[Any, dict[str, Any]]:
-    """Invoke one model synchronously through the Observer boundary and account its budget.
-
-    Mirrors :func:`ainvoke_model_with_budget`, including attempt-only accounting
-    when the call raises after real provider attempts.
-    """
-    from open_deep_research.observability import observe_model_invoke
-
-    merged, counter = model_attempt_config(config)
-    try:
-        response = observe_model_invoke(runnable, payload, config=merged, **observer_kwargs)
-    except BaseException:
-        capture_budget_usage(budget_from_model_attempts(counter.starts))
-        raise
-    delta = merge_budget_usage(
-        budget_from_model_attempts(counter.starts),
-        budget_tokens_from_response(response),
-    )
-    capture_budget_usage(delta)
-    return response, delta
 
 
 def budget_from_native_search() -> dict[str, Any]:

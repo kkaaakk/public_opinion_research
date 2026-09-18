@@ -1,8 +1,8 @@
 """Budget Guard and token accounting tests.
 
-Token usage authority is LangChain ``UsageMetadata`` (``AIMessage.usage_metadata``);
-model-call attempt authority is LangChain's ``on_chat_model_start`` lifecycle.  These
-tests use real LangChain message types instead of custom fake metadata.
+Token usage authority is LangChain ``UsageMetadata`` reported by the official
+``UsageMetadataCallbackHandler``; model-call attempt authority is the official
+``on_chat_model_start`` lifecycle.  These tests use real LangChain message types.
 """
 
 from types import SimpleNamespace
@@ -17,7 +17,7 @@ from open_deep_research.budget import (
     ModelAttemptCounter,
     append_budget_summary,
     available_research_unit_slots,
-    budget_tokens_from_response,
+    budget_from_model_accounting,
     budget_usage_with_reason,
     capture_budget_usage,
     context_pressure_ratio,
@@ -28,12 +28,11 @@ from open_deep_research.budget import (
     filter_tool_calls_for_budget,
     format_budget_summary,
     merge_budget_usage,
-    model_attempt_config,
+    model_accounting_config,
     require_valid_structured_output,
     start_budget_capture,
     stop_budget_capture,
     truncate_text_to_token_budget,
-    usage_metadata_from_response,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.state import runtime_reducer
@@ -58,6 +57,11 @@ def _message(
     return AIMessage(content="done", usage_metadata=metadata)
 
 
+def _usage_handler(usage: dict | None = None) -> SimpleNamespace:
+    """Stand-in for the public ``.usage_metadata`` of the official usage handler."""
+    return SimpleNamespace(usage_metadata=({"fixture": usage} if usage else {}))
+
+
 @tool
 def sample_search(query: str) -> str:
     """Search the web for one query."""
@@ -69,26 +73,17 @@ def sample_search(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_budget_tokens_from_ai_message_usage_metadata():
-    message = AIMessage(
-        content="done",
-        usage_metadata={
-            "input_tokens": 13,
-            "output_tokens": 7,
-            "total_tokens": 20,
-        },
-    )
+def test_budget_from_model_accounting_usage_metadata():
+    usage = budget_from_model_accounting(1, _usage_handler(_message(13, 7).usage_metadata))
 
-    usage = budget_tokens_from_response(message)
-
-    assert usage["model_calls"] == 0  # attempts are owned by ModelAttemptCounter
+    assert usage["model_calls"] == 1
     assert usage["input_tokens"] == 13
     assert usage["output_tokens"] == 7
     assert usage["total_tokens"] == 20
 
 
-def test_provider_response_metadata_is_not_parsed():
-    """Provider-specific token fields are no longer a token source."""
+def test_provider_response_metadata_is_not_a_token_source():
+    """Provider-specific token fields never reach the official usage handler."""
     message = AIMessage(
         content="done",
         response_metadata={
@@ -100,24 +95,32 @@ def test_provider_response_metadata_is_not_parsed():
         },
     )
 
-    usage = budget_tokens_from_response(message)
+    usage = budget_from_model_accounting(1, _usage_handler(message.usage_metadata))
 
     assert usage["input_tokens"] == 0
     assert usage["output_tokens"] == 0
     assert usage["total_tokens"] == 0
 
 
-def test_usage_metadata_from_structured_raw_envelope():
-    """``include_raw=True`` structured output keeps the authoritative message."""
-    raw = _message(5, 3)
-    assert usage_metadata_from_response({"raw": raw, "parsed": object()}) == raw.usage_metadata
-    assert usage_metadata_from_response(SimpleNamespace(content="x")) is None
+def test_budget_from_model_accounting_aggregates_all_handler_entries():
+    """Multiple model keys are aggregated with the official ``add_usage``."""
+    handler = SimpleNamespace(
+        usage_metadata={
+            "model-a": _message(10, 4).usage_metadata,
+            "model-b": _message(3, 6).usage_metadata,
+        }
+    )
+
+    usage = budget_from_model_accounting(2, handler)
+
+    assert usage["model_calls"] == 2
+    assert usage["input_tokens"] == 13
+    assert usage["output_tokens"] == 10
+    assert usage["total_tokens"] == 23
 
 
 def test_missing_usage_never_fabricates_tokens():
-    response = SimpleNamespace(content="written")
-
-    usage = budget_tokens_from_response(response)
+    usage = budget_from_model_accounting(1, _usage_handler())
 
     assert usage["input_tokens"] == 0
     assert usage["output_tokens"] == 0
@@ -129,7 +132,7 @@ def test_model_attempt_counter_counts_real_chat_model_starts():
     model = GenericFakeChatModel(
         messages=iter([AIMessage(content="ok", response_metadata={"model_name": "fixture"})])
     )
-    config, counter = model_attempt_config()
+    config, counter, _usage = model_accounting_config()
 
     model.invoke([HumanMessage(content="hi")], config=config)
 
@@ -162,7 +165,7 @@ def test_model_attempt_counter_counts_retry_attempts():
     model = Flaky(
         messages=iter([AIMessage(content="ok", response_metadata={"model_name": "fixture"})])
     )
-    config, counter = model_attempt_config()
+    config, counter, _usage = model_accounting_config()
 
     model.with_retry(stop_after_attempt=5).invoke([HumanMessage(content="hi")], config=config)
 
@@ -188,16 +191,20 @@ def test_require_valid_structured_output_raises_parsing_error():
 
 
 def test_token_details_are_preserved_and_merged_without_guessing():
-    left = budget_tokens_from_response(
-        _message(
-            10,
-            4,
-            input_details={"cache_read": 3, "cache_creation": 2},
-            output_details={"reasoning": 1},
-        )
+    left = budget_from_model_accounting(
+        1,
+        _usage_handler(
+            _message(
+                10,
+                4,
+                input_details={"cache_read": 3, "cache_creation": 2},
+                output_details={"reasoning": 1},
+            ).usage_metadata
+        ),
     )
-    right = budget_tokens_from_response(
-        _message(6, 2, input_details={"cache_read": 1})
+    right = budget_from_model_accounting(
+        1,
+        _usage_handler(_message(6, 2, input_details={"cache_read": 1}).usage_metadata),
     )
 
     merged = merge_budget_usage(left, right)
@@ -207,15 +214,21 @@ def test_token_details_are_preserved_and_merged_without_guessing():
 
 
 def test_missing_token_details_do_not_error_or_appear():
-    usage = merge_budget_usage(budget_tokens_from_response(_message()), empty_budget_usage())
+    usage = merge_budget_usage(
+        budget_from_model_accounting(1, _usage_handler(_message().usage_metadata)),
+        empty_budget_usage(),
+    )
 
     assert "input_token_details" not in usage
     assert "output_token_details" not in usage
 
 
 def test_token_details_formatting_only_shows_provider_reported_values():
-    usage = budget_tokens_from_response(
-        _message(10, 4, input_details={"cache_read": 3}, output_details={"reasoning": 2})
+    usage = budget_from_model_accounting(
+        1,
+        _usage_handler(
+            _message(10, 4, input_details={"cache_read": 3}, output_details={"reasoning": 2}).usage_metadata
+        ),
     )
     configurable = Configuration(budget_enabled=True)
 
@@ -231,8 +244,12 @@ def test_token_details_formatting_only_shows_provider_reported_values():
 
 
 def test_merge_matches_langchain_add_usage_semantics():
-    left = budget_tokens_from_response(_message(10, 4, input_details={"cache_read": 2}))
-    right = budget_tokens_from_response(_message(3, 6, output_details={"reasoning": 5}))
+    left = budget_from_model_accounting(
+        1, _usage_handler(_message(10, 4, input_details={"cache_read": 2}).usage_metadata)
+    )
+    right = budget_from_model_accounting(
+        1, _usage_handler(_message(3, 6, output_details={"reasoning": 5}).usage_metadata)
+    )
 
     merged = merge_budget_usage(left, right)
     expected = add_usage(
@@ -263,10 +280,8 @@ def test_merge_matches_langchain_add_usage_semantics():
 
 
 def _node_delta(message: AIMessage, *, attempts: int = 1) -> dict:
-    """Build the delta a node returns: tokens from usage + real attempt count."""
-    delta = budget_tokens_from_response(message)
-    delta["model_calls"] = attempts
-    return delta
+    """Build the delta a node returns from the official usage handler shape."""
+    return budget_from_model_accounting(attempts, _usage_handler(message.usage_metadata))
 
 
 def test_parallel_agent_deltas_reduce_once():
@@ -311,11 +326,11 @@ def test_nested_model_call_records_once_without_double_count():
         )
     )
     token = start_budget_capture()
-    config, counter = model_attempt_config()
-    response = model.invoke([HumanMessage(content="hi")], config=config)
-    delta = budget_tokens_from_response(response)
-    delta["model_calls"] = counter.starts
-    capture_budget_usage(delta)
+    config, counter, usage_handler = model_accounting_config()
+    model.invoke([HumanMessage(content="hi")], config=config)
+    capture_budget_usage(
+        budget_from_model_accounting(counter.starts, usage_handler)
+    )
 
     captured_usage = stop_budget_capture(token)
 
@@ -504,9 +519,11 @@ def test_runtime_reducer_keeps_list_and_token_state():
 
 
 def test_tool_messages_do_not_contribute_token_usage():
-    """Tool outputs are context, not billing usage."""
-    usage = budget_tokens_from_response(
-        ToolMessage(content="raw result", tool_call_id="call-1", name="web_search")
-    )
+    """Only AIMessage usage reaches the handler; tool outputs never bill tokens."""
+    assert not hasattr(ToolMessage(content="x", tool_call_id="call-1", name="web_search"), "usage_metadata")
+
+    usage = budget_from_model_accounting(1, _usage_handler(ToolMessage(
+        content="raw result", tool_call_id="call-1", name="web_search"
+    ).model_dump().get("usage_metadata")))
 
     assert usage["total_tokens"] == 0

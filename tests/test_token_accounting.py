@@ -18,9 +18,9 @@ from langchain_core.tools import tool
 
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
-    budget_tokens_from_response,
+    budget_from_model_accounting,
     estimate_context_tokens,
-    model_attempt_config,
+    model_accounting_config,
     start_budget_capture,
     stop_budget_capture,
     structured_output_chain,
@@ -92,6 +92,11 @@ def _error_step(error: Exception):
     return step
 
 
+def _usage_handler(usage: dict | None = None) -> SimpleNamespace:
+    """Stand-in for the public ``.usage_metadata`` of the official usage handler."""
+    return SimpleNamespace(usage_metadata=({"scripted": usage} if usage else {}))
+
+
 # ---------------------------------------------------------------------------
 # Structured output keeps raw usage
 # ---------------------------------------------------------------------------
@@ -107,12 +112,13 @@ def test_structured_raw_usage_is_preserved_and_parsed_still_works():
         )
     )
     chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=2)
+    handler = UsageMetadataCallbackHandler()
 
-    envelope = asyncio.run(chain.ainvoke([HumanMessage(content="hi")]))
+    envelope = asyncio.run(chain.ainvoke([HumanMessage(content="hi")], config={"callbacks": [handler]}))
 
     assert envelope["raw"].usage_metadata == LARGE_USAGE
     assert envelope["parsed"].verification == "ok"
-    usage = budget_tokens_from_response(envelope)
+    usage = budget_from_model_accounting(1, handler)
     assert usage["input_tokens"] == 10
     assert usage["output_tokens"] == 5
     assert usage["total_tokens"] == 15
@@ -175,8 +181,11 @@ def test_model_calls_counts_real_attempts_after_parsing_error():
 
     _response, delta = asyncio.run(exercise())
 
+    # Both real attempts reported usage: the failed parse is no longer discarded.
     assert delta["model_calls"] == 2
-    assert delta["input_tokens"] == 10
+    assert delta["input_tokens"] == 20
+    assert delta["output_tokens"] == 10
+    assert delta["total_tokens"] == 30
 
 
 def test_retry_exhaustion_records_attempts_in_capture_without_fabricating_tokens():
@@ -186,7 +195,7 @@ def test_retry_exhaustion_records_attempts_in_capture_without_fabricating_tokens
         _error_step(ValueError("fail 2")),
         _error_step(ValueError("fail 3")),
     )
-    config, counter = model_attempt_config()
+    config, counter, _usage = model_accounting_config()
     model = ScriptedChat().with_retry(stop_after_attempt=3)
 
     async def exercise() -> dict:
@@ -208,8 +217,8 @@ def test_retry_exhaustion_records_attempts_in_capture_without_fabricating_tokens
     assert captured["total_tokens"] == 0
 
 
-def test_parsing_retry_exhaustion_records_attempts_in_capture():
-    """Three parsing failures: attempts are captured, failed-envelope tokens are not."""
+def test_parsing_retry_exhaustion_records_attempts_and_reported_usage():
+    """Three parsing failures: attempts and every provider-reported usage are captured."""
     from open_deep_research.state import ClarifyWithUser
 
     _script(
@@ -230,8 +239,9 @@ def test_parsing_retry_exhaustion_records_attempts_in_capture():
     captured = asyncio.run(exercise())
 
     assert captured["model_calls"] == 3
-    assert captured["input_tokens"] == 0
-    assert captured["total_tokens"] == 0
+    assert captured["input_tokens"] == 12
+    assert captured["output_tokens"] == 6
+    assert captured["total_tokens"] == 18
 
 
 def test_failed_attempts_without_usage_do_not_fabricate_tokens():
@@ -247,6 +257,58 @@ def test_failed_attempts_without_usage_do_not_fabricate_tokens():
     assert delta["model_calls"] == 2
     assert delta["input_tokens"] == 4
     assert delta["total_tokens"] == 6
+
+
+def test_provider_error_then_parse_error_keeps_all_reported_usage():
+    """Provider failure + parsing failure + success: 3 attempts, summed reported usage."""
+    from open_deep_research.state import ClarifyWithUser
+
+    _script(
+        _error_step(ValueError("transient")),
+        _tool_step("ClarifyWithUser", {"wrong_field": 1}, usage=SMALL_USAGE),
+        _tool_step(
+            "ClarifyWithUser",
+            {"need_clarification": False, "question": "", "verification": "ok"},
+            usage=LARGE_USAGE,
+        ),
+    )
+    chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=4)
+
+    async def exercise():
+        return await ainvoke_model_with_budget(chain, [HumanMessage(content="hi")])
+
+    _response, delta = asyncio.run(exercise())
+
+    assert delta["model_calls"] == 3
+    assert delta["input_tokens"] == 14
+    assert delta["output_tokens"] == 7
+    assert delta["total_tokens"] == 21
+
+
+def test_boundary_preserves_base_exception_and_leaves_capture_balanced():
+    """A BaseException is re-raised after accounting; no capture context leaks."""
+
+    class FatalError(BaseException):
+        pass
+
+    class FatalRunnable:
+        async def ainvoke(self, payload, config=None):
+            raise FatalError()
+
+    async def exercise() -> tuple[dict, dict]:
+        token = start_budget_capture()
+        try:
+            with pytest.raises(FatalError):
+                await ainvoke_model_with_budget(FatalRunnable(), [HumanMessage(content="hi")])
+        finally:
+            captured = stop_budget_capture(token)
+        return captured, stop_budget_capture(start_budget_capture())
+
+    captured, fresh = asyncio.run(exercise())
+
+    assert captured["model_calls"] == 0
+    assert captured["total_tokens"] == 0
+    assert fresh == captured
 
 
 def test_official_usage_callback_stays_a_separate_observability_channel():
@@ -273,11 +335,11 @@ def test_official_usage_callback_stays_a_separate_observability_channel():
 # ---------------------------------------------------------------------------
 
 
-def test_nested_structured_model_with_retry_does_not_double_count():
+def test_nested_structured_model_with_retry_counts_all_reported_usage():
     from open_deep_research.state import Summary
 
     _script(
-        _tool_step("Summary", {"wrong_field": "x"}),
+        _tool_step("Summary", {"wrong_field": "x"}, usage=SMALL_USAGE),
         _tool_step(
             "Summary",
             {"summary": "short summary", "key_excerpts": "evidence"},
@@ -295,11 +357,11 @@ def test_nested_structured_model_with_retry_does_not_double_count():
 
     captured = asyncio.run(exercise())
 
-    # 2 real attempts, tokens counted once (from the successful raw envelope).
+    # 2 real attempts; both provider-reported usages are summed exactly once.
     assert captured["model_calls"] == 2
-    assert captured["input_tokens"] == 9
-    assert captured["output_tokens"] == 3
-    assert captured["total_tokens"] == 12
+    assert captured["input_tokens"] == 13
+    assert captured["output_tokens"] == 5
+    assert captured["total_tokens"] == 18
 
 
 def test_nested_retry_exhaustion_keeps_attempts_in_tool_capture():
@@ -874,17 +936,16 @@ def test_parallel_reducer_remains_delta_only():
     from open_deep_research.state import runtime_reducer
 
     def delta(calls: int, tokens: int) -> dict:
-        payload = budget_tokens_from_response(
-            AIMessage(
-                content="x",
-                usage_metadata={
+        payload = budget_from_model_accounting(
+            calls,
+            _usage_handler(
+                {
                     "input_tokens": tokens,
                     "output_tokens": 0,
                     "total_tokens": tokens,
-                },
-            )
+                }
+            ),
         )
-        payload["model_calls"] = calls
         return payload
 
     state: dict = {}
@@ -893,3 +954,53 @@ def test_parallel_reducer_remains_delta_only():
 
     assert state["budget"]["model_calls"] == 4
     assert state["budget"]["input_tokens"] == 22
+
+
+def test_parallel_invocations_keep_usage_isolated_and_reduce_once():
+    """Each invocation gets a fresh official handler; the reducer sums deltas once."""
+    from open_deep_research.state import runtime_reducer
+
+    class FixedChat(BaseChatModel):
+        usage: dict
+
+        @property
+        def _llm_type(self) -> str:
+            return "fixed"
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            message = AIMessage(
+                content="done",
+                response_metadata={"model_name": "fixed"},
+                usage_metadata=self.usage,
+            )
+            return _chat_result(message)
+
+    async def invoke(usage: dict) -> dict:
+        token = start_budget_capture()
+        try:
+            _response, _delta = await ainvoke_model_with_budget(
+                FixedChat(usage=usage), [HumanMessage(content="hi")]
+            )
+        finally:
+            return stop_budget_capture(token)
+
+    async def exercise() -> list[dict]:
+        return await asyncio.gather(
+            invoke({"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}),
+            invoke({"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}),
+        )
+
+    first, second = asyncio.run(exercise())
+
+    assert first["input_tokens"] == 10
+    assert first["total_tokens"] == 15
+    assert second["input_tokens"] == 20
+    assert second["total_tokens"] == 30
+
+    state: dict = {}
+    for delta in (first, second):
+        state = runtime_reducer(state, {"budget": delta})
+
+    assert state["budget"]["model_calls"] == 2
+    assert state["budget"]["input_tokens"] == 30
+    assert state["budget"]["total_tokens"] == 45

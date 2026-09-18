@@ -607,35 +607,36 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         max_attempts=configurable.max_structured_output_retries,
     )
     
-    # Budget Capture so a failed planner attempt keeps its model_calls.
-    budget_update = {}
+    # Budget Capture so a failed planner attempt keeps its model_calls/usage.
+    # try/finally guarantees the ContextVar is reset on every exit path.
+    fallback_reason = ""
     attempt_token = start_budget_capture()
     try:
-        response, budget_update = await ainvoke_model_with_budget(
-            planner,
-            [HumanMessage(content=prompt)],
-            observer_model=planner_model_name,
-            observer_structured_output=True,
-            observer_component="report_planner",
-        )
-        response = response["parsed"]
-        stop_budget_capture(attempt_token)
-    except Exception as exc:
-        budget_update = merge_budget_usage(
-            budget_update, stop_budget_capture(attempt_token)
-        )
-        if not is_token_limit_exceeded(exc, planner_model_name):
-            LOGGER.exception("Unexpected report section planning failure.")
-            raise
-        LOGGER.warning(
-            "Section planning hit the model context limit: %s. Falling back to single section.",
-            exc,
-        )
-        budget_update = merge_budget_usage(
-            budget_update,
-            budget_usage_with_reason(
+        try:
+            response, _ = await ainvoke_model_with_budget(
+                planner,
+                [HumanMessage(content=prompt)],
+                observer_model=planner_model_name,
+                observer_structured_output=True,
+                observer_component="report_planner",
+            )
+            response = response["parsed"]
+        except Exception as exc:
+            if not is_token_limit_exceeded(exc, planner_model_name):
+                LOGGER.exception("Unexpected report section planning failure.")
+                raise
+            LOGGER.warning(
+                "Section planning hit the model context limit: %s. Falling back to single section.",
+                exc,
+            )
+            fallback_reason = (
                 "Section planning hit the model context limit; falling back to a single section."
-            ),
+            )
+    finally:
+        budget_update = stop_budget_capture(attempt_token)
+    if fallback_reason:
+        budget_update = merge_budget_usage(
+            budget_update, budget_usage_with_reason(fallback_reason)
         )
         single_section = Section(
             name="Research Report",
@@ -922,38 +923,41 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         writer_model_config["max_tokens"] = writer_max_tokens
     
     async def _write_one(section: Section) -> tuple[Section, dict[str, Any]]:
-        # Budget Capture so a failed section attempt keeps its model_calls.
+        # Budget Capture so a failed section attempt keeps its model_calls/usage.
+        # try/finally guarantees the ContextVar is reset on every exit path.
+        failure_reason = ""
         attempt_token = start_budget_capture()
         try:
-            evidence = section_evidence[section.name]
-            prompt = section_writer_from_role_reports_prompt.format(
-                section_name=section.name,
-                section_description=section.description,
-                evidence=evidence,
-            )
-            writer = configurable_model.with_config(writer_model_config)
-            response, response_budget = await ainvoke_model_with_budget(
-                writer,
-                [HumanMessage(content=prompt)],
-                observer_model=writer_model_name,
-            )
-            section.content = str(response.content)
-            section.status = "done"
-            stop_budget_capture(attempt_token)
-        except Exception as exc:
-            attempt_budget = stop_budget_capture(attempt_token)
-            if is_token_limit_exceeded(exc, writer_model_name):
+            try:
+                evidence = section_evidence[section.name]
+                prompt = section_writer_from_role_reports_prompt.format(
+                    section_name=section.name,
+                    section_description=section.description,
+                    evidence=evidence,
+                )
+                writer = configurable_model.with_config(writer_model_config)
+                response, _ = await ainvoke_model_with_budget(
+                    writer,
+                    [HumanMessage(content=prompt)],
+                    observer_model=writer_model_name,
+                )
+                section.content = str(response.content)
+                section.status = "done"
+            except Exception as exc:
+                if not is_token_limit_exceeded(exc, writer_model_name):
+                    LOGGER.exception("Unexpected section writer failure for '%s'.", section.name)
+                    raise
                 LOGGER.warning("Section '%s' exceeded the model context limit: %s", section.name, exc)
                 section.content = ""
-                response_budget = merge_budget_usage(
-                    attempt_budget,
-                    budget_usage_with_reason(
-                        f"Section '{section.name}' was not written because the model context limit was reached."
-                    ),
+                failure_reason = (
+                    f"Section '{section.name}' was not written because the model context limit was reached."
                 )
-            else:
-                LOGGER.exception("Unexpected section writer failure for '%s'.", section.name)
-                raise
+        finally:
+            response_budget = stop_budget_capture(attempt_token)
+        if failure_reason:
+            response_budget = merge_budget_usage(
+                response_budget, budget_usage_with_reason(failure_reason)
+            )
         return section, response_budget
 
     results = await asyncio.gather(*[_write_one(s) for s in research_sections])
@@ -1025,37 +1029,40 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     }
     
     async def _write_one(section: Section) -> tuple[Section, dict[str, Any]]:
-        # Budget Capture so a failed final-section attempt keeps its model_calls.
+        # Budget Capture so a failed final-section attempt keeps its model_calls/usage.
+        # try/finally guarantees the ContextVar is reset on every exit path.
+        failure_reason = ""
         attempt_token = start_budget_capture()
         try:
-            prompt = final_section_writer_instructions.format(
-                section_name=section.name,
-                section_description=section.description,
-                context=context,
-            )
-            writer = configurable_model.with_config(writer_model_config)
-            response, response_budget = await ainvoke_model_with_budget(
-                writer,
-                [HumanMessage(content=prompt)],
-                observer_model=configurable.final_report_model,
-            )
-            section.content = str(response.content)
-            section.status = "done"
-            stop_budget_capture(attempt_token)
-        except Exception as exc:
-            attempt_budget = stop_budget_capture(attempt_token)
-            if is_token_limit_exceeded(exc, configurable.final_report_model):
+            try:
+                prompt = final_section_writer_instructions.format(
+                    section_name=section.name,
+                    section_description=section.description,
+                    context=context,
+                )
+                writer = configurable_model.with_config(writer_model_config)
+                response, _ = await ainvoke_model_with_budget(
+                    writer,
+                    [HumanMessage(content=prompt)],
+                    observer_model=configurable.final_report_model,
+                )
+                section.content = str(response.content)
+                section.status = "done"
+            except Exception as exc:
+                if not is_token_limit_exceeded(exc, configurable.final_report_model):
+                    LOGGER.exception("Unexpected final section writer failure for '%s'.", section.name)
+                    raise
                 LOGGER.warning("Final section '%s' exceeded the model context limit: %s", section.name, exc)
                 section.content = ""
-                response_budget = merge_budget_usage(
-                    attempt_budget,
-                    budget_usage_with_reason(
-                        f"Final section '{section.name}' was not written because the model context limit was reached."
-                    ),
+                failure_reason = (
+                    f"Final section '{section.name}' was not written because the model context limit was reached."
                 )
-            else:
-                LOGGER.exception("Unexpected final section writer failure for '%s'.", section.name)
-                raise
+        finally:
+            response_budget = stop_budget_capture(attempt_token)
+        if failure_reason:
+            response_budget = merge_budget_usage(
+                response_budget, budget_usage_with_reason(failure_reason)
+            )
         return section, response_budget
 
     results = await asyncio.gather(*[_write_one(s) for s in final_sections])
@@ -1133,26 +1140,30 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                     "tags": ["langsmith:nostream"],
                 }
                 attempt_token = start_budget_capture()
+                fill_failed = False
                 try:
-                    fill_response, fill_budget = await ainvoke_model_with_budget(
-                        configurable_model.with_config(writer_config),
-                        [HumanMessage(content=final_report_prompt)],
-                        observer_model=configurable.final_report_model,
-                    )
-                except Exception as exc:
+                    try:
+                        fill_response, _ = await ainvoke_model_with_budget(
+                            configurable_model.with_config(writer_config),
+                            [HumanMessage(content=final_report_prompt)],
+                            observer_model=configurable.final_report_model,
+                        )
+                    except Exception as exc:
+                        if not is_token_limit_exceeded(exc, configurable.final_report_model):
+                            LOGGER.exception("Unexpected missing-section report fill failure.")
+                            raise
+                        LOGGER.warning(
+                            "Filling missing sections hit the model context limit: %s",
+                            exc,
+                        )
+                        fill_failed = True
+                finally:
                     fill_budget_update = stop_budget_capture(attempt_token)
-                    if not is_token_limit_exceeded(exc, configurable.final_report_model):
-                        LOGGER.exception("Unexpected missing-section report fill failure.")
-                        raise
-                    LOGGER.warning(
-                        "Filling missing sections hit the model context limit: %s",
-                        exc,
-                    )
+                if fill_failed:
                     report += f"\n\n> Note: 以下 section 因模型上下文限制未完成: {', '.join(missing_names)}"
                 else:
-                    stop_budget_capture(attempt_token)
                     budget_update = merge_budget_usage(
-                        fill_budget,
+                        fill_budget_update,
                         budget_usage_with_reason(f"Filled {len(missing_names)} missing sections via final_report_model."),
                     )
                     final_usage = merge_budget_usage(budget_usage, budget_update)
@@ -1586,64 +1597,39 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
     findings_token_limit = None
     
     while current_retry <= max_retries:
-        # Budget Capture so a failed context-limit attempt keeps its model_calls.
+        # Budget Capture so a failed context-limit attempt keeps its attempts/usage.
+        # try/finally guarantees the ContextVar is reset on every exit path.
         attempt_token = start_budget_capture()
+        token_limit_hit = False
         try:
-            # Create comprehensive prompt with all research context
-            final_report_prompt = public_opinion_final_report_generation_prompt.format(
-                research_brief=_workflow(state).get("brief", ""),
-                organization_context=_business_context(configurable),
-                messages=messages_text,
-                findings=findings,
-                date=get_today_str(),
-            )
+            try:
+                # Create comprehensive prompt with all research context
+                final_report_prompt = public_opinion_final_report_generation_prompt.format(
+                    research_brief=_workflow(state).get("brief", ""),
+                    organization_context=_business_context(configurable),
+                    messages=messages_text,
+                    findings=findings,
+                    date=get_today_str(),
+                )
 
-            # Generate the final report
-            final_report, report_budget = await ainvoke_model_with_budget(
-                configurable_model.with_config(writer_model_config),
-                [HumanMessage(content=final_report_prompt)],
-                observer_model=configurable.final_report_model,
-            )
-        except Exception as exc:
+                # Generate the final report
+                final_report, _ = await ainvoke_model_with_budget(
+                    configurable_model.with_config(writer_model_config),
+                    [HumanMessage(content=final_report_prompt)],
+                    observer_model=configurable.final_report_model,
+                )
+            except Exception as exc:
+                if not is_token_limit_exceeded(exc, configurable.final_report_model):
+                    LOGGER.exception("Unexpected final report generation failure.")
+                    raise
+                token_limit_hit = True
+        finally:
             budget_update = merge_budget_usage(
-                budget_update,
-                stop_budget_capture(attempt_token),
+                budget_update, stop_budget_capture(attempt_token)
             )
-            # Handle token limit exceeded errors with progressive truncation
-            if is_token_limit_exceeded(exc, configurable.final_report_model):
-                current_retry += 1
 
-                if current_retry == 1:
-                    # First retry: determine initial truncation limit
-                    model_token_limit = get_model_token_limit(configurable.final_report_model)
-                    if not model_token_limit:
-                        LOGGER.exception(
-                            "Final report model exceeded its context limit and no model limit is configured."
-                        )
-                        return {
-                            "report": {"final": "Error generating final report due to a model context limit."},
-                            "messages": [AIMessage(content="Report generation failed due to token limits")],
-                            "runtime": {"budget": budget_update},
-                        }
-                    findings_token_limit = max(0, model_token_limit - output_reserve)
-                else:
-                    # Subsequent retries: reduce by 10% each time
-                    findings_token_limit = int(findings_token_limit * 0.9)
-
-                # Truncate findings by token budget and retry
-                findings, _ = truncate_text_to_token_budget(findings, findings_token_limit)
-                continue
-            else:
-                LOGGER.exception("Unexpected final report generation failure.")
-                raise
-        else:
-            # Successful call: the returned delta already counts attempts and usage.
-            stop_budget_capture(attempt_token)
-            final_budget_update = merge_budget_usage(
-                budget_update,
-                report_budget,
-            )
-            final_usage = merge_budget_usage(budget_usage, final_budget_update)
+        if not token_limit_hit:
+            final_usage = merge_budget_usage(budget_usage, budget_update)
             final_report_content = append_budget_summary(
                 str(final_report.content),
                 configurable,
@@ -1655,8 +1641,31 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
             return {
                 "report": {"final": final_report_content},
                 "messages": [AIMessage(content=final_report_content)],
-                "runtime": {"budget": final_budget_update},
+                "runtime": {"budget": budget_update},
             }
+
+        # Handle token limit exceeded errors with progressive truncation
+        current_retry += 1
+
+        if current_retry == 1:
+            # First retry: determine initial truncation limit
+            model_token_limit = get_model_token_limit(configurable.final_report_model)
+            if not model_token_limit:
+                LOGGER.exception(
+                    "Final report model exceeded its context limit and no model limit is configured."
+                )
+                return {
+                    "report": {"final": "Error generating final report due to a model context limit."},
+                    "messages": [AIMessage(content="Report generation failed due to token limits")],
+                    "runtime": {"budget": budget_update},
+                }
+            findings_token_limit = max(0, model_token_limit - output_reserve)
+        else:
+            # Subsequent retries: reduce by 10% each time
+            findings_token_limit = int(findings_token_limit * 0.9)
+
+        # Truncate findings by token budget and retry
+        findings, _ = truncate_text_to_token_budget(findings, findings_token_limit)
     
     # Step 4: Return failure result if all retries exhausted
     return {

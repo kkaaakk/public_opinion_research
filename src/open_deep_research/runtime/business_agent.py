@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import Mapping
@@ -342,22 +341,25 @@ async def _execute_tool_safely(
     *,
     tool_call_id: str | None = None,
 ) -> tuple[str, dict[str, Any], bool]:
+    # try/finally guarantees the Budget Capture ContextVar is reset on every exit
+    # path, including CancelledError/BaseException.
     capture_token = start_budget_capture()
+    failed = False
     try:
-        observation = await observe_tool_ainvoke(
-            tool,
-            args,
-            config,
-            tool_call_id=tool_call_id,
-        )
-        return observation, stop_budget_capture(capture_token), True
-    except asyncio.CancelledError:
-        stop_budget_capture(capture_token)
-        raise
-    except Exception as exc:
+        try:
+            observation = await observe_tool_ainvoke(
+                tool,
+                args,
+                config,
+                tool_call_id=tool_call_id,
+            )
+        except Exception as exc:
+            LOGGER.exception("Unexpected tool execution failure for '%s'.", _tool_name(tool))
+            observation = f"Error executing tool: {exc}"
+            failed = True
+    finally:
         captured_budget = stop_budget_capture(capture_token)
-        LOGGER.exception("Unexpected tool execution failure for '%s'.", _tool_name(tool))
-        return f"Error executing tool: {exc}", captured_budget, False
+    return observation, captured_budget, not failed
 
 
 async def _compress_research(
@@ -403,39 +405,44 @@ async def _compress_research(
     attempt_budget: dict[str, Any] = {}
     for _attempt in range(3):
         # Budget Capture so a failed compression attempt keeps its model_calls.
+        # try/finally guarantees the ContextVar is reset on every exit path.
         attempt_token = start_budget_capture()
+        token_limit_hit = False
         try:
-            response, response_budget = await ainvoke_model_with_budget(
-                model,
-                [
-                    SystemMessage(
-                        content=compress_research_system_prompt.format(date=get_today_str())
-                    ),
-                    *researcher_messages,
-                ],
-                observer_model=configurable.compression_model,
-            )
-            stop_budget_capture(attempt_token)
-            raw_notes = "\n".join(
-                str(message.content)
-                for message in filter_messages(
-                    researcher_messages, include_types=["tool", "ai"]
+            try:
+                response, _response_budget = await ainvoke_model_with_budget(
+                    model,
+                    [
+                        SystemMessage(
+                            content=compress_research_system_prompt.format(date=get_today_str())
+                        ),
+                        *researcher_messages,
+                    ],
+                    observer_model=configurable.compression_model,
                 )
-            )
-            return (
-                str(response.content),
-                [raw_notes],
-                merge_budget_usage(attempt_budget, response_budget),
-            )
-        except Exception as exc:
+            except Exception as exc:
+                if not is_token_limit_exceeded(exc, configurable.compression_model):
+                    LOGGER.exception("Unexpected research compression failure.")
+                    raise
+                token_limit_hit = True
+        finally:
             attempt_budget = merge_budget_usage(
                 attempt_budget, stop_budget_capture(attempt_token)
             )
-            if is_token_limit_exceeded(exc, configurable.compression_model):
-                researcher_messages = remove_up_to_last_ai_message(researcher_messages)
-                continue
-            LOGGER.exception("Unexpected research compression failure.")
-            raise
+        if token_limit_hit:
+            researcher_messages = remove_up_to_last_ai_message(researcher_messages)
+            continue
+        raw_notes = "\n".join(
+            str(message.content)
+            for message in filter_messages(
+                researcher_messages, include_types=["tool", "ai"]
+            )
+        )
+        return (
+            str(response.content),
+            [raw_notes],
+            attempt_budget,
+        )
 
     raw_notes = "\n".join(
         str(message.content)
