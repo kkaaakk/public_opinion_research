@@ -313,6 +313,17 @@ def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -
     return chain
 
 
+def budget_from_model_attempts(attempts: int) -> dict[str, Any]:
+    """Create a budget payload that counts real model attempts only.
+
+    Failed attempts usually have no ``AIMessage.usage_metadata``, so this payload
+    never carries tokens: the counters are authoritative, tokens stay zero.
+    """
+    usage = empty_budget_usage()
+    usage["model_calls"] = max(0, int(attempts or 0))
+    return usage
+
+
 async def ainvoke_model_with_budget(
     runnable: Any,
     payload: Any,
@@ -326,15 +337,25 @@ async def ainvoke_model_with_budget(
     attempts (retries included, from the LangChain start event) and tokens come
     from ``AIMessage.usage_metadata``.  Nested calls (inside a tool) additionally
     record the delta into the active Budget Capture for per-tool attribution.
+
+    If the call raises after real attempts (for example ``with_retry`` exhaustion),
+    the attempts are recorded into the active Budget Capture before the original
+    exception is re-raised, so a caller that recovers keeps accurate counts.
     """
     from open_deep_research.observability import observe_model_ainvoke
 
     merged, counter = model_attempt_config(config)
-    response = await observe_model_ainvoke(
-        runnable, payload, config=merged, **observer_kwargs
+    try:
+        response = await observe_model_ainvoke(
+            runnable, payload, config=merged, **observer_kwargs
+        )
+    except BaseException:
+        capture_budget_usage(budget_from_model_attempts(counter.starts))
+        raise
+    delta = merge_budget_usage(
+        budget_from_model_attempts(counter.starts),
+        budget_tokens_from_response(response),
     )
-    delta = budget_tokens_from_response(response)
-    delta["model_calls"] = counter.starts
     capture_budget_usage(delta)
     return response, delta
 
@@ -346,13 +367,23 @@ def invoke_model_with_budget(
     config: Any = None,
     **observer_kwargs: Any,
 ) -> tuple[Any, dict[str, Any]]:
-    """Invoke one model synchronously through the Observer boundary and account its budget."""
+    """Invoke one model synchronously through the Observer boundary and account its budget.
+
+    Mirrors :func:`ainvoke_model_with_budget`, including attempt-only accounting
+    when the call raises after real provider attempts.
+    """
     from open_deep_research.observability import observe_model_invoke
 
     merged, counter = model_attempt_config(config)
-    response = observe_model_invoke(runnable, payload, config=merged, **observer_kwargs)
-    delta = budget_tokens_from_response(response)
-    delta["model_calls"] = counter.starts
+    try:
+        response = observe_model_invoke(runnable, payload, config=merged, **observer_kwargs)
+    except BaseException:
+        capture_budget_usage(budget_from_model_attempts(counter.starts))
+        raise
+    delta = merge_budget_usage(
+        budget_from_model_attempts(counter.starts),
+        budget_tokens_from_response(response),
+    )
     capture_budget_usage(delta)
     return response, delta
 

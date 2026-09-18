@@ -16,6 +16,7 @@ from open_deep_research.budget import (
     ainvoke_model_with_budget,
     budget_usage_with_reason,
     can_spend_model_call,
+    merge_budget_usage,
     start_budget_capture,
     stop_budget_capture,
 )
@@ -399,7 +400,10 @@ async def _compress_research(
         *messages,
         HumanMessage(content=compress_research_simple_human_message),
     ]
+    attempt_budget: dict[str, Any] = {}
     for _attempt in range(3):
+        # Budget Capture so a failed compression attempt keeps its model_calls.
+        attempt_token = start_budget_capture()
         try:
             response, response_budget = await ainvoke_model_with_budget(
                 model,
@@ -411,6 +415,7 @@ async def _compress_research(
                 ],
                 observer_model=configurable.compression_model,
             )
+            stop_budget_capture(attempt_token)
             raw_notes = "\n".join(
                 str(message.content)
                 for message in filter_messages(
@@ -420,9 +425,12 @@ async def _compress_research(
             return (
                 str(response.content),
                 [raw_notes],
-                response_budget,
+                merge_budget_usage(attempt_budget, response_budget),
             )
         except Exception as exc:
+            attempt_budget = merge_budget_usage(
+                attempt_budget, stop_budget_capture(attempt_token)
+            )
             if is_token_limit_exceeded(exc, configurable.compression_model):
                 researcher_messages = remove_up_to_last_ai_message(researcher_messages)
                 continue
@@ -436,7 +444,10 @@ async def _compress_research(
     return (
         "Error synthesizing research report: Maximum retries exceeded",
         [raw_notes],
-        budget_usage_with_reason("Research compression failed after maximum retries."),
+        merge_budget_usage(
+            attempt_budget,
+            budget_usage_with_reason("Research compression failed after maximum retries."),
+        ),
     )
 
 

@@ -138,19 +138,6 @@ def test_parsing_error_retries_the_real_model_call():
     assert envelope["raw"].usage_metadata == LARGE_USAGE
 
 
-def test_parsing_error_retry_exhaustion_raises():
-    from open_deep_research.state import ClarifyWithUser
-
-    _script(
-        _tool_step("ClarifyWithUser", {"wrong_field": 1}),
-        _tool_step("ClarifyWithUser", {"wrong_field": 2}),
-    )
-    chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=2)
-
-    with pytest.raises(Exception):
-        asyncio.run(chain.ainvoke([HumanMessage(content="hi")]))
-
-
 # ---------------------------------------------------------------------------
 # model_calls equals real chat-model attempts
 # ---------------------------------------------------------------------------
@@ -192,8 +179,8 @@ def test_model_calls_counts_real_attempts_after_parsing_error():
     assert delta["input_tokens"] == 10
 
 
-def test_retry_exhaustion_observes_all_attempts_without_fabricating_tokens():
-    """Three failing attempts: the boundary observes 3 starts and no token deltas."""
+def test_retry_exhaustion_records_attempts_in_capture_without_fabricating_tokens():
+    """Three failing attempts: the active Budget Capture keeps 3 attempts, no tokens."""
     _script(
         _error_step(ValueError("fail 1")),
         _error_step(ValueError("fail 2")),
@@ -202,15 +189,49 @@ def test_retry_exhaustion_observes_all_attempts_without_fabricating_tokens():
     config, counter = model_attempt_config()
     model = ScriptedChat().with_retry(stop_after_attempt=3)
 
-    async def exercise():
-        return await ainvoke_model_with_budget(
-            model, [HumanMessage(content="hi")], config=config
-        )
+    async def exercise() -> dict:
+        token = start_budget_capture()
+        try:
+            with pytest.raises(ValueError):
+                await ainvoke_model_with_budget(
+                    model, [HumanMessage(content="hi")], config=config
+                )
+        finally:
+            return stop_budget_capture(token)
 
-    with pytest.raises(ValueError):
-        asyncio.run(exercise())
+    captured = asyncio.run(exercise())
 
     assert counter.starts == 3
+    assert captured["model_calls"] == 3
+    assert captured["input_tokens"] == 0
+    assert captured["output_tokens"] == 0
+    assert captured["total_tokens"] == 0
+
+
+def test_parsing_retry_exhaustion_records_attempts_in_capture():
+    """Three parsing failures: attempts are captured, failed-envelope tokens are not."""
+    from open_deep_research.state import ClarifyWithUser
+
+    _script(
+        _tool_step("ClarifyWithUser", {"wrong_field": 1}, usage=SMALL_USAGE),
+        _tool_step("ClarifyWithUser", {"wrong_field": 2}, usage=SMALL_USAGE),
+        _tool_step("ClarifyWithUser", {"wrong_field": 3}, usage=SMALL_USAGE),
+    )
+    chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=3)
+
+    async def exercise() -> dict:
+        token = start_budget_capture()
+        try:
+            with pytest.raises(Exception):
+                await ainvoke_model_with_budget(chain, [HumanMessage(content="hi")])
+        finally:
+            return stop_budget_capture(token)
+
+    captured = asyncio.run(exercise())
+
+    assert captured["model_calls"] == 3
+    assert captured["input_tokens"] == 0
+    assert captured["total_tokens"] == 0
 
 
 def test_failed_attempts_without_usage_do_not_fabricate_tokens():
@@ -279,6 +300,33 @@ def test_nested_structured_model_with_retry_does_not_double_count():
     assert captured["input_tokens"] == 9
     assert captured["output_tokens"] == 3
     assert captured["total_tokens"] == 12
+
+
+def test_nested_retry_exhaustion_keeps_attempts_in_tool_capture():
+    """A nested model that exhausts retries and degrades still reports its attempts."""
+    from open_deep_research.state import Summary
+
+    _script(
+        _error_step(ValueError("fail 1")),
+        _error_step(ValueError("fail 2")),
+    )
+    model = structured_output_chain(ScriptedChat(), Summary, max_attempts=2)
+
+    async def exercise() -> tuple[str, dict]:
+        token = start_budget_capture()
+        try:
+            # summarize_webpage catches the failure and returns the raw page text.
+            result = await summarize_webpage(model, "page text")
+        finally:
+            return result, stop_budget_capture(token)
+
+    result, captured = asyncio.run(exercise())
+
+    assert result == "page text"
+    assert captured["model_calls"] == 2
+    assert captured["input_tokens"] == 0
+    assert captured["output_tokens"] == 0
+    assert captured["total_tokens"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +477,7 @@ def test_research_review_node_reports_structured_usage(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Context pressure uses the exact next request
+# Context pressure uses the actual request structure with approximate counting
 # ---------------------------------------------------------------------------
 
 
@@ -648,7 +696,7 @@ def test_agent_runtime_checks_context_before_invoking_the_model():
 
     asyncio.run(runtime.run("collect evidence"))
 
-    # Pressure is estimated on the exact request, before the model is invoked.
+    # Pressure is estimated on the actual request structure, before the model is invoked.
     assert events.index("build_request") < events.index("pressure_check")
     assert events.index("pressure_check") < events.index("model")
 
@@ -716,20 +764,15 @@ def test_token_limit_exception_still_enters_context_recovery(monkeypatch):
     import open_deep_research.deep_researcher as module
 
     monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
-
-    class _TokenLimitModel:
-        def with_config(self, _config):
-            return self
-
-        async def ainvoke(self, _messages, config=None):
-            raise _token_limit_error()
-
-    monkeypatch.setattr(module, "configurable_model", _TokenLimitModel())
+    _script(_error_step(_token_limit_error()))
+    monkeypatch.setattr(module, "configurable_model", ScriptedChat())
 
     result = asyncio.run(module.section_writer(_writer_state(), _writer_config()))
 
     budget = result["runtime"]["budget"]
-    assert budget["model_calls"] == 0
+    # The failed real attempt is still budgeted, with no fabricated tokens.
+    assert budget["model_calls"] == 1
+    assert budget["total_tokens"] == 0
     assert (
         "Section 'Risk' was not written because the model context limit was reached."
         in budget["degradation_reasons"]
@@ -786,6 +829,40 @@ def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
         result["report"]["final"]
     )
     assert len(captured["prompt"]) < len(huge_findings)
+
+
+def test_final_report_context_recovery_counts_failed_and_successful_requests(monkeypatch):
+    """A context-limit request plus the successful retry are both budgeted."""
+    import open_deep_research.deep_researcher as module
+
+    monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
+    _script(
+        _error_step(_token_limit_error()),
+        _text_step("recovered report", usage=SMALL_USAGE),
+    )
+    monkeypatch.setattr(module, "configurable_model", ScriptedChat())
+    state = {
+        "messages": [HumanMessage(content="brand risk question")],
+        "agents": {"public_signal": {"report": "signal evidence"}},
+        "workflow": {"brief": "brand risk brief"},
+        "runtime": {"budget": {}},
+    }
+    config = {
+        "configurable": {
+            "final_report_model": "deepseek:deepseek-chat",
+            "final_report_model_max_tokens": 1000,
+            "research_graph_enabled": False,
+        }
+    }
+
+    result = asyncio.run(module._fallback_report_generation(state, config))
+
+    assert "recovered report" in result["report"]["final"]
+    budget = result["runtime"]["budget"]
+    # First request hit the context limit, second succeeded: both are real requests.
+    assert budget["model_calls"] == 2
+    assert budget["input_tokens"] == 4
+    assert budget["total_tokens"] == 6
 
 
 # ---------------------------------------------------------------------------

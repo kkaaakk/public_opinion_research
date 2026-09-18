@@ -28,6 +28,8 @@ from open_deep_research.budget import (
     merge_budget_usage,
     remaining_input_tokens,
     remaining_output_tokens,
+    start_budget_capture,
+    stop_budget_capture,
     structured_output_chain,
     truncate_text_to_token_budget,
 )
@@ -605,6 +607,9 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
         max_attempts=configurable.max_structured_output_retries,
     )
     
+    # Budget Capture so a failed planner attempt keeps its model_calls.
+    budget_update = {}
+    attempt_token = start_budget_capture()
     try:
         response, budget_update = await ainvoke_model_with_budget(
             planner,
@@ -614,7 +619,11 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             observer_component="report_planner",
         )
         response = response["parsed"]
+        stop_budget_capture(attempt_token)
     except Exception as exc:
+        budget_update = merge_budget_usage(
+            budget_update, stop_budget_capture(attempt_token)
+        )
         if not is_token_limit_exceeded(exc, planner_model_name):
             LOGGER.exception("Unexpected report section planning failure.")
             raise
@@ -622,8 +631,11 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             "Section planning hit the model context limit: %s. Falling back to single section.",
             exc,
         )
-        budget_update = budget_usage_with_reason(
-            "Section planning hit the model context limit; falling back to a single section."
+        budget_update = merge_budget_usage(
+            budget_update,
+            budget_usage_with_reason(
+                "Section planning hit the model context limit; falling back to a single section."
+            ),
         )
         single_section = Section(
             name="Research Report",
@@ -910,6 +922,8 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         writer_model_config["max_tokens"] = writer_max_tokens
     
     async def _write_one(section: Section) -> tuple[Section, dict[str, Any]]:
+        # Budget Capture so a failed section attempt keeps its model_calls.
+        attempt_token = start_budget_capture()
         try:
             evidence = section_evidence[section.name]
             prompt = section_writer_from_role_reports_prompt.format(
@@ -925,12 +939,17 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
             )
             section.content = str(response.content)
             section.status = "done"
+            stop_budget_capture(attempt_token)
         except Exception as exc:
+            attempt_budget = stop_budget_capture(attempt_token)
             if is_token_limit_exceeded(exc, writer_model_name):
                 LOGGER.warning("Section '%s' exceeded the model context limit: %s", section.name, exc)
                 section.content = ""
-                response_budget = budget_usage_with_reason(
-                    f"Section '{section.name}' was not written because the model context limit was reached."
+                response_budget = merge_budget_usage(
+                    attempt_budget,
+                    budget_usage_with_reason(
+                        f"Section '{section.name}' was not written because the model context limit was reached."
+                    ),
                 )
             else:
                 LOGGER.exception("Unexpected section writer failure for '%s'.", section.name)
@@ -1006,6 +1025,8 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     }
     
     async def _write_one(section: Section) -> tuple[Section, dict[str, Any]]:
+        # Budget Capture so a failed final-section attempt keeps its model_calls.
+        attempt_token = start_budget_capture()
         try:
             prompt = final_section_writer_instructions.format(
                 section_name=section.name,
@@ -1020,12 +1041,17 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
             )
             section.content = str(response.content)
             section.status = "done"
+            stop_budget_capture(attempt_token)
         except Exception as exc:
+            attempt_budget = stop_budget_capture(attempt_token)
             if is_token_limit_exceeded(exc, configurable.final_report_model):
                 LOGGER.warning("Final section '%s' exceeded the model context limit: %s", section.name, exc)
                 section.content = ""
-                response_budget = budget_usage_with_reason(
-                    f"Final section '{section.name}' was not written because the model context limit was reached."
+                response_budget = merge_budget_usage(
+                    attempt_budget,
+                    budget_usage_with_reason(
+                        f"Final section '{section.name}' was not written because the model context limit was reached."
+                    ),
                 )
             else:
                 LOGGER.exception("Unexpected final section writer failure for '%s'.", section.name)
@@ -1081,36 +1107,50 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
     
     if parts:
         report = "\n\n".join(parts)
+        fill_budget_update: dict[str, Any] = {}
         
         # Handle missing sections
         if missing_names:
             if can_spend_model_call(configurable, budget_usage):
                 # Try to fill missing sections with final_report_model
+                findings = (
+                    _graph_report_context(state, config, query_suffix="missing sections")
+                    if configurable.research_graph_enabled
+                    else _role_context(_role_reports(state))
+                )
+
+                final_report_prompt = public_opinion_final_report_generation_prompt.format(
+                    research_brief=_workflow(state).get("brief", ""),
+                    organization_context=_business_context(configurable),
+                    messages=get_buffer_string(state.get("messages", [])),
+                    findings=f"已有报告内容:\n{report}\n\n补充证据:\n{findings}",
+                    date=get_today_str(),
+                )
+
+                writer_config: dict[str, Any] = {
+                    "model": configurable.final_report_model,
+                    "api_key": get_api_key_for_model(configurable.final_report_model, config),
+                    "tags": ["langsmith:nostream"],
+                }
+                attempt_token = start_budget_capture()
                 try:
-                    findings = (
-                        _graph_report_context(state, config, query_suffix="missing sections")
-                        if configurable.research_graph_enabled
-                        else _role_context(_role_reports(state))
-                    )
-                    
-                    final_report_prompt = public_opinion_final_report_generation_prompt.format(
-                        research_brief=_workflow(state).get("brief", ""),
-                        organization_context=_business_context(configurable),
-                        messages=get_buffer_string(state.get("messages", [])),
-                        findings=f"已有报告内容:\n{report}\n\n补充证据:\n{findings}",
-                        date=get_today_str(),
-                    )
-                    
-                    writer_config: dict[str, Any] = {
-                        "model": configurable.final_report_model,
-                        "api_key": get_api_key_for_model(configurable.final_report_model, config),
-                        "tags": ["langsmith:nostream"],
-                    }
                     fill_response, fill_budget = await ainvoke_model_with_budget(
                         configurable_model.with_config(writer_config),
                         [HumanMessage(content=final_report_prompt)],
                         observer_model=configurable.final_report_model,
                     )
+                except Exception as exc:
+                    fill_budget_update = stop_budget_capture(attempt_token)
+                    if not is_token_limit_exceeded(exc, configurable.final_report_model):
+                        LOGGER.exception("Unexpected missing-section report fill failure.")
+                        raise
+                    LOGGER.warning(
+                        "Filling missing sections hit the model context limit: %s",
+                        exc,
+                    )
+                    report += f"\n\n> Note: 以下 section 因模型上下文限制未完成: {', '.join(missing_names)}"
+                else:
+                    stop_budget_capture(attempt_token)
                     budget_update = merge_budget_usage(
                         fill_budget,
                         budget_usage_with_reason(f"Filled {len(missing_names)} missing sections via final_report_model."),
@@ -1127,15 +1167,6 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                         "messages": [AIMessage(content=report)],
                         "runtime": {"budget": budget_update},
                     }
-                except Exception as exc:
-                    if not is_token_limit_exceeded(exc, configurable.final_report_model):
-                        LOGGER.exception("Unexpected missing-section report fill failure.")
-                        raise
-                    LOGGER.warning(
-                        "Filling missing sections hit the model context limit: %s",
-                        exc,
-                    )
-                    report += f"\n\n> Note: 以下 section 因模型上下文限制未完成: {', '.join(missing_names)}"
             else:
                 report += f"\n\n> Note: 以下 section 因预算限制未完成: {', '.join(missing_names)}"
         
@@ -1143,7 +1174,7 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
         return {
             "report": {"final": report},
             "messages": [AIMessage(content=report)],
-            "runtime": {"budget": {}},
+            "runtime": {"budget": fill_budget_update},
         }
     
     # All sections missing: degrade from role reports (or scoped graph context).
@@ -1555,6 +1586,8 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
     findings_token_limit = None
     
     while current_retry <= max_retries:
+        # Budget Capture so a failed context-limit attempt keeps its model_calls.
+        attempt_token = start_budget_capture()
         try:
             # Create comprehensive prompt with all research context
             final_report_prompt = public_opinion_final_report_generation_prompt.format(
@@ -1564,37 +1597,22 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                 findings=findings,
                 date=get_today_str(),
             )
-            
+
             # Generate the final report
             final_report, report_budget = await ainvoke_model_with_budget(
                 configurable_model.with_config(writer_model_config),
                 [HumanMessage(content=final_report_prompt)],
                 observer_model=configurable.final_report_model,
             )
-            final_budget_update = merge_budget_usage(
-                budget_update,
-                report_budget,
-            )
-            final_usage = merge_budget_usage(budget_usage, final_budget_update)
-            final_report_content = append_budget_summary(
-                str(final_report.content),
-                configurable,
-                final_usage,
-            )
-            await maybe_persist_chat_memory(state, config, final_report_content)
-            
-            # Return successful report generation
-            return {
-                "report": {"final": final_report_content},
-                "messages": [AIMessage(content=final_report_content)],
-                "runtime": {"budget": final_budget_update},
-            }
-            
         except Exception as exc:
+            budget_update = merge_budget_usage(
+                budget_update,
+                stop_budget_capture(attempt_token),
+            )
             # Handle token limit exceeded errors with progressive truncation
             if is_token_limit_exceeded(exc, configurable.final_report_model):
                 current_retry += 1
-                
+
                 if current_retry == 1:
                     # First retry: determine initial truncation limit
                     model_token_limit = get_model_token_limit(configurable.final_report_model)
@@ -1618,6 +1636,27 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
             else:
                 LOGGER.exception("Unexpected final report generation failure.")
                 raise
+        else:
+            # Successful call: the returned delta already counts attempts and usage.
+            stop_budget_capture(attempt_token)
+            final_budget_update = merge_budget_usage(
+                budget_update,
+                report_budget,
+            )
+            final_usage = merge_budget_usage(budget_usage, final_budget_update)
+            final_report_content = append_budget_summary(
+                str(final_report.content),
+                configurable,
+                final_usage,
+            )
+            await maybe_persist_chat_memory(state, config, final_report_content)
+
+            # Return successful report generation
+            return {
+                "report": {"final": final_report_content},
+                "messages": [AIMessage(content=final_report_content)],
+                "runtime": {"budget": final_budget_update},
+            }
     
     # Step 4: Return failure result if all retries exhausted
     return {

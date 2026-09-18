@@ -243,7 +243,7 @@ class AgentRuntime:
             )
             if compaction_budget:
                 budget_update = merge_budget_usage(budget_update, compaction_budget)
-                # History changed: rebuild the exact request for the actual call.
+                # History changed: rebuild the actual request structure for the call.
                 model_messages = [
                     SystemMessage(content=self.system_prompt),
                     *await self.workspace.before_model(messages),
