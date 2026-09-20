@@ -294,7 +294,7 @@ class Configuration(BaseModel):
     research_graph_neo4j_password: Optional[str] = Field(default=None, optional=True)
     research_graph_neo4j_database: Optional[str] = Field(default=None, optional=True)
     research_graph_extraction_model: str = Field(
-        default="deepseek:deepseek-chat",
+        default="volcengine:doubao-seed-2-0-mini-260428",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -323,7 +323,7 @@ class Configuration(BaseModel):
         },
     )
     context_manager_model: str = Field(
-        default="deepseek:deepseek-chat",
+        default="volcengine:doubao-seed-2-0-mini-260428",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -333,7 +333,7 @@ class Configuration(BaseModel):
     )
     context_manager_model_max_tokens: int = Field(default=2048, optional=True)
     rolling_compaction_model: str = Field(
-        default="deepseek:deepseek-chat",
+        default="volcengine:doubao-seed-2-0-mini-260428",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -1059,7 +1059,7 @@ class Configuration(BaseModel):
         }
     )
     rag_query_rewrite_model: str = Field(
-        default="deepseek:deepseek-chat",
+        default="volcengine:doubao-seed-2-0-mini-260428",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -1202,7 +1202,7 @@ class Configuration(BaseModel):
     )
     # Model Configuration
     summarization_model: str = Field(
-        default="deepseek:deepseek-chat",
+        default="volcengine:doubao-seed-2-0-mini-260428",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -1234,7 +1234,7 @@ class Configuration(BaseModel):
         }
     )
     research_model: str = Field(
-        default="deepseek:deepseek-chat",
+        default="deepseek:deepseek-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -1254,7 +1254,7 @@ class Configuration(BaseModel):
         }
     )
     compression_model: str = Field(
-        default="deepseek:deepseek-chat",
+        default="deepseek:deepseek-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -1274,7 +1274,7 @@ class Configuration(BaseModel):
         }
     )
     final_report_model: str = Field(
-        default="deepseek:deepseek-chat",
+        default="deepseek:deepseek-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",

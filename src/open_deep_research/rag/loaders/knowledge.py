@@ -20,9 +20,9 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 
+from open_deep_research.models import create_chat_model as init_chat_model
 from open_deep_research.observability import observe_model_invoke
 from open_deep_research.rag.code_languages import (
     CODE_EXTENSION_LANGUAGE_MAP,

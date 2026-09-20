@@ -1,8 +1,17 @@
-"""Fail-open Agent Observer v0.2 integration.
+"""Fail-open Agent Observer v0.2 sidecar for usage/tool telemetry.
 
-The business graph only depends on this small adapter.  Agent Observer remains
-an optional sidecar: an absent package, an unavailable server, a full queue, or
-an event serialization error must never change research behavior.
+Scope (deliberately narrow): Agent Observer is an *optional, disabled-by-default*
+sidecar that reports provider usage and tool facts.  It is **not** the project's
+tracing system.  Execution observability — Trace/Span hierarchy, graph nodes,
+Agents, LLM, Tool, MCP, Retriever/RAG, latency, errors — is owned by LangSmith
+(see ``observability.langsmith``).  Token/usage/budget/cost accounting is owned
+by ``open_deep_research.budget`` on LangChain's official callbacks.
+
+The business graph only depends on this small adapter.  An absent package, an
+unavailable server, a full queue, or an event serialization error must never
+change research behavior.  Because LangSmith auto-traces LLM/Tool calls, this
+adapter never wraps a call again to build a parallel LangSmith span; it records
+sidecar events on its own endpoint only.
 """
 
 from __future__ import annotations
@@ -35,24 +44,6 @@ _TOOL_BOUNDARY_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
     default=0,
 )
 _MAX_RESULT_SIZE_PROBE = 64 * 1024
-
-_PUBLIC_OPINION_TOPOLOGY = {
-    "edges": [
-        ["enrich_query_images", "clarify_with_user"],
-        ["clarify_with_user", "write_research_brief"],
-        ["write_research_brief", "plan_report_sections"],
-        ["plan_report_sections", "research_phase"],
-        ["research_phase", "section_writer"],
-        ["section_writer", "write_final_sections"],
-        ["write_final_sections", "compile_final_report"],
-        ["public_signal_agent", "research_review"],
-        ["internal_knowledge_agent", "research_review"],
-        ["research_review", "public_signal_agent"],
-        ["research_review", "internal_knowledge_agent"],
-        ["research_review", "risk_assessment_agent"],
-        ["risk_assessment_agent", "response_strategy_agent"],
-    ]
-}
 
 try:  # Optional dependency: the application must work without it installed.
     from agent_observer.sdk import (
@@ -411,7 +402,8 @@ def _start_observed_run(
         # retain a stale Run after the native graph finishes.
         contextvars.copy_context().run(create_run)
         run = run_holder["run"]
-        register_graph_topology(_PUBLIC_OPINION_TOPOLOGY, run=run)
+        # Graph topology visualization now belongs to LangSmith/LangGraph native
+        # tracing; this sidecar no longer hard-codes a parallel topology.
         return _ObserverRun(observer=observer, run=run, started_at=time.perf_counter(), timeout=timeout)
     except Exception:  # pragma: no cover - optional sidecar guard
         LOGGER.debug("Agent Observer setup failed; continuing without telemetry", exc_info=True)

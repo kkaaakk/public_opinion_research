@@ -17,6 +17,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable
 from typing import Any
 
+from open_deep_research.observability.langsmith import trace_span
 from open_deep_research.rag.graph import create_graph_index
 from open_deep_research.rag.graph_terms import TermExtractor
 from open_deep_research.rag.metadata import build_structured_context_text
@@ -159,26 +160,89 @@ class HybridChunkRetriever:
         keyword_top_k: int,
     ) -> list[RetrievalResult]:
         """分别召回向量候选和关键词候选，并融合排序。"""
-        vector_results = self.vectorstore.search(query_vector, top_k=top_k)
-        keyword_results = self.keyword_index.search(query, top_k=keyword_top_k)
-        fused_results = reciprocal_rank_fusion(
-            vector_results,
-            keyword_results,
-            rank_constant=self.rrf_rank_constant,
-        )
-        if self.graph_index is not None:
-            fused_results = self.graph_index.expand(
-                query=query,
-                seed_results=fused_results,
-                max_neighbors=self.graph_max_neighbors,
-                graph_weight=self.graph_weight,
+        vectorstore_provider = type(self.vectorstore).__name__
+        with trace_span(
+            "vector_retrieval",
+            "retriever",
+            metadata={
+                "retriever_type": "vector",
+                "vectorstore_provider": vectorstore_provider,
+                "top_k": top_k,
+            },
+        ) as vector_run:
+            vector_results = self.vectorstore.search(query_vector, top_k=top_k)
+            if vector_run is not None:
+                vector_run.add_outputs({"result_count": len(vector_results)})
+
+        with trace_span(
+            "bm25_retrieval",
+            "retriever",
+            metadata={
+                "retriever_type": "bm25",
+                "keyword_index": type(self.keyword_index).__name__,
+                "top_k": keyword_top_k,
+            },
+        ) as keyword_run:
+            keyword_results = self.keyword_index.search(query, top_k=keyword_top_k)
+            if keyword_run is not None:
+                keyword_run.add_outputs({"result_count": len(keyword_results)})
+
+        with trace_span(
+            "hybrid_merge",
+            "chain",
+            metadata={
+                "retrieval_mode": "hybrid",
+                "vector_count": len(vector_results),
+                "bm25_count": len(keyword_results),
+                "rrf_rank_constant": self.rrf_rank_constant,
+            },
+        ) as merge_run:
+            fused_results = reciprocal_rank_fusion(
+                vector_results,
+                keyword_results,
+                rank_constant=self.rrf_rank_constant,
             )
-        fused_results = apply_structured_metadata_boost(
-            query,
-            fused_results,
-            weight=self.structured_metadata_weight,
-        )
-        return fused_results[:top_k]
+            if merge_run is not None:
+                merge_run.add_outputs({"merged_count": len(fused_results)})
+
+        if self.graph_index is not None:
+            with trace_span(
+                "graph_retrieval",
+                "retriever",
+                metadata={
+                    "retriever_type": "graph",
+                    "graph_backend": type(self.graph_index).__name__,
+                    "max_neighbors": self.graph_max_neighbors,
+                    "seed_count": len(fused_results),
+                },
+            ) as graph_run:
+                fused_results = self.graph_index.expand(
+                    query=query,
+                    seed_results=fused_results,
+                    max_neighbors=self.graph_max_neighbors,
+                    graph_weight=self.graph_weight,
+                )
+                if graph_run is not None:
+                    graph_run.add_outputs({"result_count": len(fused_results)})
+
+        with trace_span(
+            "structured_metadata_boost",
+            "chain",
+            metadata={
+                "structured_metadata_weight": self.structured_metadata_weight,
+                "input_count": len(fused_results),
+                "top_k": top_k,
+            },
+        ) as boost_run:
+            fused_results = apply_structured_metadata_boost(
+                query,
+                fused_results,
+                weight=self.structured_metadata_weight,
+            )
+            selected = fused_results[:top_k]
+            if boost_run is not None:
+                boost_run.add_outputs({"result_count": len(selected)})
+        return selected
 
 
 def reciprocal_rank_fusion(

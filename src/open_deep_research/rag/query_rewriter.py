@@ -2,15 +2,19 @@
 
 import json
 import logging
-import os
 import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 
 from open_deep_research.budget import invoke_model_with_budget
+from open_deep_research.models import (
+    ModelConfigurationError,
+    create_chat_model,
+    resolve_api_key,
+)
+from open_deep_research.observability.langsmith import trace_span
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,34 +39,51 @@ def rewrite_query_with_model(
     max_tokens: int,
     api_key: str | None,
     prompt: str = DEFAULT_RAG_QUERY_REWRITE_PROMPT,
-    model_factory: Callable[..., Any] = init_chat_model,
+    model_factory: Callable[..., Any] = create_chat_model,
 ) -> str:
     """Rewrite a query for retrieval, falling back to the original on any failure."""
     original_query = query.strip()
     if not original_query:
         return query
 
-    try:
-        model = model_factory(
-            model=model_name,
-            max_tokens=max(1, max_tokens),
-            api_key=api_key,
-            tags=["langsmith:nostream"],
-        )
-        response, _budget = invoke_model_with_budget(
-            model,
-            [HumanMessage(content=prompt.format(query=original_query))],
-            observer_model=model_name,
-            observer_component="rag_query_rewrite",
-        )
-    except Exception as exc:
-        LOGGER.warning("RAG query rewrite failed; using original query: %s", exc)
-        return query
+    # The rewrite LLM call is auto-traced by LangChain; this span only adds the
+    # bounded stage facts (query lengths) without copying the query text.
+    with trace_span(
+        "query_rewrite",
+        "chain",
+        metadata={
+            "model": model_name,
+            "original_query_length": len(original_query),
+        },
+    ) as rewrite_run:
+        try:
+            model = model_factory(
+                model=model_name,
+                max_tokens=max(1, max_tokens),
+                api_key=api_key,
+                tags=["langsmith:nostream"],
+            )
+            response, _budget = invoke_model_with_budget(
+                model,
+                [HumanMessage(content=prompt.format(query=original_query))],
+                observer_model=model_name,
+                observer_component="rag_query_rewrite",
+            )
+        except Exception as exc:
+            LOGGER.warning("RAG query rewrite failed; using original query: %s", exc)
+            return query
 
-    rewritten_query = clean_rewritten_query(_response_text(response))
-    if not _is_usable_rewrite(rewritten_query, original_query):
-        return query
-    return rewritten_query
+        rewritten_query = clean_rewritten_query(_response_text(response))
+        if not _is_usable_rewrite(rewritten_query, original_query):
+            return query
+        if rewrite_run is not None:
+            rewrite_run.add_outputs(
+                {
+                    "rewritten": True,
+                    "rewritten_query_length": len(rewritten_query),
+                }
+            )
+        return rewritten_query
 
 
 def maybe_rewrite_query_with_model(
@@ -85,28 +106,11 @@ def maybe_rewrite_query_with_model(
 
 
 def api_key_for_model(model_name: str, config: Mapping[str, Any] | None = None) -> str | None:
-    """Resolve provider API keys from RunnableConfig-like config or environment."""
-    should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
-    normalized_model = model_name.lower()
-    if should_get_from_config.lower() == "true":
-        api_keys = _configurable(config).get("apiKeys", {})
-        if not isinstance(api_keys, Mapping):
-            return None
-        if normalized_model.startswith("openai:"):
-            return api_keys.get("OPENAI_API_KEY")
-        if normalized_model.startswith("anthropic:"):
-            return api_keys.get("ANTHROPIC_API_KEY")
-        if normalized_model.startswith("google"):
-            return api_keys.get("GOOGLE_API_KEY")
+    """Compatibility wrapper around the unified credential resolver."""
+    try:
+        return resolve_api_key(model_name, config)
+    except ModelConfigurationError:
         return None
-
-    if normalized_model.startswith("openai:"):
-        return os.getenv("OPENAI_API_KEY")
-    if normalized_model.startswith("anthropic:"):
-        return os.getenv("ANTHROPIC_API_KEY")
-    if normalized_model.startswith("google"):
-        return os.getenv("GOOGLE_API_KEY")
-    return None
 
 
 def clean_rewritten_query(text: str) -> str:

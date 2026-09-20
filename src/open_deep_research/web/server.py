@@ -20,6 +20,13 @@ from dotenv import load_dotenv
 # Load .env before anything else — API keys live there
 load_dotenv()
 
+from open_deep_research.observability import (  # noqa: E402, I001
+    correlation_metadata,
+    ensure_langsmith_configuration,
+)
+
+ensure_langsmith_configuration()
+
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402, I001
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse  # noqa: E402
@@ -27,7 +34,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from langchain_core.messages import HumanMessage  # noqa: E402
 from pydantic import BaseModel, Field, field_validator  # noqa: E402
 
-from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_factory  # noqa: E402
+from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_factory  # noqa: E402, I001
 
 STATIC_DIR = Path(__file__).parent / "static"
 LOGGER = logging.getLogger(__name__)
@@ -39,6 +46,8 @@ MAX_CONCURRENT_RESEARCH_REQUESTS = 2
 ALLOWED_RESEARCH_MODELS = frozenset(
     {
         "deepseek:deepseek-chat",
+        "deepseek:deepseek-v4-flash",
+        "deepseek:deepseek-flash",
         "openai:gpt-4.1",
         "openai:gpt-4o",
         "anthropic:claude-sonnet-4-20250514",
@@ -65,7 +74,7 @@ if STATIC_DIR.is_dir():
 
 class ResearchRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=MAX_TOPIC_LENGTH)
-    model: str = "deepseek:deepseek-chat"
+    model: str = "deepseek:deepseek-flash"
     search_api: Literal["tavily", "openai", "anthropic"] = "tavily"
     mode: Literal["fast", "normal", "deep"] = "normal"
     org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
@@ -205,8 +214,10 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
             }
             mode = mode_configs.get(request.mode, mode_configs["normal"])
 
+            thread_id = uuid.uuid4().hex
             config = {
                 "configurable": {
+                    "thread_id": thread_id,
                     "research_model": request.model,
                     "compression_model": request.model,
                     "final_report_model": request.model,
@@ -218,7 +229,10 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
                     "rag_enabled": request.rag_enabled,
                     "retrieval_mode": "hybrid" if request.rag_enabled else "web_only",
                     **mode,
-                }
+                },
+                # Bounded correlation facts only; LangSmith reads them without
+                # copying state, prompt, or user content.
+                "metadata": correlation_metadata({"configurable": {"thread_id": thread_id}}),
             }
 
             initial_state = {

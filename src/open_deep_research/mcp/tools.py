@@ -249,9 +249,21 @@ _SERVER_DOMAIN_MAP: dict[str, str] = {
 
 
 def _tag_tools_with_domain(tools: list[BaseTool], server_name: str) -> list[BaseTool]:
-    """Tag every MCP tool with its server's registered domain."""
+    """Tag every MCP tool with its server domain and MCP server name.
+
+    ``tool_domain`` drives business-scene filtering; ``mcp_server`` is bounded
+    correlation metadata that LangChain's native tool tracing exposes to
+    LangSmith.  Neither changes tool behavior.
+    """
     domain = _SERVER_DOMAIN_MAP.get(server_name, "external_mcp")
-    return tag_tools_with_domain(tools, domain)
+    tagged = tag_tools_with_domain(tools, domain)
+    for tool in tagged:
+        if isinstance(tool, dict):
+            continue
+        metadata = dict(getattr(tool, "metadata", None) or {})
+        metadata.setdefault("mcp_server", server_name)
+        tool.metadata = metadata
+    return tagged
 
 
 # ---------------------------------------------------------------------------
