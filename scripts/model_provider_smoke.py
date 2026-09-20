@@ -1,4 +1,4 @@
-"""Opt-in live smoke tests for configured model providers."""
+"""Opt-in live smoke tests for the configured model providers."""
 
 from __future__ import annotations
 
@@ -38,21 +38,30 @@ def smoke_volcengine(model_id: str = DEFAULT_VOLCENGINE_MODEL) -> None:
     )
     model = create_chat_model(logical_model, max_tokens=128)
     response = model.invoke([HumanMessage(content="Reply with only: OK")])
-    envelope = structured_output_chain(model, Summary, max_attempts=1).invoke(
-        [HumanMessage(content="Summarize and quote: The sky is blue.")]
+    structured_envelope = structured_output_chain(
+        model, Summary, max_attempts=1
+    ).invoke(
+        [
+            HumanMessage(
+                content=("Summarize this and include one key excerpt: The sky is blue.")
+            )
+        ]
     )
-    assert isinstance(envelope["parsed"], Summary)
+    structured = structured_envelope["parsed"]
+    assert isinstance(structured, Summary)
+    structured_usage = _usage(structured_envelope["raw"])
     LOGGER.info(
         "volcengine model=%s plain=PASS structured=PASS usage=%r structured_usage=%r",
         logical_model,
         _usage(response),
-        _usage(envelope["raw"]),
+        structured_usage,
     )
 
 
 def smoke_deepseek() -> None:
     """Exercise DeepSeek thinking, tool-calling, and structured-output calls."""
-    model = create_chat_model("deepseek:deepseek-flash", max_tokens=1024)
+    logical_model = "deepseek:deepseek-flash"
+    model = create_chat_model(logical_model, max_tokens=1024)
     response = model.invoke(
         [HumanMessage(content="Think briefly, then reply with only: OK")]
     )
@@ -60,20 +69,30 @@ def smoke_deepseek() -> None:
         [HumanMessage(content="Call echo_code with code='OK'.")]
     )
     assert getattr(tool_response, "tool_calls", None)
-    brief = structured_output_chain(model, ResearchQuestion, max_attempts=1).invoke(
-        [HumanMessage(content="Create a brief about electric vehicle safety.")]
+
+    brief_envelope = structured_output_chain(
+        model, ResearchQuestion, max_attempts=1
+    ).invoke([HumanMessage(content="Create a brief about electric vehicle safety.")])
+    assert isinstance(brief_envelope["parsed"], ResearchQuestion)
+
+    review_envelope = structured_output_chain(
+        model, ResearchReview, max_attempts=1
+    ).invoke(
+        [
+            HumanMessage(
+                content=(
+                    "Review this evidence and mark complete: Verified sales increased."
+                )
+            )
+        ]
     )
-    assert isinstance(brief["parsed"], ResearchQuestion)
-    review = structured_output_chain(model, ResearchReview, max_attempts=1).invoke(
-        [HumanMessage(content="Review this evidence and mark complete: verified.")]
-    )
-    assert isinstance(review["parsed"], ResearchReview)
+    assert isinstance(review_envelope["parsed"], ResearchReview)
     LOGGER.info(
         "deepseek plain=PASS react_tool_calling=PASS brief_structured=PASS "
         "review_structured=PASS usage=%r brief_usage=%r review_usage=%r",
         _usage(response),
-        _usage(brief["raw"]),
-        _usage(review["raw"]),
+        _usage(brief_envelope["raw"]),
+        _usage(review_envelope["raw"]),
     )
 
 
@@ -88,7 +107,10 @@ def main() -> None:
     parser.add_argument(
         "--model",
         default=DEFAULT_VOLCENGINE_MODEL,
-        help="Volcengine preset Model ID or ep-* endpoint ID.",
+        help=(
+            "Volcengine preset Model ID or ep-* endpoint ID. The optional "
+            "volcengine: prefix is accepted."
+        ),
     )
     args = parser.parse_args()
     if os.getenv("RUN_LIVE_MODEL_TESTS") != "1":
