@@ -7,7 +7,6 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage, filter_messages
 from langchain_core.runnables import RunnableConfig
 
@@ -21,7 +20,8 @@ from open_deep_research.budget import (
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
-from open_deep_research.observability import observe_tool_ainvoke
+from open_deep_research.models import configurable_chat_model
+from open_deep_research.observability import agent_metadata, observe_tool_ainvoke
 from open_deep_research.prompts import (
     compress_research_simple_human_message,
     compress_research_system_prompt,
@@ -51,9 +51,7 @@ from open_deep_research.utils import (
 )
 
 LOGGER = logging.getLogger(__name__)
-_CONFIGURABLE_MODEL = init_chat_model(
-    configurable_fields=("model", "max_tokens", "api_key"),
-)
+_CONFIGURABLE_MODEL = configurable_chat_model()
 
 _UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
     "public_signal": (),
@@ -534,6 +532,10 @@ async def run_business_agent(
         "max_tokens": configurable.research_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.research_model, config),
         "tags": ["langsmith:nostream"],
+        "metadata": {
+            **agent_metadata(getattr(spec, "node_name", f"{role}_agent"), role),
+            "research_round": research_round,
+        },
     }
     model = (
         _CONFIGURABLE_MODEL.bind_tools(tools)

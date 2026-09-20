@@ -241,6 +241,8 @@ class ModelAttemptCounter(BaseCallbackHandler):
 
 def model_accounting_config(
     config: Any = None,
+    *,
+    metadata: Mapping[str, Any] | None = None,
 ) -> tuple[Any, ModelAttemptCounter, UsageMetadataCallbackHandler]:
     """Return ``(config, attempt_counter, usage_handler)`` for one model invocation.
 
@@ -249,13 +251,29 @@ def model_accounting_config(
     ``AIMessage.usage_metadata`` from every call, including attempts whose
     structured output fails to parse.  A fresh usage handler per invocation keeps
     parallel agents, section writers, and tools isolated from each other.
+
+    ``metadata`` is optional LangSmith correlation metadata (component, structured
+    output).  It does not affect token accounting or the provider call.
     """
     counter = ModelAttemptCounter()
     usage_handler = UsageMetadataCallbackHandler()
-    merged = merge_configs(
-        ensure_config(config), {"callbacks": [counter, usage_handler]}
-    )
+    overrides: dict[str, Any] = {"callbacks": [counter, usage_handler]}
+    if metadata:
+        overrides["metadata"] = dict(metadata)
+    merged = merge_configs(ensure_config(config), overrides)
     return merged, counter, usage_handler
+
+
+def _observer_langsmith_metadata(observer_kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    """Project Observer model hints onto LangSmith-only metadata (bounded)."""
+    from open_deep_research.observability.langsmith import model_metadata
+
+    component = observer_kwargs.get("observer_component")
+    structured = bool(observer_kwargs.get("observer_structured_output", False))
+    return model_metadata(
+        component=str(component) if component else None,
+        structured_output=structured,
+    )
 
 
 def budget_from_model_accounting(
@@ -294,7 +312,9 @@ async def ainvoke_model_with_budget(
     """
     from open_deep_research.observability import observe_model_ainvoke
 
-    merged, counter, usage_handler = model_accounting_config(config)
+    merged, counter, usage_handler = model_accounting_config(
+        config, metadata=_observer_langsmith_metadata(observer_kwargs)
+    )
     try:
         response = await observe_model_ainvoke(
             runnable, payload, config=merged, **observer_kwargs
@@ -323,7 +343,9 @@ def invoke_model_with_budget(
     """
     from open_deep_research.observability import observe_model_invoke
 
-    merged, counter, usage_handler = model_accounting_config(config)
+    merged, counter, usage_handler = model_accounting_config(
+        config, metadata=_observer_langsmith_metadata(observer_kwargs)
+    )
     try:
         response = observe_model_invoke(runnable, payload, config=merged, **observer_kwargs)
     except BaseException:

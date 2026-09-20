@@ -5,9 +5,8 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, List, Literal
 
-from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -24,6 +23,11 @@ from tavily import AsyncTavilyClient
 
 from open_deep_research.budget import ainvoke_model_with_budget, structured_output_chain
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
+from open_deep_research.models import (
+    ModelConfigurationError,
+    create_chat_model,
+    resolve_api_key,
+)
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
 
@@ -93,7 +97,7 @@ async def tavily_search(
     # Initialize summarization model with retry logic
     model_api_key = get_api_key_for_model(configurable.summarization_model, config)
     summarization_model = structured_output_chain(
-        init_chat_model(
+        create_chat_model(
             model=configurable.summarization_model,
             max_tokens=configurable.summarization_model_max_tokens,
             api_key=model_api_key,
@@ -526,7 +530,7 @@ def build_dynamic_tool_prompt(
         Optional set of domain names that survived filtering — used to
         add a note about which domains are active vs. inactive.
 
-    Returns
+    Returns:
     -------
     str
         A Markdown-formatted tool listing for inclusion in the system prompt.
@@ -550,11 +554,17 @@ def build_dynamic_tool_prompt(
         if not domain_tools:
             continue
         lines.append(f"### {label}")
-        for tool in domain_tools:
-            name = tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")
+        for domain_tool in domain_tools:
+            name = (
+                domain_tool.get("name", "")
+                if isinstance(domain_tool, dict)
+                else getattr(domain_tool, "name", "")
+            )
             desc = ""
-            if not isinstance(tool, dict):
-                desc = (getattr(tool, "description", "") or "").split("\n")[0][:120]
+            if not isinstance(domain_tool, dict):
+                desc = (getattr(domain_tool, "description", "") or "").split("\n")[0][
+                    :120
+                ]
             if desc:
                 lines.append(f"{counter}. **{name}**: {desc}")
             else:
@@ -826,6 +836,7 @@ MODEL_TOKEN_LIMITS = {
     "anthropic.claude-opus-4-1-20250805-v1:0": 200000,
     "deepseek:deepseek-chat": 131072,
     "deepseek:deepseek-reasoner": 131072,
+    "deepseek:deepseek-v4-flash": 131072,
 }
 
 def get_model_token_limit(model_string):
@@ -890,35 +901,13 @@ def get_config_value(value):
         return value.value
 
 def get_api_key_for_model(model_name: str, config: RunnableConfig):
-    """Get API key for a specific model from environment or config."""
-    should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
-    model_name = model_name.lower()
-    if should_get_from_config.lower() == "true":
-        api_keys = config.get("configurable", {}).get("apiKeys", {})
-        if not api_keys:
-            return None
-        if model_name.startswith("openai:"):
-            return api_keys.get("OPENAI_API_KEY")
-        elif model_name.startswith("anthropic:"):
-            return api_keys.get("ANTHROPIC_API_KEY")
-        elif model_name.startswith("google"):
-            return api_keys.get("GOOGLE_API_KEY")
-        elif model_name.startswith("deepseek:"):
-            return api_keys.get("DEEPSEEK_API_KEY")
-        elif model_name.startswith("groq:"):
-            return api_keys.get("GROQ_API_KEY")
-        return None
-    else:
-        if model_name.startswith("openai:"):
-            return os.getenv("OPENAI_API_KEY")
-        elif model_name.startswith("anthropic:"):
-            return os.getenv("ANTHROPIC_API_KEY")
-        elif model_name.startswith("google"):
-            return os.getenv("GOOGLE_API_KEY")
-        elif model_name.startswith("deepseek:"):
-            return os.getenv("DEEPSEEK_API_KEY")
-        elif model_name.startswith("groq:"):
-            return os.getenv("GROQ_API_KEY")
+    """Compatibility wrapper around the unified credential resolver."""
+    try:
+        return resolve_api_key(model_name, config)
+    except ModelConfigurationError:
+        # Test doubles and third-party providers may not have a known
+        # credential mapping. Model creation remains strict and will reject an
+        # unknown real provider at the authoritative factory boundary.
         return None
 
 def get_tavily_api_key(config: RunnableConfig):

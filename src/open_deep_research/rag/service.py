@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, model_validator
 from open_deep_research.configuration import Configuration
 from open_deep_research.memory.context import get_conversation_id, get_user_id
 from open_deep_research.memory.types import INDEXABLE_MEMORY_TYPES
+from open_deep_research.observability.langsmith import trace_span
 from open_deep_research.rag.citations import build_answer_ready_context
 from open_deep_research.rag.config import (
     ChunkingConfig,
@@ -303,25 +304,69 @@ class RAGPipeline:
                 context="Local RAG index is not ready.",
             )
 
-        query_vector = self.indexer.embedding_backend.embed_query(query)
+        with trace_span(
+            "embed_query",
+            "chain",
+            metadata={
+                "embedding_provider": self.config.embedding_provider,
+                "embedding_model": self.config.embedding_model,
+            },
+        ):
+            query_vector = self.indexer.embedding_backend.embed_query(query)
         candidate_count = max(self.config.top_k, self.config.rerank_top_n)
-        retrieval_results = self.indexer.retriever.retrieve(
-            query=query,
-            query_vector=query_vector,
-            top_k=candidate_count,
-            keyword_top_k=max(candidate_count, self.config.keyword_top_k),
-        )
-        retrieval_results = self.reranker.rerank(
-            query=query,
-            results=retrieval_results,
-            top_k=candidate_count,
-        )
+        with trace_span(
+            "rag_retrieval",
+            "retriever",
+            metadata={
+                "retriever_type": "hybrid",
+                "top_k": candidate_count,
+                "keyword_top_k": max(candidate_count, self.config.keyword_top_k),
+                "vectorstore_provider": self.config.vectorstore_provider,
+            },
+        ) as retrieval_run:
+            retrieval_results = self.indexer.retriever.retrieve(
+                query=query,
+                query_vector=query_vector,
+                top_k=candidate_count,
+                keyword_top_k=max(candidate_count, self.config.keyword_top_k),
+            )
+            if retrieval_run is not None:
+                retrieval_run.add_outputs({"result_count": len(retrieval_results)})
+        with trace_span(
+            "rerank",
+            "chain",
+            metadata={
+                "reranker_provider": self.config.reranker_provider,
+                "reranker_model": self.config.reranker_model,
+                "input_count": len(retrieval_results),
+                "top_k": candidate_count,
+            },
+        ) as rerank_run:
+            retrieval_results = self.reranker.rerank(
+                query=query,
+                results=retrieval_results,
+                top_k=candidate_count,
+            )
+            if rerank_run is not None:
+                rerank_run.add_outputs({"output_count": len(retrieval_results)})
         if self.config.authority_rerank_enabled:
             retrieval_results = apply_authority_adjustment(retrieval_results)
-        filtered_results = self._filter_results(retrieval_results)
+        with trace_span(
+            "result_selection",
+            "chain",
+            metadata={
+                "authority_rerank_enabled": self.config.authority_rerank_enabled,
+                "input_count": len(retrieval_results),
+                "top_k": self.config.top_k,
+            },
+        ) as selection_run:
+            filtered_results = self._filter_results(retrieval_results)
+            selected = filtered_results[: self.config.top_k]
+            if selection_run is not None:
+                selection_run.add_outputs({"result_count": len(selected)})
         return build_answer_ready_context(
             query=display_query,
-            matched_chunks=filtered_results[: self.config.top_k],
+            matched_chunks=selected,
         )
 
     def ensure_indexed(self) -> None:

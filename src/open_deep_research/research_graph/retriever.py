@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from open_deep_research.observability.langsmith import trace_span
 from open_deep_research.research_graph.models import (
     RelevantSubgraph,
     ResearchGraphScope,
@@ -51,13 +52,32 @@ class ResearchGraphRetriever:
             seed_ids.extend(working_context.active_evidence_ids)
             seed_ids.extend(working_context.active_event_ids)
         query = " ".join(part for part in (objective, evidence_needed, gaps, query_suffix) if part).strip()
-        return self.store.retrieve(
-            query,
-            run_id=scope.run_id,
-            max_nodes=self.max_nodes,
-            max_edges=self.max_edges,
-            seed_ids=seed_ids,
-        )
+        with trace_span(
+            "research_graph_retrieval",
+            "retriever",
+            metadata={
+                "retriever_type": "research_graph",
+                "graph_backend": type(self.store).__name__,
+                "max_nodes": self.max_nodes,
+                "max_edges": self.max_edges,
+                "seed_count": len(seed_ids),
+            },
+        ) as graph_run:
+            subgraph = self.store.retrieve(
+                query,
+                run_id=scope.run_id,
+                max_nodes=self.max_nodes,
+                max_edges=self.max_edges,
+                seed_ids=seed_ids,
+            )
+            if graph_run is not None:
+                graph_run.add_outputs(
+                    {
+                        "node_count": len(subgraph.nodes),
+                        "edge_count": len(subgraph.edges),
+                    }
+                )
+            return subgraph
 
 
 def format_relevant_subgraph(

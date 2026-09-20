@@ -6,7 +6,6 @@ import uuid
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -35,11 +34,16 @@ from open_deep_research.budget import (
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.memory.writer import persist_conversation_memory
+from open_deep_research.models import configurable_chat_model
 from open_deep_research.observability import (
+    WORKFLOW_NAME,
     ObservedGraph,
     ObserverRunLifecycle,
+    ensure_langsmith_configuration,
+    invocation_metadata,
     observe_graph_node,
 )
+from open_deep_research.observability.langsmith import node_metadata
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     final_section_writer_instructions,
@@ -78,9 +82,7 @@ from open_deep_research.utils import (
 )
 
 # Initialize a configurable model that we will use throughout the agent
-configurable_model = init_chat_model(
-    configurable_fields=("model", "max_tokens", "api_key"),
-)
+configurable_model = configurable_chat_model()
 LOGGER = logging.getLogger(__name__)
 
 
@@ -206,6 +208,27 @@ def _research_task_identity(task: ResearchTask) -> str:
 def _research_task_payload(task: ResearchTask) -> dict[str, Any]:
     """Serialize a task for a dynamic Send payload."""
     return task.model_dump()
+
+
+def _with_correlation_metadata(
+    config: RunnableConfig | None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a copied config with bounded LangSmith correlation metadata.
+
+    The base config is never mutated, and the metadata is derived only from
+    identifiers, never from graph state or user content.
+    """
+    merged: dict[str, Any] = dict(config) if isinstance(config, Mapping) else {}
+    metadata: dict[str, Any] = {}
+    existing = merged.get("metadata")
+    if isinstance(existing, Mapping):
+        metadata.update(existing)
+    metadata.update(invocation_metadata(merged))
+    if extra:
+        metadata.update({str(key): value for key, value in extra.items() if value})
+    merged["metadata"] = metadata
+    return merged
 
 
 def _resolve_research_run_id(
@@ -1379,11 +1402,31 @@ async def response_strategy_agent(state: PublicOpinionState, config: RunnableCon
 
 
 public_opinion_builder = StateGraph(DeepResearchState, config_schema=Configuration)
-public_opinion_builder.add_node("public_signal_agent", public_signal_agent)
-public_opinion_builder.add_node("internal_knowledge_agent", internal_knowledge_agent)
-public_opinion_builder.add_node("research_review", research_review)
-public_opinion_builder.add_node("risk_assessment_agent", risk_assessment_agent)
-public_opinion_builder.add_node("response_strategy_agent", response_strategy_agent)
+public_opinion_builder.add_node(
+    "public_signal_agent",
+    public_signal_agent,
+    metadata=node_metadata("public_signal_agent", kind="agent"),
+)
+public_opinion_builder.add_node(
+    "internal_knowledge_agent",
+    internal_knowledge_agent,
+    metadata=node_metadata("internal_knowledge_agent", kind="agent"),
+)
+public_opinion_builder.add_node(
+    "research_review",
+    research_review,
+    metadata=node_metadata("research_review"),
+)
+public_opinion_builder.add_node(
+    "risk_assessment_agent",
+    risk_assessment_agent,
+    metadata=node_metadata("risk_assessment_agent", kind="agent"),
+)
+public_opinion_builder.add_node(
+    "response_strategy_agent",
+    response_strategy_agent,
+    metadata=node_metadata("response_strategy_agent", kind="agent"),
+)
 
 public_opinion_builder.add_edge(START, "public_signal_agent")
 public_opinion_builder.add_edge(START, "internal_knowledge_agent")
@@ -1416,7 +1459,7 @@ public_opinion_builder.add_conditional_edges(
 public_opinion_builder.add_edge("risk_assessment_agent", "response_strategy_agent")
 public_opinion_builder.add_edge("response_strategy_agent", END)
 
-public_opinion_subgraph = public_opinion_builder.compile()
+public_opinion_subgraph = public_opinion_builder.compile(name="public_opinion_agents")
 
 
 @observe_graph_node(name="research_phase", kind="subgraph")
@@ -1424,6 +1467,11 @@ async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     """Run initial and gap-driven public-opinion research before report writing."""
     input_budget = _runtime(state).get("budget", {})
     research_run_id = _resolve_research_run_id(state, config)
+    # Bounded LangSmith correlation metadata for the multi-agent subgraph.  It
+    # never enters graph state or checkpoints; only the LangSmith run tree.
+    subgraph_config = _with_correlation_metadata(
+        config, {"research_run_id": research_run_id}
+    )
     result = await public_opinion_subgraph.ainvoke(
         {
             "messages": state.get("messages", []),
@@ -1439,7 +1487,7 @@ async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
             "report": _report(state),
             "runtime": {"budget": input_budget, "metrics": {}},
         },
-        config,
+        subgraph_config,
     )
     result_runtime = result.get("runtime", {}) or {}
     budget_update = diff_budget_usage(result_runtime.get("budget", {}), input_budget)
@@ -1697,34 +1745,42 @@ def _create_deep_researcher_builder(
     builder.add_node(
         "enrich_query_images",
         node("enrich_query_images", enrich_query_images),
+        metadata=node_metadata("enrich_query_images"),
     )
     builder.add_node(
         "clarify_with_user",
         node("clarify_with_user", clarify_with_user, terminal=True),
+        metadata=node_metadata("clarify_with_user"),
     )
     builder.add_node(
         "write_research_brief",
         node("write_research_brief", write_research_brief),
+        metadata=node_metadata("write_research_brief"),
     )
     builder.add_node(
         "plan_report_sections",
         node("plan_report_sections", plan_report_sections),
+        metadata=node_metadata("plan_report_sections"),
     )
     builder.add_node(
         "research_phase",
         node("research_phase", research_phase),
+        metadata=node_metadata("research_phase", kind="subgraph"),
     )
     builder.add_node(
         "section_writer",
         node("section_writer", section_writer),
+        metadata=node_metadata("section_writer", kind="writer"),
     )
     builder.add_node(
         "write_final_sections",
         node("write_final_sections", write_final_sections),
+        metadata=node_metadata("write_final_sections", kind="writer"),
     )
     builder.add_node(
         "compile_final_report",
         node("compile_final_report", compile_final_report, finish=True),
+        metadata=node_metadata("compile_final_report", kind="writer"),
     )
 
     builder.add_edge(START, "enrich_query_images")
@@ -1736,11 +1792,14 @@ def _create_deep_researcher_builder(
     return builder
 
 
+# Normalize LangSmith env vars once optional modules have loaded their .env.
+ensure_langsmith_configuration()
+
 # Keep the builder available for existing Python-side tests and tooling. The
 # exported ``deep_researcher`` below is a factory so LangGraph CLI/Studio sees
 # the native Pregel returned by the factory rather than a custom facade.
 deep_researcher_builder = _create_deep_researcher_builder()
-deep_researcher_graph = deep_researcher_builder.compile()
+deep_researcher_graph = deep_researcher_builder.compile(name=WORKFLOW_NAME)
 observed_deep_researcher = ObservedGraph(deep_researcher_graph)
 
 
@@ -1749,8 +1808,10 @@ def deep_researcher(config: Any = None):
 
     LangGraph API calls this factory for each graph execution. The factory only
     constructs the graph; the Observer Run starts lazily at the first node so a
-    server-side graph load cannot create a shared Run.
+    server-side graph load cannot create a shared Run. LangSmith traces the
+    native Pregel under the ``public_opinion_research`` name; correlation
+    metadata is attached at the graph boundary in ``research_phase``.
     """
     del config  # The node-level RunnableConfig carries the invocation settings.
     lifecycle = ObserverRunLifecycle()
-    return _create_deep_researcher_builder(lifecycle).compile()
+    return _create_deep_researcher_builder(lifecycle).compile(name=WORKFLOW_NAME)
