@@ -75,7 +75,7 @@ ORG_CONTEXTS = [
 # ═══════════════════════════════════════════════════════════════════════════
 
 MODELS = [
-    "deepseek:deepseek-chat",
+    "deepseek:deepseek-flash",
     "openai:gpt-4o-mini",
     "anthropic:claude-sonnet-4-6",
 ]
