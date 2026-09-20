@@ -170,7 +170,9 @@ src/open_deep_research/
 | Compression | `openai:gpt-4.1` | 研究内容压缩 |
 | Final Report | `openai:gpt-4.1` | 最终报告生成 |
 
-支持 OpenAI、Anthropic、Google、Groq、DeepSeek 等所有通过 `init_chat_model()` 接入的模型。
+支持 OpenAI、Anthropic、Google、Groq、DeepSeek，以及通过 OpenAI 兼容接口接入的火山方舟。运行时代码统一通过 `open_deep_research.models.create_chat_model()` 创建 LangChain `BaseChatModel`；模型引用采用 `provider:model` 格式。
+
+推荐的双模型路由是：网页摘要、RAG 查询改写、Research Graph 抽取、上下文管理和滚动压缩使用 `volcengine:doubao-seed-2-0-mini-260428`；研究 Agent、研究压缩和最终报告使用 `deepseek:deepseek-flash`。Volcengine 引用既支持预置 Model ID（如 `volcengine:doubao-seed-2-0-mini-260428`），也支持自定义 endpoint ID（如 `volcengine:ep-...`），工厂只剥离 provider 前缀。火山方舟需要 `ARK_API_KEY`，可用 `ARK_BASE_URL` 覆盖默认端点；DeepSeek 需要 `DEEPSEEK_API_KEY`。真实 API 冒烟测试仅在显式设置 `RUN_LIVE_MODEL_TESTS=1` 后运行，例如 `python scripts/model_provider_smoke.py --provider volcengine --model doubao-seed-2-0-mini-260428`。
 
 ### 搜索 API
 

@@ -100,7 +100,7 @@ class AgentStressTester:
     def run_one(self, scenario: str, mode: str) -> AgentResult:
         """Synchronous — callable from ThreadPoolExecutor for concurrency testing."""
         topic = TOPICS[scenario][0]
-        model = "deepseek:deepseek-chat"
+        model = "deepseek:deepseek-flash"
         payload = {
             "topic": topic,
             "model": model,

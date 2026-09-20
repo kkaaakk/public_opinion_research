@@ -117,7 +117,7 @@ def test_rag_query_rewrite_defaults_to_enabled():
     config = Configuration()
 
     assert config.rag_query_rewrite_enabled is True
-    assert config.rag_query_rewrite_model == "deepseek:deepseek-chat"
+    assert config.rag_query_rewrite_model == "volcengine:doubao-seed-2-0-mini-260428"
     assert config.rag_query_rewrite_max_tokens == 256
 
 
