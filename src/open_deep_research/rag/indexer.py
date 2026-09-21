@@ -16,13 +16,13 @@ from open_deep_research.rag.loaders import (
     fingerprint_knowledge_base_paths,
     load_documents_from_paths,
 )
+from open_deep_research.rag.loaders.file_memory import (
+    fingerprint_memory_paths,
+    load_memory_documents_from_paths,
+)
 from open_deep_research.rag.loaders.mysql_memory import (
     fingerprint_mysql_memory,
     load_memory_documents_from_mysql,
-)
-from open_deep_research.rag.memory import (
-    fingerprint_memory_paths,
-    load_memory_documents_from_paths,
 )
 from open_deep_research.rag.retriever import BM25Index, HybridChunkRetriever
 from open_deep_research.rag.splitter import split_documents

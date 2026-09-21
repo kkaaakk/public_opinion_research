@@ -2,10 +2,11 @@
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import ValidationError
 from starlette.requests import Request
 
@@ -23,19 +24,23 @@ from open_deep_research.rag.types import RAGDocument
 from open_deep_research.state import Section
 
 
-class UsageModel:
-    """Minimal async model fixture that returns a predefined response."""
+class UsageModel(BaseChatModel):
+    """Real LangChain chat model so budget callbacks fire like production."""
 
-    def __init__(self, response):
-        self.response = response
-        self.prompts: list[str] = []
+    content: str = "written"
+    usage_metadata_payload: dict | None = None
 
-    def with_config(self, _config):
-        return self
+    @property
+    def _llm_type(self) -> str:
+        return "usage-fixture"
 
-    async def ainvoke(self, messages):
-        self.prompts.append(str(messages[0].content))
-        return self.response
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        message = AIMessage(
+            content=self.content,
+            response_metadata={"model_name": "usage-fixture"},
+            usage_metadata=self.usage_metadata_payload,
+        )
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 def _writer_config() -> dict:
@@ -52,15 +57,14 @@ def _section_state(section: Section) -> dict:
 
 def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> None:
     """Both parallel writer stages merge model calls and token usage."""
-    response = AIMessage(
+    model = UsageModel(
         content="written",
-        usage_metadata={
+        usage_metadata_payload={
             "input_tokens": 11,
             "output_tokens": 7,
             "total_tokens": 18,
         },
     )
-    model = UsageModel(response)
     monkeypatch.setattr(deep_researcher_module, "configurable_model", model)
 
     research_result = asyncio.run(
@@ -110,7 +114,7 @@ def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> 
 
 def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
     """Providers without usage metadata are counted without fabricated tokens."""
-    model = UsageModel(SimpleNamespace(content="written"))
+    model = UsageModel(content="written")
     monkeypatch.setattr(deep_researcher_module, "configurable_model", model)
 
     result = asyncio.run(

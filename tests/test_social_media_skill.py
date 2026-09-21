@@ -1,21 +1,31 @@
 """Tests for social media MCP primitives and thin LangChain tool wrappers."""
 
+from collections import Counter
+
+import open_deep_research.social_media_apify_api as apify_api
 from open_deep_research.social_media.tools import (
     SOCIAL_MEDIA_TOOL_NAMES,
     get_social_media_tools,
 )
 from open_deep_research.social_media_mcp import (
     _dedupe_records,
+    _engagement_score,
+    _is_complaint,
     _matches_query,
     _query_groups,
+    _risk_metrics,
+    _sentiment,
+    _top_keywords,
     check_duplicate,
     extract_images,
-    fetch_comments as mcp_fetch_comments,
     fetch_x_thread,
     normalize_post,
     search_complaints,
     search_posts,
     search_x_posts,
+)
+from open_deep_research.social_media_mcp import (
+    fetch_comments as mcp_fetch_comments,
 )
 
 SAMPLE_CONFIG = {"data_paths": ["data/social_media/sample_posts.jsonl"]}
@@ -85,6 +95,97 @@ def test_search_complaints_mcp() -> None:
     assert result["ok"] is True
 
 
+def test_social_media_domain_golden_fixture() -> None:
+    records = [
+        {
+            "id": "negative-1",
+            "content": "质量 issue, refund requested",
+            "sentiment": "negative",
+            "engagement": {"likes": 10, "comments": 2, "views": 988},
+            "tags": ["battery", "refund"],
+        },
+        {
+            "id": "positive-1",
+            "content": "resolved and good",
+            "sentiment": "positive",
+            "engagement": {"likes": 5},
+            "tags": ["battery"],
+        },
+    ]
+    counts = Counter(_sentiment(record) for record in records)
+    total_engagement = sum(_engagement_score(record) for record in records)
+    complaints = sum(1 for record in records if _is_complaint(record))
+
+    assert counts == {"negative": 1, "positive": 1}
+    assert complaints == 1
+    assert total_engagement == 1005
+    assert _top_keywords(records) == [
+        {"keyword": "battery", "count": 2},
+        {"keyword": "refund", "count": 1},
+    ]
+    assert _risk_metrics(records, counts, total_engagement, complaints, {}) == {
+        "level": "high",
+        "score": 37,
+        "heat_level": "low",
+        "negative_ratio": 0.5,
+        "negative_engagement": 1000,
+        "complaint_count": 1,
+        "rules": {
+            "critical": {"min_negative_ratio": 0.6, "min_negative_engagement": 10000, "min_complaints": 10},
+            "high": {"min_negative_ratio": 0.45, "min_negative_engagement": 3000, "min_complaints": 3},
+            "medium": {"min_negative_ratio": 0.25, "min_negative_engagement": 800, "min_complaints": 1},
+        },
+        "reasons": [
+            "negative_ratio=0.5",
+            "total_engagement=1005",
+            "complaint_count=1",
+            "negative_engagement=1000",
+        ],
+    }
+
+
+def test_apify_adapter_preserves_its_golden_aggregate(monkeypatch) -> None:
+    records = [
+        {
+            "id": "negative-1",
+            "platform": "x",
+            "content": "refund requested",
+            "sentiment": "negative",
+            "published_at": "2026-09-20T10:00:00",
+            "engagement": {"likes": 10, "views": 990},
+            "tags": ["refund"],
+        },
+        {
+            "id": "positive-1",
+            "platform": "x",
+            "content": "resolved",
+            "sentiment": "positive",
+            "published_at": "2026-09-21T10:00:00",
+            "engagement": {"likes": 5},
+            "tags": ["resolved"],
+        },
+    ]
+    monkeypatch.setattr(
+        apify_api,
+        "search_social_posts",
+        lambda _params: {"ok": True, "posts": records, "source": {"mode": "fixture"}},
+    )
+
+    result = apify_api.aggregate_public_sentiment({"query": "brand"})
+
+    assert result["sentiment_counts"] == {"negative": 1, "positive": 1}
+    assert result["negative_ratio"] == 0.5
+    assert result["complaint_count"] == 1
+    assert result["total_engagement"] == 1005
+    assert result["negative_engagement"] == 1000
+    assert result["top_keywords"] == [
+        {"keyword": "refund", "count": 1},
+        {"keyword": "resolved", "count": 1},
+    ]
+    assert result["risk"]["level"] == "high"
+    assert result["risk"]["score"] == 37
+
+
 # ── thin @tool wrappers ────────────────────────────────────────────────
 
 def test_tool_names_match_expected_set() -> None:
@@ -97,5 +198,3 @@ def test_tool_names_match_expected_set() -> None:
     assert "fetch_author_profile" in names
     assert "get_trending_keywords" in names
     assert "get_public_opinion_snapshot" in names
-
-

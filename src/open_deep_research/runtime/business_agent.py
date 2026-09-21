@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
-from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage, filter_messages
@@ -38,7 +36,7 @@ from open_deep_research.social_media.tools import (
     SOCIAL_MEDIA_TOOL_NAMES,
     get_social_media_tools,
 )
-from open_deep_research.state import DeepResearchState, ResearchReview, ResearchTask
+from open_deep_research.state import DeepResearchState
 from open_deep_research.utils import (
     get_all_tools,
     get_api_key_for_model,
@@ -48,6 +46,20 @@ from open_deep_research.utils import (
     has_external_research_tool,
     is_token_limit_exceeded,
     remove_up_to_last_ai_message,
+)
+from open_deep_research.workflow.state_utils import (
+    agents_state,
+    business_context,
+    coerce_research_review,
+    coerce_research_tasks,
+    is_followup,
+    research_state,
+    resolve_research_run_id,
+    role_context,
+    role_reports,
+    runtime_state,
+    tool_name,
+    workflow_state,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -65,115 +77,6 @@ _UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _workflow(state: Mapping[str, Any]) -> dict[str, Any]:
-    return dict(state.get("workflow", {}) or {})
-
-
-def _agents(state: Mapping[str, Any]) -> dict[str, Any]:
-    return dict(state.get("agents", {}) or {})
-
-
-def _research(state: Mapping[str, Any]) -> dict[str, Any]:
-    return dict(state.get("research", {}) or {})
-
-
-def _runtime(state: Mapping[str, Any]) -> dict[str, Any]:
-    return dict(state.get("runtime", {}) or {})
-
-
-def _role_reports(state: Mapping[str, Any]) -> dict[str, str]:
-    return {
-        str(role): str(value.get("report") or "")
-        for role, value in _agents(state).items()
-        if isinstance(value, Mapping) and value.get("report")
-    }
-
-
-def _coerce_research_task(value: Any) -> ResearchTask | None:
-    if isinstance(value, ResearchTask):
-        return value
-    if isinstance(value, dict):
-        try:
-            return ResearchTask.model_validate(value)
-        except Exception:
-            return None
-    return None
-
-
-def _coerce_research_tasks(value: Any) -> list[ResearchTask]:
-    if value is None:
-        return []
-    values = value if isinstance(value, (list, tuple)) else [value]
-    return [
-        task
-        for item in values
-        if (task := _coerce_research_task(item)) is not None
-    ]
-
-
-def _coerce_research_review(value: Any) -> ResearchReview | None:
-    if isinstance(value, ResearchReview):
-        return value
-    if isinstance(value, dict):
-        try:
-            return ResearchReview.model_validate(value)
-        except Exception:
-            return None
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        try:
-            return ResearchReview.model_validate(model_dump())
-        except Exception:
-            return None
-    return None
-
-
-def _is_followup(state: Mapping[str, Any]) -> bool:
-    return int(_workflow(state).get("round", 1) or 1) > 1
-
-
-def _business_context(configurable: Configuration) -> str:
-    context = (configurable.organization_context or "").strip()
-    if context:
-        return context
-    return (
-        "No additional organization context was configured. Use the user's request, "
-        "local RAG evidence, and cited public sources without inventing company facts."
-    )
-
-
-def _role_context(role_reports: dict[str, str], roles: tuple[str, ...]) -> str:
-    formatted_reports = [
-        f"## {role}\n{report}"
-        for role in roles
-        for report in [role_reports.get(role, "")]
-        if report
-    ]
-    return "\n\n".join(formatted_reports) or "No upstream role reports are available yet."
-
-
-def _resolve_research_run_id(
-    state: Mapping[str, Any],
-    config: RunnableConfig | None = None,
-) -> str:
-    state_run_id = str(_research(state).get("run_id") or "").strip()
-    if state_run_id:
-        return state_run_id
-    configurable: Mapping[str, Any] = (
-        config.get("configurable", {}) if isinstance(config, Mapping) else {}
-    )
-    for key in ("research_run_id", "thread_id", "run_id"):
-        value = str(configurable.get(key) or "").strip()
-        if value:
-            return value
-    metadata = config.get("metadata", {}) if isinstance(config, Mapping) else {}
-    for key in ("research_run_id", "thread_id", "run_id"):
-        value = str(metadata.get(key) or "").strip() if isinstance(metadata, Mapping) else ""
-        if value:
-            return value
-    return f"run_{uuid.uuid4().hex}"
-
-
 def _effective_context_strategy(configurable: Configuration, spec: Any) -> str:
     configured = configurable.context_strategy.strip().lower()
     if configured != "auto":
@@ -188,7 +91,7 @@ def _task_descriptor(
 ) -> TaskDescriptor:
     tasks = [
         task
-        for task in _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
+        for task in coerce_research_tasks(workflow_state(state).get("pending_tasks", []))
         if task.target_role == role
     ]
     if tasks:
@@ -200,8 +103,8 @@ def _task_descriptor(
             reason=task.reason,
         )
     return TaskDescriptor(
-        task_id=stable_id("TASK", run_id, role, _workflow(state).get("round", 1)),
-        objective=str(_workflow(state).get("brief", "") or ""),
+        task_id=stable_id("TASK", run_id, role, workflow_state(state).get("round", 1)),
+        objective=str(workflow_state(state).get("brief", "") or ""),
         evidence_needed="Evidence required by the role contract and current research brief.",
         reason="Initial role research task.",
     )
@@ -223,25 +126,25 @@ def _build_business_agent_assignment(
             "reconstruct or request complete upstream role reports."
         )
     else:
-        upstream_context = _role_context(
-            _role_reports(state),
+        upstream_context = role_context(
+            role_reports(state),
             _UPSTREAM_ROLES.get(role, ()),
         )
-    review = _coerce_research_review(_workflow(state).get("review"))
+    review = coerce_research_review(workflow_state(state).get("review"))
     review_context = review.model_dump_json(indent=2) if review else "No research review yet."
     assignment = (
-        f"Overall research brief:\n{_workflow(state).get('brief', '')}\n\n"
+        f"Overall research brief:\n{workflow_state(state).get('brief', '')}\n\n"
         f"Upstream research context:\n{upstream_context}\n\n"
         f"Latest research review:\n{review_context}\n\n"
         f"Input contract:\n{chr(10).join(f'- {item}' for item in spec.input_contract)}\n\n"
         f"Your role-specific objective:\n{spec.expected_output}"
     )
-    if not _is_followup(state):
+    if not is_followup(state):
         return assignment
 
     followup_tasks = [
         task
-        for task in _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
+        for task in coerce_research_tasks(workflow_state(state).get("pending_tasks", []))
         if task.target_role == role
     ]
     if not followup_tasks:
@@ -259,17 +162,11 @@ def _build_business_agent_assignment(
     ]
     return (
         f"{assignment}\n\n"
-        f"Current mode: follow-up research round {_workflow(state).get('round', 2)}.\n"
+        f"Current mode: follow-up research round {workflow_state(state).get('round', 2)}.\n"
         "Do not repeat the first-round comprehensive survey. Focus only on these unresolved, "
         "decision-relevant research gaps and use the existing scoped research context:\n"
         f"{chr(10).join(task_lines)}"
     )
-
-
-def _tool_name(tool: Any) -> str:
-    if isinstance(tool, dict):
-        return str(tool.get("name") or "web_search")
-    return str(getattr(tool, "name", ""))
 
 
 def _role_tool_prompt(configurable: Configuration, spec: Any) -> str:
@@ -306,8 +203,8 @@ async def _business_agent_tools(
         and _effective_context_strategy(configurable, spec) == "research_graph_producer"
     ):
         raw_search_tools = await get_raw_search_tool(configurable.search_api)
-        raw_names = {_tool_name(tool) for tool in raw_search_tools}
-        all_tools = [tool for tool in all_tools if _tool_name(tool) not in raw_names]
+        raw_names = {tool_name(tool) for tool in raw_search_tools}
+        all_tools = [tool for tool in all_tools if tool_name(tool) not in raw_names]
         all_tools.extend(raw_search_tools)
     if "social_media" in allowed_domains:
         all_tools.extend(tag_tools_with_domain(get_social_media_tools(), "social_media"))
@@ -319,7 +216,7 @@ async def _business_agent_tools(
         if domain in allowed_domains:
             filtered_tools.append(tool)
         else:
-            rejected_tools.append((_tool_name(tool), domain or "unclassified"))
+            rejected_tools.append((tool_name(tool), domain or "unclassified"))
     LOGGER.debug(
         "Public-opinion agent %s: allowed_domains=%s tools_before=%d "
         "tools_after=%d rejected=%s",
@@ -345,7 +242,7 @@ async def _execute_tool_safely(
         try:
             observation = await tool.ainvoke(args, config)
         except Exception as exc:
-            LOGGER.exception("Unexpected tool execution failure for '%s'.", _tool_name(tool))
+            LOGGER.exception("Unexpected tool execution failure for '%s'.", tool_name(tool))
             observation = f"Error executing tool: {exc}"
             failed = True
     finally:
@@ -457,7 +354,7 @@ def _build_state_patch(
     result: AgentRuntimeResult,
     workspace: ResearchWorkspace,
 ) -> dict[str, Any]:
-    followup = _is_followup(state)
+    followup = is_followup(state)
     patch: dict[str, Any] = {
         "agents": {
             role: {
@@ -472,7 +369,7 @@ def _build_state_patch(
         },
         "workflow": {
             "completed_tasks": (
-                _coerce_research_tasks(_workflow(state).get("pending_tasks", []))
+                coerce_research_tasks(workflow_state(state).get("pending_tasks", []))
                 if followup
                 else []
             ),
@@ -503,8 +400,8 @@ async def run_business_agent(
         return {}
 
     spec = get_public_opinion_agent_spec(role)
-    research_round = max(1, int(_workflow(state).get("round", 1) or 1))
-    run_id = _resolve_research_run_id(state, config)
+    research_round = max(1, int(workflow_state(state).get("round", 1) or 1))
+    run_id = resolve_research_run_id(state, config)
     strategy = create_context_strategy(
         _effective_context_strategy(configurable, spec),
         graph_enabled=configurable.research_graph_enabled,
@@ -548,7 +445,7 @@ async def run_business_agent(
 
     workspace = ResearchWorkspace(
         strategy=strategy,
-        research_state=_research(state),
+        research_state=research_state(state),
         role=role,
         configurable=configurable,
         model_factory=model_factory,
@@ -560,7 +457,7 @@ async def run_business_agent(
         retrieval_tool_prompt=_role_tool_prompt(configurable, spec),
         mcp_prompt=configurable.mcp_prompt or "",
         date=get_today_str(),
-        organization_context=_business_context(configurable),
+        organization_context=business_context(configurable),
     )
 
     async def compress_report(
@@ -581,14 +478,14 @@ async def run_business_agent(
     runtime = AgentRuntime(
         role=role,
         spec=spec,
-        agent_state=_agents(state).get(role, {}),
+        agent_state=agents_state(state).get(role, {}),
         workspace=workspace,
         config=configurable,
         runtime_config=config,
         model=model,
         system_prompt=system_prompt,
         tools=tools,
-        initial_budget=_runtime(state).get("budget", {}),
+        initial_budget=runtime_state(state).get("budget", {}),
         execute_tool=_execute_tool_safely,
         compress_report=compress_report,
     )

@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableLambda
 
 import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.runtime.business_agent as business_agent_module
@@ -32,7 +33,7 @@ def test_full_role_report_is_not_replaced_by_compact_memory(monkeypatch) -> None
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, _messages):
+        async def ainvoke(self, _messages, config=None):
             return AIMessage(content="agent step")
 
     async def fake_tools(_config, _role, _spec=None):
@@ -80,7 +81,7 @@ def test_business_agent_preserves_private_memory_and_rolling_summary(monkeypatch
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             captured_messages.extend(messages)
             return AIMessage(content="done")
 
@@ -155,8 +156,8 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
         }
 
     class FakeReviewModel:
-        def with_structured_output(self, _schema):
-            return self
+        def with_structured_output(self, _schema, include_raw=False):
+            return RunnableLambda(self._structured_call)
 
         def with_retry(self, **_kwargs):
             return self
@@ -164,8 +165,8 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, _messages):
-            return ResearchReview(research_complete=True)
+        async def _structured_call(self, _messages, config=None):
+            return {"raw": None, "parsed": ResearchReview(research_complete=True), "parsing_error": None}
 
     monkeypatch.setattr(deep_researcher_module, "run_business_agent", fake_agent)
     monkeypatch.setattr(deep_researcher_module, "configurable_model", FakeReviewModel())
@@ -241,7 +242,7 @@ def test_section_writer_prefers_full_role_report_over_memory(monkeypatch) -> Non
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             captured_prompts.append(str(messages[0].content))
             return SimpleNamespace(content="section output")
 
@@ -325,7 +326,7 @@ def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             captured_prompts.append(str(messages[0].content))
             return SimpleNamespace(content="final report")
 

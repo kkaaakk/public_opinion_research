@@ -10,8 +10,9 @@ degradation reasons, and per-node budget deltas for the LangGraph reducers.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import Any, Mapping, cast
+from typing import Any, Iterator, Mapping, cast
 
 from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage
@@ -170,6 +171,23 @@ def stop_budget_capture(token: Token) -> dict[str, Any]:
     captured_usage = normalize_budget_usage(_BUDGET_CAPTURE.get())
     _BUDGET_CAPTURE.reset(token)
     return captured_usage
+
+
+@contextmanager
+def budget_capture() -> Iterator[dict[str, Any]]:
+    """Capture nested usage and always restore the previous ContextVar value.
+
+    The yielded dictionary is updated in place by :func:`capture_budget_usage`,
+    so callers can consume the final delta after the ``with`` block.  The low-level
+    start/stop API remains available for compatibility.
+    """
+    token = start_budget_capture()
+    captured = _BUDGET_CAPTURE.get()
+    assert captured is not None
+    try:
+        yield captured
+    finally:
+        stop_budget_capture(token)
 
 
 def capture_budget_usage(usage: Any) -> None:
