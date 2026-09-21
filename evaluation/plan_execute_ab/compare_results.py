@@ -257,13 +257,13 @@ def _case_markdown(
 
 `{_flow(before_raw)}`
 
-Observer node sequence and model/tool counts are stored in the raw artifact. No Research Review node is expected in the Before commit.
+The node sequence and tool counts are stored in the raw artifact. No Research Review node is expected in the Before commit.
 
 ## After 实际执行链路
 
 `{_flow(after_raw)}`
 
-The sequence above is reconstructed from Agent Observer `span_started` events, with stream updates as a fallback.
+The sequence above is reconstructed from the benchmark harness stream updates.
 
 ## After Research Review 判断
 
@@ -519,7 +519,7 @@ def _report(
     limitations = [
         "One run per Case was executed (`repeat_count=1`) because this benchmark was run as a cost-controlled first pass; no variance estimate is claimed.",
         "Tavily Web results are live and Before/After were run in two continuous version blocks; result drift is a limitation.",
-        "Social-media calls used the repository's fixed JSON fixtures because the configured API at 127.0.0.1:9000 was not running. The Observer sidecar at 127.0.0.1:8766 was also not running; the installed Agent Observer v0.2 SDK and LangGraph adapter recorded events in-process.",
+        "Social-media calls used the repository's fixed JSON fixtures because the configured API at 127.0.0.1:9000 was not running.",
         "Token metrics are N/A when any model response omitted usage metadata; final-report token counts are N/A because no tokenizer was introduced by the harness.",
         "Quality and gap metrics use the fixed deterministic rubric and lexical matching, not a blinded LLM judge. Raw reports and task text are retained for expert review.",
         "No record/replay layer was added, and no core logic, prompt, tool whitelist, RAG algorithm, MCP configuration, or dynamic-loop decision rule was changed.",
@@ -540,7 +540,6 @@ def _report(
 | Other controls | max_react_tool_calls={after_cfg.get('max_react_tool_calls', 'N/A')}; max_research_rounds={after_cfg.get('max_research_rounds', 'N/A')}; structured-output retries={after_cfg.get('max_structured_output_retries', 'N/A')}; clarification={after_cfg.get('allow_clarification', 'N/A')} |
 | Search/tool config | Search API=`{after_cfg.get('search_api', 'N/A')}`; social=`{after_cfg.get('social_media_mode', 'N/A')}`; MCP calls are observed, not added |
 | RAG config | enabled={after_cfg.get('rag_enabled', 'N/A')}; mode={after_cfg.get('retrieval_mode', 'N/A')}; embedding={after_cfg.get('rag_embedding_provider', 'N/A')}; vectorstore={after_cfg.get('rag_vectorstore_provider', 'N/A')}; reranker={after_cfg.get('rag_reranker_provider', 'N/A')}; graph={after_cfg.get('rag_graph_enabled', 'N/A')}; query rewrite={after_cfg.get('rag_query_rewrite_enabled', 'N/A')} |
-| Observer config | {after_cfg.get('observer_mode', 'N/A')}; project=`{after_cfg.get('agent_observer_project', 'N/A')}` |
 | Benchmark time | started={benchmark_started_at}; Before finished={before_raw.get('benchmark_finished_at_utc', 'N/A')}; After finished={after_raw.get('benchmark_finished_at_utc', 'N/A')} |
 
 Both versions received the same benchmark configuration and the same case order. The only intended variable is the committed code at the two exact SHAs.
@@ -555,7 +554,7 @@ Both versions received the same benchmark configuration and the same case order.
 
 ## D. 执行成本对比
 
-The table provides mean, median, and total. `N/A` is preserved when the observer or provider did not expose a reliable value.
+The table provides mean, median, and total. `N/A` is preserved when the provider did not expose a reliable value.
 
 {_cost_table(before_eval.get('aggregate', {}), after_eval.get('aggregate', {}))}
 
@@ -597,8 +596,8 @@ If a Case failed, its exact error and traceback are in the corresponding raw JSO
 
 ## Artifact index
 
-- `before_results.json` — raw Before stream, Observer events, tool records, reports, and metrics.
-- `after_results.json` — raw After stream, Observer events, tool records, reports, Research Reviews, tasks, and metrics.
+- `before_results.json` — raw Before stream, tool records, reports, and metrics.
+- `after_results.json` — raw After stream, tool records, reports, Research Reviews, tasks, and metrics.
 - `before_evaluated.json` / `after_evaluated.json` — per-run rubric output and aggregate statistics.
 - `comparison.json` — stable machine-readable aligned comparison.
 - `cases/case_*.md` — one evidence-oriented flow comparison per Case.
@@ -698,7 +697,7 @@ def compare_files(
         "limitations": [
             "Single repeat per case.",
             "Live Tavily data can drift between sequential version blocks.",
-            "Social adapter used fixed local JSON fixtures; Observer events were recorded in-process because sidecar port 8766 was unavailable.",
+            "Social adapter used fixed local JSON fixtures.",
             "Quality/gap metrics are deterministic lexical screening, not expert or blinded LLM judgement.",
             "N/A is retained for unavailable token/final-tokenizer metrics.",
         ],

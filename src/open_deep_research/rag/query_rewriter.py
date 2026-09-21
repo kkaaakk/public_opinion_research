@@ -66,8 +66,8 @@ def rewrite_query_with_model(
             response, _budget = invoke_model_with_budget(
                 model,
                 [HumanMessage(content=prompt.format(query=original_query))],
-                observer_model=model_name,
-                observer_component="rag_query_rewrite",
+                model_name=model_name,
+                component="rag_query_rewrite",
             )
         except Exception as exc:
             LOGGER.warning("RAG query rewrite failed; using original query: %s", exc)

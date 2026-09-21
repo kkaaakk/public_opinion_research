@@ -1,20 +1,26 @@
-# Observability architecture
+# Observability Architecture
 
-Public Opinion Research uses two independent observability channels with a
+Public Opinion Research has exactly two observability responsibilities with a
 deliberate boundary:
 
 ```text
-LangSmith         → Execution observability (Trace / Span / debug / latency / error)
-Agent Observer    → Token & cost observability (usage / cache / budget / cost)
+LangSmith         → Execution observability (Trace / Span / Graph / Agent / Node /
+                    LLM / Tool / MCP / RAG / latency / error / retry / debug)
+budget.py         → Token & usage policy (model attempts / input tokens /
+                    output tokens / cache tokens / budget / cost policy)
 ```
 
-All integrations live in `src/open_deep_research/observability/`. Business
-modules call thin boundaries only; neither channel may change research
+`budget.py` is **not** an external observability platform. It is the project's
+own usage/budget policy layer, built on LangChain's official callbacks
+(`ModelAttemptCounter` + `UsageMetadataCallbackHandler` + `add_usage`).
+
+All LangSmith integration lives in `src/open_deep_research/observability/`.
+Business modules call thin boundaries only; neither channel may change research
 behavior, RAG results, prompts, or agent decisions.
 
-## 1. LangSmith — execution tracing (primary)
+## 1. LangSmith — execution tracing
 
-LangSmith is the project's tracing system. Because this is a LangGraph /
+LangSmith is the project's only tracing system. Because this is a LangGraph /
 LangChain application, **native auto-tracing** provides most of the coverage —
 no manual span is created for anything LangChain already captures:
 
@@ -104,34 +110,17 @@ into LangGraph state or checkpoints.
 
 * LangSmith auto-tracing keeps its normal debug capability for model
   input/output. The project does not duplicate model input/output into
-  metadata and does not copy it to the Agent Observer.
+  metadata.
 * Custom spans record only the bounded facts listed above.
 * LangSmith receives no API keys, DSNs, cookies, or authorization headers;
   MCP/DB credentials stay in configuration and are never logged.
 * Whole LangGraph state, memory stores, RAG chunks, web pages, MCP payloads,
   and social media content are not attached to spans.
 
-## 2. Agent Observer — token & cost observability
+## 2. budget.py — token & budget accounting
 
-`observability/agent_observer.py` is an **optional, disabled-by-default**
-sidecar adapter (`agent_observer_enabled=false`) that reports provider usage
-and tool facts to a local Agent Observer endpoint:
-
-* provider-returned `usage_metadata` (input / output / cache-read /
-  cache-creation) per model call;
-* tool call/result facts with bounded sizes and durations;
-* minimal Run/Agent context required to attribute those facts.
-
-Responsibilities that are *not* Agent Observer's anymore:
-
-* graph topology visualization (removed — LangGraph/LangSmith provide the
-  real topology);
-* execution tracing hierarchy (LangSmith's role).
-
-Token accounting itself — the authoritative semantics — lives in
-`open_deep_research/budget.py` on LangChain's official callbacks
-(`ModelAttemptCounter` + `UsageMetadataCallbackHandler` + `add_usage`). It is
-completely independent of both LangSmith and the Agent Observer sidecar:
+Token accounting — the authoritative semantics — lives in
+`open_deep_research/budget.py` on LangChain's official callbacks:
 
 * only provider-reported usage is recorded; missing fields stay null/`N/A`
   and are never estimated;
@@ -145,7 +134,6 @@ completely independent of both LangSmith and the Agent Observer sidecar:
 | No `LANGSMITH_API_KEY` | Research runs normally; tracing normalized off. |
 | `LANGSMITH_TRACING=false` | Research runs normally; no spans created. |
 | LangSmith network unreachable | Upload errors are logged in the background; research continues. |
-| Agent Observer endpoint down / package absent | Sidecar is a no-op; research continues. |
 | Tracing code raises | All span/metadata helpers catch and degrade; business exceptions still propagate. |
 
 ## 4. Troubleshooting

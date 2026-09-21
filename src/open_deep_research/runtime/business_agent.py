@@ -21,7 +21,7 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
 from open_deep_research.models import configurable_chat_model
-from open_deep_research.observability import agent_metadata, observe_tool_ainvoke
+from open_deep_research.observability import agent_metadata
 from open_deep_research.prompts import (
     compress_research_simple_human_message,
     compress_research_system_prompt,
@@ -336,8 +336,6 @@ async def _execute_tool_safely(
     tool: Any,
     args: Any,
     config: RunnableConfig,
-    *,
-    tool_call_id: str | None = None,
 ) -> tuple[str, dict[str, Any], bool]:
     # try/finally guarantees the Budget Capture ContextVar is reset on every exit
     # path, including CancelledError/BaseException.
@@ -345,12 +343,7 @@ async def _execute_tool_safely(
     failed = False
     try:
         try:
-            observation = await observe_tool_ainvoke(
-                tool,
-                args,
-                config,
-                tool_call_id=tool_call_id,
-            )
+            observation = await tool.ainvoke(args, config)
         except Exception as exc:
             LOGGER.exception("Unexpected tool execution failure for '%s'.", _tool_name(tool))
             observation = f"Error executing tool: {exc}"
@@ -416,7 +409,7 @@ async def _compress_research(
                         ),
                         *researcher_messages,
                     ],
-                    observer_model=configurable.compression_model,
+                    model_name=configurable.compression_model,
                 )
             except Exception as exc:
                 if not is_token_limit_exceeded(exc, configurable.compression_model):

@@ -270,9 +270,9 @@ class GraphExtractor:
         response, budget_usage = await ainvoke_model_with_budget(
             structured,
             [HumanMessage(content=prompt)],
-            observer_model=self.model_name,
-            observer_structured_output=True,
-            observer_component="graph_extraction",
+            model_name=self.model_name,
+            structured_output=True,
+            component="graph_extraction",
         )
         output = _coerce_extraction_output(response["parsed"])
         delta = normalize_extraction_output(output, documents, scope=scope)

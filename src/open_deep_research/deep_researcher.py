@@ -37,11 +37,8 @@ from open_deep_research.memory.writer import persist_conversation_memory
 from open_deep_research.models import configurable_chat_model
 from open_deep_research.observability import (
     WORKFLOW_NAME,
-    ObservedGraph,
-    ObserverRunLifecycle,
     ensure_langsmith_configuration,
     invocation_metadata,
-    observe_graph_node,
 )
 from open_deep_research.observability.langsmith import node_metadata
 from open_deep_research.prompts import (
@@ -358,7 +355,6 @@ def _messages_without_query_image_context(messages):
     ]
 
 
-@observe_graph_node(name="enrich_query_images", kind="graph_node")
 async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict:
     """Convert user-question images into temporary text context before research planning."""
     configurable = Configuration.from_runnable_config(config)
@@ -411,7 +407,6 @@ def budget_skip_tool_message(tool_call: dict, reason: str) -> ToolMessage:
     )
 
 
-@observe_graph_node(name="clarify_with_user", kind="graph_node")
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
     
@@ -469,9 +464,9 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     response, budget_update = await ainvoke_model_with_budget(
         clarification_model,
         [HumanMessage(content=prompt_content)],
-        observer_model=configurable.research_model,
-        observer_structured_output=True,
-        observer_component="clarification",
+        model_name=configurable.research_model,
+        structured_output=True,
+        component="clarification",
     )
     response = response["parsed"]
     
@@ -496,7 +491,6 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         )
 
 
-@observe_graph_node(name="write_research_brief", kind="graph_node")
 async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_phase"]]:
     """Transform user messages into a structured brief for the research phase.
     
@@ -558,9 +552,9 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     response, budget_update = await ainvoke_model_with_budget(
         research_model,
         [HumanMessage(content=prompt_content)],
-        observer_model=configurable.research_model,
-        observer_structured_output=True,
-        observer_component="research_brief",
+        model_name=configurable.research_model,
+        structured_output=True,
+        component="research_brief",
     )
     response = response["parsed"]
 
@@ -573,7 +567,6 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     )
 
 
-@observe_graph_node(name="plan_report_sections", kind="graph_node")
 async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Command[Literal["plan_report_sections", "research_phase"]]:
     """Plan report sections using Plan-and-Execute pattern.
     
@@ -639,9 +632,9 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             response, _ = await ainvoke_model_with_budget(
                 planner,
                 [HumanMessage(content=prompt)],
-                observer_model=planner_model_name,
-                observer_structured_output=True,
-                observer_component="report_planner",
+                model_name=planner_model_name,
+                structured_output=True,
+                component="report_planner",
             )
             response = response["parsed"]
         except Exception as exc:
@@ -883,7 +876,6 @@ def _graph_report_context(
     )
 
 
-@observe_graph_node(name="section_writer", kind="writer")
 async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     """Write report sections from role evidence in public-opinion mode.
     
@@ -962,7 +954,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
                 response, _ = await ainvoke_model_with_budget(
                     writer,
                     [HumanMessage(content=prompt)],
-                    observer_model=writer_model_name,
+                    model_name=writer_model_name,
                 )
                 section.content = str(response.content)
                 section.status = "done"
@@ -1001,7 +993,6 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     }
 
 
-@observe_graph_node(name="write_final_sections", kind="writer")
 async def write_final_sections(state: AgentState, config: RunnableConfig) -> dict:
     """Write non-research sections (intro, conclusion) in parallel.
     
@@ -1067,7 +1058,7 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
                 response, _ = await ainvoke_model_with_budget(
                     writer,
                     [HumanMessage(content=prompt)],
-                    observer_model=configurable.final_report_model,
+                    model_name=configurable.final_report_model,
                 )
                 section.content = str(response.content)
                 section.status = "done"
@@ -1106,7 +1097,6 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     }
 
 
-@observe_graph_node(name="compile_final_report", kind="writer")
 async def compile_final_report(state: AgentState, config: RunnableConfig):
     """Compile the final report by assembling sections in planned order.
 
@@ -1169,7 +1159,7 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                         fill_response, _ = await ainvoke_model_with_budget(
                             configurable_model.with_config(writer_config),
                             [HumanMessage(content=final_report_prompt)],
-                            observer_model=configurable.final_report_model,
+                            model_name=configurable.final_report_model,
                         )
                     except Exception as exc:
                         if not is_token_limit_exceeded(exc, configurable.final_report_model):
@@ -1216,7 +1206,6 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
     return await _fallback_report_generation(state, config)
 
 
-@observe_graph_node(name="research_review", kind="graph_node")
 async def research_review(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Review collected evidence and optionally create targeted follow-up tasks."""
     configurable = Configuration.from_runnable_config(config)
@@ -1304,9 +1293,9 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     response, review_budget = await ainvoke_model_with_budget(
         reviewer,
         [HumanMessage(content=prompt)],
-        observer_model=configurable.research_model,
-        observer_structured_output=True,
-        observer_component=f"research_review_round_{current_round}",
+        model_name=configurable.research_model,
+        structured_output=True,
+        component=f"research_review_round_{current_round}",
     )
     review = _coerce_research_review(response["parsed"])
     if review is None:
@@ -1377,25 +1366,21 @@ def route_after_research_agent(state: PublicOpinionState) -> list[str]:
     return []
 
 
-@observe_graph_node(name="public_signal_agent", kind="agent")
 async def public_signal_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Collect integrated news, social, complaint, competitor, and spread evidence."""
     return await run_business_agent(role="public_signal", state=state, config=config)
 
 
-@observe_graph_node(name="internal_knowledge_agent", kind="agent")
 async def internal_knowledge_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Collect internal RAG evidence from company knowledge, playbooks, and memory."""
     return await run_business_agent(role="internal_knowledge", state=state, config=config)
 
 
-@observe_graph_node(name="risk_assessment_agent", kind="agent")
 async def risk_assessment_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Verify claims and assess compliance, legal, and product-risk signals."""
     return await run_business_agent(role="risk_assessment", state=state, config=config)
 
 
-@observe_graph_node(name="response_strategy_agent", kind="agent")
 async def response_strategy_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Create PR response posture, FAQ points, actions, and monitoring keywords."""
     return await run_business_agent(role="response_strategy", state=state, config=config)
@@ -1462,7 +1447,6 @@ public_opinion_builder.add_edge("response_strategy_agent", END)
 public_opinion_subgraph = public_opinion_builder.compile(name="public_opinion_agents")
 
 
-@observe_graph_node(name="research_phase", kind="subgraph")
 async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     """Run initial and gap-driven public-opinion research before report writing."""
     input_budget = _runtime(state).get("budget", {})
@@ -1664,7 +1648,7 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                 final_report, _ = await ainvoke_model_with_budget(
                     configurable_model.with_config(writer_model_config),
                     [HumanMessage(content=final_report_prompt)],
-                    observer_model=configurable.final_report_model,
+                    model_name=configurable.final_report_model,
                 )
             except Exception as exc:
                 if not is_token_limit_exceeded(exc, configurable.final_report_model):
@@ -1727,59 +1711,52 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
 
 # Main Deep Researcher Graph Construction
 # Creates the complete deep research workflow from user input to final report.
-def _create_deep_researcher_builder(
-    lifecycle: ObserverRunLifecycle | None = None,
-) -> StateGraph:
-    """Build a native LangGraph, optionally binding one invocation lifecycle."""
+def _create_deep_researcher_builder() -> StateGraph:
+    """Build a native LangGraph state graph."""
     builder = StateGraph(
         DeepResearchState,
         input=AgentInputState,
         config_schema=Configuration,
     )
 
-    def node(name: str, function, *, finish: bool = False, terminal: bool = False):
-        if lifecycle is None:
-            return function
-        return lifecycle.wrap_node(name, function, finish=finish, terminal=terminal)
-
     builder.add_node(
         "enrich_query_images",
-        node("enrich_query_images", enrich_query_images),
+        enrich_query_images,
         metadata=node_metadata("enrich_query_images"),
     )
     builder.add_node(
         "clarify_with_user",
-        node("clarify_with_user", clarify_with_user, terminal=True),
+        clarify_with_user,
         metadata=node_metadata("clarify_with_user"),
     )
     builder.add_node(
         "write_research_brief",
-        node("write_research_brief", write_research_brief),
+        write_research_brief,
         metadata=node_metadata("write_research_brief"),
     )
     builder.add_node(
         "plan_report_sections",
-        node("plan_report_sections", plan_report_sections),
+        plan_report_sections,
         metadata=node_metadata("plan_report_sections"),
     )
     builder.add_node(
         "research_phase",
-        node("research_phase", research_phase),
+        research_phase,
         metadata=node_metadata("research_phase", kind="subgraph"),
     )
     builder.add_node(
         "section_writer",
-        node("section_writer", section_writer),
+        section_writer,
         metadata=node_metadata("section_writer", kind="writer"),
     )
     builder.add_node(
         "write_final_sections",
-        node("write_final_sections", write_final_sections),
+        write_final_sections,
         metadata=node_metadata("write_final_sections", kind="writer"),
     )
     builder.add_node(
         "compile_final_report",
-        node("compile_final_report", compile_final_report, finish=True),
+        compile_final_report,
         metadata=node_metadata("compile_final_report", kind="writer"),
     )
 
@@ -1797,21 +1774,17 @@ ensure_langsmith_configuration()
 
 # Keep the builder available for existing Python-side tests and tooling. The
 # exported ``deep_researcher`` below is a factory so LangGraph CLI/Studio sees
-# the native Pregel returned by the factory rather than a custom facade.
+# the native Pregel returned by the factory.
 deep_researcher_builder = _create_deep_researcher_builder()
 deep_researcher_graph = deep_researcher_builder.compile(name=WORKFLOW_NAME)
-observed_deep_researcher = ObservedGraph(deep_researcher_graph)
 
 
 def deep_researcher(config: Any = None):
-    """Create one native graph with an isolated per-invocation Observer lifecycle.
+    """Return a freshly compiled native graph for LangGraph API per-invocation use.
 
-    LangGraph API calls this factory for each graph execution. The factory only
-    constructs the graph; the Observer Run starts lazily at the first node so a
-    server-side graph load cannot create a shared Run. LangSmith traces the
-    native Pregel under the ``public_opinion_research`` name; correlation
-    metadata is attached at the graph boundary in ``research_phase``.
+    LangSmith traces the native Pregel under the ``public_opinion_research``
+    name; correlation metadata is attached at the graph boundary in
+    ``research_phase``.
     """
     del config  # The node-level RunnableConfig carries the invocation settings.
-    lifecycle = ObserverRunLifecycle()
-    return _create_deep_researcher_builder(lifecycle).compile(name=WORKFLOW_NAME)
+    return _create_deep_researcher_builder().compile(name=WORKFLOW_NAME)

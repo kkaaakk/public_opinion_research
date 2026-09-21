@@ -23,7 +23,7 @@ def test_langgraph_json_graph_loads(monkeypatch) -> None:
 
     monkeypatch.setenv(
         "DATABASE_URI",
-        "postgresql://observer:observer@127.0.0.1:5432/observer",
+        "postgresql://postgres:postgres@127.0.0.1:5432/postgres",
     )
     monkeypatch.setenv("REDIS_URI", "redis://127.0.0.1:6379/0")
     langgraph_api_graph = pytest.importorskip("langgraph_api.graph")

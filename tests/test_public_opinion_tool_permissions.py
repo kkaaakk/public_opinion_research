@@ -27,7 +27,7 @@ def _names(tools) -> set[str]:
 
 
 def _config() -> dict:
-    return {"configurable": {"agent_observer_enabled": False}}
+    return {"configurable": {}}
 
 
 def _patch_tool_source(monkeypatch, tools, social_tools=()) -> None:

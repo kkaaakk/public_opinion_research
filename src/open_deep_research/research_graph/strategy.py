@@ -181,8 +181,8 @@ class _ResearchGraphStrategyBase:
         response, budget = await ainvoke_model_with_budget(
             workspace.model_factory(model_name, max_tokens),
             [HumanMessage(content=prompt)],
-            observer_model=model_name,
-            observer_component="graph_role_report",
+            model_name=model_name,
+            component="graph_role_report",
         )
         if workspace.transcript is not None:
             workspace.transcript.append(

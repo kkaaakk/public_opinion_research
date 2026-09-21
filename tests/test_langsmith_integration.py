@@ -2,8 +2,7 @@
 
 These tests exercise the project's own boundary, not the LangSmith SaaS:
 
-* LangSmith owns execution tracing; the Agent Observer sidecar keeps usage
-  telemetry; token/cost accounting stays in ``budget``.
+* LangSmith owns execution tracing; token/cost accounting stays in ``budget``.
 * Tracing is opt-in, fail-open, and must never change business behavior,
   execute a tool or model twice, or swallow exceptions.
 """
@@ -528,8 +527,8 @@ def test_token_accounting_is_identical_with_tracing_enabled(monkeypatch):
             ainvoke_model_with_budget(
                 GenericFakeChatModel(messages=iter([message])),
                 [HumanMessage(content="hi")],
-                observer_model="openai:fixture",
-                observer_component="token_regression",
+                model_name="openai:fixture",
+                component="token_regression",
             )
         )
 

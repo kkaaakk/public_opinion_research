@@ -3,8 +3,7 @@
 The worker imports one requested committed worktree in an isolated process.
 It does not override model names, temperatures, ReAct limits, research-round
 limits, tools, or RAG settings.  The only harness changes are a benchmark
-thread id and an in-memory replacement for the already-configured Agent
-Observer sender, plus bounded tool-result diagnostics.
+thread id, a stream-update transcript, and bounded tool-result diagnostics.
 """
 
 from __future__ import annotations
@@ -170,7 +169,6 @@ def runtime_config(version: str, case_id: str) -> dict[str, Any]:
     return {
         "configurable": {
             "thread_id": run_tag,
-            "observer_logical_run_id": run_tag,
             # The current .env leaves RAG_ENABLED unset, which defaults to
             # False and makes internal_knowledge_agent fail before a complete
             # public-opinion run.  This is a shared harness configuration
@@ -437,234 +435,43 @@ def parse_completed_tasks(updates: list[dict[str, Any]]) -> list[dict[str, Any]]
     return tasks
 
 
-def span_info(events: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    """Index Observer spans and their terminal durations."""
-    starts: dict[str, dict[str, Any]] = {}
-    for event in events:
-        if event.get("type") != "span_started":
-            continue
-        span_id = event.get("span_id")
-        if not span_id:
-            continue
-        metadata = event.get("metadata") if isinstance(event.get("metadata"), Mapping) else {}
-        name = str(event.get("name") or metadata.get("graph_node") or metadata.get("node_name") or "")
-        starts[str(span_id)] = {
-            "span_id": str(span_id),
-            "name": name or None,
-            "kind": event.get("kind"),
-            "metadata": dict(metadata),
-            "start_sequence": event.get("sequence"),
-        }
-    for event in events:
-        if event.get("type") not in {"span_finished", "span_failed", "span_interrupted"}:
-            continue
-        span_id = event.get("span_id")
-        if span_id and str(span_id) in starts:
-            starts[str(span_id)].update({
-                "duration_ms": event.get("duration_ms"),
-                "terminal_event": event.get("type"),
-                "stop_reason": event.get("stop_reason"),
-            })
-    return starts, list(starts.values())
+def model_calls_from_captures() -> list[dict[str, Any]]:
+    """Keep the artifact schema; per-call model events are no longer captured."""
+    return []
 
 
-def call_type(component: str | None, node: str | None) -> str:
-    """Classify a model call only from explicit Observer component/node facts."""
-    component_text = str(component or "")
-    node_text = str(node or "")
-    if component_text == "research_brief":
-        return "research_brief"
-    if component_text == "clarification":
-        return "clarification"
-    if component_text == "report_planner":
-        return "report_planner"
-    if component_text == "webpage_summarization":
-        return "webpage_summarization"
-    if component_text.startswith("research_review"):
-        return "research_review"
-    if node_text == "section_writer":
-        return "section_writer"
-    if node_text == "write_final_sections":
-        return "final_section_writer"
-    if node_text == "compile_final_report":
-        return "final_report_compile"
-    if component_text == "":
-        if node_text in {
-            "public_signal_agent",
-            "internal_knowledge_agent",
-            "risk_assessment_agent",
-            "response_strategy_agent",
-        }:
-            # The final model call in a role span is classified as
-            # research_compression after the full request list is available;
-            # earlier unlabeled calls are ReAct reasoning in the Before code.
-            return "unclassified_model_call"
-        return "unclassified_model_call"
-    if re.search(r"_(initial|followup)_round_\d+$", component_text):
-        return "react_reasoning"
-    return "unclassified_model_call"
-
-
-def role_from_node_or_component(node: str | None, component: str | None) -> str | None:
-    """Return an explicit business role when the event names one."""
-    node_text = str(node or "")
-    if node_text.endswith("_agent"):
-        return node_text.removesuffix("_agent")
-    match = re.match(r"(public_signal|internal_knowledge|risk_assessment|response_strategy)_", str(component or ""))
-    return match.group(1) if match else None
-
-
-def round_from_component(component: str | None) -> int | None:
-    match = re.search(r"(?:round_|_R)(\d+)", str(component or ""), re.IGNORECASE)
-    return int(match.group(1)) if match else None
-
-
-def model_calls(events: list[dict[str, Any]], spans: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Join request/response events into one row per actual model invocation."""
-    responses = {
-        str(event.get("request_id")): event
-        for event in events
-        if event.get("type") == "model_response" and event.get("request_id")
-    }
-    latest_round_by_span: dict[str, int] = {}
-    calls: list[dict[str, Any]] = []
-    requests = [event for event in events if event.get("type") == "model_request"]
-    requests.sort(key=lambda item: item.get("sequence", 0))
-    for event in requests:
-        span_id = str(event.get("span_id") or "")
-        span = spans.get(span_id, {})
-        metadata = span.get("metadata") if isinstance(span.get("metadata"), Mapping) else {}
-        node = str(span.get("name") or metadata.get("graph_node") or "") or None
-        component = event.get("component")
-        current_round = round_from_component(component)
-        if current_round is not None:
-            latest_round_by_span[span_id] = current_round
-        response = responses.get(str(event.get("request_id")))
-        kind = call_type(component, node)
-        research_round = current_round or latest_round_by_span.get(span_id)
-        row = {
-            "call_id": event.get("request_id"),
-            "sequence": event.get("sequence"),
-            "span_id": span_id or None,
-            "graph_node": node,
-            "agent_role": role_from_node_or_component(node, component),
-            "research_round": research_round,
-            "research_round_source": (
-                "component"
-                if current_round is not None
-                else ("preceding_component_in_span" if research_round is not None else "N/A")
-            ),
-            "call_type": kind,
-            "model": event.get("model"),
-            "provider": event.get("provider"),
-            "structured_output": event.get("structured_output"),
-            "input_tokens": response.get("input_tokens") if response else None,
-            "output_tokens": response.get("output_tokens") if response else None,
-            "total_tokens": (
-                response.get("input_tokens") + response.get("output_tokens")
-                if response
-                and isinstance(response.get("input_tokens"), int)
-                and isinstance(response.get("output_tokens"), int)
-                else None
-            ),
-            "duration_ms": response.get("duration_ms") if response else None,
-            "success": response.get("success") if response else None,
-            "stop_reason": response.get("stop_reason") if response else None,
-            "error_type": response.get("error_type") if response else None,
-            "token_source": "Agent Observer model_response usage fields",
-            "usage_complete": bool(
-                response
-                and isinstance(response.get("input_tokens"), int)
-                and isinstance(response.get("output_tokens"), int)
-            ),
-        }
-        calls.append(row)
-    # The Before commit predates explicit observer_component labels.  Its
-    # public-opinion agent span still has a reliable execution order: the
-    # final model call in the span is compress_research(), and earlier calls
-    # are ReAct reasoning.  This is a structural classification, not a token
-    # or cost guess.
-    calls_by_span: dict[str, list[dict[str, Any]]] = {}
-    for call in calls:
-        if (
-            call.get("call_type") == "unclassified_model_call"
-            and call.get("graph_node")
-            in {
-                "public_signal_agent",
-                "internal_knowledge_agent",
-                "risk_assessment_agent",
-                "response_strategy_agent",
-            }
-        ):
-            calls_by_span.setdefault(str(call.get("span_id") or ""), []).append(call)
-    for span_calls in calls_by_span.values():
-        span_calls.sort(key=lambda item: item.get("sequence", 0))
-        if span_calls:
-            span_calls[-1]["call_type"] = "research_compression"
-            for call in span_calls[:-1]:
-                call["call_type"] = "react_reasoning"
-            for call in span_calls:
-                if call.get("research_round") is None:
-                    call["research_round"] = 1
-                    call["research_round_source"] = "single_before_role_execution_default_initial"
-    for call in calls:
-        if (
-            call.get("research_round") is None
-            and call.get("graph_node")
-            in {
-                "public_signal_agent",
-                "internal_knowledge_agent",
-                "risk_assessment_agent",
-                "response_strategy_agent",
-            }
-        ):
-            call["research_round"] = 1
-            call["research_round_source"] = "single_role_execution_default_initial"
-    return calls
-
-
-def tool_calls(
-    events: list[dict[str, Any]],
-    spans: Mapping[str, Mapping[str, Any]],
-    captured: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Join Observer tool events and benchmark-only bounded result captures."""
-    results = {
-        str(event.get("tool_call_id")): event
-        for event in events
-        if event.get("type") == "tool_result" and event.get("tool_call_id")
-    }
+def tool_calls_from_captures(captured: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return one bounded row per captured tool execution."""
     rows: list[dict[str, Any]] = []
-    for event in events:
-        if event.get("type") != "tool_call":
-            continue
-        span_id = str(event.get("span_id") or "")
-        span = spans.get(span_id, {})
-        metadata = span.get("metadata") if isinstance(span.get("metadata"), Mapping) else {}
-        result = results.get(str(event.get("tool_call_id")))
+    for extra in captured:
         rows.append({
-            "tool_call_id": event.get("tool_call_id"),
-            "sequence": event.get("sequence"),
-            "span_id": span_id or None,
-            "graph_node": span.get("name") or metadata.get("graph_node") or None,
-            "tool": event.get("tool") or event.get("name"),
-            "tool_domain": event.get("tool_domain"),
-            "mcp_server": event.get("mcp_server"),
-            "duration_ms": result.get("duration_ms") if result else None,
-            "success": result.get("success") if result else None,
-            "raw_bytes": result.get("raw_bytes") if result else None,
-            "context_bytes": result.get("context_bytes") if result else None,
-            "observer_result_event": result,
+            "tool": extra.get("tool"),
+            "started_at": extra.get("started_at"),
+            "args": extra.get("args"),
+            "duration_ms": extra.get("duration_ms"),
+            "success": extra.get("success"),
+            "error_type": extra.get("error_type"),
+            "result": extra.get("result"),
         })
-    # The wrapper carries query/result previews unavailable in the privacy-safe
-    # Observer event. Match in execution order without changing Observer counts.
-    for row, extra in zip(rows, captured):
-        row["captured_args"] = extra.get("args")
-        row["captured_started_at"] = extra.get("started_at")
-        row["captured_result"] = extra.get("result")
-        if extra.get("error_type"):
-            row["captured_error_type"] = extra.get("error_type")
     return rows
+
+
+def budget_usage_from_updates(updates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Sum per-node budget deltas from stream updates into one authoritative total."""
+    from open_deep_research.budget import merge_budget_usage
+
+    total: dict[str, Any] = {}
+    for item in updates:
+        changes = item.get("changes")
+        if not isinstance(changes, Mapping):
+            continue
+        runtime = changes.get("runtime")
+        if not isinstance(runtime, Mapping):
+            continue
+        budget = runtime.get("budget")
+        if isinstance(budget, Mapping) and budget:
+            total = merge_budget_usage(total, dict(budget))
+    return total
 
 
 def token_rollup(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -696,110 +503,36 @@ def token_rollup(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def flow_and_summaries(
-    events: list[dict[str, Any]],
+    updates: list[dict[str, Any]],
     calls: list[dict[str, Any]],
     tools: list[dict[str, Any]],
-    spans: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build node, stage, and actual event-sequence cost summaries."""
+    """Build node and stage cost summaries from stream updates and captures."""
     node_sequence = [
-        str(span.get("name"))
-        for span in sorted(spans, key=lambda item: item.get("start_sequence", 0))
-        if span.get("name")
+        str(item.get("node"))
+        for item in updates
+        if item.get("node") and str(item.get("node")) != "<non_mapping_update>"
     ]
     node_groups: dict[str, list[dict[str, Any]]] = {}
-    for span in spans:
-        name = str(span.get("name") or "")
-        if name:
-            node_groups.setdefault(name, []).append(span)
+    for item in updates:
+        name = str(item.get("node") or "")
+        if name and name != "<non_mapping_update>":
+            node_groups.setdefault(name, []).append(item)
     node_rows: list[dict[str, Any]] = []
     for node, executions in node_groups.items():
-        span_ids = {str(item.get("span_id")) for item in executions}
-        node_calls = [call for call in calls if str(call.get("span_id")) in span_ids]
-        node_tools = [tool for tool in tools if str(tool.get("span_id")) in span_ids]
-        tokens = token_rollup(node_calls)
-        durations = [
-            item.get("duration_ms")
-            for item in executions
-            if isinstance(item.get("duration_ms"), int)
-        ]
+        budget = budget_usage_from_updates(executions)
         node_rows.append({
             "node": node,
             "executions": len(executions),
-            "model_calls": len(node_calls),
-            "tokens": tokens,
-            "tool_calls": len(node_tools),
-            "duration_ms": sum(durations) if len(durations) == len(executions) else None,
-            "duration_known_execution_count": len(durations),
-            "kinds": sorted(set(str(item.get("kind")) for item in executions)),
-        })
-    stage_groups: dict[str, list[dict[str, Any]]] = {}
-    for call in calls:
-        role = call.get("agent_role")
-        round_value = call.get("research_round")
-        if call.get("call_type") == "react_reasoning":
-            label = f"{role or 'unknown'} R{round_value or 'N/A'}"
-        elif call.get("call_type") == "research_compression":
-            label = f"{role or 'unknown'} compress R{round_value or 'N/A'}"
-        elif call.get("call_type") == "webpage_summarization":
-            label = f"{role or 'unknown'} webpage_summarization R{round_value or 'N/A'}"
-        elif call.get("call_type") == "research_review":
-            label = f"research_review #{round_value or 'N/A'}"
-        else:
-            label = str(call.get("call_type"))
-        stage_groups.setdefault(label, []).append(call)
-    stage_rows = []
-    calls_by_span: dict[str, list[dict[str, Any]]] = {}
-    for call in calls:
-        calls_by_span.setdefault(str(call.get("span_id") or ""), []).append(call)
-    for span_calls in calls_by_span.values():
-        span_calls.sort(key=lambda item: item.get("sequence", 0))
-    for stage, stage_calls in stage_groups.items():
-        stage_sequences = [
-            call.get("sequence")
-            for call in stage_calls
-            if isinstance(call.get("sequence"), int)
-        ]
-        stage_span_ids = {str(call.get("span_id") or "") for call in stage_calls}
-        stage_tools: list[Mapping[str, Any]] = []
-        if stage_sequences and not all(
-            call.get("call_type") == "webpage_summarization"
-            for call in stage_calls
-        ):
-            low = min(stage_sequences)
-            high = max(stage_sequences)
-            for span_id in stage_span_ids:
-                later_model_sequences = [
-                    call.get("sequence")
-                    for call in calls_by_span.get(span_id, [])
-                    if isinstance(call.get("sequence"), int) and call.get("sequence") > high
-                ]
-                upper = min(later_model_sequences) if later_model_sequences else None
-                stage_tools.extend(
-                    tool
-                    for tool in tools
-                    if str(tool.get("span_id") or "") == span_id
-                    and isinstance(tool.get("sequence"), int)
-                    and tool.get("sequence") > low
-                    and (upper is None or tool.get("sequence") < upper)
-                )
-        stage_rows.append({
-            "stage": stage,
-            "call_type": sorted(set(str(call.get("call_type")) for call in stage_calls)),
-            "model_calls": len(stage_calls),
-            "tokens": token_rollup(stage_calls),
-            "tool_calls": len(stage_tools),
-            "model_duration_ms": sum(
-                call["duration_ms"]
-                for call in stage_calls
-                if isinstance(call.get("duration_ms"), int)
-            ),
+            "model_calls": budget.get("model_calls", 0),
+            "input_tokens": budget.get("input_tokens"),
+            "output_tokens": budget.get("output_tokens"),
+            "total_tokens": budget.get("total_tokens"),
+            "tool_calls": budget.get("tool_calls", 0),
         })
     return {
         "node_sequence": node_sequence,
         "node_rows": node_rows,
-        "stage_rows": stage_rows,
-        "total_model_calls": len(calls),
         "total_tool_calls": len(tools),
         "total_tokens": token_rollup(calls),
     }
@@ -849,7 +582,7 @@ def repeated_context_analysis(
     round_reports: list[Mapping[str, Any]],
     updates: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Estimate repeated role-report input from observed consumers and code contracts."""
+    """Estimate repeated role-report input from report sizes and code contracts."""
     report_sizes_by_role: dict[str, dict[int, int]] = {}
     for report in round_reports:
         role = str(report.get("role"))
@@ -870,175 +603,33 @@ def repeated_context_analysis(
         role: cumulative_chars(role, max(rounds))
         for role, rounds in report_sizes_by_role.items()
     }
-    entries: list[dict[str, Any]] = []
-
-    def add(consumer: str, call_rows: list[Mapping[str, Any]], roles: list[str], basis: str) -> None:
-        if not call_rows:
-            return
-        chars_by_call = [
-            sum(
-                cumulative_chars(role, call.get("research_round"))
-                for role in roles
-            )
-            for call in call_rows
-        ]
-        chars_by_call = [value for value in chars_by_call if value > 0]
-        if not chars_by_call:
-            return
-        entries.append({
-            "consumer": consumer,
-            "model_call_count": len(chars_by_call),
-            "roles": roles,
-            "report_chars_per_call": round(sum(chars_by_call) / len(chars_by_call)),
-            "estimated_tokens_per_call": round(sum((value + 3) // 4 for value in chars_by_call) / len(chars_by_call)),
-            "estimated_repeated_input_tokens": sum((value + 3) // 4 for value in chars_by_call),
-            "basis": basis,
-            "estimated": True,
-        })
-
-    review_calls = [call for call in calls if call.get("call_type") == "research_review"]
-    add(
-        "research_review",
-        review_calls,
-        ["public_signal", "internal_knowledge"],
-        "research_review prompt formats both full role_reports",
-    )
-    risk_calls = [
-        call
-        for call in calls
-        if call.get("agent_role") == "risk_assessment"
-        and call.get("call_type") == "react_reasoning"
-    ]
-    add(
-        "risk_assessment",
-        risk_calls,
-        ["public_signal", "internal_knowledge"],
-        "role assignment formats both upstream reports",
-    )
-    strategy_calls = [
-        call
-        for call in calls
-        if call.get("agent_role") == "response_strategy"
-        and call.get("call_type") == "react_reasoning"
-    ]
-    add(
-        "response_strategy",
-        strategy_calls,
-        ["public_signal", "internal_knowledge", "risk_assessment"],
-        "role assignment formats all declared upstream reports",
-    )
-    section_calls = [call for call in calls if call.get("call_type") == "section_writer"]
-    add(
-        "section_writer",
-        section_calls,
-        list(report_chars),
-        "section evidence is extracted from current role_reports; exact section role selection is not present in Observer events",
-    )
-    final_section_calls = [call for call in calls if call.get("call_type") == "final_section_writer"]
-    add(
-        "write_final_sections",
-        final_section_calls,
-        list(report_chars),
-        "final section context may contain completed evidence; report reuse is an upper-bound estimate",
-    )
     total_estimated = sum(
-        int(item["estimated_repeated_input_tokens"])
-        for item in entries
-    )
-    all_known_total = sum(
-        int(call.get("total_tokens"))
-        for call in calls
-        if isinstance(call.get("total_tokens"), int)
+        (value + 3) // 4
+        for rounds in report_sizes_by_role.values()
+        for value in rounds.values()
     )
     return {
         "role_report_sizes": report_chars,
-        "downstream_reuse": entries,
-        "downstream_reuse_count": sum(item["model_call_count"] for item in entries),
-        "estimated_repeated_input_tokens": total_estimated,
-        "estimated_repeated_context_share_of_known_tokens": (
-            total_estimated / all_known_total if all_known_total else None
-        ),
         "estimated": True,
-        "note": "This is a code-path/character estimate; prompt-level provenance is not emitted by the Observer.",
+        "note": (
+            "This is a code-path/character estimate; per-call prompt "
+            "provenance is not captured by this harness."
+        ),
     }
 
 
 def react_progression(calls: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Show consecutive ReAct input-token observations per role/round."""
-    groups: dict[tuple[str, Any], list[Mapping[str, Any]]] = {}
-    for call in calls:
-        if call.get("call_type") != "react_reasoning":
-            continue
-        key = (str(call.get("agent_role") or "unknown"), call.get("research_round"))
-        groups.setdefault(key, []).append(call)
-    rows = []
-    for (role, round_value), group in groups.items():
-        group = sorted(group, key=lambda item: item.get("sequence", 0))
-        values = [item.get("input_tokens") for item in group]
-        deltas = [
-            values[index] - values[index - 1]
-            if isinstance(values[index], int) and isinstance(values[index - 1], int)
-            else None
-            for index in range(1, len(values))
-        ]
-        rows.append({
-            "agent_role": role,
-            "research_round": round_value,
-            "call_ids": [item.get("call_id") for item in group],
-            "input_tokens": values,
-            "delta_from_previous": deltas,
-            "input_growth_observable": any(delta is not None and delta > 0 for delta in deltas),
-            "exact": all(isinstance(value, int) for value in values),
-        })
-    return rows
+    """Kept for artifact schema compatibility; per-call events are no longer captured."""
+    return []
 
 
 def share_by_call_type(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
-    """Calculate exact or known-token estimated shares."""
-    known_total = sum(
-        int(call.get("total_tokens"))
-        for call in calls
-        if isinstance(call.get("total_tokens"), int)
-    )
-    missing = sum(call.get("total_tokens") is None for call in calls)
-    groups = {
-        "react_reasoning": [call for call in calls if call.get("call_type") == "react_reasoning"],
-        "compression": [call for call in calls if call.get("call_type") == "research_compression"],
-        "research_review": [call for call in calls if call.get("call_type") == "research_review"],
-        "risk_plus_strategy": [
-            call
-            for call in calls
-            if call.get("agent_role") in {"risk_assessment", "response_strategy"}
-        ],
-        "section_writing": [
-            call
-            for call in calls
-            if call.get("call_type") in {"section_writer", "final_section_writer"}
-        ],
-        "final_report_compile": [
-            call for call in calls if call.get("call_type") == "final_report_compile"
-        ],
+    """Kept for artifact schema compatibility; per-call events are no longer captured."""
+    return {
+        "known_total_tokens": 0,
+        "missing_token_call_count": 0,
+        "note": "Per-call model events are not captured; budget totals come from stream updates.",
     }
-    result: dict[str, Any] = {}
-    for name, group in groups.items():
-        value = sum(
-            int(call.get("total_tokens"))
-            for call in group
-            if isinstance(call.get("total_tokens"), int)
-        )
-        result[name] = {
-            "known_tokens": value,
-            "share_of_known_tokens": value / known_total if known_total else None,
-            "estimated": missing > 0,
-            "missing_token_call_count": sum(call.get("total_tokens") is None for call in group),
-        }
-    result["known_total_tokens"] = known_total
-    result["missing_token_call_count"] = missing
-    result["note"] = (
-        "Shares are exact only when all model responses expose input/output usage; "
-        "otherwise they are estimated from known-token calls."
-    )
-    return result
 
 
 def token_ratios(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1065,56 +656,19 @@ async def run_case(
     target_root: Path,
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    """Execute one case and collect raw Observer/stream evidence."""
+    """Execute one case and collect raw stream/tool evidence."""
     sys.path.insert(0, str(target_root / "src"))
     from dotenv import load_dotenv
 
     load_dotenv(ENV_PATH, override=True)
 
-    import agent_observer.sdk as observer_sdk
     import open_deep_research.deep_researcher as deep_researcher_module
-    import open_deep_research.observability.agent_observer as observer_module
+    import open_deep_research.runtime.business_agent as business_agent_module
     from langchain_core.messages import HumanMessage
 
-    events: list[dict[str, Any]] = []
     captured_tools: list[dict[str, Any]] = []
 
-    def record_event(
-        run_id: Any,
-        sequence: Any,
-        event_type: Any,
-        *,
-        span_id: Any = None,
-        **payload: Any,
-    ) -> None:
-        events.append({
-            "run_id": str(run_id),
-            "sequence": sequence,
-            "type": str(event_type),
-            "span_id": str(span_id) if span_id is not None else None,
-            **jsonable(payload, string_limit=50_000),
-        })
-
-    class RecordingObserver:
-        """Use the real SDK event model while disabling only its network sender."""
-
-        def __init__(self, **kwargs: Any) -> None:
-            self.inner = observer_sdk.AgentObserver(
-                enabled=False,
-                project=str(kwargs.get("project", "public-opinion-cost-profile")),
-            )
-            self.inner._record = record_event
-
-        def start_run(self, **kwargs: Any) -> Any:
-            return self.inner.start_run(**kwargs)
-
-        def close(self, timeout: float = 1.0) -> None:
-            self.inner.close(timeout)
-
-    observer_module.AgentObserver = RecordingObserver
-    original_tool_ainvoke = deep_researcher_module.observe_tool_ainvoke
-
-    async def capture_tool(tool: Any, args: Any, config: Any = None, **kwargs: Any) -> Any:
+    async def capture_tool(tool: Any, args: Any, config: Any = None) -> Any:
         started_at = time.perf_counter()
         item: dict[str, Any] = {
             "tool": str(getattr(tool, "name", None) or type(tool).__name__),
@@ -1122,7 +676,7 @@ async def run_case(
             "args": bounded_args(args),
         }
         try:
-            result = await original_tool_ainvoke(tool, args, config, **kwargs)
+            result = await tool.ainvoke(args, config)
         except BaseException as exc:
             item.update({
                 "success": False,
@@ -1140,7 +694,10 @@ async def run_case(
         captured_tools.append(item)
         return result
 
-    deep_researcher_module.observe_tool_ainvoke = capture_tool
+    # The business agent executes every tool through this module-level hook, so
+    # replacing it adds benchmark-only query/result diagnostics without changing
+    # the tool, its arguments, or its results.
+    business_agent_module._execute_tool_safely = capture_tool
     config = runtime_config(version, str(case["case_id"]))
     started_at = time.perf_counter()
     started_utc = utc_now()
@@ -1192,10 +749,9 @@ async def run_case(
             "type": "NoFinalReport",
             "message": "Graph ended without a final_report; this run is not a complete research execution.",
         }
-    spans_by_id, spans = span_info(events)
-    calls = model_calls(events, spans_by_id)
-    tools = tool_calls(events, spans_by_id, captured_tools)
-    flow = flow_and_summaries(events, calls, tools, spans)
+    calls = model_calls_from_captures()
+    tools = tool_calls_from_captures(captured_tools)
+    flow = flow_and_summaries(updates, calls, tools)
     report_growth = report_sizes(round_reports)
     repeated = repeated_context_analysis(calls, round_reports, updates)
     progression = react_progression(calls)
@@ -1218,9 +774,8 @@ async def run_case(
             "python_executable": sys.executable,
             "env_file": str(ENV_PATH),
             "env_file_exists": ENV_PATH.exists(),
-            "agent_observer_sdk": "in-process recorder over installed Agent Observer SDK",
             "actual_cost": actual_cost,
-            "actual_cost_note": "N/A: provider response/Observer metadata did not expose a billed cost field.",
+            "actual_cost_note": "N/A: provider metadata did not expose a billed cost field.",
         },
         "effective_configuration": config_snapshot(config),
         "error": error,
@@ -1228,14 +783,12 @@ async def run_case(
         "model_calls": calls,
         "tool_calls": tools,
         "tool_capture_records": captured_tools,
-        "node_executions": spans,
         "role_reports": role_reports,
         "round_reports": round_reports,
         "research_reviews": reviews,
         "completed_research_tasks": completed_tasks,
         "final_report": final_report,
         "stream_updates": updates,
-        "observer_events": events,
         "analysis": {
             "report_growth": report_growth,
             "react_input_progression": progression,
@@ -1260,11 +813,7 @@ async def run_case(
             },
         },
         "diagnostics": {
-            "observer_event_count": len(events),
-            "model_request_count": len([event for event in events if event.get("type") == "model_request"]),
-            "model_response_count": len([event for event in events if event.get("type") == "model_response"]),
-            "observer_tool_call_count": len([event for event in events if event.get("type") == "tool_call"]),
-            "observer_tool_result_count": len([event for event in events if event.get("type") == "tool_result"]),
+            "tool_capture_count": len(captured_tools),
         },
     }
 
