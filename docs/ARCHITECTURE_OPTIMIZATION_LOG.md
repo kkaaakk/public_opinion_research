@@ -173,7 +173,7 @@ The following architecture optimizations are complete and form the current basel
 - Dynamic Review, routing, Send payloads, and subgraph topology: [`deep_researcher.py`](../src/open_deep_research/deep_researcher.py)
 - Workflow safety configuration: [`configuration.py`](../src/open_deep_research/configuration.py)
 - Research Review prompt: [`prompts.py`](../src/open_deep_research/prompts.py)
-- Observer topology: [`agent_observer.py`](../src/open_deep_research/observability/agent_observer.py)
+- Observability: [`observability/langsmith.py`](../src/open_deep_research/observability/langsmith.py) (historical note: this phase originally referenced a separate `agent_observer.py` sidecar; that integration has since been removed entirely, marked historical/removed)
 - Dynamic loop regression coverage: [`test_public_opinion_research_loop.py`](../tests/test_public_opinion_research_loop.py)
 
 ## Design Decisions
@@ -568,11 +568,11 @@ The raw '.env' left RAG disabled, which made 'internal_knowledge_agent' fail bef
 #### Findings
 
 - After used 233 model calls and 60 tool calls over 642.46 seconds. Before used 135 model calls and 46 tool calls over 493.97 seconds.
-- Known token subtotal was 1,332,387 for After versus 827,944 for Before: +504,443 known tokens, or about +60.9%. Exact totals were unavailable because the Observer/provider omitted usage fields for 192 After calls and 104 Before calls. These missing calls are mostly webpage summarization and structured-output calls, so the real difference may be larger.
+- Known token subtotal was 1,332,387 for After versus 827,944 for Before: +504,443 known tokens, or about +60.9%. Exact totals were unavailable because the provider omitted usage fields for 192 After calls and 104 Before calls. These missing calls are mostly webpage summarization and structured-output calls, so the real difference may be larger.
 - 'public_signal_agent' is the main known-token cost center. It used 190 model calls in After versus 81 in Before. The largest count and time driver was 'webpage_summarization': 187 calls in After, with about 1,051.8 seconds of cumulative model-call duration. Its token usage was not exposed, so this is a high-priority investigation target.
 - ReAct history grows continuously because new AI and Tool Result messages remain in the next prompt. In After, 'public_signal' Round 2 input grew from 8,170 to 96,307 tokens. Similar growth appears in the other agents.
 - 'compress_research' is not cheap: 6 calls in After versus 4 in Before. After's known compression subtotal was 298,064 tokens, about 22.37% of its known token subtotal.
-- The same 'role_reports' are injected into Research Review, Risk Assessment, Response Strategy, and Section Writer. Character-based estimation puts After repeated role-report input at roughly 171,151 tokens; this is estimated because Observer does not expose prompt provenance.
+- The same 'role_reports' are injected into Research Review, Risk Assessment, Response Strategy, and Section Writer. Character-based estimation puts After repeated role-report input at roughly 171,151 tokens; this is estimated because prompt provenance was not captured.
 - Dynamic Research is not expensive because of the Review call itself. The direct loop overhead was 2 Research Review calls plus 132 public/internal follow-up calls, with at least 629,027 known tokens. The follow-up agents effectively perform another broad research pass instead of returning a small evidence delta.
 
 #### Decision

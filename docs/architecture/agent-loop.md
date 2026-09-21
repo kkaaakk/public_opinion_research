@@ -278,4 +278,4 @@ public_signal_agent + internal_knowledge_agent
 - `PublicOpinionState` 的输入/输出契约（如有必要）。
 - `public_opinion_builder` 的固定依赖边。
 - `research_phase` 的状态转换测试。
-- Observer topology 和相关文档。
+- LangSmith 观测元数据和相关文档。

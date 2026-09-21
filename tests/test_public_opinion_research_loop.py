@@ -13,7 +13,6 @@ def _config(*, max_research_rounds: int = 2) -> dict:
     """Build a small deterministic subgraph configuration for loop tests."""
     return {
         "configurable": {
-            "agent_observer_enabled": False,
             "enabled_business_agents": [
                 "public_signal",
                 "internal_knowledge",

@@ -124,9 +124,9 @@ async def rolling_compact(
     response, budget_usage = await ainvoke_model_with_budget(
         structured,
         [HumanMessage(content=prompt)],
-        observer_model=model_name,
-        observer_structured_output=True,
-        observer_component="rolling_compact",
+        model_name=model_name,
+        structured_output=True,
+        component="rolling_compact",
     )
     output = _coerce_rolling_output(response["parsed"])
     summary = output.rolling_summary.strip()

@@ -264,15 +264,18 @@ def model_accounting_config(
     return merged, counter, usage_handler
 
 
-def _observer_langsmith_metadata(observer_kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    """Project Observer model hints onto LangSmith-only metadata (bounded)."""
+def _model_langsmith_metadata(
+    model_name: str | None = None,
+    *,
+    component: str | None = None,
+    structured_output: bool = False,
+) -> dict[str, Any]:
+    """Build LangSmith-only metadata for one model invocation (bounded)."""
     from open_deep_research.observability.langsmith import model_metadata
 
-    component = observer_kwargs.get("observer_component")
-    structured = bool(observer_kwargs.get("observer_structured_output", False))
     return model_metadata(
         component=str(component) if component else None,
-        structured_output=structured,
+        structured_output=structured_output,
     )
 
 
@@ -299,9 +302,11 @@ async def ainvoke_model_with_budget(
     payload: Any,
     *,
     config: Any = None,
-    **observer_kwargs: Any,
+    model_name: str | None = None,
+    component: str | None = None,
+    structured_output: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
-    """Invoke one model runnable through the Observer boundary and account its budget.
+    """Invoke one model runnable and account its budget.
 
     Returns ``(response, budget_delta)`` where real attempts come from the official
     chat-model start lifecycle and tokens come from the official
@@ -309,16 +314,20 @@ async def ainvoke_model_with_budget(
     the final response).  Nested calls record the delta into the active Budget
     Capture; if the call raises after real attempts, that fact is captured before
     the original exception is re-raised.
-    """
-    from open_deep_research.observability import observe_model_ainvoke
 
+    ``model_name``/``component``/``structured_output`` are optional LangSmith
+    correlation hints; they do not affect the provider call or token accounting.
+    """
     merged, counter, usage_handler = model_accounting_config(
-        config, metadata=_observer_langsmith_metadata(observer_kwargs)
+        config,
+        metadata=_model_langsmith_metadata(
+            model_name,
+            component=component,
+            structured_output=structured_output,
+        ),
     )
     try:
-        response = await observe_model_ainvoke(
-            runnable, payload, config=merged, **observer_kwargs
-        )
+        response = await runnable.ainvoke(payload, config=merged)
     except BaseException:
         capture_budget_usage(
             budget_from_model_accounting(counter.starts, usage_handler)
@@ -334,20 +343,25 @@ def invoke_model_with_budget(
     payload: Any,
     *,
     config: Any = None,
-    **observer_kwargs: Any,
+    model_name: str | None = None,
+    component: str | None = None,
+    structured_output: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
-    """Invoke one model synchronously through the Observer boundary and account its budget.
+    """Invoke one model synchronously and account its budget.
 
     Mirrors :func:`ainvoke_model_with_budget`, including attempt and usage
     accounting when the call raises.
     """
-    from open_deep_research.observability import observe_model_invoke
-
     merged, counter, usage_handler = model_accounting_config(
-        config, metadata=_observer_langsmith_metadata(observer_kwargs)
+        config,
+        metadata=_model_langsmith_metadata(
+            model_name,
+            component=component,
+            structured_output=structured_output,
+        ),
     )
     try:
-        response = observe_model_invoke(runnable, payload, config=merged, **observer_kwargs)
+        response = runnable.invoke(payload, config=merged)
     except BaseException:
         capture_budget_usage(
             budget_from_model_accounting(counter.starts, usage_handler)

@@ -2,7 +2,7 @@
 
 This module deliberately lives outside ``src/``.  It loads the requested
 worktree in a subprocess, runs the same cases with the same runtime
-configuration, and records the existing Agent Observer v0.2 events in memory.
+configuration, and records tool executions and stream updates in memory.
 The in-process recording adapter is only a benchmark harness: no application
 logic or prompt is changed.
 """
@@ -184,17 +184,9 @@ def benchmark_config(version: str, case_id: str, repeat_index: int) -> dict[str,
     """Return the one identical runtime config used by every case/version."""
     run_tag = f"plan-execute-ab-{version}-{case_id}-repeat-{repeat_index}-{uuid.uuid4().hex[:8]}"
     return {
-        # Serialize provider requests at the harness boundary.  Both commits
-        # receive the same setting; it avoids free-tier provider concurrency
-        # errors being mistaken for workflow behavior.
         "max_concurrency": 1,
         "configurable": {
             "thread_id": run_tag,
-            "observer_logical_run_id": run_tag,
-            "agent_observer_enabled": True,
-            "agent_observer_endpoint": "in-process-recording",
-            "agent_observer_project": "public-opinion-research-ab-benchmark",
-            "agent_observer_timeout": 0.35,
             "search_api": "none",
             "max_react_tool_calls": 1,
             "max_research_rounds": 2,
@@ -280,10 +272,6 @@ def effective_config_snapshot(config: Mapping[str, Any]) -> dict[str, Any]:
         "rag_graph_enabled",
         "rag_query_rewrite_enabled",
         "rag_memory_write_enabled",
-        "agent_observer_enabled",
-        "agent_observer_endpoint",
-        "agent_observer_project",
-        "agent_observer_timeout",
     ]
     snapshot = {key: jsonable(configurable.get(key)) for key in selected if key in configurable}
     for model_field in ("research_model", "summarization_model", "compression_model", "final_report_model"):
@@ -306,7 +294,6 @@ def effective_config_snapshot(config: Mapping[str, Any]) -> dict[str, Any]:
     snapshot["social_media_data_paths"] = jsonable(configurable.get("social_media_data_paths"))
     snapshot["max_concurrency"] = config.get("max_concurrency")
     snapshot["social_media_mode"] = "local JSON fixtures"
-    snapshot["observer_mode"] = "Agent Observer v0.2 SDK with in-process event recorder"
     return snapshot
 
 
@@ -482,8 +469,7 @@ def parse_completed_tasks(stream_updates: list[dict[str, Any]]) -> list[dict[str
     return tasks
 
 
-def observer_metrics(
-    events: list[dict[str, Any]],
+def benchmark_metrics(
     tool_records: list[dict[str, Any]],
     *,
     elapsed_ms: int,
@@ -494,22 +480,7 @@ def observer_metrics(
     max_research_rounds: int,
 ) -> dict[str, Any]:
     """Aggregate only observed values; missing values remain null/N/A."""
-    span_started = [event for event in events if event.get("type") == "span_started"]
-    model_requests = [event for event in events if event.get("type") == "model_request"]
-    model_responses = [event for event in events if event.get("type") == "model_response"]
-    observer_tool_calls = [event for event in events if event.get("type") == "tool_call"]
-    tool_calls = tool_records or observer_tool_calls
-
-    node_sequence: list[str] = []
-    node_kinds: dict[str, str] = {}
-    for event in span_started:
-        metadata = event.get("metadata") if isinstance(event.get("metadata"), Mapping) else {}
-        name = event.get("name") or metadata.get("graph_node") or metadata.get("node_name")
-        if not name:
-            continue
-        name = str(name)
-        node_sequence.append(name)
-        node_kinds[name] = str(event.get("kind") or "graph_node")
+    tool_calls = tool_records
 
     def tool_name(record: Mapping[str, Any]) -> str:
         return str(record.get("tool") or record.get("name") or "")
@@ -523,31 +494,6 @@ def observer_metrics(
         for record in tool_calls
         if isinstance(record, Mapping)
     )
-
-    token_fields = ("input_tokens", "output_tokens")
-    observed_token_values = {field: [] for field in token_fields}
-    missing_token_responses = 0
-    for response in model_responses:
-        missing = False
-        for field in token_fields:
-            value = response.get(field)
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                observed_token_values[field].append(value)
-            else:
-                missing = True
-        if missing:
-            missing_token_responses += 1
-    input_tokens = (
-        sum(observed_token_values["input_tokens"])
-        if model_responses and missing_token_responses == 0 and observed_token_values["input_tokens"]
-        else None
-    )
-    output_tokens = (
-        sum(observed_token_values["output_tokens"])
-        if model_responses and missing_token_responses == 0 and observed_token_values["output_tokens"]
-        else None
-    )
-    total_tokens = input_tokens + output_tokens if input_tokens is not None and output_tokens is not None else None
 
     review_rounds = sorted({
         int(report["round"])
@@ -583,24 +529,11 @@ def observer_metrics(
 
     return {
         "duration_ms": elapsed_ms,
-        "node_executions": len(span_started) if span_started else None,
-        "agent_executions": sum(node_kinds.get(name) == "agent" for name in node_sequence) if span_started else None,
-        "model_calls": len(model_requests) if events else None,
-        "tool_calls": len(tool_calls) if events or tool_records else None,
+        "tool_calls": len(tool_calls) if tool_calls else None,
         "web_search_calls": web_calls if tool_calls else None,
         "rag_calls": rag_calls if tool_calls else None,
         "mcp_calls": mcp_calls if tool_calls else None,
         "social_media_calls": social_calls if tool_calls else None,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "token_usage_observed_responses": len(model_responses),
-        "token_usage_missing_responses": missing_token_responses,
-        "public_signal_executions": node_sequence.count("public_signal_agent") if span_started else None,
-        "internal_knowledge_executions": node_sequence.count("internal_knowledge_agent") if span_started else None,
-        "risk_assessment_executions": node_sequence.count("risk_assessment_agent") if span_started else None,
-        "response_strategy_executions": node_sequence.count("response_strategy_agent") if span_started else None,
-        "research_review_executions": node_sequence.count("research_review") if span_started else None,
         "research_rounds": research_round,
         "followup_rounds": followup_rounds,
         "research_review_count": len(reviews),
@@ -611,13 +544,10 @@ def observer_metrics(
         "duplicate_task_count": max(0, duplicate_task_count),
         "review_triggered_followup": review_triggered,
         "max_research_round_reached": max_round_reached,
-        "node_sequence": node_sequence,
-        "node_kinds": node_kinds,
         "tool_names": tool_names,
         "final_report_chars": len(final_report),
         "final_report_tokens": None,
         "final_report_token_note": "N/A: no tokenizer is used by the benchmark harness; characters are exact.",
-        "observer_event_count": len(events),
     }
 
 
@@ -643,43 +573,14 @@ async def run_one_case(
         os.environ[model_field] = BENCHMARK_MODEL
 
     # Imports intentionally happen after target_src is first on sys.path.
-    import agent_observer.sdk as observer_sdk
     import open_deep_research.deep_researcher as deep_researcher_module
-    import open_deep_research.observability.agent_observer as observer_module
+    import open_deep_research.runtime.business_agent as business_agent_module
     from langchain_core.messages import HumanMessage
 
-    events: list[dict[str, Any]] = []
     tool_records: list[dict[str, Any]] = []
 
-    def record_event(run_id: Any, sequence: Any, event_type: Any, *, span_id: Any = None, **payload: Any) -> None:
-        events.append({
-            "run_id": str(run_id),
-            "sequence": sequence,
-            "type": str(event_type),
-            "span_id": str(span_id) if span_id is not None else None,
-            **jsonable(payload, string_limit=50_000),
-        })
-
-    class RecordingObserver:
-        """Use the installed SDK data model while replacing only its sender."""
-
-        def __init__(self, **kwargs: Any) -> None:
-            self.inner = observer_sdk.AgentObserver(
-                enabled=False,
-                project=str(kwargs.get("project", "public-opinion-research-ab-benchmark")),
-            )
-            self.inner._record = record_event
-
-        def start_run(self, **kwargs: Any) -> Any:
-            return self.inner.start_run(**kwargs)
-
-        def close(self, timeout: float = 1.0) -> None:
-            self.inner.close(timeout)
-
-    observer_module.AgentObserver = RecordingObserver
-    original_tool_ainvoke = deep_researcher_module.observe_tool_ainvoke
-
-    async def recording_tool_ainvoke(tool: Any, args: Any, config: Any = None, **kwargs: Any) -> Any:
+    async def recording_tool(tool: Any, args: Any, config: Any = None) -> Any:
+        """Benchmark-only tool recorder that mirrors execute_tool_safely behavior."""
         started_at = time.perf_counter()
         record: dict[str, Any] = {
             "tool": str(getattr(tool, "name", None) or type(tool).__name__),
@@ -687,7 +588,7 @@ async def run_one_case(
             "args": _bounded_args(args),
         }
         try:
-            result = await original_tool_ainvoke(tool, args, config, **kwargs)
+            result = await tool.ainvoke(args, config)
         except BaseException as exc:
             record.update({
                 "success": False,
@@ -705,9 +606,10 @@ async def run_one_case(
         tool_records.append(record)
         return result
 
-    # execute_tool_safely resolves this module-level binding, so this wrapper
-    # adds benchmark-only query/result summaries without changing the tool.
-    deep_researcher_module.observe_tool_ainvoke = recording_tool_ainvoke
+    # The business agent executes every tool through this module-level hook, so
+    # replacing it adds benchmark-only query/result summaries without changing
+    # the tool, its arguments, or its results.
+    business_agent_module._execute_tool_safely = recording_tool
 
     config = benchmark_config(version, str(case["case_id"]), repeat_index)
     started_utc = utc_now()
@@ -769,8 +671,7 @@ async def run_one_case(
                     break
 
     elapsed_ms = max(0, int((time.perf_counter() - started_at) * 1_000))
-    metrics = observer_metrics(
-        events,
+    metrics = benchmark_metrics(
         tool_records,
         elapsed_ms=elapsed_ms,
         final_report=final_report,
@@ -794,7 +695,6 @@ async def run_one_case(
         "config": effective_config_snapshot(config),
         "error": error,
         "stream_updates": stream_updates,
-        "observer_events": events,
         "tool_records": tool_records,
         "role_reports": role_reports,
         "round_reports": round_reports,

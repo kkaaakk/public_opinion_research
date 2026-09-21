@@ -251,8 +251,8 @@ class AgentRuntime:
             response, response_budget = await ainvoke_model_with_budget(
                 self.model,
                 model_messages,
-                observer_model=self.config.research_model,
-                observer_component=f"{self.role}_{mode}_round_{research_round}",
+                model_name=self.config.research_model,
+                component=f"{self.role}_{mode}_round_{research_round}",
             )
             messages.append(response)
             native_search = openai_websearch_called(response) or anthropic_websearch_called(response)
@@ -316,7 +316,6 @@ class AgentRuntime:
                             tools_by_name[call["name"]],
                             call["args"],
                             self.runtime_config,
-                            tool_call_id=call["id"],
                         )
                         for call in known
                     ]

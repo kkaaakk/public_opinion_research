@@ -13,7 +13,6 @@ from open_deep_research.state import ResearchReview, Section, agents_reducer
 def _public_opinion_config(*roles: str) -> dict:
     return {
         "configurable": {
-            "agent_observer_enabled": False,
             "enabled_business_agents": list(roles),
         }
     }

@@ -272,7 +272,7 @@ def single_markdown(profile: Mapping[str, Any], label: str) -> str:
 
 {flow}
 
-The sequence is reconstructed from Agent Observer span events.
+The sequence is reconstructed from the benchmark harness stream updates.
 
 ## Effective configuration
 
@@ -285,7 +285,6 @@ The sequence is reconstructed from Agent Observer span events.
 | RAG enabled / mode | {fmt(cfg.get('rag_enabled'))} / {fmt(cfg.get('retrieval_mode'))} |
 | RAG embedding / vectorstore / reranker | {fmt(cfg.get('rag_embedding_provider'))} / {fmt(cfg.get('rag_vectorstore_provider'))} / {fmt(cfg.get('rag_reranker_provider'))} |
 | RAG configuration note | {cfg.get('rag_benchmark_override', 'N/A')} |
-| Observer | {fmt(cfg.get('agent_observer_project'))}; {fmt(profile.get('environment', {}).get('agent_observer_sdk'))} |
 
 ## Full Flow Cost Breakdown
 
@@ -295,7 +294,7 @@ The sequence is reconstructed from Agent Observer span events.
 
 {node_table(profile)}
 
-Observer v0.2 span_finished events returned duration_ms=null for graph spans. Node wall-duration is therefore N/A rather than inferred; per-model durations, per-tool durations, and total wall elapsed remain recorded.
+Per-model durations, per-tool durations, and total wall elapsed remain recorded in the raw artifact.
 
 ## Research Review and follow-up
 
@@ -353,7 +352,7 @@ Compression cost share: {fmt(profile.get('analysis', {}).get('token_shares', {})
 - Estimated repeated input tokens: {fmt(profile.get('analysis', {}).get('role_reports_reuse', {}).get('estimated_repeated_input_tokens'))}
 - Estimated repeated-context share of known tokens: {fmt(profile.get('analysis', {}).get('role_reports_reuse', {}).get('estimated_repeated_context_share_of_known_tokens'))}
 
-This is estimated from code-path contracts and report character lengths because Observer events do not include prompt provenance.
+This is estimated from code-path contracts and report character lengths because per-call prompt provenance is not captured by this harness.
 
 ## Follow-up report append
 
@@ -370,7 +369,7 @@ This is estimated from code-path contracts and report character lengths because 
 
 - No actual billed cost was exposed.
 - Missing token values remain N/A; known partial sums are shown separately.
-- The Observer sidecar network sender was replaced only by an in-process recorder; the installed SDK and existing adapter were used.
+- Per-call model events are not captured; budget totals come from LangGraph stream updates.
 - If status is not success, this is a diagnostic trace, not a complete cost profile.
 """
 
@@ -547,7 +546,7 @@ An increasing exact input-token sequence is evidence that a role's prior history
 
 {reuse_table(after)}
 
-Character/token estimates are explicitly estimated because Observer events do not include prompt provenance.
+Character/token estimates are explicitly estimated because per-call prompt provenance is not captured by this harness.
 
 ### Follow-up report append
 
@@ -582,7 +581,7 @@ Character/token estimates are explicitly estimated because Observer events do no
 - Current .env model is {before_cfg.get('research_model', 'N/A')}; it is not the named deepseek-v4-flash unless the environment is changed.
 - No billed cost field was returned; no online price was used to invent one.
 - Missing token fields remain N/A. Report-character context reuse and its share are estimated.
-- The Observer HTTP sidecar and social API may be unavailable; raw JSON contains exact errors and in-process Observer events.
+- The social API may be unavailable; raw JSON contains exact errors.
 """
 
 

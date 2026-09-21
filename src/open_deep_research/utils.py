@@ -118,9 +118,8 @@ async def tavily_search(
         else summarize_webpage(
             summarization_model,
             result["raw_content"][:max_char_to_include],
-            observer_model=configurable.summarization_model,
-        )
-        for result in unique_results.values()
+            model_name=configurable.summarization_model,
+        )        for result in unique_results.values()
     ]
     
     # Step 5: Execute all summarization tasks in parallel
@@ -240,13 +239,14 @@ async def summarize_webpage(
     model: BaseChatModel,
     webpage_content: str,
     *,
-    observer_model: str | None = None,
+    model_name: str | None = None,
 ) -> str:
     """Summarize webpage content using AI model with timeout protection.
     
     Args:
         model: The chat model configured for summarization
         webpage_content: Raw webpage content to be summarized
+        model_name: Optional model name for LangSmith correlation metadata
         
     Returns:
         Formatted summary with key excerpts, or original content if summarization fails
@@ -263,9 +263,9 @@ async def summarize_webpage(
             ainvoke_model_with_budget(
                 model,
                 [HumanMessage(content=prompt_content)],
-                observer_model=observer_model,
-                observer_structured_output=True,
-                observer_component="webpage_summarization",
+                model_name=model_name,
+                structured_output=True,
+                component="webpage_summarization",
             ),
             timeout=60.0  # 60 second timeout for summarization
         )

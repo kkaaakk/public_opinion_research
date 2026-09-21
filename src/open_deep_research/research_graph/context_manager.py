@@ -85,9 +85,9 @@ class ContextManager:
         response, budget_usage = await ainvoke_model_with_budget(
             structured,
             [HumanMessage(content=prompt)],
-            observer_model=self.model_name,
-            observer_structured_output=True,
-            observer_component="context_manager",
+            model_name=self.model_name,
+            structured_output=True,
+            component="context_manager",
         )
         delta = _coerce_context_delta(response["parsed"])
         available_ids = _available_graph_ids(current, relevant_subgraph, deltas)
