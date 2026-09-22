@@ -264,11 +264,21 @@ data/
 ## 🧪 测试
 
 ```bash
-# 运行所有测试
-pytest
+# 默认离线验证（不读取仓库 .env，不访问真实外部服务）
+python -m pytest
+
+# Active production source lint
+python -m ruff check --select E,F,I --ignore E501 src/open_deep_research tests/conftest.py tests/test_*.py
+
+# 编译与 import smoke
+python -m compileall -q src/open_deep_research
+python -c "import open_deep_research.deep_researcher; import open_deep_research.runtime; import open_deep_research.rag"
+
+# 需要网络下载模型或外部基础设施的集成测试
+python -m pytest -m integration
 
 # RAG 检索评估
-pytest tests/evaluate_rag_retrieval.py
+python tests/evaluate_rag_retrieval.py
 
 # 舆情 Agent 测试
 pytest tests/test_public_opinion_agents.py
