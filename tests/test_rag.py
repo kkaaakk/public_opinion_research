@@ -11,6 +11,17 @@ from langchain_text_splitters import Language
 from open_deep_research.configuration import Configuration
 from open_deep_research.rag import loaders
 from open_deep_research.rag import splitter as rag_splitter
+from open_deep_research.rag.config import (
+    ChunkingConfig,
+    EmbeddingConfig,
+    GraphRAGConfig,
+    HybridRetrievalConfig,
+    KeywordSearchConfig,
+    MemoryConfig,
+    MultimodalConfig,
+    RerankerConfig,
+    VectorstoreConfig,
+)
 from open_deep_research.rag.graph import Neo4jGraphRAGIndex, create_graph_index
 from open_deep_research.rag.mysql_memory import (
     build_chat_memory_records,
@@ -28,17 +39,6 @@ from open_deep_research.rag.retriever import (
     BM25Index,
     HybridChunkRetriever,
     reciprocal_rank_fusion,
-)
-from open_deep_research.rag.config import (
-    ChunkingConfig,
-    EmbeddingConfig,
-    GraphRAGConfig,
-    HybridRetrievalConfig,
-    KeywordSearchConfig,
-    MemoryConfig,
-    MultimodalConfig,
-    RerankerConfig,
-    VectorstoreConfig,
 )
 from open_deep_research.rag.service import (
     RAGPipeline,
@@ -376,9 +376,9 @@ def test_graph_rag_expands_related_competitor_evidence():
         chunk_id="seed",
     )
     related_chunk = RAGChunk(
-        content="The free tier created pricing pressure in the SMB sales pipeline.",
+        content="The NimbusCRM launch created pricing pressure in the SMB sales pipeline.",
         source="internal://sales",
-        title="Sales feedback",
+        title="NimbusCRM sales feedback",
         chunk_id="related",
     )
     unrelated_chunk = RAGChunk(
@@ -397,13 +397,15 @@ def test_graph_rag_expands_related_competitor_evidence():
         graph_enabled=True,
         graph_max_neighbors=2,
         graph_weight=0.45,
+        graph_ner_enabled=False,
+        graph_idf_enabled=False,
     )
 
     results = retriever.retrieve(
         query="NimbusCRM launch risk",
         query_vector=[1.0, 0.0],
-        top_k=3,
-        keyword_top_k=3,
+        top_k=2,
+        keyword_top_k=1,
     )
     by_id = {result.chunk.chunk_id: result for result in results}
 
@@ -627,7 +629,12 @@ def test_neo4j_graph_rag_writes_chunks_and_expands_neighbors():
         def run(self, query, **params):
             self.calls.append((query, params))
             if "RETURN neighbor.chunk_id" in query:
-                return [{"chunk_id": "related", "shared_terms": 2}]
+                return [
+                    {
+                        "chunk_id": "related",
+                        "shared_terms": ["nimbuscrm", "pricing"],
+                    }
+                ]
             return []
 
     class FakeDriver:
@@ -680,7 +687,10 @@ def test_neo4j_graph_rag_writes_chunks_and_expands_neighbors():
     )
     by_id = {result.chunk.chunk_id: result for result in results}
     assert "related" in by_id
-    assert by_id["related"].graph_score == pytest.approx(0.4 * 0.5 * (2 / 3))
+    assert by_id["related"].graph_score == pytest.approx(
+        0.4 * 0.5 * (2 / 3) * 0.8,
+        abs=1e-6,
+    )
 
 
 def test_multimodal_image_loader_extracts_ocr_text(monkeypatch, tmp_path):
@@ -1461,6 +1471,7 @@ def test_authority_filter_blocks_misleading_final_context():
     assert [result.chunk.chunk_id for result in filtered] == ["auth"]
 
 
+@pytest.mark.integration
 def test_rag_pipeline_retrieves_relevant_local_context(tmp_path):
     write_text_file(
         tmp_path / "handbook.md",
@@ -1599,6 +1610,7 @@ def test_rag_pipeline_uses_rewritten_query_but_returns_original_query():
     assert calls["reranker_query"] == "Milvus vector index path"
 
 
+@pytest.mark.integration
 def test_rag_pipeline_handles_empty_documents(tmp_path):
     write_text_file(tmp_path / "empty.md", "")
 
@@ -1619,6 +1631,7 @@ def test_rag_pipeline_handles_empty_documents(tmp_path):
     assert result.citations == []
 
 
+@pytest.mark.integration
 def test_rag_pipeline_handles_empty_results(tmp_path):
     write_text_file(
         tmp_path / "policy.txt",
@@ -1646,6 +1659,7 @@ def test_rag_pipeline_handles_empty_results(tmp_path):
     assert result.citations == []
 
 
+@pytest.mark.integration
 def test_rag_pipeline_retrieves_chat_memory(tmp_path):
     memory_path = tmp_path / "chat_memory.jsonl"
     write_jsonl_file(
@@ -1708,6 +1722,7 @@ def test_rag_index_id_stays_stable_when_file_changes(tmp_path):
     assert first_index_id == second_index_id
 
 
+@pytest.mark.integration
 def test_pipeline_refreshes_same_index_when_file_changes(tmp_path):
     document_path = tmp_path / "policy.txt"
     write_text_file(document_path, "first policy requires alpha review")

@@ -82,6 +82,7 @@ namespaces = true
 "*" = ["py.typed"]
 
 [tool.ruff]
+extend-exclude = ["src/legacy", "*.ipynb"]
 lint.select = [
     "E",    # pycodestyle
     "F",    # pyflakes
@@ -104,6 +105,13 @@ lint.ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "-m", "not integration"]
+markers = [
+    "integration: requires network access, downloaded models, or external infrastructure",
+]
 
 [tool.uv]
 # markitdown-mcp pins mcp~=1.8.0 but langchain-mcp-adapters needs mcp>=1.9.2.

@@ -1,11 +1,18 @@
 """Registry for compact public-opinion business agents."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec
-from open_deep_research.public_opinion_agents.internal_knowledge import AGENT as INTERNAL_KNOWLEDGE_AGENT
-from open_deep_research.public_opinion_agents.public_signal import AGENT as PUBLIC_SIGNAL_AGENT
-from open_deep_research.public_opinion_agents.response_strategy import AGENT as RESPONSE_STRATEGY_AGENT
-from open_deep_research.public_opinion_agents.risk_assessment import AGENT as RISK_ASSESSMENT_AGENT
-
+from open_deep_research.public_opinion_agents.internal_knowledge import (
+    AGENT as INTERNAL_KNOWLEDGE_AGENT,
+)
+from open_deep_research.public_opinion_agents.public_signal import (
+    AGENT as PUBLIC_SIGNAL_AGENT,
+)
+from open_deep_research.public_opinion_agents.response_strategy import (
+    AGENT as RESPONSE_STRATEGY_AGENT,
+)
+from open_deep_research.public_opinion_agents.risk_assessment import (
+    AGENT as RISK_ASSESSMENT_AGENT,
+)
 
 PUBLIC_OPINION_AGENT_ORDER = (
     "public_signal",
