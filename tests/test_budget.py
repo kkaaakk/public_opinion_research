@@ -5,6 +5,7 @@ Token usage authority is LangChain ``UsageMetadata`` reported by the official
 ``on_chat_model_start`` lifecycle.  These tests use real LangChain message types.
 """
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +18,7 @@ from open_deep_research.budget import (
     ModelAttemptCounter,
     append_budget_summary,
     available_research_unit_slots,
+    budget_capture,
     budget_from_model_accounting,
     budget_usage_with_reason,
     capture_budget_usage,
@@ -527,3 +529,60 @@ def test_tool_messages_do_not_contribute_token_usage():
     ).model_dump().get("usage_metadata")))
 
     assert usage["total_tokens"] == 0
+
+
+def test_budget_capture_context_manager_normal_and_exception_paths():
+    delta = {"model_calls": 1, "input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
+    with budget_capture() as captured:
+        capture_budget_usage(delta)
+    assert captured["model_calls"] == 1
+    assert captured["total_tokens"] == 5
+
+    with pytest.raises(RuntimeError):
+        with budget_capture() as failed:
+            capture_budget_usage(delta)
+            raise RuntimeError("boom")
+    assert failed["model_calls"] == 1
+
+    with budget_capture() as restored:
+        capture_budget_usage({"tool_calls": 1})
+    assert restored["tool_calls"] == 1
+
+
+def test_budget_capture_context_manager_resets_on_base_exception():
+    class CancellationLike(BaseException):
+        pass
+
+    with pytest.raises(CancellationLike):
+        with budget_capture():
+            capture_budget_usage({"model_calls": 1})
+            raise CancellationLike()
+
+    with budget_capture() as restored:
+        capture_budget_usage({"model_calls": 2})
+    assert restored["model_calls"] == 2
+
+
+def test_budget_capture_context_manager_nested_and_parallel_isolation():
+    with budget_capture() as outer:
+        capture_budget_usage({"model_calls": 1})
+        with budget_capture() as inner:
+            capture_budget_usage({"model_calls": 2})
+        capture_budget_usage({"tool_calls": 1})
+    assert inner["model_calls"] == 2
+    assert outer["model_calls"] == 1
+    assert outer["tool_calls"] == 1
+
+    async def capture(value: int) -> dict:
+        with budget_capture() as usage:
+            await asyncio.sleep(0)
+            capture_budget_usage({"model_calls": value})
+        return usage
+
+    async def capture_parallel() -> tuple[dict, dict]:
+        first, second = await asyncio.gather(capture(3), capture(5))
+        return first, second
+
+    first, second = asyncio.run(capture_parallel())
+    assert first["model_calls"] == 3
+    assert second["model_calls"] == 5

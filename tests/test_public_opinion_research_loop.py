@@ -2,6 +2,7 @@
 
 import asyncio
 
+from langchain_core.runnables import RunnableLambda
 from langgraph.types import Send
 
 import open_deep_research.deep_researcher as deep_researcher_module
@@ -44,8 +45,8 @@ class _ReviewModel:
         self.reviews = iter(reviews)
         self.calls = 0
 
-    def with_structured_output(self, _schema):
-        return self
+    def with_structured_output(self, _schema, include_raw=False):
+        return RunnableLambda(self._structured_call)
 
     def with_retry(self, **_kwargs):
         return self
@@ -53,9 +54,10 @@ class _ReviewModel:
     def with_config(self, _config):
         return self
 
-    async def ainvoke(self, _messages):
+    async def _structured_call(self, _messages, config=None):
         self.calls += 1
-        return next(self.reviews)
+        parsed = next(self.reviews)
+        return {"raw": None, "parsed": parsed, "parsing_error": None}
 
 
 def _fake_agent(calls: list[tuple[str, str, list[str]]]):

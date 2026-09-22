@@ -146,6 +146,13 @@ def _coerce_research_task(value: Any) -> ResearchTask | None:
     return None
 
 
+def research_task_identity(task: ResearchTask) -> str:
+    """Return the stable identity used to de-duplicate tasks across rounds."""
+    return task.task_id.strip() or (
+        f"{task.target_role}:{task.objective.strip()}:{task.evidence_needed.strip()}"
+    )
+
+
 def _task_values(value: Any) -> list[Any]:
     value = _override_value(value, [])
     if value is None:
@@ -164,9 +171,7 @@ def research_tasks_reducer(current_value: Any, new_value: Any) -> list[ResearchT
         task = _coerce_research_task(value)
         if task is None:
             continue
-        identity = task.task_id.strip() or (
-            f"{task.target_role}:{task.objective.strip()}:{task.evidence_needed.strip()}"
-        )
+        identity = research_task_identity(task)
         if identity not in seen:
             seen.add(identity)
             merged.append(task)
@@ -344,6 +349,6 @@ __all__ = [
     "ReportState", "ResearchComplete", "ResearchQuestion", "ResearchReview",
     "ResearchState", "ResearchTask", "RuntimeState", "SearchQuery", "Section",
     "Sections", "Summary", "WorkflowState", "agents_reducer", "report_reducer",
-    "research_reducer", "research_tasks_reducer", "runtime_reducer",
-    "workflow_reducer",
+    "research_reducer", "research_task_identity", "research_tasks_reducer",
+    "runtime_reducer", "workflow_reducer",
 ]

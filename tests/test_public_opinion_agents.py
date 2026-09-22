@@ -107,7 +107,7 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
         def with_config(self, _config):
             return self
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             captured_prompts.append(str(messages[0].content))
             return SimpleNamespace(content="section output")
 

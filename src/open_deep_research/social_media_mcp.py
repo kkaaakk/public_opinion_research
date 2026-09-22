@@ -15,102 +15,25 @@ from urllib.request import Request, urlopen
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
+from open_deep_research.social_media.domain import (
+    COMPLAINT_TERMS,
+    DEFAULT_RISK_RULES,
+    NEGATIVE_TERMS,
+    POSITIVE_TERMS,
+    contains_any,
+    heat_level,
+    matched_signal_terms,
+    negative_query_variants,
+    ratio,
+    risk_score,
+)
+
 load_dotenv()
 
 MCP_SERVER_NAME = "open-deep-research-social-media"
 DEFAULT_DATA_PATHS = ["data/social_media/sample_posts.jsonl"]
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
-DEFAULT_RISK_RULES = {
-    "critical": {"min_negative_ratio": 0.6, "min_negative_engagement": 10000, "min_complaints": 10},
-    "high": {"min_negative_ratio": 0.45, "min_negative_engagement": 3000, "min_complaints": 3},
-    "medium": {"min_negative_ratio": 0.25, "min_negative_engagement": 800, "min_complaints": 1},
-}
-NEGATIVE_TERMS = [
-    "complaint",
-    "refund",
-    "after-sales",
-    "after_sales",
-    "quality issue",
-    "delay",
-    "safety issue",
-    "abnormal",
-    "scam",
-    "fraud",
-    "boycott",
-    "\u6295\u8bc9",
-    "\u7ef4\u6743",
-    "\u9000\u6b3e",
-    "\u9000\u8d27",
-    "\u8d28\u91cf",
-    "\u552e\u540e",
-    "\u5ba2\u670d",
-    "\u5b89\u5168",
-    "\u5f02\u5e38",
-    "\u6545\u969c",
-    "\u5931\u63a7",
-    "\u81ea\u71c3",
-    "\u5239\u8f66",
-    "\u6f0f\u6c34",
-    "\u865a\u5047\u5ba3\u4f20",
-    "\u6b3a\u8bc8",
-    "\u9a97",
-    "\u5dee\u8bc4",
-    "\u907f\u96f7",
-    "\u907f\u5751",
-    "\u8e29\u5751",
-    "\u7ffb\u8f66",
-    "\u80cc\u523a",
-    "\u5272\u97ed\u83dc",
-    "\u8d2c\u503c",
-    "\u7eed\u822a\u865a\u6807",
-    "\u8f66\u673a\u5361\u987f",
-    "\u5239\u4e0d\u4f4f",
-    "\u66dd\u5149",
-    "\u53ec\u56de",
-    "\u8d54\u507f",
-    "\u8fdd\u6cd5",
-    "\u5904\u7f5a",
-    "\u6570\u636e\u6cc4\u9732",
-    "\u9690\u79c1",
-]
-COMPLAINT_TERMS = [
-    "complaint",
-    "blackcat",
-    "refund",
-    "after-sales",
-    "after_sales",
-    "quality",
-    "\u9ed1\u732b",
-    "\u6295\u8bc9",
-    "\u7ef4\u6743",
-    "\u9000\u6b3e",
-    "\u9000\u8d27",
-    "\u8d28\u91cf",
-    "\u552e\u540e",
-    "\u5ba2\u670d",
-    "\u8d54\u507f",
-]
-POSITIVE_TERMS = [
-    "good",
-    "great",
-    "resolved",
-    "recommend",
-    "\u6ee1\u610f",
-    "\u89e3\u51b3",
-    "\u63a8\u8350",
-    "\u597d\u8bc4",
-    "\u9760\u8c31",
-]
-NEGATIVE_QUERY_TERMS = [
-    "\u6295\u8bc9",
-    "\u8d28\u91cf",
-    "\u552e\u540e",
-    "\u9000\u6b3e",
-    "\u7ef4\u6743",
-    "\u907f\u96f7",
-    "\u907f\u5751",
-]
 
 mcp = FastMCP(
     MCP_SERVER_NAME,
@@ -1238,28 +1161,15 @@ def _signal_text(record: Mapping[str, Any]) -> str:
 
 
 def _contains_any(text: str, terms: list[str]) -> bool:
-    return any(term.lower() in text for term in terms)
+    return contains_any(text, terms)
 
 
 def _matched_signal_terms(record: Mapping[str, Any]) -> list[str]:
-    text = _signal_text(record)
-    return sorted({term for term in [*NEGATIVE_TERMS, *COMPLAINT_TERMS] if term.lower() in text})
+    return matched_signal_terms(_signal_text(record))
 
 
 def _negative_query_variants(query: str, config: Mapping[str, Any]) -> list[str]:
-    base_query = str(query or "").strip()
-    if not base_query:
-        return []
-    variant_count = _negative_query_variant_count(config)
-    variants = [base_query]
-    base_lower = base_query.lower()
-    for term in NEGATIVE_QUERY_TERMS:
-        if term.lower() in base_lower:
-            continue
-        variants.append(f"{base_query} {term}")
-        if len(variants) >= variant_count:
-            break
-    return variants
+    return negative_query_variants(query, _negative_query_variant_count(config))
 
 
 def _negative_query_variant_count(config: Mapping[str, Any]) -> int:
@@ -1404,15 +1314,8 @@ def _risk_metrics(
         if _sentiment(record) == "negative"
     )
     has_negative_signal = bool(negative_ratio or complaint_count or negative_engagement)
-    heat_component = min(total_engagement / 2000, 10) if has_negative_signal else min(total_engagement / 5000, 5)
-    score = min(
-        100,
-        round(
-            negative_ratio * 55
-            + min(complaint_count * 8, 25)
-            + min(negative_engagement / 1000, 15)
-            + heat_component
-        ),
+    score = risk_score(
+        negative_ratio, complaint_count, negative_engagement, total_engagement
     )
     rules = _risk_rules(config)
     level = "low"
@@ -1451,13 +1354,7 @@ def _risk_metrics(
 
 
 def _heat_level(total_engagement: int) -> str:
-    if total_engagement >= 100000:
-        return "critical"
-    if total_engagement >= 30000:
-        return "high"
-    if total_engagement >= 3000:
-        return "medium"
-    return "low"
+    return heat_level(total_engagement)
 
 
 def _risk_rules(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1486,9 +1383,7 @@ def _bounded_limit(limit: int) -> int:
 
 
 def _ratio(numerator: int, denominator: int) -> float:
-    if denominator <= 0:
-        return 0.0
-    return round(numerator / denominator, 4)
+    return ratio(numerator, denominator)
 
 
 def _source_summary(config: Mapping[str, Any]) -> dict[str, Any]:
