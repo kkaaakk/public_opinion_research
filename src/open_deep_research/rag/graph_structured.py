@@ -9,7 +9,6 @@ visible at the term level but are strong signals for multi-hop retrieval.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from open_deep_research.rag.types import RAGChunk
 

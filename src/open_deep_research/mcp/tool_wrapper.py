@@ -10,7 +10,6 @@ server-scoped name such as ``dbhub__execute_sql``.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
 

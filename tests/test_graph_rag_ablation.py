@@ -7,11 +7,12 @@ backward compatibility.
 
 from __future__ import annotations
 
-import pytest
-
 from open_deep_research.rag.graph import GraphRAGIndex, create_graph_index
 from open_deep_research.rag.graph_adaptive import ExpansionDecision, decide_expansion
-from open_deep_research.rag.graph_scoring import RECOMMENDED_GRAPH_PARAMS, compute_graph_score
+from open_deep_research.rag.graph_scoring import (
+    RECOMMENDED_GRAPH_PARAMS,
+    compute_graph_score,
+)
 from open_deep_research.rag.graph_structured import (
     StructuralIndex,
     build_adjacent_edges,

@@ -2,7 +2,6 @@
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec
 
-
 AGENT = PublicOpinionAgentSpec(
     role="internal_knowledge",
     node_name="internal_knowledge_agent",

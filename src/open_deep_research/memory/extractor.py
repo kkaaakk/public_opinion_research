@@ -7,7 +7,11 @@ touch the vector index.
 from typing import Any, Mapping, Optional, Sequence
 
 from open_deep_research.memory.store import stable_memory_id
-from open_deep_research.memory.types import ChatMemoryRecord, MemoryType, normalize_memory_type
+from open_deep_research.memory.types import (
+    ChatMemoryRecord,
+    MemoryType,
+    normalize_memory_type,
+)
 
 
 def build_chat_memory_records(

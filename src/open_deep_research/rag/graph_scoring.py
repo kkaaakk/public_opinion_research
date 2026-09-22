@@ -15,7 +15,6 @@ a threshold can be filtered out entirely.
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from open_deep_research.rag.graph_terms import TermExtractor

@@ -11,13 +11,16 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from open_deep_research.memory.types import (
     INDEXABLE_MEMORY_TYPES,
     ChatMemoryRecord,
     normalize_record_types,
 )
+
+if TYPE_CHECKING:
+    from open_deep_research.rag.types import RAGDocument
 
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 

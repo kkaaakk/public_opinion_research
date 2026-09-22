@@ -93,9 +93,12 @@ def _recording_trace(journal: list[dict[str, Any]]):
 
 @contextlib.contextmanager
 def _enabled_langsmith(monkeypatch: pytest.MonkeyPatch, journal: list[dict[str, Any]]):
-    monkeypatch.setenv("LANGSMITH_TRACING", "true")
-    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_pt_test-only")
-    monkeypatch.setenv("LANGSMITH_ENDPOINT", "http://127.0.0.1:9")
+    # Exercise the project tracing boundary without enabling LangChain's global
+    # SaaS tracer, which would otherwise start background HTTP ingestion.
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.delenv("LANGSMITH_ENDPOINT", raising=False)
+    monkeypatch.setattr(langsmith_module, "langsmith_enabled", lambda: True)
     monkeypatch.setattr(langsmith_module, "_ls_trace", _recording_trace(journal))
     yield
 
@@ -462,6 +465,7 @@ def _spy_subgraph_call(graph: Any, journal: list[dict[str, Any]]):
     return spy
 
 
+@pytest.mark.integration
 def test_graph_metadata_propagates_to_children(monkeypatch):
     """Node metadata and config metadata must reach LLM/tool child runs."""
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
