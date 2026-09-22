@@ -58,9 +58,6 @@ export default defineConfig({
           items: [
             { text: "Agent Instructions", link: "/project/agents" },
             { text: "Claude Instructions", link: "/project/claude" },
-            { text: "Legacy Overview", link: "/legacy/legacy" },
-            { text: "Legacy Claude Instructions", link: "/legacy/claude" },
-            { text: "Vibe Code Notes", link: "/legacy/vibe-code" },
           ],
         },
       ],

@@ -81,21 +81,15 @@ ruff check
 mypy
 ```
 
-### 2.3 当前打包注意点
+### 2.3 当前打包边界
 
-`pyproject.toml` 中 `tool.setuptools.packages` 当前显式列出：
+`pyproject.toml` 使用 setuptools package discovery，发布包只包含：
 
 ```toml
-packages = ["open_deep_research", "open_deep_research.rag", "legacy", "tests"]
+include = ["open_deep_research*", "security*"]
 ```
 
-但当前代码已经新增这些子包：
-
-- `open_deep_research.memory`
-- `open_deep_research.tools`
-- `open_deep_research.rag.loaders`
-
-如果后续要做 wheel / package 发布，需要验证这些子包是否被正确打进去。开发环境直接从源码运行通常不会暴露这个问题。
+`open_deep_research` 下的 memory、tools、RAG loaders 等子包由通配规则统一发现。
 
 ## 3. Agent 编排技术栈
 
