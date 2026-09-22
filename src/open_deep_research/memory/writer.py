@@ -89,12 +89,12 @@ def _refresh_memory_index(
 ) -> None:
     try:
         from open_deep_research.rag.service import (
-            build_rag_pipeline_config,
+            build_rag_config,
             get_or_create_rag_pipeline,
         )
 
         pipeline = get_or_create_rag_pipeline(
-            build_rag_pipeline_config(
+            build_rag_config(
                 configurable,
                 memory_enabled=True,
                 memory_conversation_id=conversation_id,

@@ -30,13 +30,13 @@ from open_deep_research.rag.types import RAGChunk, RAGDocument
 from open_deep_research.rag.vectorstore import create_vectorstore_backend
 
 if TYPE_CHECKING:
-    from open_deep_research.rag.service import RAGPipelineConfig
+    from open_deep_research.rag.config import RAGConfig
 
 
 class RAGIndexer:
     """Build and refresh the retrieval index for a RAG pipeline."""
 
-    def __init__(self, config: "RAGPipelineConfig", index_id: str):
+    def __init__(self, config: "RAGConfig", index_id: str):
         """Initialize index dependencies and empty in-memory index state."""
         self.config = config
         self.index_id = index_id
@@ -101,7 +101,7 @@ class RAGIndexer:
                 self.last_vector_count = 0
 
             if keyword.backend.lower().strip() == "elasticsearch":
-                self.keyword_index = ElasticsearchBM25Index(self.chunks, self.config)
+                self.keyword_index = ElasticsearchBM25Index(self.chunks, keyword)
             else:
                 self.keyword_index = BM25Index(self.chunks)
             self.retriever = HybridChunkRetriever(
