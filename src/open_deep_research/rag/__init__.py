@@ -25,14 +25,18 @@ from open_deep_research.rag.config import (
     KeywordSearchConfig,
     MemoryConfig,
     MultimodalConfig,
+    QueryConfig,
+    RAGConfig,
     RerankerConfig,
     VectorstoreConfig,
 )
 from open_deep_research.rag.service import (
     RAGPipeline,
     RAGPipelineConfig,
+    build_rag_config,
     build_rag_pipeline_config,
     get_or_create_rag_pipeline,
+    rag_config_from_configuration,
     reset_rag_pipeline_cache,
 )
 from open_deep_research.tools.rag_tool import rag_search
@@ -45,8 +49,11 @@ __all__ = [
     "KeywordSearchConfig",
     "MemoryConfig",
     "MultimodalConfig",
+    "QueryConfig",
+    "RAGConfig",
     "RAGPipeline",
     "RAGPipelineConfig",
+    "build_rag_config",
     "build_rag_pipeline_config",
     "RerankerConfig",
     "VectorstoreConfig",
@@ -56,6 +63,7 @@ __all__ = [
     "load_memory_record_by_source_id",
     "parse_mysql_memory_source",
     "persist_conversation_memory",
+    "rag_config_from_configuration",
     "rag_search",
     "reset_rag_pipeline_cache",
 ]
