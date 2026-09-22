@@ -1,9 +1,9 @@
 {
   "scripts": {
     "dev": "next dev",
-    "md:format": "prettier --write \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"src/legacy/**/*.md\" \"data/knowledge/**/*.md\"",
-    "md:lint": "markdownlint-cli2 \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"src/legacy/**/*.md\" \"data/knowledge/**/*.md\"",
-    "md:fix": "markdownlint-cli2 --fix \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"src/legacy/**/*.md\" \"data/knowledge/**/*.md\"",
+    "md:format": "prettier --write \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
+    "md:lint": "markdownlint-cli2 \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
+    "md:fix": "markdownlint-cli2 --fix \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
     "md:toc": "remark README.md --use remark-toc --output",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",

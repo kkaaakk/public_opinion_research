@@ -11,7 +11,7 @@ layout: doc
 :::
 
 ::: warning 内容边界
-根目录、examples、legacy、data/knowledge 中已有的 Markdown 已复制进文档站对应主题目录。原文件仍保留在原位置，避免影响项目入口、示例数据和历史实现。
+根目录、examples、data/knowledge 中已有的 Markdown 已复制进文档站对应主题目录。原文件仍保留在原位置，避免影响项目入口和示例数据。
 :::
 
 ## 推荐阅读路径
@@ -52,11 +52,10 @@ flowchart TD
 | 示例         | [ArXiv 示例](./examples/arxiv.md)                              | 示例研究报告和输出样本                 |
 | 知识库       | [Team Handbook](./knowledge/team-handbook.md)                  | 本地知识库样例文档                     |
 | 项目参考     | [Agent Instructions](./project/agents.md)                      | 根目录维护说明和 agent 指令副本        |
-| Legacy       | [Legacy Overview](./legacy/legacy.md)                          | 旧版实现和历史说明                     |
 
 ## 维护约定
 
-- 模块说明优先记录当前实现；过时背景放到 legacy 或评估记录。
+- 模块说明优先记录当前实现；过时背景保留在 Git 历史或评估记录中。
 - 新增模块文档建议按“定位 -> 流程 -> 数据结构 / 配置 -> 错误处理 -> 扩展建议”的顺序维护。
 - 评估记录采用追加式写法，保留命令、配置、指标、未命中样本和解释。
 - VitePress 导航变更时同步更新 `docs/.vitepress/config.mts`。

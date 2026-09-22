@@ -204,7 +204,7 @@ Treat `public_opinion_risk` as the current product workflow: public signal colle
 
 **Neutral**
 
-- The repository still contains legacy implementations for reference, but they are not part of the current main graph.
+- Retired implementations remain available in Git history, not in the active source tree.
 
 #### Alternatives Considered
 
