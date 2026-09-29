@@ -227,14 +227,14 @@ def test_model_dump_does_not_contain_sub_config_keys():
     assert "embedding_provider" in dumped
 
 
-def test_model_fields_does_not_contain_sub_config_names():
-    """model_fields should not contain sub-config property names."""
+def test_pipeline_config_model_fields_are_the_canonical_nested_sections():
+    """The compatibility type stores only canonical nested sections."""
     field_names = set(RAGPipelineConfig.model_fields.keys())
-    for sub_key in (
+    assert field_names == {
+        "enabled",
         "embedding", "vectorstore", "reranker", "multimodal", "memory",
-        "keyword_search", "hybrid_retrieval", "graph_rag", "chunking",
-    ):
-        assert sub_key not in field_names
+        "keyword_search", "hybrid_retrieval", "graph_rag", "chunking", "query",
+    }
 
 
 def test_rag_loader_package_exports_new_and_legacy_loader_apis():
@@ -1442,7 +1442,9 @@ def test_authority_adjustment_downranks_misleading_rerank_hits():
 
 def test_authority_filter_blocks_misleading_final_context():
     pipeline = object.__new__(RAGPipeline)
-    pipeline.config = types.SimpleNamespace(authority_rerank_enabled=True)
+    pipeline.config = types.SimpleNamespace(
+        chunking=types.SimpleNamespace(authority_rerank_enabled=True)
+    )
     authoritative = RetrievalResult(
         chunk=RAGChunk(
             content="Current release policy.",

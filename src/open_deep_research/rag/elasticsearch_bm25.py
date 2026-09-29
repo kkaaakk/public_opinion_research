@@ -1,14 +1,17 @@
 """Elasticsearch-backed keyword/BM25 index for RAG chunks."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from open_deep_research.rag.types import RAGChunk, RetrievalResult
+
+if TYPE_CHECKING:
+    from open_deep_research.rag.config import KeywordSearchConfig
 
 
 class ElasticsearchBM25Index:
     """Small adapter that exposes the same `search(query, top_k)` shape as BM25Index."""
 
-    def __init__(self, chunks: list[RAGChunk], config: Any):
+    def __init__(self, chunks: list[RAGChunk], config: "KeywordSearchConfig"):
         self.chunks = chunks
         self.url = config.elasticsearch_url
         self.index_name = config.elasticsearch_index
