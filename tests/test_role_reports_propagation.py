@@ -8,6 +8,8 @@ from langchain_core.runnables import RunnableLambda
 
 import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.runtime.business_agent as business_agent_module
+import open_deep_research.workflow.research as workflow_research
+import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.state import ResearchReview, Section, agents_reducer
 
 
@@ -168,8 +170,8 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
         async def _structured_call(self, _messages, config=None):
             return {"raw": None, "parsed": ResearchReview(research_complete=True), "parsing_error": None}
 
-    monkeypatch.setattr(deep_researcher_module, "run_business_agent", fake_agent)
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", FakeReviewModel())
+    monkeypatch.setattr(workflow_research, "run_business_agent", fake_agent)
+    monkeypatch.setattr(workflow_shared, "configurable_model", FakeReviewModel())
     result = asyncio.run(
         deep_researcher_module.public_opinion_subgraph.ainvoke(
             {
@@ -247,7 +249,7 @@ def test_section_writer_prefers_full_role_report_over_memory(monkeypatch) -> Non
             return SimpleNamespace(content="section output")
 
     full_report = "A" * 3_000 + "FINAL_RISK_EVIDENCE"
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", CapturingModel())
+    monkeypatch.setattr(workflow_shared, "configurable_model", CapturingModel())
 
     asyncio.run(
         deep_researcher_module.section_writer(
@@ -293,7 +295,7 @@ def test_research_phase_propagates_subgraph_role_reports(monkeypatch) -> None:
                 "runtime": {"budget": {}, "metrics": {}},
             }
 
-    monkeypatch.setattr(deep_researcher_module, "public_opinion_subgraph", FakeSubgraph())
+    monkeypatch.setattr(workflow_research, "public_opinion_subgraph", FakeSubgraph())
 
     result = asyncio.run(
         deep_researcher_module.research_phase(
@@ -330,7 +332,7 @@ def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
             captured_prompts.append(str(messages[0].content))
             return SimpleNamespace(content="final report")
 
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", CapturingModel())
+    monkeypatch.setattr(workflow_shared, "configurable_model", CapturingModel())
     full_report = "A" * 3_000 + "FINAL_REPORT_EVIDENCE"
     asyncio.run(
         deep_researcher_module._fallback_report_generation(

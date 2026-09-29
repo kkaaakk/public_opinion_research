@@ -191,7 +191,7 @@ def test_extraction_batches_by_tokens_instead_of_fixed_document_count() -> None:
 def test_tavily_raw_tool_keeps_source_boundaries_without_page_summarization(monkeypatch) -> None:
     import asyncio
 
-    import open_deep_research.utils as utils
+    import open_deep_research.search.tavily as utils
 
     async def fake_search(*_args, **_kwargs):
         return [

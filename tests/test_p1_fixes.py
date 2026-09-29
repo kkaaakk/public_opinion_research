@@ -12,6 +12,7 @@ from starlette.requests import Request
 
 import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.runtime.business_agent as business_agent_module
+import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.configuration import Configuration
 from open_deep_research.rag import mcp_server
 from open_deep_research.rag.config import HybridRetrievalConfig
@@ -65,7 +66,7 @@ def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> 
             "total_tokens": 18,
         },
     )
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", model)
+    monkeypatch.setattr(workflow_shared, "configurable_model", model)
 
     research_result = asyncio.run(
         deep_researcher_module.section_writer(
@@ -115,7 +116,7 @@ def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> 
 def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
     """Providers without usage metadata are counted without fabricated tokens."""
     model = UsageModel(content="written")
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", model)
+    monkeypatch.setattr(workflow_shared, "configurable_model", model)
 
     result = asyncio.run(
         deep_researcher_module.section_writer(

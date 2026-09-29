@@ -5,16 +5,20 @@ index refresh after the write; query-time `RAGIndexer.ensure_ready()` still
 remains the fallback if that background refresh has not completed.
 """
 
+import asyncio
 import logging
 import threading
 from typing import Any, Mapping, Sequence
 
+from langchain_core.messages import get_buffer_string
 from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.memory.context import get_conversation_id, get_user_id
 from open_deep_research.memory.extractor import extract_conversation_memories
 from open_deep_research.memory.store import MySQLChatMemoryStore
+from open_deep_research.state import AgentState
+from open_deep_research.time_utils import get_today_str
 
 LOGGER = logging.getLogger(__name__)
 
@@ -104,3 +108,43 @@ def _refresh_memory_index(
         pipeline.index_pending_memories()
     except Exception:  # pragma: no cover - depends on external DB/vector DB
         LOGGER.exception("Failed to refresh memory RAG index; continuing in background.")
+
+
+def _messages_without_query_image_context(messages):
+    return [
+        message
+        for message in messages
+        if not bool(getattr(message, "additional_kwargs", {}).get("rag_query_image_context"))
+    ]
+
+
+async def maybe_persist_chat_memory(
+    state: AgentState,
+    config: RunnableConfig,
+    final_report_content: str,
+) -> None:
+    """Persist chat transcript, generated summary, and durable memory into MySQL RAG memory."""
+    configurable = Configuration.from_runnable_config(config)
+    if not configurable.rag_memory_write_enabled:
+        return
+
+    messages_text = get_buffer_string(
+        _messages_without_query_image_context(state.get("messages", []))
+    )
+    research_brief = str((state.get("workflow", {}) or {}).get("brief") or "").strip()
+    memories = [research_brief] if research_brief else []
+    try:
+        await asyncio.to_thread(
+            persist_conversation_memory,
+            configurable=configurable,
+            runtime_config=config,
+            chat_content=messages_text,
+            summary=final_report_content,
+            memories=memories,
+            metadata={
+                "workflow": "deep_researcher",
+                "date": get_today_str(),
+            },
+        )
+    except Exception:  # pragma: no cover - depends on external MySQL/vector DB
+        LOGGER.exception("Failed to persist chat memory; continuing without persistence.")

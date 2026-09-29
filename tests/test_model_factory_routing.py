@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from open_deep_research import utils
+from open_deep_research.search import tavily as utils
 
 
 @pytest.mark.asyncio
