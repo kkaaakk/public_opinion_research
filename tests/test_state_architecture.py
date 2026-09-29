@@ -5,6 +5,7 @@ import asyncio
 from langchain_core.messages import HumanMessage
 
 import open_deep_research.deep_researcher as deep_researcher_module
+import open_deep_research.memory.writer as memory_writer
 import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
 from open_deep_research.runtime import AgentRuntime
@@ -152,7 +153,7 @@ def test_final_report_still_persists_conversation_memory(monkeypatch) -> None:
     def fake_persist(**kwargs):
         captured.update(kwargs)
 
-    monkeypatch.setattr(deep_researcher_module, "persist_conversation_memory", fake_persist)
+    monkeypatch.setattr(memory_writer, "persist_conversation_memory", fake_persist)
     asyncio.run(
         deep_researcher_module.maybe_persist_chat_memory(
             {

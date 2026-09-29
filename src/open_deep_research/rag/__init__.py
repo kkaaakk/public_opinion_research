@@ -35,7 +35,15 @@ from open_deep_research.rag.service import (
     get_or_create_rag_pipeline,
     reset_rag_pipeline_cache,
 )
-from open_deep_research.tools.rag_tool import rag_search
+
+
+def __getattr__(name: str):
+    """Resolve the public tool after the RAG package has initialized."""
+    if name == "rag_search":
+        from open_deep_research.tools.rag_tool import rag_search
+
+        return rag_search
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "ChunkingConfig",

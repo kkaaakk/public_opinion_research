@@ -53,7 +53,7 @@ from open_deep_research.rag.vectorstore import (
     InMemoryVectorStore,
     create_vectorstore_backend,
 )
-from open_deep_research.utils import get_all_tools
+from open_deep_research.tools.registry import get_all_tools
 
 
 @pytest.fixture(autouse=True)

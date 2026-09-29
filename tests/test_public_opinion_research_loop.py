@@ -7,6 +7,8 @@ from langgraph.types import Send
 
 import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.runtime.business_agent as business_agent_module
+import open_deep_research.workflow.research as workflow_research
+import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.state import ResearchReview, ResearchTask, agents_reducer
 
 
@@ -107,9 +109,9 @@ def _invoke_with_fixtures(
     """Invoke the compiled subgraph with deterministic review and agent fixtures."""
     reviewer = _ReviewModel(reviews)
     calls: list[tuple[str, str, list[str]]] = []
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", reviewer)
+    monkeypatch.setattr(workflow_shared, "configurable_model", reviewer)
     monkeypatch.setattr(
-        deep_researcher_module,
+        workflow_research,
         "run_business_agent",
         _fake_agent(calls),
     )

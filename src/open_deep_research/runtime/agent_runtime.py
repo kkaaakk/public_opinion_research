@@ -23,13 +23,13 @@ from open_deep_research.budget import (
     is_over_budget,
     merge_budget_usage,
 )
-from open_deep_research.research_graph import ResearchWorkspace, ToolBatchItem
-from open_deep_research.research_graph.compaction import rolling_compact
-from open_deep_research.utils import (
+from open_deep_research.llm.context import get_model_token_limit
+from open_deep_research.llm.native_search import (
     anthropic_websearch_called,
-    get_model_token_limit,
     openai_websearch_called,
 )
+from open_deep_research.research_graph import ResearchWorkspace, ToolBatchItem
+from open_deep_research.research_graph.compaction import rolling_compact
 
 LOGGER = logging.getLogger(__name__)
 

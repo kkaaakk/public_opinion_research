@@ -7,7 +7,7 @@ import pytest
 import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.mcp.domain_filter import get_tool_domain
 from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
-from open_deep_research.utils import get_all_tools
+from open_deep_research.tools.registry import get_all_tools
 
 
 class FixtureTool:

@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 
+import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
     budget_from_model_accounting,
@@ -34,7 +35,7 @@ from open_deep_research.research_graph.models import (
     WorkingContext,
 )
 from open_deep_research.runtime.agent_runtime import AgentRuntime
-from open_deep_research.utils import summarize_webpage
+from open_deep_research.search.tavily import summarize_webpage
 
 LARGE_USAGE = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
 SMALL_USAGE = {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6}
@@ -509,7 +510,7 @@ def test_research_review_node_reports_structured_usage(monkeypatch):
             usage={"input_tokens": 55, "output_tokens": 15, "total_tokens": 70},
         )
     )
-    monkeypatch.setattr(module, "configurable_model", ScriptedChat())
+    monkeypatch.setattr(workflow_shared, "configurable_model", ScriptedChat())
     state = {
         "messages": [HumanMessage(content="brand risk")],
         "workflow": {"brief": "brand risk", "round": 1},
@@ -816,7 +817,7 @@ def test_ordinary_exception_is_not_routed_to_token_limit_recovery(monkeypatch):
         async def ainvoke(self, _messages, config=None):
             raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(module, "configurable_model", _FailingModel())
+    monkeypatch.setattr(workflow_shared, "configurable_model", _FailingModel())
 
     with pytest.raises(RuntimeError, match="provider unavailable"):
         asyncio.run(module.section_writer(_writer_state(), _writer_config()))
@@ -827,7 +828,7 @@ def test_token_limit_exception_still_enters_context_recovery(monkeypatch):
 
     monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
     _script(_error_step(_token_limit_error()))
-    monkeypatch.setattr(module, "configurable_model", ScriptedChat())
+    monkeypatch.setattr(workflow_shared, "configurable_model", ScriptedChat())
 
     result = asyncio.run(module.section_writer(_writer_state(), _writer_config()))
 
@@ -842,7 +843,7 @@ def test_token_limit_exception_still_enters_context_recovery(monkeypatch):
 
 
 def test_token_limit_detection_is_specific_to_provider_errors():
-    from open_deep_research.utils import is_token_limit_exceeded
+    from open_deep_research.llm.errors import is_token_limit_exceeded
 
     assert is_token_limit_exceeded(RuntimeError("provider unavailable"), "deepseek:deepseek-chat") is False
     assert is_token_limit_exceeded(_token_limit_error(), "openai:gpt-4.1") is True
@@ -866,7 +867,7 @@ def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
             captured["prompt"] = messages[0].content
             return AIMessage(content="final report body")
 
-    monkeypatch.setattr(module, "configurable_model", _FinalReportModel())
+    monkeypatch.setattr(workflow_shared, "configurable_model", _FinalReportModel())
     monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
     huge_findings = "evidence line with facts, sources and citations. " * 400
     state = {
@@ -902,7 +903,7 @@ def test_final_report_context_recovery_counts_failed_and_successful_requests(mon
         _error_step(_token_limit_error()),
         _text_step("recovered report", usage=SMALL_USAGE),
     )
-    monkeypatch.setattr(module, "configurable_model", ScriptedChat())
+    monkeypatch.setattr(workflow_shared, "configurable_model", ScriptedChat())
     state = {
         "messages": [HumanMessage(content="brand risk question")],
         "agents": {"public_signal": {"report": "signal evidence"}},

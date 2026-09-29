@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import open_deep_research.deep_researcher as deep_researcher_module
+import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.configuration import Configuration
 from open_deep_research.public_opinion_agents import (
     PUBLIC_OPINION_AGENT_ORDER,
@@ -111,7 +112,7 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
             captured_prompts.append(str(messages[0].content))
             return SimpleNamespace(content="section output")
 
-    monkeypatch.setattr(deep_researcher_module, "configurable_model", CapturingModel())
+    monkeypatch.setattr(workflow_shared, "configurable_model", CapturingModel())
     full_report = "A" * 2_000 + "\nTAIL_EVIDENCE_MUST_REACH_SECTION_WRITER"
     compact_memory = full_report[:1_800] + "\n[truncated]"
     state = {
