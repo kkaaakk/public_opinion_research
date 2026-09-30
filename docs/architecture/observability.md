@@ -8,7 +8,11 @@ LangSmith         → Execution observability (Trace / Span / Graph / Agent / No
                     LLM / Tool / MCP / RAG / latency / error / retry / debug)
 budget.py         → Token & usage policy (model attempts / input tokens /
                     output tokens / cache tokens / budget / cost policy)
+Local Trajectory  → Ephemeral developer presentation of current runtime events
 ```
+
+Local Trajectory is not a third observability backend; it adds no trace store
+and does not call LangSmith. See [Trajectory UI](trajectory-ui.md).
 
 `budget.py` is **not** an external observability platform. It is the project's
 own usage/budget policy layer, built on LangChain's official callbacks

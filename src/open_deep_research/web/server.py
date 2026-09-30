@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import secrets
+import time
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -35,6 +36,7 @@ from langchain_core.messages import HumanMessage  # noqa: E402
 from pydantic import BaseModel, Field, field_validator  # noqa: E402
 
 from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_factory  # noqa: E402, I001
+from open_deep_research.web.trajectory import TrajectoryProjector, sanitize  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
 LOGGER = logging.getLogger(__name__)
@@ -79,6 +81,7 @@ class ResearchRequest(BaseModel):
     mode: Literal["fast", "normal", "deep"] = "normal"
     org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
     rag_enabled: bool = False
+    trajectory_enabled: bool = True
 
     @field_validator("topic")
     @classmethod
@@ -178,10 +181,10 @@ def _extract_text(value) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    index_path = STATIC_DIR / "index.html"
+    index_path = STATIC_DIR / "dist" / "index.html"
     if index_path.is_file():
         return index_path.read_text(encoding="utf-8")
-    return "<h1>Open Deep Research</h1><p>Frontend not found.</p>"
+    return "<h1>Public Opinion Research</h1><p>Build the frontend with npm run build.</p>"
 
 
 @app.get("/api/health")
@@ -215,6 +218,37 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
             mode = mode_configs.get(request.mode, mode_configs["normal"])
 
             thread_id = uuid.uuid4().hex
+            projector = TrajectoryProjector(thread_id) if request.trajectory_enabled else None
+            if projector is not None:
+                yield _event({"type": "trajectory", "event": {
+                    "seq": 0,
+                    "timestamp": int(time.time() * 1000),
+                    "kind": "user",
+                    "run_id": thread_id,
+                    "parent_ids": [],
+                    "thread_id": thread_id,
+                    "name": "user",
+                    "input": sanitize(request.topic),
+                    "status": "completed",
+                }})
+                yield _event({"type": "trajectory", "event": {
+                    "seq": 1,
+                    "timestamp": int(time.time() * 1000),
+                    "kind": "context",
+                    "run_id": thread_id,
+                    "parent_ids": [],
+                    "thread_id": thread_id,
+                    "name": "research_config",
+                    "input": {
+                        "business_scenario": "public_opinion_risk",
+                        "retrieval_mode": "hybrid" if request.rag_enabled else "web_only",
+                        "rag_enabled": request.rag_enabled,
+                        "search_api": request.search_api,
+                        "mode": request.mode,
+                    },
+                    "status": "completed",
+                }})
+                projector.seq = 1
             config = {
                 "configurable": {
                     "thread_id": thread_id,
@@ -242,10 +276,24 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
             final_report = None
             budget = {}
 
-            # Stream graph execution with node-level updates
-            async for chunk in _deep_researcher_factory(config).astream(
-                initial_state, config, stream_mode="updates"
+            # One graph execution supplies both root node updates and native
+            # child LLM/tool/agent events. The UI projection is fail-open.
+            async for source in _deep_researcher_factory(config).astream_events(
+                initial_state, config, version="v2"
             ):
+                if projector is not None:
+                    try:
+                        projected = projector.project(source)
+                        if projected is not None:
+                            yield _event({"type": "trajectory", "event": projected})
+                    except Exception:
+                        LOGGER.warning("Trajectory projection failed; trace_id=%s", trace_id, exc_info=True)
+
+                if source.get("event") != "on_chain_stream" or source.get("parent_ids"):
+                    continue
+                chunk = (source.get("data") or {}).get("chunk")
+                if not isinstance(chunk, dict):
+                    continue
                 for node_name, node_output in chunk.items():
                     # ── Status update ──────────────────────────
                     label = _NODE_LABEL.get(node_name)
@@ -293,12 +341,18 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
                     "message": "Research completed but no report was generated.",
                 })
 
+            if projector is not None:
+                yield _event({"type": "trajectory", "event": projector.terminal("completed")})
             yield _event({"type": "done"})
 
         except asyncio.CancelledError:
+            if "projector" in locals() and projector is not None:
+                yield _event({"type": "trajectory", "event": projector.terminal("cancelled")})
             yield _event({"type": "error", "message": "Research cancelled."})
         except Exception:
             LOGGER.exception("Research request failed; trace_id=%s", trace_id)
+            if "projector" in locals() and projector is not None:
+                yield _event({"type": "trajectory", "event": projector.terminal("error")})
             yield _event({
                 "type": "error",
                 "message": f"Research request failed. Trace ID: {trace_id}.",
