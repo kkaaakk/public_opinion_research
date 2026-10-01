@@ -86,6 +86,7 @@ export interface TrajectoryViewInjected {
 }
 
 interface UsageLike {
+  inputIncludesCache?: boolean
   inputTokens?: number
   cacheReadTokens?: number
   cacheWriteTokens?: number
@@ -97,6 +98,7 @@ function requestUsage(value: unknown): TrajectoryUsage | undefined {
   const usage = value as UsageLike | undefined
   if (usage === undefined) return undefined
   return {
+    ...(usage.inputIncludesCache === undefined ? {} : { inputIncludesCache: usage.inputIncludesCache }),
     ...(usage.inputTokens === undefined ? {} : { input: usage.inputTokens }),
     ...(usage.cacheReadTokens === undefined ? {} : { cacheRead: usage.cacheReadTokens }),
     ...(usage.cacheWriteTokens === undefined ? {} : { cacheWrite: usage.cacheWriteTokens }),
@@ -110,7 +112,9 @@ function addUsage(
   usage: TrajectoryUsage | undefined,
 ): TrajectoryUsage | undefined {
   if (usage === undefined) return total
+  if (total === undefined) return usage
   return {
+    ...(usage.inputIncludesCache || total.inputIncludesCache ? { inputIncludesCache: true } : {}),
     ...(total?.input === undefined && usage.input === undefined
       ? {}
       : { input: (total?.input ?? 0) + (usage.input ?? 0) }),

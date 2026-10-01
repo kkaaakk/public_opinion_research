@@ -477,6 +477,8 @@ export type TrajectoryRequestNumber = TrajectoryRequestNumberBase & (
 
 /** Disjoint provider token buckets for one request or a session prefix. */
 export interface TrajectoryUsage {
+  /** LangChain's reported input already includes its cache buckets. */
+  inputIncludesCache?: boolean
   input?: number
   cacheRead?: number
   cacheWrite?: number
@@ -775,6 +777,7 @@ function TokenRows({ cell, t }: { cell: TrajectoryCellProps; t: TrajectoryTransl
 }
 
 function inputTotal(usage: TrajectoryUsage): number | undefined {
+  if (usage.inputIncludesCache) return usage.input
   if (
     usage.input === undefined
     && usage.cacheRead === undefined
@@ -786,6 +789,11 @@ function inputTotal(usage: TrajectoryUsage): number | undefined {
 function UsageRows({ usage, t }: { usage: TrajectoryUsage | undefined; t: TrajectoryTranslate }) {
   if (usage === undefined) return <p className={css.noPayload}>{t('usage.notReported')}</p>
   const totalInput = inputTotal(usage)
+  const otherInput = usage.inputIncludesCache
+    ? usage.input !== undefined && usage.cacheRead !== undefined && usage.cacheWrite !== undefined
+      ? Math.max(0, usage.input - usage.cacheRead - usage.cacheWrite)
+      : undefined
+    : usage.input
   const otherOutput = usage.output !== undefined && usage.reasoning !== undefined
     ? usage.output - usage.reasoning
     : undefined
@@ -806,10 +814,10 @@ function UsageRows({ usage, t }: { usage: TrajectoryUsage | undefined; t: Trajec
           <dd>{t('unit.tokens', { value: usage.cacheWrite })}</dd>
         </div>
       )}
-      {usage.input !== undefined && (
+      {otherInput !== undefined && (
         <div className={css.requestTokenDetail}>
           <dt>{t('usage.other')}</dt>
-          <dd>{t('unit.tokens', { value: usage.input })}</dd>
+          <dd>{t('unit.tokens', { value: otherInput })}</dd>
         </div>
       )}
       {usage.output !== undefined && (
@@ -2709,7 +2717,7 @@ export function TrajectoryTable({
                             : 'request.collapsedAssistant'),
                           summary: record.collapsedSummary,
                         })
-                        : isRequestOnly
+                        : isRequestOnly && requestInfo?.purpose === 'compaction'
                           ? t('request.rowAriaCompaction', { request: request ?? '' })
                           : t('request.rowAria', {
                             request: request === undefined ? '' : t('request.rowPrefix', { request }),

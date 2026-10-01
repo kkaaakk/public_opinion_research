@@ -403,7 +403,10 @@ export function deriveTrajectoryLayout(
     if (node.kind === 'user') {
       // user/message has no turn on the wire; enclose it in the next assistant
       // (or partial) turn, else open the turn after the last assistant.
-      const turn = enclosingUserTurn(followingAssistants[i], partial, lastAssistantTurn)
+      const location = eventLocations?.get(node.seq)
+      const turn = location?.kind === 'turn' || location?.kind === 'step'
+        ? location.turn.turn
+        : enclosingUserTurn(followingAssistants[i], partial, lastAssistantTurn)
       pushMessage(turn, {
         absTime: finiteTime(node.time),
         cell: {
@@ -450,21 +453,33 @@ export function deriveTrajectoryLayout(
       continue
     }
     if (node.kind === 'context') {
-      const turn = enclosingUserTurn(followingAssistants[i], partial, lastAssistantTurn)
-      pushMessage(turn, {
+      const location = eventLocations?.get(node.seq)
+      const turn = location?.kind === 'turn' || location?.kind === 'step'
+        ? location.turn.turn
+        : enclosingUserTurn(followingAssistants[i], partial, lastAssistantTurn)
+      const laid = {
         absTime: finiteTime(node.time),
         cell: {
           index: ++index,
-          kind: 'context',
+          kind: 'context' as const,
           ...inputCellDetail(node, t),
         },
-      })
+      }
+      if (location?.kind === 'step') pushStepInput(turn, location.step.step, [laid])
+      else pushMessage(turn, laid)
       prevAbsTime = finiteTime(node.time) ?? prevAbsTime
       continue
     }
     if (node.kind === 'compaction') {
       // Chat owns the human-facing compaction marker. It contributes no
       // duplicate trajectory cell, but still advances the duration cursor.
+      const location = eventLocations?.get(node.seq)
+      if (location?.kind === 'turn' || location?.kind === 'step') {
+        pushMessage(location.turn.turn, { absTime: finiteTime(node.time), cell: {
+          index: ++index, kind: 'context', content: 'Compaction',
+          outputDetail: node.summary ?? undefined,
+        } })
+      }
       prevAbsTime = finiteTime(node.time) ?? prevAbsTime
       continue
     }
@@ -498,7 +513,14 @@ export function deriveTrajectoryLayout(
           laidList.push(laid)
           index = laid.cell.index
         }
-        pushStep(0, 1, laidList)
+        const location = eventLocations?.get(node.seq)
+        if (location?.kind === 'step') pushStep(location.turn.turn, location.step.step, laidList)
+        else if (location?.kind === 'turn') for (const laid of laidList) pushMessage(location.turn.turn, laid)
+        else if (location?.kind === 'unresolved') {
+          // The ledger explicitly declined to resolve ownership. Do not turn
+          // an unresolved result into a fabricated model Step 1.
+          for (const laid of laidList) pushMessage(0, laid)
+        } else pushStep(0, 1, laidList)
       }
       prevAbsTime = finiteTime(node.time) ?? prevAbsTime
     }

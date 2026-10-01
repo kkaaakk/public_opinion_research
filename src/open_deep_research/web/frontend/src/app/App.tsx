@@ -1,13 +1,15 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { TrajectoryView } from '@trajectory-upstream'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { zh } from '../trajectory/upstream/src/client/locales.ts'
 import { emptyTrajectory, reduceTrajectory, trajectorySnapshot } from '../trajectory/adapter/reducer.ts'
-import type { TrajectoryEvent, TrajectoryState } from '../trajectory/adapter/reducer.ts'
+import type { TrajectoryPacket, TrajectoryState } from '../trajectory/adapter/reducer.ts'
 
-type ResearchEvent = { type: string; event?: TrajectoryEvent; message?: string;
+type ResearchEvent = Partial<TrajectoryPacket> & { type: string; message?: string;
   content?: string; input_tokens?: number; output_tokens?: number;
   total_tokens?: number; model_calls?: number }
+type HistoryPage = { session_id: string; latest_seq: number; snapshot: TrajectoryPacket['snapshot'];
+  before_seq: number; has_more: boolean; writer_active: boolean; degraded: boolean; warning?: string }
 const markdownLabels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' }
 const models = [
   ['deepseek:deepseek-flash', 'DeepSeek V4.1 Flash'],
@@ -41,26 +43,138 @@ export function App() {
   const [trajectory, setTrajectory] = useState<TrajectoryState>(emptyTrajectory)
   const [duration, setDuration] = useState(false)
   const abort = useRef<AbortController | null>(null)
-  const lastEvent = useRef<TrajectoryEvent | null>(null)
+  const session = useRef<string | null>(null)
+  const [sessionInput, setSessionInput] = useState('')
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const beforeSeq = useRef(0)
   const snapshot = useMemo(() => trajectorySnapshot(trajectory), [trajectory])
 
+  function rememberSession(id: string) {
+    session.current = id
+    setSessionInput(id)
+    const url = new URL(window.location.href)
+    url.searchParams.set('session', id)
+    window.history.replaceState(null, '', url)
+  }
+
   function accept(data: ResearchEvent) {
-    if (data.type === 'trajectory' && data.event) {
-      lastEvent.current = data.event
-      setTrajectory(previous => reduceTrajectory(previous, data.event!))
-    } else if (data.type === 'status') setStatus(data.message ?? '')
+    if (data.type === 'trajectory' && data.snapshot && data.session_id && data.seq !== undefined) {
+      rememberSession(data.session_id)
+      setTrajectory(previous => reduceTrajectory(previous, data as TrajectoryPacket))
+      if (data.snapshot.status !== 'running') setStatus(data.snapshot.status)
+    } else if (data.type === 'trajectory_degraded') setStatus('Trajectory degraded — research continues')
+    else if (data.type === 'status') setStatus(data.message ?? '')
     else if (data.type === 'report') setReport(data.content ?? '')
     else if (data.type === 'usage') setUsage(data)
     else if (data.type === 'error') setStatus(data.message ?? 'Error')
-    else if (data.type === 'done') setStatus('Complete')
+    else if (data.type === 'done') setRunning(false)
+  }
+
+  async function readStream(response: Response, controller: AbortController) {
+    if (!response.ok || !response.body) throw new Error(`Stream failed (${response.status})`)
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let pending = ''
+    while (!controller.signal.aborted) {
+      const { value, done } = await reader.read()
+      pending += decoder.decode(value, { stream: !done }).replaceAll('\r\n', '\n')
+      let boundary = pending.indexOf('\n\n')
+      while (boundary >= 0) {
+        const block = pending.slice(0, boundary)
+        pending = pending.slice(boundary + 2)
+        const text = block.split('\n').filter(line => line.startsWith('data: '))
+          .map(line => line.slice(6)).join('\n')
+        if (text) accept(JSON.parse(text) as ResearchEvent)
+        boundary = pending.indexOf('\n\n')
+      }
+      if (done) break
+    }
+  }
+
+  async function readHistory(id: string, before?: number): Promise<HistoryPage> {
+    const query = new URLSearchParams({ limit: '100' })
+    if (before !== undefined) query.set('before_seq', String(before))
+    const response = await fetch(`/api/trajectory/sessions/${encodeURIComponent(id)}/events?${query}`)
+    if (!response.ok) throw new Error(`History unavailable (${response.status})`)
+    return response.json() as Promise<HistoryPage>
+  }
+
+  function installHistory(page: HistoryPage) {
+    rememberSession(page.session_id)
+    beforeSeq.current = page.before_seq
+    setHasMore(page.has_more)
+    setTrajectory(previous => reduceTrajectory(previous, { session_id: page.session_id,
+      seq: page.latest_seq, snapshot: page.snapshot, degraded: page.degraded }))
+    const budget = page.snapshot.budgetUsage
+    if (budget) setUsage({ type: 'usage', ...budget })
+    setStatus(page.warning ? `History warning: ${page.warning}` : page.snapshot.status)
+  }
+
+  async function loadSession(id: string) {
+    if (!id.trim()) return
+    abort.current?.abort()
+    const controller = new AbortController()
+    abort.current = controller
+    setTrajectory(emptyTrajectory())
+    setReport('')
+    setRunning(false)
+    try {
+      const page = await readHistory(id.trim())
+      if (controller.signal.aborted) return
+      installHistory(page)
+      if (page.writer_active) {
+        setRunning(true)
+        await readStream(await fetch(`/api/trajectory/sessions/${encodeURIComponent(id)}/stream`,
+          { signal: controller.signal }), controller)
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) setStatus(error instanceof Error ? error.message : 'History unavailable')
+    } finally {
+      if (abort.current === controller) { setRunning(false); abort.current = null }
+    }
+  }
+
+  useEffect(() => {
+    const id = new URL(window.location.href).searchParams.get('session')
+    if (id) void loadSession(id)
+    return () => { abort.current?.abort() }
+  }, [])
+
+  async function loadOlder(): Promise<boolean> {
+    if (!session.current || !hasMore || loadingOlder) return false
+    const id = session.current
+    setLoadingOlder(true)
+    try {
+      const page = await readHistory(id, beforeSeq.current)
+      if (session.current !== id) return false
+      installHistory(page)
+      return true
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'History unavailable')
+      return false
+    } finally { setLoadingOlder(false) }
+  }
+
+  async function stop() {
+    if (!session.current) return
+    try {
+      const id = session.current
+      const response = await fetch(`/api/research/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+      if (!response.ok) throw new Error(`Cancel failed (${response.status})`)
+      installHistory(await readHistory(id))
+      setRunning(false)
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Cancel failed') }
   }
 
   async function start() {
     if (!topic.trim() || running) return
+    abort.current?.abort()
     const controller = new AbortController()
     abort.current = controller
-    lastEvent.current = null
+    session.current = null
     setTrajectory(emptyTrajectory())
+    setHasMore(false)
     setReport('')
     setUsage(null)
     setRunning(true)
@@ -72,38 +186,13 @@ export function App() {
           mode, org_context: orgContext, rag_enabled: ragEnabled, trajectory_enabled: true }),
         signal: controller.signal,
       })
-      if (!response.ok || !response.body) throw new Error(`Research request failed (${response.status})`)
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let pending = ''
-      while (true) {
-        const { value, done } = await reader.read()
-        pending += decoder.decode(value, { stream: !done }).replaceAll('\r\n', '\n')
-        let boundary = pending.indexOf('\n\n')
-        while (boundary >= 0) {
-          const block = pending.slice(0, boundary)
-          pending = pending.slice(boundary + 2)
-          const text = block.split('\n').filter(line => line.startsWith('data: '))
-            .map(line => line.slice(6)).join('\n')
-          if (text) accept(JSON.parse(text) as ResearchEvent)
-          boundary = pending.indexOf('\n\n')
-        }
-        if (done) break
-      }
+      const id = response.headers.get('X-Research-Session-Id')
+      if (id) rememberSession(id)
+      await readStream(response, controller)
     } catch (error) {
       if (!controller.signal.aborted) setStatus(error instanceof Error ? error.message : 'Research failed')
     } finally {
-      if (controller.signal.aborted) {
-        const previous = lastEvent.current as TrajectoryEvent | null
-        if (previous) setTrajectory(state => reduceTrajectory(state, {
-          seq: previous.seq + 1, timestamp: Date.now(), kind: 'run_end',
-          run_id: previous.thread_id, parent_ids: [], thread_id: previous.thread_id,
-          name: 'research', status: 'cancelled',
-        }))
-        setStatus('Cancelled')
-      }
-      setRunning(false)
-      abort.current = null
+      if (abort.current === controller) { setRunning(false); abort.current = null }
     }
   }
 
@@ -138,7 +227,7 @@ export function App() {
         <label className="rag-control"><input type="checkbox" checked={ragEnabled}
           onChange={event => setRagEnabled(event.target.checked)} /> Enable RAG</label>
         <button onClick={() => void start()} disabled={running || !topic.trim()}>开始舆情分析</button>
-        {running && <button className="stop" onClick={() => abort.current?.abort()}>Stop</button>}
+        {running && <button className="stop" onClick={() => void stop()}>Stop</button>}
       </div>
       <label className="org-label">Organization context (optional)
         <input value={orgContext} onChange={event => setOrgContext(event.target.value)}
@@ -146,13 +235,19 @@ export function App() {
       </label>
     </section>
     <div className="status" role="status">{status}</div>
+    <div className="session-controls">
+      <label>Session <input aria-label="Session id" value={sessionInput}
+        onChange={event => setSessionInput(event.target.value)} placeholder="Session id" /></label>
+      <button onClick={() => void loadSession(sessionInput)} disabled={running || !sessionInput.trim()}>Replay</button>
+      {trajectory.degraded && <span>Trajectory degraded</span>}
+    </div>
     <section className="trajectory-panel" aria-label="Execution trajectory">
       <TrajectoryView
-        useSession={(select: (value: unknown) => unknown) => select({ openState: 'ready', loadingOlder: false, hasMore: false })}
+        useSession={(select: (value: unknown) => unknown) => select({ openState: 'ready', loadingOlder, hasMore })}
         useTrajectory={(select: (value: unknown) => unknown) => select(snapshot)}
         useDuration={(select: (value: boolean) => unknown) => select(duration)}
         setActualDuration={setDuration}
-        loadOlder={async () => false}
+        loadOlder={loadOlder}
         loadImage={async () => null}
         renderSlot={() => null}
         viewRequest={null}
