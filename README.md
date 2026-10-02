@@ -79,9 +79,9 @@ Windows 若遇到 `uv` trampoline 或独立工具环境无法解析项目依赖�
 - 🎨 Studio UI: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
 - 📚 API Docs: http://127.0.0.1:2024/docs
 
-## 🔭 可观测性：LangSmith + budget.py
+## 🔭 可观测性：LangSmith + budget.py + Conversation Trajectory Ledger
 
-项目只有两套观测职责，不再有其他遥测系统：
+LangSmith 负责执行追踪，budget.py 负责使用量和预算；独立的 Session Ledger 保存可回放的对话执行事实，DSH Trajectory 负责展示：
 
 - **LangSmith（执行链路观测）**：通过官方 `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` /
   `LANGSMITH_PROJECT` 环境变量开启。LangGraph / LangChain 原生 auto-tracing 覆盖
@@ -95,6 +95,19 @@ Windows 若遇到 `uv` trampoline 或独立工具环境无法解析项目依赖�
 
 LangSmith tracing 默认关闭；未配置 API key 时自动归一化为关闭状态，业务行为不受影响。
 详见 `docs/architecture/observability.md`。
+
+Web 页面使用 DeepSeek Harness 原生 Trajectory 视图展示单次 LangGraph 执行中的
+Agent、LLM、Tool、时间轴、搜索、折叠和 Inspector。由官方 `astream_events(v2)`
+与官方 callback recorder 消费同一次研究执行。事件脱敏后写入本地 JSONL；刷新可按 Session ID 回放，历史按钮可加载较旧事件，Stop 在后端持久化取消结果。浏览器无需 LangSmith API key。首次使用运行：
+
+```powershell
+npm --prefix src/open_deep_research/web/frontend ci
+npm run web:build
+uv run python -m open_deep_research.web.server
+```
+
+前端独立开发可运行 `npm run web:dev`。源码来源、MIT 许可和架构边界见
+`docs/architecture/trajectory-ui.md` 与 `THIRD_PARTY_NOTICES.md`。
 
 ## 🧩 模块结构
 

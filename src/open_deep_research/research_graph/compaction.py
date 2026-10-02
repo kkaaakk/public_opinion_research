@@ -18,6 +18,7 @@ from open_deep_research.research_graph.models import (
     RollingCompactOutput,
     WriteReceipt,
 )
+from open_deep_research.trajectory.semantics import compaction_transaction
 
 
 @dataclass
@@ -56,30 +57,35 @@ def micro_compact_messages(
     compacted: list[Any] = []
     compacted_ids: list[str] = []
     removed = 0
-    for message in items:
-        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
-        if (
-            isinstance(message, ToolMessage)
-            and tool_call_id in receipts
-            and tool_call_id not in keep_ids
-        ):
-            receipt = receipts[tool_call_id]
-            receipt_text = receipt.as_text() if isinstance(receipt, WriteReceipt) else str(receipt)
-            old_text = str(getattr(message, "content", "") or "")
-            replacement = _replace_message_content(message, receipt_text)
-            compacted.append(replacement)
-            compacted_ids.append(tool_call_id)
-            removed += max(
-                0,
-                estimate_text_tokens(old_text) - estimate_text_tokens(receipt_text),
-            )
-        else:
-            compacted.append(message)
-    return CompactionResult(
-        messages=compacted,
-        compacted_tool_call_ids=compacted_ids,
-        tokens_removed=removed,
-    )
+    with compaction_transaction("micro") as transaction:
+        for message in items:
+            tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+            if (
+                isinstance(message, ToolMessage)
+                and tool_call_id in receipts
+                and tool_call_id not in keep_ids
+            ):
+                if not transaction.started:
+                    transaction.start()
+                receipt = receipts[tool_call_id]
+                receipt_text = receipt.as_text() if isinstance(receipt, WriteReceipt) else str(receipt)
+                old_text = str(getattr(message, "content", "") or "")
+                replacement = _replace_message_content(message, receipt_text)
+                compacted.append(replacement)
+                compacted_ids.append(tool_call_id)
+                removed += max(
+                    0,
+                    estimate_text_tokens(old_text) - estimate_text_tokens(receipt_text),
+                )
+            else:
+                compacted.append(message)
+        if compacted_ids:
+            transaction.summary({"compacted_tool_call_ids": compacted_ids}, replaced_count=len(compacted_ids), estimated_tokens_removed=removed)
+        return CompactionResult(
+            messages=compacted,
+            compacted_tool_call_ids=compacted_ids,
+            tokens_removed=removed,
+        )
 
 
 async def rolling_compact(
@@ -105,49 +111,52 @@ async def rolling_compact(
             messages=items,
             rolling_summary=previous_summary,
         )
-    compactable = items[1:keep_start]
-    compactable_text = _render_messages(compactable)
-    prompt = (
-        "You are the incremental rolling context compactor for AgentRuntime. "
-        "Summarize only the newly compactable reasoning/progress below and merge it "
-        "into the previous rolling summary. Do not invent evidence, URLs, IDs, or "
-        "research conclusions. Durable evidence lives in the Research Graph; retain "
-        "important graph IDs and unresolved questions when present. Do not call tools.\n\n"
-        f"Protected context:\n{protected_context}\n\n"
-        f"Previous rolling summary:\n{previous_summary or 'None'}\n\n"
-        f"New compactable steps:\n{compactable_text}\n\n"
-        "Return RollingCompactOutput."
-    )
-    structured = structured_output_chain(
-        model, RollingCompactOutput, max_attempts=max_retries
-    )
-    response, budget_usage = await ainvoke_model_with_budget(
-        structured,
-        [HumanMessage(content=prompt)],
-        model_name=model_name,
-        structured_output=True,
-        component="rolling_compact",
-    )
-    output = _coerce_rolling_output(response["parsed"])
-    summary = output.rolling_summary.strip()
-    replacement = HumanMessage(
-        content=(
-            "[Rolling Agent Runtime Summary]\n"
-            f"{summary}\n"
-            "[Older ReAct steps compacted; durable provenance remains in the Research Graph.]"
+    with compaction_transaction("rolling") as transaction:
+        transaction.start()
+        compactable = items[1:keep_start]
+        compactable_text = _render_messages(compactable)
+        prompt = (
+            "You are the incremental rolling context compactor for AgentRuntime. "
+            "Summarize only the newly compactable reasoning/progress below and merge it "
+            "into the previous rolling summary. Do not invent evidence, URLs, IDs, or "
+            "research conclusions. Durable evidence lives in the Research Graph; retain "
+            "important graph IDs and unresolved questions when present. Do not call tools.\n\n"
+            f"Protected context:\n{protected_context}\n\n"
+            f"Previous rolling summary:\n{previous_summary or 'None'}\n\n"
+            f"New compactable steps:\n{compactable_text}\n\n"
+            "Return RollingCompactOutput."
         )
-    )
-    kept = items[keep_start:]
-    result_messages = [items[0], replacement, *kept]
-    return RollingCompactionResult(
-        messages=result_messages,
-        rolling_summary=summary,
-        budget_usage=budget_usage,
-        tokens_removed=max(
-            0,
-            estimate_text_tokens(compactable_text) - estimate_text_tokens(summary),
-        ),
-    )
+        structured = structured_output_chain(
+            model, RollingCompactOutput, max_attempts=max_retries
+        )
+        response, budget_usage = await ainvoke_model_with_budget(
+            structured,
+            [HumanMessage(content=prompt)],
+            model_name=model_name,
+            structured_output=True,
+            component="rolling_compact",
+        )
+        output = _coerce_rolling_output(response["parsed"])
+        summary = output.rolling_summary.strip()
+        transaction.summary(summary, replaced_count=len(compactable))
+        replacement = HumanMessage(
+            content=(
+                "[Rolling Agent Runtime Summary]\n"
+                f"{summary}\n"
+                "[Older ReAct steps compacted; durable provenance remains in the Research Graph.]"
+            )
+        )
+        kept = items[keep_start:]
+        result_messages = [items[0], replacement, *kept]
+        return RollingCompactionResult(
+            messages=result_messages,
+            rolling_summary=summary,
+            budget_usage=budget_usage,
+            tokens_removed=max(
+                0,
+                estimate_text_tokens(compactable_text) - estimate_text_tokens(summary),
+            ),
+        )
 
 
 def render_protected_context(

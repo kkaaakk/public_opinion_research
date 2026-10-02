@@ -1,6 +1,9 @@
 {
   "scripts": {
     "dev": "next dev",
+    "web:dev": "npm --prefix src/open_deep_research/web/frontend run dev",
+    "web:build": "npm --prefix src/open_deep_research/web/frontend run build",
+    "web:test": "npm --prefix src/open_deep_research/web/frontend test",
     "md:format": "prettier --write \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
     "md:lint": "markdownlint-cli2 \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
     "md:fix": "markdownlint-cli2 --fix \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",

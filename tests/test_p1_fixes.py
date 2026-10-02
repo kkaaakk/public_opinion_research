@@ -357,7 +357,7 @@ def test_web_stream_error_is_sanitized_and_logged(monkeypatch) -> None:
     from open_deep_research.web import server
 
     class FailingGraph:
-        async def astream(self, *_args, **_kwargs):
+        async def astream_events(self, *_args, **_kwargs):
             if False:
                 yield {}
             raise RuntimeError("SECRET_DSN=mysql://user:password@db/internal")
@@ -388,7 +388,7 @@ def test_web_research_requests_are_semaphore_limited(monkeypatch) -> None:
     maximum_active = 0
 
     class SlowGraph:
-        async def astream(self, *_args, **_kwargs):
+        async def astream_events(self, *_args, **_kwargs):
             nonlocal active, maximum_active
             active += 1
             maximum_active = max(maximum_active, active)
@@ -417,13 +417,13 @@ def test_web_research_requests_are_semaphore_limited(monkeypatch) -> None:
 
 
 def test_markdown_report_rendering_is_sanitized() -> None:
-    """The frontend sanitizes marked HTML and fails closed if the CDN is absent."""
-    app_js = Path("src/open_deep_research/web/static/app.js").read_text(encoding="utf-8")
-    index_html = Path("src/open_deep_research/web/static/index.html").read_text(encoding="utf-8")
+    """The active React frontend renders reports with DSH's safe Markdown tree."""
+    app_tsx = Path("src/open_deep_research/web/frontend/src/app/App.tsx").read_text(encoding="utf-8")
+    index_html = Path("src/open_deep_research/web/frontend/index.html").read_text(encoding="utf-8")
 
-    assert "DOMPurify.sanitize" in app_js
-    assert "reportEl.innerHTML = marked.parse" not in app_js
-    assert "dompurify@3.2.6" in index_html
+    assert "<MarkdownText text={report}" in app_tsx
+    assert "innerHTML" not in app_tsx
+    assert "cdn.jsdelivr" not in index_html
 
 
 def test_store_authorization_does_not_use_assert() -> None:
