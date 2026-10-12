@@ -80,7 +80,7 @@ def load_documents_from_paths(*args, **kwargs):
 
 def build_query_image_context(*args, **kwargs):
     """Compatibility wrapper for query-time image context loading."""
-    _query_images.extract_routed_image_bytes_text = extract_routed_image_bytes_text
+    _query_images.extract_image_bytes_vision_text = extract_image_bytes_vision_text
     return _query_images.build_query_image_context(*args, **kwargs)
 
 __all__ = [

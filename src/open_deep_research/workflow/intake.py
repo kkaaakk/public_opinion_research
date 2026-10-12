@@ -70,10 +70,7 @@ def _messages_without_query_image_context(messages):
 async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict:
     """Convert user-question images into temporary text context before research planning."""
     configurable = Configuration.from_runnable_config(config)
-    if (
-        not configurable.rag_query_image_enabled
-        or not configurable.rag_multimodal_enabled
-    ):
+    if not configurable.rag_query_image_enabled:
         return {}
 
     messages = state.get("messages", [])
@@ -83,9 +80,6 @@ async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict
     context = await asyncio.to_thread(
         query_images.build_query_image_context,
         messages,
-        provider=configurable.rag_multimodal_provider,
-        ocr_languages=configurable.rag_ocr_languages,
-        vision_enabled=configurable.rag_vision_enabled,
         vision_model=configurable.rag_vision_model,
         vision_prompt=configurable.rag_vision_prompt,
         vision_max_tokens=configurable.rag_vision_max_tokens,

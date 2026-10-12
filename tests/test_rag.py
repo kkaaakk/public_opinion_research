@@ -1006,41 +1006,39 @@ def test_image_routing_falls_back_to_ocr_when_vision_fails(monkeypatch, tmp_path
     assert documents[0].metadata["vision_error"] == "vision unavailable"
 
 
-def test_query_image_context_reuses_routed_image_bytes(monkeypatch):
+# 验证用户问题图片直接复用视觉内容识别。
+def test_query_image_context_reuses_vision_image_bytes(monkeypatch):
     from open_deep_research.rag import query_images
+    from open_deep_research.rag.loaders import query_images as query_image_loader
 
     calls = []
 
+    # 记录图片字节与视觉参数，返回预设图片描述。
     def fake_extract(
         image_bytes,
-        provider,
-        ocr_languages,
-        vision_enabled,
-        vision_model,
-        vision_prompt,
-        vision_max_tokens,
+        *,
+        model,
+        prompt,
+        max_tokens,
+        mime_type,
     ):
         calls.append(
             {
                 "image_bytes": image_bytes,
-                "provider": provider,
-                "ocr_languages": ocr_languages,
-                "vision_enabled": vision_enabled,
-                "vision_model": vision_model,
-                "vision_prompt": vision_prompt,
-                "vision_max_tokens": vision_max_tokens,
+                "model": model,
+                "prompt": prompt,
+                "max_tokens": max_tokens,
+                "mime_type": mime_type,
             }
         )
-        return (
-            "OCR text:\nRevenue funnel\n\nVision description:\nChart shows conversion drop-off.",
-            {"image_route": "ocr_vision", "image_route_reason": "diagram_like"},
-        )
+        return "Chart shows conversion drop-off."
 
     monkeypatch.setattr(
         query_images,
-        "extract_routed_image_bytes_text",
+        "extract_image_bytes_vision_text",
         fake_extract,
     )
+    monkeypatch.setattr(query_image_loader, "extract_image_bytes_vision_text", fake_extract)
 
     context = query_images.build_query_image_context(
         [
@@ -1056,9 +1054,6 @@ def test_query_image_context_reuses_routed_image_bytes(monkeypatch):
                 ]
             )
         ],
-        provider="ocr",
-        ocr_languages="eng+chi_sim",
-        vision_enabled=True,
         vision_model="openai:gpt-4.1-mini",
         vision_prompt="Describe the image.",
         vision_max_tokens=512,
@@ -1066,17 +1061,16 @@ def test_query_image_context_reuses_routed_image_bytes(monkeypatch):
     )
 
     assert "User image 1" in context
-    assert "Route: ocr_vision" in context
+    assert "Route:" not in context
+    assert "Reason:" not in context
     assert "conversion drop-off" in context
     assert calls == [
         {
             "image_bytes": b"fake image bytes",
-            "provider": "ocr",
-            "ocr_languages": "eng+chi_sim",
-            "vision_enabled": True,
-            "vision_model": "openai:gpt-4.1-mini",
-            "vision_prompt": "Describe the image.",
-            "vision_max_tokens": 512,
+            "model": "openai:gpt-4.1-mini",
+            "prompt": "Describe the image.",
+            "max_tokens": 512,
+            "mime_type": "image/png",
         }
     ]
 

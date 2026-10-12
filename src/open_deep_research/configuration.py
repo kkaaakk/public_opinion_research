@@ -942,7 +942,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": True,
-                "description": "Whether image routing can use a Vision LLM for diagrams, UI, photos, and uncertain image classification."
+                "description": "Whether RAG knowledge image routing can use a Vision LLM for extraction and classification. User-question images use rag_query_image_enabled independently."
             }
         }
     )
@@ -952,7 +952,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "text",
                 "default": DEFAULT_RAG_VISION_MODEL,
-                "description": "Vision-capable chat model used for RAG image understanding."
+                "description": "Vision-capable chat model shared by RAG knowledge images and user-question images."
             }
         }
     )
@@ -962,7 +962,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "textarea",
                 "default": DEFAULT_RAG_VISION_PROMPT,
-                "description": "Prompt used to turn image content into concise searchable RAG text."
+                "description": "Prompt shared by RAG image extraction and temporary user-question image recognition."
             }
         }
     )
@@ -972,7 +972,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 512,
-                "description": "Maximum output tokens for Vision LLM image descriptions and classification."
+                "description": "Maximum output tokens for user-question image recognition and RAG Vision descriptions and classification."
             }
         }
     )
@@ -982,7 +982,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": True,
-                "description": "Whether images attached to the user's question are recognized as temporary query context."
+                "description": "Whether user-question images are recognized directly by Vision as temporary context, independently of RAG multimodal and OCR settings."
             }
         }
     )
@@ -1002,7 +1002,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 5_000_000,
-                "description": "Maximum size in bytes for each user-question image recognized by RAG."
+                "description": "Maximum size in bytes for each user-question image recognized by Vision."
             }
         }
     )
@@ -1620,7 +1620,7 @@ class Configuration(BaseModel):
             raise ValueError(
                 "rag_multimodal_provider must be ocr, tesseract, local_ocr, none, or disabled."
             )
-        if self.rag_vision_enabled:
+        if self.rag_vision_enabled or self.rag_query_image_enabled:
             if not self.rag_vision_model.strip():
                 raise ValueError("rag_vision_model must not be empty when vision is enabled.")
             if not self.rag_vision_prompt.strip():
