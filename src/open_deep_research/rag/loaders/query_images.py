@@ -1,4 +1,4 @@
-"""Query-time image recognition helpers for RAG-aware questions."""
+"""Recognize user images with Vision as temporary query context."""
 
 import base64
 import binascii
@@ -10,7 +10,8 @@ from urllib.parse import unquote, urlparse
 
 from open_deep_research.rag.loaders.knowledge import (
     SUPPORTED_IMAGE_EXTENSIONS,
-    extract_routed_image_bytes_text,
+    _image_mime_type,
+    extract_image_bytes_vision_text,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -28,39 +29,42 @@ TEXT_IMAGE_PATH_RE = re.compile(
 def build_query_image_context(
     messages: Sequence[Any],
     *,
-    provider: str,
-    ocr_languages: str,
-    vision_enabled: bool,
     vision_model: str,
     vision_prompt: str,
     vision_max_tokens: int,
     max_images: int,
     max_bytes: int = 5_000_000,
 ) -> str:
-    """Recognize images attached to user messages and return temporary query context."""
+    """Recognize each valid user image once with Vision, within the request limit."""
     if max_images <= 0:
         return ""
 
     sections = []
+    processed_images = 0
     for image_index, image_ref in enumerate(_iter_message_image_refs(messages), start=1):
-        if len(sections) >= max_images:
+        if processed_images >= max_images:
             break
         try:
-            image_bytes, source_label = _read_image_ref(image_ref, max_bytes=max_bytes)
+            image_bytes, source_label, mime_type = _read_image_ref(
+                image_ref, max_bytes=max_bytes
+            )
         except Exception as exc:
             LOGGER.warning("Skipping query image %s: %s", image_index, exc)
             continue
 
-        text, metadata = extract_routed_image_bytes_text(
-            image_bytes,
-            provider,
-            ocr_languages,
-            vision_enabled,
-            vision_model,
-            vision_prompt,
-            vision_max_tokens,
-        )
-        if not text.strip():
+        processed_images += 1
+        try:
+            text = extract_image_bytes_vision_text(
+                image_bytes,
+                model=vision_model,
+                prompt=vision_prompt,
+                max_tokens=vision_max_tokens,
+                mime_type=mime_type,
+            ).strip()
+        except Exception as exc:
+            LOGGER.warning("Failed Vision extraction for query image %s: %s", image_index, exc)
+            continue
+        if not text:
             continue
 
         sections.append(
@@ -68,9 +72,7 @@ def build_query_image_context(
                 [
                     f"User image {len(sections) + 1}",
                     f"Source: {source_label}",
-                    f"Route: {metadata.get('image_route', 'unknown')}",
-                    f"Reason: {metadata.get('image_route_reason', 'unknown')}",
-                    text.strip(),
+                    text,
                 ]
             )
         )
@@ -132,9 +134,13 @@ def _iter_text_image_refs(text: str) -> Iterable[str]:
         yield match.group("path").strip().strip("'\"")
 
 
-def _read_image_ref(image_ref: Any, *, max_bytes: int) -> tuple[bytes, str]:
+def _read_image_ref(image_ref: Any, *, max_bytes: int) -> tuple[bytes, str, str]:
     if isinstance(image_ref, bytes):
-        return _validate_size(image_ref, max_bytes=max_bytes), "message image bytes"
+        return (
+            _validate_size(image_ref, max_bytes=max_bytes),
+            "message image bytes",
+            "image/png",
+        )
     if not isinstance(image_ref, str):
         raise ValueError("unsupported query image reference")
 
@@ -148,14 +154,15 @@ def _read_image_ref(image_ref: Any, *, max_bytes: int) -> tuple[bytes, str]:
         return (
             _validate_size(image_bytes, max_bytes=max_bytes),
             data_match.group("mime"),
+            data_match.group("mime").lower(),
         )
 
     parsed = urlparse(stripped_ref)
     if parsed.scheme == "file":
-        path = Path(unquote(parsed.path))
-        if re.match(r"^/[A-Za-z]:/", str(path)):
-            path = Path(str(path)[1:])
-        return _read_image_path(path, max_bytes=max_bytes)
+        path_text = unquote(parsed.path)
+        if re.match(r"^/[A-Za-z]:/", path_text):
+            path_text = path_text[1:]
+        return _read_image_path(Path(path_text), max_bytes=max_bytes)
 
     if parsed.scheme in {"http", "https"}:
         raise ValueError("remote query image URLs are not fetched locally")
@@ -163,21 +170,26 @@ def _read_image_ref(image_ref: Any, *, max_bytes: int) -> tuple[bytes, str]:
     return _read_image_path(Path(stripped_ref).expanduser(), max_bytes=max_bytes)
 
 
-def _read_image_path(path: Path, *, max_bytes: int) -> tuple[bytes, str]:
+def _read_image_path(path: Path, *, max_bytes: int) -> tuple[bytes, str, str]:
     if path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
         raise ValueError(f"unsupported query image extension: {path.suffix}")
     resolved_path = path.resolve()
     if not resolved_path.exists() or not resolved_path.is_file():
         raise FileNotFoundError(f"query image does not exist: {resolved_path}")
+    if resolved_path.stat().st_size > max_bytes:
+        raise ValueError("query image exceeds configured byte limit")
     return (
         _validate_size(resolved_path.read_bytes(), max_bytes=max_bytes),
         resolved_path.as_posix(),
+        _image_mime_type(resolved_path),
     )
 
 
 def _validate_size(image_bytes: bytes, *, max_bytes: int) -> bytes:
     if max_bytes <= 0:
         raise ValueError("max query image bytes must be greater than 0")
+    if not image_bytes:
+        raise ValueError("query image is empty")
     if len(image_bytes) > max_bytes:
         raise ValueError("query image exceeds configured byte limit")
     return image_bytes
