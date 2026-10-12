@@ -81,7 +81,7 @@ async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict
         query_images.build_query_image_context,
         messages,
         vision_model=configurable.rag_vision_model,
-        vision_prompt=configurable.rag_vision_prompt,
+        vision_prompt=configurable.rag_query_image_prompt,
         vision_max_tokens=configurable.rag_vision_max_tokens,
         max_images=configurable.rag_query_image_max_images,
         max_bytes=configurable.rag_query_image_max_bytes,
