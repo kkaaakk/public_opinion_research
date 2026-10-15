@@ -50,7 +50,6 @@ Public Opinion Research/
 │   └── migration/
 ├── contracts/、docker/、deploy/、scripts/、examples/
 ├── plans/、pr-build/、.agent/、.github/
-├── legacy/pre-deerflow/            # 306 文件旧项目完整备份副本
 ├── src/、evaluation/               # 原源码和评估资料继续保留
 ├── Makefile、LICENSE、AGENTS.md
 ├── config.example.yaml             # 官方原模板
@@ -60,12 +59,14 @@ Public Opinion Research/
 ```
 
 原根级 `pyproject.toml`、`uv.lock`、`package.json`、`package-lock.json`、
-`langgraph.json` 已归档到旧项目副本；原业务源码没有迁移或删除。
-旧三份 GitHub workflow 也归档，避免继续使用已归档的根依赖清单。
+`langgraph.json` 保存在已有独立备份与 Git 快照；原业务源码没有迁移或删除。
+旧三份 GitHub workflow 同样保存在备份中，当前工程不再启用旧根依赖清单。
 新增专用离线 CI；本机已运行对应测试，远程 CI 尚未运行。
-完整文件级新增/修改/删除清单见 [files-changed.tsv](files-changed.tsv)。
-该清单按 Git `--no-renames` 记录：新增 4362、修改 6、删除根位置 8 个文件；
-删除项均已归档，未删除业务源码。上游 47 个文件的 Git 可执行权限同时保留。
+最初迁移提交 `8459ba1b` 的文件级新增/修改/删除清单见 [files-changed.tsv](files-changed.tsv)。
+该历史清单按 Git `--no-renames` 记录：新增 4362、修改 6、删除根位置 8 个文件。
+用户随后指定使用已有独立备份，306 个仓库内重复文件已移除，当前源码树没有
+`legacy/pre-deerflow/`；核验与读取方法见 [backup-location.md](backup-location.md)。
+原业务源码仍在原位，上游 47 个文件的 Git 可执行权限同时保留。
 
 ## 注册和执行链路
 
@@ -247,7 +248,7 @@ WSL2 / Docker 环境准备完成后，仍使用官方 `make dev` 或 `make up`�
   本阶段没有把空配置伪装成可用的模型研究服务。
 - Windows 执行沙箱曾产生 uv build cleanup WinError 5、pytest 临时 ACL 拒绝和 Next spawn EPERM；
   采用仓库内缓存、正常进程/临时文件访问后完成实际验证，没有依赖冲突遗留。
-- 全量导入的上游和旧归档含既有尾随空白，整体 `git diff --check` 会报告这些历史内容；
+- 全量导入的上游含既有尾随空白，整体 `git diff --check` 会报告这些历史内容；
   本阶段保留原文。新业务包、适配器和集成代码已通过 Ruff；项目新文件单独检查空白。
 
 ## Git 和后续阶段

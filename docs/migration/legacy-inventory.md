@@ -2,9 +2,9 @@
 
 记录日期：2026-10-15。旧项目检查点为 `41cbc134f748750ffbfc7c7dde65c7552ace6296`，可通过远程备份分支 `origin/backup/pre-deerflow` 或标签 `v1-pre-deerflow` 读取。
 
-Phase 0 没有迁移旧 LangGraph Graph、自定义 Agent 循环或业务实现。原 `src/` 继续保留；导入 DeerFlow 时，与官方根目录重名的旧项目文件另存于 `legacy/pre-deerflow/`。该目录保存检查点的全部 306 个文件，而非仅保存下面列出的模块。官方后端的导入路径与依赖由 `backend/` 管理，运行新的 Gateway 不要求导入旧 `open_deep_research`。
+Phase 0 没有迁移旧 LangGraph Graph、自定义 Agent 循环或业务实现。原 `src/` 继续保留；与官方根目录重名的旧项目文件保存在已有独立备份及上述 Git 检查点。按用户要求，核验独立备份完整后已移除仓库内重复备份。官方后端的导入路径与依赖由 `backend/` 管理，运行新的 Gateway 不要求导入旧 `open_deep_research`。
 
-以下路径均为旧项目原始路径；归档副本路径是在其前面加 `legacy/pre-deerflow/`。表中的目标表示下一阶段建议，不表示实现已经迁入。
+以下路径均为旧项目原始路径；在独立备份根目录下直接使用这些相对路径，或通过 Git 检查点读取。位置与完整性核验见 [backup-location.md](backup-location.md)。表中的目标表示下一阶段建议，不表示实现已经迁入。
 
 ## 可复用的业务能力
 
@@ -38,7 +38,7 @@ Phase 0 没有迁移旧 LangGraph Graph、自定义 Agent 循环或业务实现�
 | `src/open_deep_research/public_opinion_agents/base.py`、`registry.py` | 旧角色注册、提示装配与调度元数据 | 只提取职责和授权边界；不将旧注册表作为新的 Agent 基础设施 |
 | `src/open_deep_research/web/server.py`、`web/static/`、`src/security/auth.py` | 旧 FastAPI、SSE、业务仪表盘与 LangGraph 部署认证 | 保留供比对，不启动第二套 Gateway，不在 Phase 0 开发业务页面；新认证与 UI 走官方机制 |
 | `src/open_deep_research/observability/`、`utils.py`、`time_utils.py` | 追踪、兼容入口与通用辅助函数 | 按需提取确有业务意义的纯函数；官方追踪、服务生命周期和时间配置保持官方机制 |
-| `pyproject.toml`、`uv.lock`、`langgraph.json`、`package.json`、`package-lock.json`、`compose.neo4j.yaml` | 旧依赖、LangGraph 启动和本地数据库部署 | 原样归档于 `legacy/pre-deerflow/`；新的官方服务按 DeerFlow 锁文件与启动命令运行 |
+| `pyproject.toml`、`uv.lock`、`langgraph.json`、`package.json`、`package-lock.json`、`compose.neo4j.yaml` | 旧依赖、LangGraph 启动和本地数据库部署 | 原样保存在独立备份和 Git 检查点；新的官方服务按 DeerFlow 锁文件与启动命令运行 |
 
 ## 测试与资料资产
 

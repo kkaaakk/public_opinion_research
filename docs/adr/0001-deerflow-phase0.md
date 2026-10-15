@@ -15,9 +15,15 @@ not a reason to replace those upstream versions.
 
 Import all 4000 files from the immutable upstream archive. Keep a SHA-256 manifest
 in `docs/migration/upstream-manifest.json` and preserve its MIT LICENSE. Preserve
-the 306-file pre-migration snapshot under `legacy/pre-deerflow/`, including its
-license and dependency locks. Original `src/` remains available for Phase 1.
-Archive old root package manifests there so default project commands target DeerFlow.
+the pre-migration snapshot through the existing `backup/pre-deerflow` branch,
+`v1-pre-deerflow` tag and the operator's independent directory backup, including
+the old dependency locks and local configuration. All 306 project files and the
+original `.env` were verified against that directory before removing the redundant
+in-repository copy, following the user's preference on 2026-10-15. Backup details
+are in `docs/migration/backup-location.md`; no runtime depends on its local path.
+Original `src/` remains available for Phase 1. The old root package manifests
+remain in Git and the external backup so default project commands target DeerFlow.
+The original license notice is also retained at `docs/licenses/pre-deerflow-LICENSE`.
 
 ```mermaid
 flowchart LR

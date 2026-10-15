@@ -6,7 +6,10 @@ Read `docs/adr/0001-deerflow-phase0.md` and `docs/migration/phase0-validation.md
 before continuing this migration. Upstream is pinned in
 `docs/migration/upstream-manifest.json`. Canonical business code is
 `opinion_business/`, the public API adapter is `deerflow_extension/`, and the
-original project snapshot is `legacy/pre-deerflow/`. Original `src/` is retained
+original project snapshot is retained in Git at `v1-pre-deerflow` and in the
+operator's independent backup documented in `docs/migration/backup-location.md`.
+Do not keep a second full backup inside this repository or make runtime code
+depend on the external backup path. Original `src/` is retained
 for reference; do not put it on the new runtime's Python path. Do not migrate
 its Graph or custom agent loop during Phase 0. Package snapshots under
 `backend/extensions/sources/` must match canonical source; use the official

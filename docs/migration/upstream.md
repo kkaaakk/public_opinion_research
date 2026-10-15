@@ -5,7 +5,8 @@
 - 引入日期：2026-10-15（Asia/Shanghai）
 - 来源：该 Commit 的 GitHub codeload ZIP；全部 4000 个文件完整引入。
 - 版本标识以源码为准：后端 `2.2.0-dev`，Harness `2.1.0`，Extension API `0.2.7`。
-- 上游 MIT LICENSE 留在根目录；旧项目 MIT LICENSE 留在 `legacy/pre-deerflow/LICENSE`。
+- 上游 MIT LICENSE 留在根目录；旧项目 MIT LICENSE 作为版权声明单独保留于
+  `docs/licenses/pre-deerflow-LICENSE`，完整旧工程使用已有独立备份与 Git 快照。
 - 原项目历史、远程备份分支与标签保留；本阶段没有推送或合并 main。
 
 `upstream-manifest.json` 记录每个原始文件和 ZIP 的 SHA-256。完整源文件均存在；
@@ -13,7 +14,8 @@
 `.gitattributes` 处理换行，Windows `.cmd` 的 LF/CRLF 等价哈希单独记录。
 本阶段仅对上游的 `.gitignore`、`AGENTS.md`、`README.md`、`backend/pyproject.toml`
 和 `backend/uv.lock` 增加本项目配置，其余上游文件保持原始字节。
-新增文件不属于上游差异；原项目根级依赖清单、旧 CI 已归档，详见文件变更清单。
+新增文件不属于上游差异；原项目根级依赖清单、旧 CI 保存在已有独立备份和 Git 快照，
+详见 [备份位置](backup-location.md) 与文件变更清单。
 
 ## 后续更新
 
