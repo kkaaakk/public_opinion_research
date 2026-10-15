@@ -1,0 +1,390 @@
+{
+  "schema_version": "1.0",
+  "artifact": "before_after_plan_execute_benchmark_raw",
+  "version": "before",
+  "commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+  "commit_short": "d0270b6",
+  "commit_subject": "fix: address P1 reliability and web security issues",
+  "worktree_status": "",
+  "expected_commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+  "commit_matches_expected": true,
+  "benchmark_started_at_utc": "2026-09-02T05:51:48.759855+00:00",
+  "environment": {
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "python_executable": "C:\\develop\\python311\\python.exe",
+    "env_file": "C:\\codex_workspace\\Public Opinion Research\\.env",
+    "env_file_exists": true
+  },
+  "cases_path": "C:\\codex_workspace\\Public Opinion Research\\evaluation\\plan_execute_ab\\cases.jsonl",
+  "repeat_count": 1,
+  "case_timeout_seconds": 300,
+  "configuration_template": {
+    "search_api": "none",
+    "max_react_tool_calls": 1,
+    "max_research_rounds": 2,
+    "max_structured_output_retries": 1,
+    "allow_clarification": false,
+    "allow_plan_feedback": false,
+    "business_scenario": "public_opinion_risk",
+    "organization_context": "Benchmark context: use cited public sources and the configured local knowledge base. Do not invent private company facts; separate facts, inferences, and unresolved items.",
+    "enabled_business_agents": [
+      "public_signal",
+      "internal_knowledge",
+      "risk_assessment",
+      "response_strategy"
+    ],
+    "rag_enabled": true,
+    "retrieval_mode": "hybrid",
+    "rag_knowledge_base_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\knowledge\\public_opinion"
+    ],
+    "rag_memory_enabled": true,
+    "rag_memory_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\memory\\public_opinion\\memories.jsonl"
+    ],
+    "rag_embedding_provider": "hash",
+    "rag_vectorstore_provider": "memory",
+    "rag_reranker_provider": "simple",
+    "rag_graph_enabled": false,
+    "rag_query_rewrite_enabled": false,
+    "rag_memory_write_enabled": false,
+    "agent_observer_enabled": true,
+    "agent_observer_endpoint": "in-process-recording",
+    "agent_observer_project": "public-opinion-research-ab-benchmark",
+    "agent_observer_timeout": 0.35,
+    "research_model": "google_genai:gemma-4-26b-a4b-it",
+    "summarization_model": "google_genai:gemma-4-26b-a4b-it",
+    "compression_model": "google_genai:gemma-4-26b-a4b-it",
+    "final_report_model": "google_genai:gemma-4-26b-a4b-it",
+    "original_env_models": {
+      "research_model": "deepseek:deepseek-chat",
+      "summarization_model": "deepseek:deepseek-chat",
+      "compression_model": "deepseek:deepseek-chat",
+      "final_report_model": "deepseek:deepseek-chat"
+    },
+    "model_override_reason": "DeepSeek returned HTTP 402 Insufficient Balance and Gemini 2.5 hit HTTP 429 quota during smoke runs; Google Gemma fallback was used uniformly for both versions.",
+    "original_env_search_api": "<unset>",
+    "search_api_override_reason": "Tavily summary fan-out repeatedly hit provider availability limits during smoke validation; local social fixtures and RAG remain enabled uniformly for both versions.",
+    "max_content_length": 10000,
+    "research_model_max_tokens": 512,
+    "summarization_model_max_tokens": 256,
+    "compression_model_max_tokens": 512,
+    "final_report_model_max_tokens": 800,
+    "section_writer_model_max_tokens": 600,
+    "temperature": null,
+    "temperature_note": "N/A: Configuration and model boundary do not expose a temperature parameter.",
+    "social_media_data_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\social_media\\bulk_mock_posts.jsonl",
+      "C:\\codex_workspace\\POR-after\\data\\social_media\\sample_posts.jsonl"
+    ],
+    "max_concurrency": 1,
+    "social_media_mode": "local JSON fixtures",
+    "observer_mode": "Agent Observer v0.2 SDK with in-process event recorder"
+  },
+  "runs": [
+    {
+      "schema_version": "1.0",
+      "version": "before",
+      "case_id": "case_01_product_quality",
+      "repeat_index": 1,
+      "status": "error",
+      "started_at_utc": "2026-09-02T05:52:34.927774+00:00",
+      "finished_at_utc": "2026-09-02T05:53:09.148849+00:00",
+      "elapsed_ms": 34220,
+      "target_root": "C:\\codex_workspace\\POR-before",
+      "commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+      "query": "请对 Acme EV 近期‘电池续航明显下降/电池异常’舆情开展一次企业级深度调研，不预设最终结论。请分别核查：事件时间线、涉及车型与地区、投诉是否形成可重复的模式及大致影响范围、是否存在技术或安全风险与合理替代解释、企业/售后官方回应和处理进展、公开证据与本地内部资料是否一致，以及仍需核验的不确定性。请区分事实、推断和待证事项，并给出风险判断所依据的来源。",
+      "config": {
+        "search_api": "none",
+        "max_react_tool_calls": 1,
+        "max_research_rounds": 2,
+        "max_structured_output_retries": 1,
+        "allow_clarification": false,
+        "allow_plan_feedback": false,
+        "business_scenario": "public_opinion_risk",
+        "organization_context": "Benchmark context: use cited public sources and the configured local knowledge base. Do not invent private company facts; separate facts, inferences, and unresolved items.",
+        "enabled_business_agents": [
+          "public_signal",
+          "internal_knowledge",
+          "risk_assessment",
+          "response_strategy"
+        ],
+        "rag_enabled": true,
+        "retrieval_mode": "hybrid",
+        "rag_knowledge_base_paths": [
+          "C:\\codex_workspace\\POR-after\\data\\knowledge\\public_opinion"
+        ],
+        "rag_memory_enabled": true,
+        "rag_memory_paths": [
+          "C:\\codex_workspace\\POR-after\\data\\memory\\public_opinion\\memories.jsonl"
+        ],
+        "rag_embedding_provider": "hash",
+        "rag_vectorstore_provider": "memory",
+        "rag_reranker_provider": "simple",
+        "rag_graph_enabled": false,
+        "rag_query_rewrite_enabled": false,
+        "rag_memory_write_enabled": false,
+        "agent_observer_enabled": true,
+        "agent_observer_endpoint": "in-process-recording",
+        "agent_observer_project": "public-opinion-research-ab-benchmark",
+        "agent_observer_timeout": 0.35,
+        "research_model": "google_genai:gemma-4-26b-a4b-it",
+        "summarization_model": "google_genai:gemma-4-26b-a4b-it",
+        "compression_model": "google_genai:gemma-4-26b-a4b-it",
+        "final_report_model": "google_genai:gemma-4-26b-a4b-it",
+        "original_env_models": {
+          "research_model": "deepseek:deepseek-chat",
+          "summarization_model": "deepseek:deepseek-chat",
+          "compression_model": "deepseek:deepseek-chat",
+          "final_report_model": "deepseek:deepseek-chat"
+        },
+        "model_override_reason": "DeepSeek returned HTTP 402 Insufficient Balance and Gemini 2.5 hit HTTP 429 quota during smoke runs; Google Gemma fallback was used uniformly for both versions.",
+        "original_env_search_api": "<unset>",
+        "search_api_override_reason": "Tavily summary fan-out repeatedly hit provider availability limits during smoke validation; local social fixtures and RAG remain enabled uniformly for both versions.",
+        "max_content_length": 10000,
+        "research_model_max_tokens": 512,
+        "summarization_model_max_tokens": 256,
+        "compression_model_max_tokens": 512,
+        "final_report_model_max_tokens": 800,
+        "section_writer_model_max_tokens": 600,
+        "temperature": null,
+        "temperature_note": "N/A: Configuration and model boundary do not expose a temperature parameter.",
+        "social_media_data_paths": [
+          "C:\\codex_workspace\\POR-after\\data\\social_media\\bulk_mock_posts.jsonl",
+          "C:\\codex_workspace\\POR-after\\data\\social_media\\sample_posts.jsonl"
+        ],
+        "max_concurrency": 1,
+        "social_media_mode": "local JSON fixtures",
+        "observer_mode": "Agent Observer v0.2 SDK with in-process event recorder"
+      },
+      "error": {
+        "type": "CancelledError",
+        "message": "",
+        "traceback": "Traceback (most recent call last):\n  File \"C:\\codex_workspace\\Public Opinion Research\\evaluation\\plan_execute_ab\\run_benchmark.py\", line 737, in run_one_case\n    await asyncio.wait_for(consume(), timeout=case_timeout_seconds)\n  File \"C:\\develop\\python311\\Lib\\asyncio\\tasks.py\", line 476, in wait_for\n    await waiter\nasyncio.exceptions.CancelledError\n"
+      },
+      "stream_updates": [
+        {
+          "namespace": [],
+          "node": "enrich_query_images",
+          "changes": null
+        },
+        {
+          "namespace": [],
+          "node": "clarify_with_user",
+          "changes": null
+        }
+      ],
+      "observer_events": [
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 0,
+          "type": "run_started",
+          "span_id": null,
+          "project": "public-opinion-research",
+          "prompt": "请对 Acme EV 近期‘电池续航明显下降/电池异常’舆情开展一次企业级深度调研，不预设最终结论。请分别核查：事件时间线、涉及车型与地区、投诉是否形成可重复的模式及大致影响范围、是否存在技术或安全风险与合理替代解释、企业/售后官方回应和处理进展、公开证据与本地内部资料是否一致，以及仍需核验的不确定性。请区分事实、推断和待证事项，并给出风险判断所依据的来源。",
+          "metadata": {
+            "framework": "langgraph",
+            "workflow": "public_opinion_research",
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-f2f71b00",
+            "logical_run_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-f2f71b00",
+            "execution_segment_id": "segment_238ee175f1c544a7b40363820693ebc4",
+            "invocation_kind": "start",
+            "resume": false,
+            "checkpoint_id": "1f1a6927-f01f-6d36-8000-79edbcb468f2",
+            "task_id": "07df5581-540e-2107-f729-8ff5454ec4de"
+          },
+          "model": "google_genai:gemma-4-26b-a4b-it",
+          "provider": "google_genai"
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 1,
+          "type": "span_started",
+          "span_id": "span_76ee0aeb471c48ae949303f03fe511fc",
+          "name": "enrich_query_images",
+          "kind": "graph_node",
+          "parent_span_id": null,
+          "upstream_span_ids": [],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "enrich_query_images",
+            "node_name": "enrich_query_images",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-f2f71b00",
+            "task_id": "07df5581-540e-2107-f729-8ff5454ec4de",
+            "checkpoint_id": "1f1a6927-f01f-6d36-8000-79edbcb468f2"
+          }
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 2,
+          "type": "span_finished",
+          "span_id": "span_76ee0aeb471c48ae949303f03fe511fc",
+          "duration_ms": null,
+          "output_bytes": null,
+          "output_items": null,
+          "stop_reason": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 3,
+          "type": "span_started",
+          "span_id": "span_e2f898f9dba245aba5502259c8cdfae8",
+          "name": "clarify_with_user",
+          "kind": "graph_node",
+          "parent_span_id": null,
+          "upstream_span_ids": [
+            "span_76ee0aeb471c48ae949303f03fe511fc"
+          ],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "clarify_with_user",
+            "node_name": "clarify_with_user",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-f2f71b00",
+            "task_id": "6b7f87dd-e53f-145c-babd-dc40665b4ffe",
+            "checkpoint_id": "1f1a6927-f026-6d9e-8001-9f32e4c26678"
+          }
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 4,
+          "type": "span_finished",
+          "span_id": "span_e2f898f9dba245aba5502259c8cdfae8",
+          "duration_ms": null,
+          "output_bytes": null,
+          "output_items": null,
+          "stop_reason": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 5,
+          "type": "span_started",
+          "span_id": "span_81ceaccaef3e4e979cab968a44ce1bac",
+          "name": "write_research_brief",
+          "kind": "graph_node",
+          "parent_span_id": null,
+          "upstream_span_ids": [
+            "span_e2f898f9dba245aba5502259c8cdfae8"
+          ],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "write_research_brief",
+            "node_name": "write_research_brief",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-f2f71b00",
+            "task_id": "62d1539c-d94d-75af-7b27-880c4e58980e",
+            "checkpoint_id": "1f1a6927-f02c-6bcc-8002-3ce77dd9d8f0"
+          }
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 6,
+          "type": "model_request",
+          "span_id": "span_81ceaccaef3e4e979cab968a44ce1bac",
+          "request_id": "req_43e4b84b18344ca9b1013078db07c547",
+          "model": "google_genai:gemma-4-26b-a4b-it",
+          "provider": "google_genai",
+          "structured_output": true,
+          "component": "research_brief"
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 7,
+          "type": "model_response",
+          "span_id": "span_81ceaccaef3e4e979cab968a44ce1bac",
+          "request_id": "req_43e4b84b18344ca9b1013078db07c547",
+          "duration_ms": 33928,
+          "model": "google_genai:gemma-4-26b-a4b-it",
+          "provider": "google_genai",
+          "structured_output": true,
+          "success": false,
+          "component": "research_brief",
+          "stop_reason": "error",
+          "error_type": "CancelledError"
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 8,
+          "type": "span_failed",
+          "span_id": "span_81ceaccaef3e4e979cab968a44ce1bac",
+          "error_type": "CancelledError",
+          "error_message": "<object object at 0x000001B521754690>",
+          "duration_ms": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_813235f598e74456a30705fe4c579a20",
+          "sequence": 9,
+          "type": "run_failed",
+          "span_id": null,
+          "error_type": "CancelledError",
+          "error_message": "<object object at 0x000001B521754690>",
+          "duration_ms": 33936
+        }
+      ],
+      "tool_records": [],
+      "role_reports": {},
+      "round_reports": [],
+      "research_reviews": [],
+      "completed_research_tasks": [],
+      "final_report": "",
+      "metrics": {
+        "duration_ms": 34220,
+        "node_executions": 3,
+        "agent_executions": 0,
+        "model_calls": 1,
+        "tool_calls": 0,
+        "web_search_calls": null,
+        "rag_calls": null,
+        "mcp_calls": null,
+        "social_media_calls": null,
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "token_usage_observed_responses": 1,
+        "token_usage_missing_responses": 1,
+        "public_signal_executions": 0,
+        "internal_knowledge_executions": 0,
+        "risk_assessment_executions": 0,
+        "response_strategy_executions": 0,
+        "research_review_executions": 0,
+        "research_rounds": 1,
+        "followup_rounds": 0,
+        "research_review_count": 0,
+        "research_gap_count": 0,
+        "next_tasks_count": 0,
+        "public_signal_followup_tasks": 0,
+        "internal_knowledge_followup_tasks": 0,
+        "duplicate_task_count": 0,
+        "review_triggered_followup": false,
+        "max_research_round_reached": false,
+        "node_sequence": [
+          "enrich_query_images",
+          "clarify_with_user",
+          "write_research_brief"
+        ],
+        "node_kinds": {
+          "enrich_query_images": "graph_node",
+          "clarify_with_user": "graph_node",
+          "write_research_brief": "graph_node"
+        },
+        "tool_names": [],
+        "final_report_chars": 0,
+        "final_report_tokens": null,
+        "final_report_token_note": "N/A: no tokenizer is used by the benchmark harness; characters are exact.",
+        "observer_event_count": 10
+      }
+    }
+  ],
+  "benchmark_finished_at_utc": "2026-09-02T05:53:09.149854+00:00",
+  "status": "completed"
+}

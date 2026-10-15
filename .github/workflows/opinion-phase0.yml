@@ -1,0 +1,39 @@
+name: Public opinion Phase 0
+on:
+  pull_request:
+    paths:
+      - "opinion_business/**"
+      - "deerflow_extension/**"
+      - "backend/extensions/sources/**"
+      - "backend/pyproject.toml"
+      - "backend/uv.lock"
+      - "tests/phase0/**"
+      - "scripts/sync_opinion_business.py"
+      - ".github/workflows/opinion-phase0.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.1"
+          python-version: "3.12"
+      - run: uv sync --project backend --locked
+      - name: Independent business package
+        run: uv run --no-project --with ./opinion_business python -m unittest discover -s opinion_business/tests -v
+      - name: Independent extension package
+        run: >-
+          uv run --no-project --with ./backend/packages/extension-api
+          --with ./opinion_business --with ./deerflow_extension
+          python -m unittest discover -s deerflow_extension/tests -v
+      - name: Official host integration
+        env:
+          PYTHONPATH: backend
+        run: >-
+          uv run --no-sync --project backend python -m pytest
+          -c tests/phase0/pytest.ini --confcutdir=tests/phase0
+          -p no:cacheprovider tests/phase0/test_integration.py -q

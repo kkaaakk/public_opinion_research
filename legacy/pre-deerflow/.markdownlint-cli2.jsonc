@@ -1,0 +1,23 @@
+{
+  "globs": [
+    "*.md",
+    "docs/**/*.md",
+    "examples/**/*.md",
+    "src/legacy/**/*.md",
+    "data/knowledge/**/*.md",
+    "!node_modules",
+    "!pytest-cache-files-*"
+  ],
+  "config": {
+    "MD001": false,
+    "MD013": false,
+    "MD033": false,
+    "MD024": false,
+    "MD025": false,
+    "MD028": false,
+    "MD040": false,
+    "MD041": false,
+    "MD052": false,
+    "MD059": false
+  }
+}

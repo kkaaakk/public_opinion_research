@@ -1,0 +1,2039 @@
+[09/17/26 17:50:56] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:51:34] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:00] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Not enough budget slots for deep_researcher.py:771
+                             section_writer after                              
+                             planning 5 research                               
+                             sections. Falling back to                         
+                             single section.                                   
+[09/17/26 17:52:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:21] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:30] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:42] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:43] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:45] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:47] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:50] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+[09/17/26 17:52:53] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:58] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:52:59] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:00] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:01] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:02] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:03] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:05] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:07] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:08] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:09] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:10] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:12] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:15] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:18] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:20] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:23] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:32] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:53:49] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:00] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:01] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:03] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:04] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:05] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:06] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:07] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:08] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:10] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:15] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:16] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:18] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:20] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:26] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:27] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:30] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:31] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:32] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:42] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:48] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:57] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:54:58] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:01] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+[09/17/26 17:55:07] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:10] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:18] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:20] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:21] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:23] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:24] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:25] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:27] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:28] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:29] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:32] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:34] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:35] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:37] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:49] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:55:51] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:19] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:20] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:23] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+[09/17/26 17:56:31] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:32] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:33] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:35] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:36] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:37] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:38] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:40] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:41] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:42] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:43] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:45] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:46] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:47] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:50] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:51] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:52] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:55] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:56] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:56:59] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:04] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:10] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:40] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:48] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:49] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:50] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:57:52] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+[09/17/26 17:58:00] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:02] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:03] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:08] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:09] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:10] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:12] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:18] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:20] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:22] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:24] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:26] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:28] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:31] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:35] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:40] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 17:58:43] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:00:19] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:00:23] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:04:44] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:07:34] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:07:45] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:07:48] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:07:56] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:07:58] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:06] INFO     Retrying request to           _base_client.py:1693
+                             /chat/completions in 0.427988                     
+                             seconds                                           
+[09/17/26 18:08:08] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:09] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+[09/17/26 18:08:16] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:19] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:21] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:22] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:23] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:25] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:27] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:29] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:30] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:31] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:34] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:36] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:37] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:38] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:41] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:42] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:45] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:46] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:48] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:49] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:52] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:54] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:55] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:08:56] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:05] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:30] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:40] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:43] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:47] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+[09/17/26 18:09:52] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:54] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:55] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:56] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:57] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:58] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:09:59] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:01] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:02] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:03] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:05] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:08] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:12] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:15] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:16] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:18] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:20] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:26] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:46] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:56] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:57] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:10:59] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:08] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:10] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:12] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:15] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:16] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:18] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:20] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:21] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:24] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:27] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:29] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:32] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:34] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:36] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:11:58] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:12:23] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:12:30] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:12:33] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:12:36] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+[09/17/26 18:12:41] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:12:46] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:12:47] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:12:51] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:12:57] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:13:00] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:13:01] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:13:09] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:13:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:13:19] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:13:35] WARNING  Summarization timed out after 60      utils.py:217
+                             seconds, returning original content               
+[09/17/26 18:13:51] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:13:58] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:01] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    WARNING  Summarization failed with error:      utils.py:221
+                             'NoneType' object has no attribute                
+                             'summary', returning original content             
+[09/17/26 18:14:07] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:12] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:21] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:22] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:25] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:31] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:33] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:37] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:38] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:14:49] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:15:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:15:28] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:17:31] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:19:31] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:19:44] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:19:50] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:19:58] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:19:59] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:13] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:15] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:16] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:18] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:20] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:22] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:28] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:29] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:30] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:34] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:41] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:20:55] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:03] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:05] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:19] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:22] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:23] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:24] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:26] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:28] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:29] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:34] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:38] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:39] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:51] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:21:52] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:22:23] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:22:29] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:22:36] INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://api.tavily.com/search                     
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:22:45] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:22:48] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:22:52] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:22:54] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:22:56] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+                    INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:23:00] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:23:06] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:23:10] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:23:12] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:23:15] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:23:29] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:23:39] WARNING  Summarization timed out after 60      utils.py:217
+                             seconds, returning original content               
+[09/17/26 18:24:00] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:24:27] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:25:14] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:27:16] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:27:55] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:29:11] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:31:31] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:33:17] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 
+[09/17/26 18:37:44] INFO     HTTP Request: POST                 _client.py:1740
+                             https://ark.cn-beijing.volces.com/                
+                             api/plan/v3/chat/completions                      
+                             "HTTP/1.1 200 OK"                                 

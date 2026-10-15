@@ -1,0 +1,499 @@
+# 通过确定性替身验证来源链、图范围隔离及生产角色的压缩生命周期。
+"""Focused tests for ResearchWorkspace graph/context behavior."""
+
+import json
+import re
+from types import SimpleNamespace
+
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableLambda
+
+import open_deep_research.runtime.business_agent as business_agent_module
+from open_deep_research.budget import context_pressure_ratio, estimate_context_tokens
+from open_deep_research.configuration import Configuration
+from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
+from open_deep_research.research_graph import (
+    ContextConflict,
+    GraphExtractionOutput,
+    InMemoryResearchGraphStore,
+    ResearchGraphProducerStrategy,
+    ResearchGraphScope,
+    ResearchWorkspace,
+    ToolBatchItem,
+    WorkingContext,
+    WorkingContextDelta,
+    apply_working_context_delta,
+    batch_documents_by_tokens,
+    micro_compact_messages,
+    normalize_extraction_output,
+)
+from open_deep_research.research_graph.models import RawResearchDocument
+from open_deep_research.research_graph.schema import content_hash
+from open_deep_research.state import agents_reducer
+
+
+# 创建固定运行范围的研究图测试对象。
+def _scope(run_id: str = "run-a") -> ResearchGraphScope:
+    return ResearchGraphScope(
+        run_id=run_id,
+        role="public_signal",
+        research_round=1,
+        task_id="task-a",
+    )
+
+
+# 创建带代码侧来源身份的原始研究材料。
+def _document(run_id: str = "run-a", source_id: str = "SRC1") -> RawResearchDocument:
+    content = "Official notice confirms a brake investigation."
+    return RawResearchDocument(
+        source_id=source_id,
+        url=f"https://example.test/{source_id}",
+        title="Official notice",
+        content=content,
+        source_type="web_search",
+        tool_name="web_search",
+        content_hash=content_hash(content),
+    )
+
+
+# 验证业务角色分配到图生产和图消费策略。
+def test_agent_specs_route_to_the_two_context_strategies() -> None:
+    assert PUBLIC_OPINION_AGENT_SPECS["public_signal"].context_strategy == "research_graph_producer"
+    assert PUBLIC_OPINION_AGENT_SPECS["internal_knowledge"].context_strategy == "research_graph_producer"
+    assert PUBLIC_OPINION_AGENT_SPECS["risk_assessment"].context_strategy == "research_graph_consumer"
+    assert PUBLIC_OPINION_AGENT_SPECS["response_strategy"].context_strategy == "research_graph_consumer"
+
+
+# 验证发现、主张、证据与来源关系完整物化。
+def test_provenance_materializes_finding_claim_evidence_source_edges() -> None:
+    scope = _scope()
+    delta = normalize_extraction_output(
+        GraphExtractionOutput(
+            claims=[{"local_id": "claim-1", "statement": "Brake issue is reported."}],
+            evidences=[
+                {
+                    "local_id": "evidence-1",
+                    "source_id": "SRC1",
+                    "statement": "The notice describes a brake investigation.",
+                    "supports_claim_ids": ["claim-1"],
+                }
+            ],
+            findings=[
+                {
+                    "local_id": "finding-1",
+                    "summary": "The issue requires verification.",
+                    "claim_ids": ["claim-1"],
+                    "evidence_ids": ["evidence-1"],
+                }
+            ],
+        ),
+        [_document()],
+        scope=scope,
+    )
+    store = InMemoryResearchGraphStore()
+    receipt = store.write_delta(delta)
+    subgraph = store.retrieve("brake investigation", run_id="run-a")
+    edges = {(edge.relation_type, edge.source_id, edge.target_id) for edge in subgraph.edges}
+    assert receipt.source_ids == ["SRC1"]
+    assert receipt.evidence_ids and receipt.claim_ids and receipt.finding_ids
+    assert any(kind == "EXTRACTED_FROM" for kind, _, _ in edges)
+    assert any(kind == "SUPPORTS" for kind, _, _ in edges)
+    assert any(kind == "DERIVED_FROM" for kind, _, _ in edges)
+    assert any(kind == "SUPPORTED_BY" for kind, _, _ in edges)
+
+
+# 验证不同 run_id 的图检索相互隔离。
+def test_graph_retrieval_isolation_by_run_id() -> None:
+    store = InMemoryResearchGraphStore()
+    for run_id, source_id in (("run-a", "SRC-A"), ("run-b", "SRC-B")):
+        store.write_delta(
+            normalize_extraction_output(
+                GraphExtractionOutput(
+                    evidences=[
+                        {
+                            "source_id": source_id,
+                            "statement": f"Evidence for {run_id}.",
+                        }
+                    ]
+                ),
+                [_document(run_id, source_id)],
+                scope=_scope(run_id),
+            )
+        )
+    assert all("SRC-B" not in node.node_id for node in store.retrieve("Evidence", run_id="run-a").nodes)
+    assert any(node.node_id == "SRC-B" for node in store.retrieve("Evidence", run_id="run-b").nodes)
+
+
+# 验证已保存的相同 URL 内容版本不重复写入。
+def test_url_dedup_skips_exact_source_version() -> None:
+    store = InMemoryResearchGraphStore()
+    scope = _scope()
+    document = _document()
+    delta = normalize_extraction_output(GraphExtractionOutput(), [document], scope=scope)
+    store.write_delta(delta)
+    assert store.source_is_persisted(scope, document)
+    changed = document.model_copy(update={"content": "A changed notice.", "content_hash": content_hash("A changed notice.")})
+    assert not store.source_is_persisted(scope, changed)
+
+
+# 验证上下文更新保留冲突的来源引用。
+def test_context_manager_delta_keeps_conflict_provenance() -> None:
+    current = WorkingContext(current_objective="assess safety")
+    delta = WorkingContextDelta(
+        conflicts_add=[
+            ContextConflict(
+                summary="Official and owner accounts differ.",
+                claim_ids=["CLM1"],
+                evidence_ids=["EVD1", "EVD2"],
+                source_ids=["SRC1", "SRC2"],
+            )
+        ],
+    )
+    updated = apply_working_context_delta(
+        current,
+        delta,
+        available_graph_ids={"CLM1", "EVD1", "EVD2", "SRC1", "SRC2"},
+    )
+    assert isinstance(updated.conflicts[0], ContextConflict)
+    assert updated.conflicts[0].evidence_ids == ["EVD1", "EVD2"]
+
+
+# 验证微压缩替换旧正文并保留近期完整工具步骤。
+def test_micro_compact_replaces_old_tool_body_and_keeps_recent_step() -> None:
+    first_call = {"name": "web_search", "args": {"queries": ["old"]}, "id": "call-old"}
+    second_call = {"name": "web_search", "args": {"queries": ["new"]}, "id": "call-new"}
+    messages = [
+        HumanMessage(content="assignment"),
+        AIMessage(content="old reasoning", tool_calls=[first_call]),
+        ToolMessage(content="very large raw old result", name="web_search", tool_call_id="call-old"),
+        AIMessage(content="new reasoning", tool_calls=[second_call]),
+        ToolMessage(content="recent raw result", name="web_search", tool_call_id="call-new"),
+    ]
+    result = micro_compact_messages(
+        messages,
+        {"call-old": "[receipt]"},
+        recent_raw_steps=1,
+    )
+    assert result.compacted_tool_call_ids == ["call-old"]
+    assert result.messages[2].tool_call_id == "call-old"
+    assert result.messages[2].content == "[receipt]"
+    assert result.messages[4].content == "recent raw result"
+
+
+# 验证滚动压缩触发依据上下文压力而非无关预算。
+def test_rolling_compact_threshold_is_context_only() -> None:
+    messages = [HumanMessage(content="x" * 400)]
+    estimated = estimate_context_tokens(messages)
+    assert context_pressure_ratio(estimated, 10_000) < 0.75
+    assert context_pressure_ratio(estimated, 10) >= 0.75
+
+
+# 验证抽取按令牌量分批，避免固定文档数造成超限。
+def test_extraction_batches_by_tokens_instead_of_fixed_document_count() -> None:
+    documents = [
+        RawResearchDocument(source_id=f"S{i}", content="x" * 80)
+        for i in range(3)
+    ]
+    batches = batch_documents_by_tokens(documents, max_tokens=25)
+    assert len(batches) == 3
+    assert all(len(batch) == 1 for batch in batches)
+
+
+# 验证原始搜索保留来源边界且不调用逐页摘要。
+def test_tavily_raw_tool_keeps_source_boundaries_without_page_summarization(monkeypatch) -> None:
+    import asyncio
+
+    import open_deep_research.search.tavily as utils
+
+    # 返回固定网页来源与正文，隔离实际 Tavily 请求。
+    async def fake_search(*_args, **_kwargs):
+        return [
+            {
+                "query": "brake",
+                "results": [
+                    {
+                        "url": "https://example.test/a",
+                        "title": "A",
+                        "raw_content": "raw A",
+                    },
+                    {
+                        "url": "https://example.test/a",
+                        "title": "A duplicate",
+                        "raw_content": "raw duplicate",
+                    },
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(utils, "tavily_search_async", fake_search)
+    payload = asyncio.run(
+        utils.tavily_search_raw.ainvoke({"queries": ["brake"]}, {})
+    )
+    decoded = json.loads(payload)
+    assert decoded["type"] == "research_raw_search"
+    assert len(decoded["results"]) == 1
+    assert decoded["results"][0]["content"] == "raw A"
+
+
+# 提供图抽取、上下文更新和报告生成的预设模型响应。
+class _GraphFixtureModel:
+    """Fixture structured model emitting real ``include_raw=True`` envelopes."""
+
+    # 初始化预设响应及调用记录。
+    def __init__(self) -> None:
+        self.schema = None
+        self.extraction_calls = 0
+
+    # 保存结构化输出模式并提供测试调用链。
+    def with_structured_output(self, schema, include_raw=False):
+        self.schema = schema
+        return RunnableLambda(self._structured_call)
+
+    # 保留测试模型的链式重试接口。
+    def with_retry(self, **_kwargs):
+        return self
+
+    # 接收运行配置并返回可执行模型替身。
+    def with_config(self, _config):
+        return self
+
+    # 按请求结构返回预设图或工作上下文响应。
+    async def _structured_call(self, messages, config=None):
+        parsed = await self.ainvoke(messages)
+        return {
+            "raw": AIMessage(
+                content="",
+                response_metadata={"model_name": "fixture"},
+                usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+            ),
+            "parsed": parsed,
+            "parsing_error": None,
+        }
+
+    # 异步返回脚本指定的模型消息。
+    async def ainvoke(self, messages, config=None):
+        prompt = str(messages[0].content)
+        if self.schema is GraphExtractionOutput:
+            self.extraction_calls += 1
+            source_id = re.search(r'"source_id":\s*"([^"]+)"', prompt).group(1)
+            return GraphExtractionOutput(
+                claims=[{"local_id": "c1", "statement": "A brake issue is reported."}],
+                evidences=[
+                    {
+                        "local_id": "e1",
+                        "source_id": source_id,
+                        "statement": "The source reports a brake issue.",
+                        "supports_claim_ids": ["c1"],
+                    }
+                ],
+            )
+        if self.schema is WorkingContextDelta:
+            return WorkingContextDelta(recent_progress="graph updated")
+        return SimpleNamespace(content="role report")
+
+
+# 验证生产钩子先持久化证据，再压缩原始工具结果。
+def test_producer_hook_persists_then_compacts_raw_tool_result(tmp_path) -> None:
+    model = _GraphFixtureModel()
+    config = Configuration(
+        research_graph_enabled=True,
+        research_graph_backend="memory",
+        research_graph_transcript_dir=str(tmp_path),
+        recent_raw_steps=0,
+    )
+    store = InMemoryResearchGraphStore()
+    workspace = ResearchWorkspace(
+        strategy=ResearchGraphProducerStrategy(),
+        research_state={"working_contexts": {}},
+        role="public_signal",
+        configurable=config,
+        model_factory=lambda _name, _max_tokens: model,
+        store=store,
+        run_id="run-fixture",
+        research_round=1,
+    )
+    tool_call = {"name": "web_search", "args": {"queries": ["brake"]}, "id": "call-1"}
+    observation = json.dumps(
+        {
+            "type": "research_raw_search",
+            "results": [
+                {
+                    "url": "https://example.test/brake",
+                    "title": "Brake notice",
+                    "content": "Official notice confirms a brake investigation.",
+                }
+            ],
+        }
+    )
+    messages = [
+        HumanMessage(content="assignment"),
+        AIMessage(content="search", tool_calls=[tool_call]),
+        ToolMessage(content=observation, name="web_search", tool_call_id="call-1"),
+    ]
+    result = __import__("asyncio").run(
+        workspace.ingest(
+            messages,
+            [ToolBatchItem("web_search", "call-1", tool_call["args"], observation, True)],
+        )
+    )
+    assert result.succeeded
+    assert model.extraction_calls == 1
+    assert any(node.node_type == "Evidence" for node in store.nodes.values())
+    assert result.messages[2].content.startswith("[Research result compacted.")
+    assert (tmp_path / "run-fixture.jsonl").exists()
+
+
+# 验证图模式同角色报告替换，旧映射更新仍兼容追加。
+def test_graph_report_updates_replace_same_role_but_legacy_mapping_still_appends() -> None:
+    updated = agents_reducer(
+        {"public_signal": {"report": "old"}},
+        {"public_signal": {"report": {"type": "override", "value": "new"}}},
+    )
+    assert updated == {"public_signal": {"report": "new"}}
+    legacy = agents_reducer(
+        {"public_signal": {"report": "old"}},
+        {"public_signal": {"report": "new"}},
+    )
+    assert "old" in legacy["public_signal"]["report"]
+    assert "new" in legacy["public_signal"]["report"]
+
+
+# 验证图角色路径不再调用旧完整历史压缩。
+def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tmp_path) -> None:
+    import asyncio
+
+    # 提供固定原始搜索结果的异步工具替身。
+    class FixtureTool:
+        name = "web_search"
+        metadata = {"type": "search", "name": "web_search"}
+
+        # 返回带真实来源字段的固定原始搜索 JSON。
+        async def ainvoke(self, _args, _config=None):
+            return json.dumps(
+                {
+                    "type": "research_raw_search",
+                    "results": [
+                        {
+                            "url": "https://example.test/graph-agent",
+                            "title": "Graph agent source",
+                            "content": "The source reports a brake issue.",
+                        }
+                    ],
+                }
+            )
+
+    # 按模型和输出结构模拟图角色的抽取、工作区更新及报告生成。
+    class AgentFixtureModel:
+        # 初始化测试替身的 agent_calls、model_name、schema 状态。
+        def __init__(self, model_name="fixture", schema=None):
+            self.model_name = model_name
+            self.schema = schema
+            self.agent_calls = 0
+
+        # 提供工具绑定测试接口，保留链式模型调用。
+        def bind_tools(self, _tools):
+            return self
+
+        # 提供链式重试配置接口，不执行真实请求。
+        def with_retry(self, **_kwargs):
+            return self
+
+        # 将测试结构化响应函数包装为 Runnable，兼容真实输出链。
+        def with_structured_output(self, schema, include_raw=False):
+            structured = AgentFixtureModel(self.model_name, schema=schema)
+            return RunnableLambda(structured._structured_call)
+
+        # 根据传入模型名创建新的图角色模型替身。
+        def with_config(self, config):
+            return AgentFixtureModel(config.get("model", self.model_name))
+
+        # 返回包含原始响应、解析结果和错误字段的结构化测试响应。
+        async def _structured_call(self, messages, config=None):
+            parsed = await self._parse(messages)
+            return {
+                "raw": AIMessage(
+                    content="",
+                    response_metadata={"model_name": "fixture"},
+                    usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+                ),
+                "parsed": parsed,
+                "parsing_error": None,
+            }
+
+        # 按当前结构化模式构造预设图抽取或工作上下文结果。
+        async def _parse(self, messages):
+            if self.schema is GraphExtractionOutput:
+                source_id = re.search(r'"source_id":\s*"([^"]+)"', str(messages[0].content)).group(1)
+                return GraphExtractionOutput(
+                    claims=[{"local_id": "c1", "statement": "A brake issue is reported."}],
+                    evidences=[
+                        {
+                            "local_id": "e1",
+                            "source_id": source_id,
+                            "statement": "The source reports a brake issue.",
+                            "supports_claim_ids": ["c1"],
+                        }
+                    ],
+                )
+            if self.schema is WorkingContextDelta:
+                return WorkingContextDelta(recent_progress="updated")
+            return None
+
+        # 按请求阶段返回结构化输出、工具调用或最终图报告。
+        async def ainvoke(self, messages, config=None):
+            if self.schema is not None:
+                return await self._structured_call(messages, config)
+            if "Generate a bounded public-opinion role report" in str(messages[0].content):
+                return SimpleNamespace(content="bounded graph report")
+            self.agent_calls += 1
+            if self.agent_calls == 1:
+                return AIMessage(
+                    content="search",
+                    tool_calls=[
+                        {
+                            "name": "web_search",
+                            "args": {"queries": ["brake"]},
+                            "id": "call-graph-agent",
+                        }
+                    ],
+                )
+            return AIMessage(content="done")
+
+    fixture_model = AgentFixtureModel()
+    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", fixture_model)
+    monkeypatch.setattr(
+        business_agent_module,
+        "_business_agent_tools",
+        lambda _config, _role, _spec=None: asyncio.sleep(0, result=[FixtureTool()]),
+    )
+
+    # 若图生产路径调用旧版全历史压缩则立即使测试失败。
+    async def fail_legacy_compression(*_args, **_kwargs):
+        raise AssertionError("Graph Producer must not invoke compress_research")
+
+    monkeypatch.setattr(business_agent_module, "_compress_research", fail_legacy_compression)
+    result = asyncio.run(
+        business_agent_module.run_business_agent(
+            state={
+                "workflow": {"brief": "Investigate brake safety.", "round": 1,
+                             "pending_tasks": [], "completed_tasks": []},
+                "research": {"run_id": "run-graph-agent", "working_contexts": {}},
+                "agents": {},
+                "runtime": {"budget": {}, "metrics": {}},
+            },
+            config={
+                "configurable": {
+                    "research_graph_enabled": True,
+                    "research_graph_backend": "memory",
+                    "enabled_business_agents": ["public_signal"],
+                    "research_graph_transcript_dir": str(tmp_path),
+                    "recent_raw_steps": 0,
+                    "thread_id": "run-graph-agent",
+                }
+            },
+            role="public_signal",
+        )
+    )
+    assert result["agents"]["public_signal"]["report"]["type"] == "override"
+    assert "bounded graph report" in result["agents"]["public_signal"]["report"]["value"]
+    assert result["research"]["working_contexts"]["public_signal"]["recent_progress"] == "updated"

@@ -1,85 +1,89 @@
+# DeerFlow docker image cache
+docker/.cache/
+# oh-my-claudecode state
+.omc/
+# OS generated files
+.DS_Store
+*.local
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-*.egg-info
-*.pyc
-
-# Python
+# Python cache
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.pyc
+*.pyo
 
 # Virtual environments
+.venv
 venv/
-env/
-ENV/
+
+# Benchmark outputs
+bench_results.jsonl
+bench_optimized.jsonl
+results.jsonl
+backend/scripts/benchmark/*.jsonl
+
+# Environment variables
 .env
 
-# IDE specific files
+# Configuration files
+config.yaml
+mcp_config.json
+extensions_config.json
+
+# IDE
 .idea/
 .vscode/
-docs/.obsidian/
-*.swp
-*.swo
-.DS_Store
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Coverage report
+coverage.xml
+coverage/
+.deer-flow/
+.claude/
+skills/custom/*
+logs/
+log/
+# nginx temp dirs and the BIND_HOST-rendered nginx config from local runs
+/temp/
+debug.log
 
-# Testing
-.coverage
-htmlcov/
+# Local git hooks (keep only on this machine, do not push)
+.githooks/
+
+# pnpm
+.pnpm-store
+sandbox_image_cache.tar
+
+# ignore the legacy `web` folder
+web/
+
+# Deployment artifacts
+backend/Dockerfile.langgraph
+config.yaml.bak
+.playwright-mcp
+/frontend/test-results/
+/frontend/playwright-report/
+.gstack/
+.worktrees
+
+# Monocle agent-observability trace output (local file exporter)
+.monocle/
+
+# Preserved local research/debug artifacts and Phase 0 verification environments
+.tmp/
+.codex-finalizer/
+.playwright-mcp/
+.venv*/
+.uv-cache/
+.phase0-upstream/
+.phase0/
+.langgraph_api/
+.tmp-*/
+*.egg-info/
 .pytest_cache/
 pytest-cache-files-*/
-.tox/
-
-# Logs
-*.log
-logs/
-
-# Local development
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Dependencies
-node_modules/
-
-# VitePress
-docs/.vitepress/cache/
-docs/.vitepress/dist/
-
-# LangGraph specific
-.langgraph/
-.langgraph_api/
-
-# Temporary files
-tmp/
-temp/
-.benchmarks/
-.hf_cache*/
-.rag_models/
 .ruff_cache/
-.uv-cache/
-.tmp-*
-.tmp/runtime/transcripts/
-data/indexes/rag/*
-!data/indexes/rag/.gitkeep
-
-.venv/
+.hypothesis/

@@ -1,0 +1,32 @@
+{
+  "records": [
+    {
+      "title": "How should Tesla answer battery range complaints?",
+      "content": "Acknowledge the customer's experience immediately. Explain that displayed range is a BMS estimate influenced by temperature, driving style, battery calibration state, charging habits, and pack age. Direct customers to schedule a complimentary battery health check at any Tesla Service Center. Do not conclude 'defect' or 'user error' before vehicle diagnosis is complete."
+    },
+    {
+      "title": "Can PR say there is no safety issue?",
+      "content": "No. PR cannot assert 'no safety issue' when inspection data is incomplete. The approved language: 'Tesla is investigating. Vehicle safety is our highest priority. We have contacted the owner and will provide verified findings through official channels. We ask the public to await investigation results before drawing conclusions.'"
+    },
+    {
+      "title": "When should an issue be escalated to Critical?",
+      "content": "Escalate to Critical if: (1) SAMR or MIIT publicly names Tesla in any investigation or statement; (2) official media (Xinhua, CCTV, Guangming Daily, People's Daily) publishes a negative story; (3) unverified recall claims trend on Weibo top-50 without an official Tesla clarification posted; (4) any incident involving fatality or serious injury where Tesla vehicle is named."
+    },
+    {
+      "title": "What should be done in the first 24 hours of a crisis?",
+      "content": "1. Publish holding statement via @特斯拉 on Weibo and tesla.cn. 2. Brief 400 hotline and Service Center teams on unified talking points. 3. Assign a senior PR manager as incident commander. 4. Collect top complaint themes and prepare fact-check document for each. 5. If recall/batch-defect rumors are circulating, prepare technical supporting evidence (BMS data, third-party test results, supplier certification). 6. Notify Legal to assess regulatory exposure."
+    },
+    {
+      "title": "How should Tesla respond to 'lock-charging (锁电)' accusations?",
+      "content": "State clearly: 'Tesla does not artificially limit battery capacity. All OTA updates that affect BMS parameters are designed to protect battery longevity or improve range estimation accuracy. We have never used software updates to mask hardware defects.' Reference the China Association of Automobile Manufacturers' confirmation that the '8 brands summoned' narrative was AI-generated misinformation. Offer to arrange a battery health check for any concerned owner, free of charge."
+    },
+    {
+      "title": "What is the approved messaging on GB38031-2025 compliance?",
+      "content": "Tesla welcomes GB38031-2025 as a world-leading battery safety standard. All Tesla vehicles produced for the China market since January 2026 have been validated against the new test protocols. We are confident in our battery safety architecture and will publish compliance details before the July 2026 effective date."
+    },
+    {
+      "title": "How should Tesla address comparisons with BYD's Blade Battery?",
+      "content": "Do not engage in direct competitor comparison publicly. The approved response: 'Different manufacturers make different engineering choices. Tesla selects battery chemistry and cell format based on vehicle design requirements, thermal management architecture, and supply chain strategy. We stand behind the safety and reliability of our battery systems as demonstrated by our fleet data.' Internally, Tesla's LFP packs from CATL and BYD's Blade Battery share the same LFP chemistry family with comparable safety characteristics."
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+# 为内存与 Neo4j 研究图提供一致的有限子图查询及提示格式化入口。
+"""Research-memory retrieval adapters.
+
+This retriever returns a bounded subgraph.  It intentionally does not generate
+an answer; the existing LangGraph business agent remains the answer/analysis
+generator.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from open_deep_research.observability.langsmith import trace_span
+from open_deep_research.research_graph.models import (
+    RelevantSubgraph,
+    ResearchGraphScope,
+    WorkingContext,
+)
+from open_deep_research.research_graph.store import ResearchGraphStore
+
+
+# 封装存储查询，限制相关子图的节点与关系规模。
+class ResearchGraphRetriever:
+    """Small project-side facade over an in-memory or Neo4j graph store."""
+
+    # 绑定图存储并设置最大返回规模。
+    def __init__(
+        self,
+        store: ResearchGraphStore,
+        *,
+        max_nodes: int = 24,
+        max_edges: int = 48,
+    ) -> None:
+        """Configure the store and maximum subgraph size."""
+        self.store = store
+        self.max_nodes = max_nodes
+        self.max_edges = max_edges
+
+    # 按当前任务和缺口检索本次运行的相关研究记忆。
+    def retrieve(
+        self,
+        task: Any,
+        *,
+        scope: ResearchGraphScope,
+        working_context: WorkingContext | None = None,
+        query_suffix: str = "",
+    ) -> RelevantSubgraph:
+        """Retrieve local research memory relevant to the current task/gap."""
+        objective = str(getattr(task, "objective", "") or task or "")
+        evidence_needed = str(getattr(task, "evidence_needed", "") or "")
+        gaps = ""
+        seed_ids: list[str] = []
+        if working_context is not None:
+            gaps = " ".join(_context_summaries(working_context))
+            seed_ids.extend(working_context.active_claim_ids)
+            seed_ids.extend(working_context.active_evidence_ids)
+            seed_ids.extend(working_context.active_event_ids)
+        query = " ".join(part for part in (objective, evidence_needed, gaps, query_suffix) if part).strip()
+        with trace_span(
+            "research_graph_retrieval",
+            "retriever",
+            metadata={
+                "retriever_type": "research_graph",
+                "graph_backend": type(self.store).__name__,
+                "max_nodes": self.max_nodes,
+                "max_edges": self.max_edges,
+                "seed_count": len(seed_ids),
+            },
+        ) as graph_run:
+            subgraph = self.store.retrieve(
+                query,
+                run_id=scope.run_id,
+                max_nodes=self.max_nodes,
+                max_edges=self.max_edges,
+                seed_ids=seed_ids,
+            )
+            if graph_run is not None:
+                graph_run.add_outputs(
+                    {
+                        "node_count": len(subgraph.nodes),
+                        "edge_count": len(subgraph.edges),
+                    }
+                )
+            return subgraph
+
+
+# 仅渲染有限子图，并保留节点与关系 ID 以支持溯源。
+def format_relevant_subgraph(
+    subgraph: RelevantSubgraph,
+    *,
+    max_property_chars: int = 2400,
+) -> str:
+    """Render only a bounded, ID-preserving subgraph for a model prompt."""
+    if not subgraph.nodes:
+        return "No relevant Research Graph subgraph was retrieved for this task."
+    lines = [f"Research Graph subgraph (run_id={subgraph.run_id}):"]
+    for node in subgraph.nodes:
+        properties = str(node.properties)
+        if len(properties) > max_property_chars:
+            properties = properties[:max_property_chars].rstrip() + "…"
+        lines.append(
+            f"- NODE {node.node_id} [{node.node_type}] role={node.role} "
+            f"round={node.research_round}: {properties}"
+        )
+    if subgraph.edges:
+        lines.append("Relationships:")
+        for edge in subgraph.edges:
+            lines.append(
+                f"- EDGE {edge.edge_id}: {edge.source_id} -[{edge.relation_type}]-> "
+                f"{edge.target_id}"
+            )
+    lines.append("Use these graph IDs when making any evidence-backed statement.")
+    return "\n".join(lines)
+
+
+# 从工作上下文提取适合检索的摘要文本。
+def _context_summaries(context: WorkingContext) -> list[str]:
+    values: list[str] = []
+    for item in context.confirmed_findings:
+        values.append(str(getattr(item, "summary", item)))
+    for item in context.conflicts:
+        values.append(str(getattr(item, "summary", item)))
+    for item in context.open_gaps:
+        values.append(str(getattr(item, "summary", item)))
+    return values[-8:]
+
+
+__all__ = ["ResearchGraphRetriever", "format_relevant_subgraph"]

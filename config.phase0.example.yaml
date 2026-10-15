@@ -1,0 +1,22 @@
+# Offline Phase 0 profile, using the upstream config schema at the pinned commit.
+# Copy to config.yaml, then install the extension with the official CLI.
+config_version: 60
+log_level: info
+models: []
+sandbox:
+  use: deerflow.sandbox.local:LocalSandboxProvider
+memory:
+  enabled: false
+  injection_enabled: false
+scheduler:
+  enabled: false
+skills:
+  path: skills
+plugins:
+  - name: opinion
+    package: opinion-deerflow-extension
+    use: opinion_deerflow_extension:install
+    enabled: true
+    required: true
+    config:
+      enabled: true

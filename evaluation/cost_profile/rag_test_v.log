@@ -1,0 +1,59 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-8.4.0, pluggy-1.6.0 -- C:\codex_workspace\Public Opinion Research\.venv\Scripts\python.exe
+codspeed: 4.3.0 (disabled, mode: walltime, callgraph: not supported, timer_resolution: 100.0ns)
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: C:\codex_workspace\Public Opinion Research
+configfile: pyproject.toml
+plugins: anyio-4.9.0, langsmith-0.7.1, asyncio-1.3.0, benchmark-5.2.3, codspeed-4.3.0, recording-0.13.4, socket-0.7.0, syrupy-4.9.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 64 items
+
+tests/test_rag.py::test_rag_defaults_to_milvus_for_persistent_vector_store PASSED [  1%]
+tests/test_rag.py::test_rag_defaults_use_canonical_data_directories PASSED [  3%]
+tests/test_rag.py::test_rag_multimodal_vision_defaults_are_enabled PASSED [  4%]
+tests/test_rag.py::test_rag_query_rewrite_defaults_to_enabled PASSED     [  6%]
+tests/test_rag.py::test_rag_structured_metadata_weight_defaults_to_enabled PASSED [  7%]
+tests/test_rag.py::test_graph_rag_defaults_to_neo4j_backend PASSED       [  9%]
+tests/test_rag.py::test_rag_structured_metadata_weight_rejects_negative_values PASSED [ 10%]
+tests/test_rag.py::test_sub_config_defaults_match_flat_field_defaults PASSED [ 12%]
+tests/test_rag.py::test_flat_field_writes_reflect_in_sub_config_property PASSED [ 14%]
+tests/test_rag.py::test_nested_sub_config_unpacks_to_flat_fields PASSED  [ 15%]
+tests/test_rag.py::test_nested_vectorstore_config_unpacks_and_triggers_milvus_uri_derivation PASSED [ 17%]
+tests/test_rag.py::test_explicit_flat_field_wins_over_sub_config PASSED  [ 18%]
+tests/test_rag.py::test_model_dump_does_not_contain_sub_config_keys PASSED [ 20%]
+tests/test_rag.py::test_model_fields_does_not_contain_sub_config_names PASSED [ 21%]
+tests/test_rag.py::test_rag_loader_package_exports_new_and_legacy_loader_apis PASSED [ 23%]
+tests/test_rag.py::test_rag_legacy_paths_warn_but_remain_usable PASSED   [ 25%]
+tests/test_rag.py::test_rag_defaults_fall_back_to_legacy_knowledge_path_when_needed PASSED [ 26%]
+tests/test_rag.py::test_milvus_vectorstore_backend_adds_and_searches_chunks PASSED [ 28%]
+tests/test_rag.py::test_graph_rag_expands_related_competitor_evidence FAILED [ 29%]
+tests/test_rag.py::test_reciprocal_rank_fusion_prefers_results_seen_by_both_retrievers PASSED [ 31%]
+tests/test_rag.py::test_hybrid_retriever_boosts_structured_metadata_matches PASSED [ 32%]
+tests/test_rag.py::test_keyword_reranker_uses_structured_metadata_context PASSED [ 34%]
+tests/test_rag.py::test_query_rewriter_cleans_model_output_and_preserves_prompt PASSED [ 35%]
+tests/test_rag.py::test_query_rewriter_falls_back_to_original_query_on_failure PASSED [ 37%]
+tests/test_rag.py::test_cross_encoder_reranker_includes_structured_metadata_in_pairs PASSED [ 39%]
+tests/test_rag.py::test_neo4j_graph_rag_writes_chunks_and_expands_neighbors FAILED [ 40%]
+tests/test_rag.py::test_multimodal_image_loader_extracts_ocr_text PASSED [ 42%]
+tests/test_rag.py::test_code_file_loader_marks_language_metadata PASSED  [ 43%]
+tests/test_rag.py::test_image_routing_uses_ocr_only_for_text_heavy_images PASSED [ 45%]
+tests/test_rag.py::test_image_routing_uses_ocr_and_vision_for_diagrams PASSED [ 46%]
+tests/test_rag.py::test_image_routing_uses_vision_only_for_photos PASSED [ 48%]
+tests/test_rag.py::test_image_routing_skips_low_information_images PASSED [ 50%]
+tests/test_rag.py::test_image_routing_uses_vision_classification_when_rules_are_uncertain PASSED [ 51%]
+tests/test_rag.py::test_image_routing_falls_back_to_ocr_when_vision_fails PASSED [ 53%]
+tests/test_rag.py::test_query_image_context_reuses_routed_image_bytes PASSED [ 54%]
+tests/test_rag.py::test_enrich_query_images_appends_synthetic_context_once PASSED [ 56%]
+tests/test_rag.py::test_split_documents_creates_chunk_ids_and_preserves_metadata PASSED [ 57%]
+tests/test_rag.py::test_split_documents_uses_recursive_character_boundaries PASSED [ 59%]
+tests/test_rag.py::test_split_documents_splits_markdown_by_headers_without_crossing_sections PASSED [ 60%]
+tests/test_rag.py::test_split_documents_groups_json_item_context_and_splits_long_fields PASSED [ 62%]
+tests/test_rag.py::test_split_documents_keeps_json_scalar_array_items_separate PASSED [ 64%]
+tests/test_rag.py::test_split_documents_keeps_text_metadata_chinese_boundaries_and_overlap PASSED [ 65%]
+tests/test_rag.py::test_split_documents_uses_recursive_language_splitter_for_code PASSED [ 67%]
+tests/test_rag.py::test_knowledge_json_loader_preserves_raw_json_for_structured_split PASSED [ 68%]
+tests/test_rag.py::test_split_documents_marks_source_authority_metadata PASSED [ 70%]
+tests/test_rag.py::test_authority_adjustment_downranks_misleading_rerank_hits PASSED [ 71%]
+tests/test_rag.py::test_authority_filter_blocks_misleading_final_context PASSED [ 73%]
+tests/test_rag.py::test_rag_pipeline_retrieves_relevant_local_context 

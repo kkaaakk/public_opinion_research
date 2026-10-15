@@ -1,0 +1,904 @@
+{
+  "schema_version": "1.0",
+  "artifact": "before_after_plan_execute_benchmark_raw",
+  "version": "before",
+  "commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+  "commit_short": "d0270b6",
+  "commit_subject": "fix: address P1 reliability and web security issues",
+  "worktree_status": "",
+  "expected_commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+  "commit_matches_expected": true,
+  "benchmark_started_at_utc": "2026-09-02T03:33:31.585263+00:00",
+  "environment": {
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "python_executable": "C:\\develop\\python311\\python.exe",
+    "env_file": "C:\\codex_workspace\\Public Opinion Research\\.env",
+    "env_file_exists": true
+  },
+  "cases_path": "C:\\codex_workspace\\Public Opinion Research\\evaluation\\plan_execute_ab\\cases.jsonl",
+  "repeat_count": 1,
+  "case_timeout_seconds": 240,
+  "configuration_template": {
+    "search_api": "tavily",
+    "max_react_tool_calls": 2,
+    "max_research_rounds": 2,
+    "max_structured_output_retries": 3,
+    "allow_clarification": false,
+    "allow_plan_feedback": false,
+    "business_scenario": "public_opinion_risk",
+    "organization_context": "Benchmark context: use cited public sources and the configured local knowledge base. Do not invent private company facts; separate facts, inferences, and unresolved items.",
+    "enabled_business_agents": [
+      "public_signal",
+      "internal_knowledge",
+      "risk_assessment",
+      "response_strategy"
+    ],
+    "rag_enabled": true,
+    "retrieval_mode": "hybrid",
+    "rag_knowledge_base_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\knowledge\\public_opinion"
+    ],
+    "rag_memory_enabled": true,
+    "rag_memory_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\memory\\public_opinion\\memories.jsonl"
+    ],
+    "rag_embedding_provider": "hash",
+    "rag_vectorstore_provider": "memory",
+    "rag_reranker_provider": "simple",
+    "rag_graph_enabled": false,
+    "rag_query_rewrite_enabled": false,
+    "rag_memory_write_enabled": false,
+    "agent_observer_enabled": true,
+    "agent_observer_endpoint": "in-process-recording",
+    "agent_observer_project": "public-opinion-research-ab-benchmark",
+    "agent_observer_timeout": 0.35,
+    "research_model": "google_genai:gemini-3.5-flash",
+    "summarization_model": "google_genai:gemini-3.5-flash",
+    "compression_model": "google_genai:gemini-3.5-flash",
+    "final_report_model": "google_genai:gemini-3.5-flash",
+    "original_env_models": {
+      "research_model": "deepseek:deepseek-chat",
+      "summarization_model": "deepseek:deepseek-chat",
+      "compression_model": "deepseek:deepseek-chat",
+      "final_report_model": "deepseek:deepseek-chat"
+    },
+    "model_override_reason": "DeepSeek returned HTTP 402 Insufficient Balance during smoke run; Google fallback was used uniformly for both versions.",
+    "max_content_length": 10000,
+    "research_model_max_tokens": 1500,
+    "summarization_model_max_tokens": 512,
+    "compression_model_max_tokens": 1500,
+    "final_report_model_max_tokens": 2000,
+    "section_writer_model_max_tokens": 1200,
+    "temperature": null,
+    "temperature_note": "N/A: Configuration and model boundary do not expose a temperature parameter.",
+    "social_media_data_paths": [
+      "C:\\codex_workspace\\POR-after\\data\\social_media\\bulk_mock_posts.jsonl",
+      "C:\\codex_workspace\\POR-after\\data\\social_media\\sample_posts.jsonl"
+    ],
+    "social_media_mode": "local JSON fixtures",
+    "observer_mode": "Agent Observer v0.2 SDK with in-process event recorder"
+  },
+  "runs": [
+    {
+      "schema_version": "1.0",
+      "version": "before",
+      "case_id": "case_01_product_quality",
+      "repeat_index": 1,
+      "status": "error",
+      "started_at_utc": "2026-09-02T03:33:44.526784+00:00",
+      "finished_at_utc": "2026-09-02T03:35:26.717977+00:00",
+      "elapsed_ms": 102191,
+      "target_root": "C:\\codex_workspace\\POR-before",
+      "commit": "d0270b6be4ab09eb381db008dd62463e2d2327eb",
+      "query": "请对 Acme EV 近期‘电池续航明显下降/电池异常’舆情开展一次企业级深度调研，不预设最终结论。请分别核查：事件时间线、涉及车型与地区、投诉是否形成可重复的模式及大致影响范围、是否存在技术或安全风险与合理替代解释、企业/售后官方回应和处理进展、公开证据与本地内部资料是否一致，以及仍需核验的不确定性。请区分事实、推断和待证事项，并给出风险判断所依据的来源。",
+      "config": {
+        "search_api": "tavily",
+        "max_react_tool_calls": 2,
+        "max_research_rounds": 2,
+        "max_structured_output_retries": 3,
+        "allow_clarification": false,
+        "allow_plan_feedback": false,
+        "business_scenario": "public_opinion_risk",
+        "organization_context": "Benchmark context: use cited public sources and the configured local knowledge base. Do not invent private company facts; separate facts, inferences, and unresolved items.",
+        "enabled_business_agents": [
+          "public_signal",
+          "internal_knowledge",
+          "risk_assessment",
+          "response_strategy"
+        ],
+        "rag_enabled": true,
+        "retrieval_mode": "hybrid",
+        "rag_knowledge_base_paths": [
+          "C:\\codex_workspace\\POR-after\\data\\knowledge\\public_opinion"
+        ],
+        "rag_memory_enabled": true,
+        "rag_memory_paths": [
+          "C:\\codex_workspace\\POR-after\\data\\memory\\public_opinion\\memories.jsonl"
+        ],
+        "rag_embedding_provider": "hash",
+        "rag_vectorstore_provider": "memory",
+        "rag_reranker_provider": "simple",
+        "rag_graph_enabled": false,
+        "rag_query_rewrite_enabled": false,
+        "rag_memory_write_enabled": false,
+        "agent_observer_enabled": true,
+        "agent_observer_endpoint": "in-process-recording",
+        "agent_observer_project": "public-opinion-research-ab-benchmark",
+        "agent_observer_timeout": 0.35,
+        "research_model": "google_genai:gemini-3.5-flash",
+        "summarization_model": "google_genai:gemini-3.5-flash",
+        "compression_model": "google_genai:gemini-3.5-flash",
+        "final_report_model": "google_genai:gemini-3.5-flash",
+        "original_env_models": {
+          "research_model": "deepseek:deepseek-chat",
+          "summarization_model": "deepseek:deepseek-chat",
+          "compression_model": "deepseek:deepseek-chat",
+          "final_report_model": "deepseek:deepseek-chat"
+        },
+        "model_override_reason": "DeepSeek returned HTTP 402 Insufficient Balance during smoke run; Google fallback was used uniformly for both versions.",
+        "max_content_length": 10000,
+        "research_model_max_tokens": 1500,
+        "summarization_model_max_tokens": 512,
+        "compression_model_max_tokens": 1500,
+        "final_report_model_max_tokens": 2000,
+        "section_writer_model_max_tokens": 1200,
+        "temperature": null,
+        "temperature_note": "N/A: Configuration and model boundary do not expose a temperature parameter.",
+        "social_media_data_paths": [
+          "C:\\codex_workspace\\POR-after\\data\\social_media\\bulk_mock_posts.jsonl",
+          "C:\\codex_workspace\\POR-after\\data\\social_media\\sample_posts.jsonl"
+        ],
+        "social_media_mode": "local JSON fixtures",
+        "observer_mode": "Agent Observer v0.2 SDK with in-process event recorder"
+      },
+      "error": {
+        "type": "CancelledError",
+        "message": "",
+        "traceback": "Traceback (most recent call last):\n  File \"C:\\codex_workspace\\Public Opinion Research\\evaluation\\plan_execute_ab\\run_benchmark.py\", line 730, in run_one_case\n    await asyncio.wait_for(consume(), timeout=case_timeout_seconds)\n  File \"C:\\develop\\python311\\Lib\\asyncio\\tasks.py\", line 476, in wait_for\n    await waiter\nasyncio.exceptions.CancelledError\n"
+      },
+      "stream_updates": [
+        {
+          "namespace": [],
+          "node": "enrich_query_images",
+          "changes": null
+        },
+        {
+          "namespace": [],
+          "node": "clarify_with_user",
+          "changes": null
+        },
+        {
+          "namespace": [],
+          "node": "write_research_brief",
+          "changes": {
+            "research_brief": "我需要对 Acme EV 近期‘电池续航明显下降/电池异常’的舆情开展一次客观、不预设最终结论的企业级深度调研。请协助我核查并分析以下",
+            "supervisor_messages": {
+              "type": "override",
+              "value": [
+                {
+                  "type": "system",
+                  "content": "You are the lead supervisor for an enterprise public-opinion and brand-risk monitoring workflow. For context, today's date is Wed Sep 2, 2026.\n\n<Business Context>\nBenchmark context: use cited public sources and the configured local knowledge base. Do not invent private company facts; separate facts, inferences, and unresolved items.\n</Business Context>\n\n<Default Monitoring Window>\nlast 7 days unless the user specifies another window\n</Default Monitoring Window>\n\n<Available Business Agents>\npublic_signal, internal_knowledge, risk_assessment, response_strategy\n</Available Business Agents>\n\n<Task>\nUse the \"ConductResearch\" tool to delegate focused work to specialized sub-agents. Each tool call must include:\n- research_topic: complete standalone instructions\n- agent_role: one of the available business agent roles\n- expected_output: the evidence format or deliverable expected from that role\n\nWhen the evidence is sufficient for a risk assessment and response plan, call \"ResearchComplete\".\n</Task>\n\n<Role Guide>\n- public_signal: collect public news, official notices, social discussion signals, complaint themes, sentiment direction, spread patterns, competitor/category context, and event timelines. Prefer social_media_skill tools for social platforms and web_search for public news, official notices, and competitor context.\n- internal_knowledge: collect internal facts from local documents, product notes, PR playbooks, FAQs, historical incident reviews, and memory. Prefer rag_search.\n- risk_assessment: separate confirmed facts, disputed claims, rumors, and unsupported assertions; assess regulatory, consumer-rights, product-quality, privacy, advertising, and contract risk. Use reliable public sources, social evidence, and rag_search when internal facts or rules matter.\n- response_strategy: produce response posture, holding statements, FAQ points, stakeholder messages, action recommendations, and follow-up monitoring keywords. Use rag_search for internal PR playbooks and historical cases.\n</Role Guide>\n\n<RAG Policy>\nTreat rag_search as the internal evidence channel. Use it for company/product facts, prior cases, PR playbooks, FAQs, compliance red lines, and internal memory.\nTreat web_search as the external public-opinion channel. Use it for current news, public statements, social discussion, competitors, and regulators.\nWhen local RAG is enabled, delegate at least one internal_knowledge, risk_assessment, or response_strategy task that explicitly asks the sub-agent to use rag_search for internal evidence.\n</RAG Policy>\n\n<Delegation Strategy>\n1. Use think_tool before delegation to plan the roles needed.\n2. For a full public-opinion risk request, prefer the compact 4-agent workflow: public_signal, internal_knowledge, risk_assessment, and response_strategy.\n3. Keep each delegated task non-overlapping.\n4. After returned findings, use think_tool to identify evidence gaps and either delegate targeted follow-up work or call ResearchComplete.\n</Delegation Strategy>\n\n<Hard Limits>\n- Maximum 5 parallel agents per iteration.\n- Stop after 6 supervisor tool iterations if enough evidence cannot be found.\n- Avoid extra delegation once the final report can provide a clear risk level, evidence basis, response posture, and follow-up monitoring plan.\n</Hard Limits>",
+                  "name": null,
+                  "tool_calls": []
+                },
+                {
+                  "type": "human",
+                  "content": "我需要对 Acme EV 近期‘电池续航明显下降/电池异常’的舆情开展一次客观、不预设最终结论的企业级深度调研。请协助我核查并分析以下",
+                  "name": null,
+                  "tool_calls": []
+                }
+              ]
+            },
+            "budget_usage": {
+              "model_calls": 1,
+              "tool_calls": 0,
+              "search_calls": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0,
+              "budget_warnings": [],
+              "degradation_reasons": []
+            }
+          }
+        },
+        {
+          "namespace": [],
+          "node": "plan_report_sections",
+          "changes": {
+            "sections": [
+              {
+                "name": "1. 报告背景与监控概述",
+                "description": "简述针对 Acme EV “电池续航明显下降/电池异常”舆情事件的监控背景、调研范围与报告结构。",
+                "research": false,
+                "content": "",
+                "agent_role": "",
+                "status": "pending"
+              },
+              {
+                "name": "2. 舆情传播特征与公众诉求分析",
+                "description": "梳理本次 Acme EV 电池续航下降舆情事件的起因、主要传播渠道与节点、用户投诉的主要话语特征及情感倾向。",
+                "research": true,
+                "content": "",
+                "agent_role": "public_signal",
+                "status": "pending"
+              },
+              {
+                "name": "3. 内部技术事实与产品合规核查",
+                "description": "基于内部已知信息与技术规范，核查有关 Acme EV 电池设计寿命、衰减标准、售后话术以及既往类似故障案例，确立事实基线。",
+                "research": true,
+                "content": "",
+                "agent_role": "internal_knowledge",
+                "status": "pending"
+              },
+              {
+                "name": "4. 舆情合规与品牌声誉风险评估",
+                "description": "对比公众指控与内部事实，识别真实缺陷与夸大信息，评估潜在的法律诉讼、监管处罚及品牌信任度崩塌等风险级别，形成风险矩阵。",
+                "research": true,
+                "content": "",
+                "agent_role": "risk_assessment,internal_knowledge",
+                "status": "pending"
+              },
+              {
+                "name": "5. 危机公关应对与长效改进建议",
+                "description": "制定针对公众、车主及媒体的口径与回应话术（Holding Statement），规划长短期技术排查与客户关怀行动，并设定后续舆情监控关键词。",
+                "research": true,
+                "content": "",
+                "agent_role": "response_strategy",
+                "status": "pending"
+              }
+            ],
+            "budget_usage": {
+              "model_calls": 1,
+              "tool_calls": 0,
+              "search_calls": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0,
+              "budget_warnings": [],
+              "degradation_reasons": [
+                "Planned 5 report sections (public-opinion mode)."
+              ]
+            }
+          }
+        },
+        {
+          "namespace": [
+            "research_supervisor:72d95888-3d4c-e391-a6c0-cfc60b932bbe"
+          ],
+          "node": "internal_knowledge_agent",
+          "changes": {
+            "role_reports": {
+              "internal_knowledge": "Agent role: internal_knowledge\nAgent name: Internal Knowledge Agent\nExpected output: Internal RAG evidence about company facts, product facts, PR playbooks, FAQs, prior cases, and memory, with local citations.\n\n[]"
+            },
+            "agent_memories": {
+              "internal_knowledge": [
+                {
+                  "title": "internal_knowledge completed role report",
+                  "content": "Agent role: internal_knowledge\nAgent name: Internal Knowledge Agent\nExpected output: Internal RAG evidence about company facts, product facts, PR playbooks, FAQs, prior cases, and memory, with local citations.\n\n[]",
+                  "source": "current_public_opinion_run",
+                  "raw_note_count": 1
+                }
+              ]
+            },
+            "notes": [
+              "Agent role: internal_knowledge\nAgent name: Internal Knowledge Agent\nExpected output: Internal RAG evidence about company facts, product facts, PR playbooks, FAQs, prior cases, and memory, with local citations.\n\n[]"
+            ],
+            "raw_notes": [
+              "[]\nLocal knowledge base results:\nUse only the cited excerpts below for claims about local knowledge or chat memory. If the excerpts do not support an answer, say the local knowledge base does not contain enough cited evidence. If a source is marked memory_type=deprecated or memory_usage=do_not_adopt, treat it as a prohibition or obsolete fact, not a recommendation.\n\n--- SOURCE 1: media_response_faq ---\nSOURCE: C:/codex_workspace/POR-after/data/knowledge/public_opinion/faq/media_response_faq.json\nCHUNK ID: 27c7c59fdd181df5-5-d8b2a2038637\nMETADATA: fields=$.records[4].title, $.records[4].content; source_status=authoritative; authority_score=0.1250; lines=20-21\nEXCERPT:\ntitle: How should Tesla respond to 'lock-charging (锁电)' accusations? content: State clearly: 'Tesla does not artificially limit battery capacity. All OTA updates that affect BMS parameters are designed to protect battery longevity or improve range estimation accuracy. We have never used software updates to mask hardware defects.' Reference the China Association of Automobile Manufacturers' confirmation that the '8 brands summoned' narrative was AI-generated misinformation. Offer to arrange a...\n\n--- SOURCE 2: Tesla Battery-Related Crisis Cases — Internal Post-Mortem Review ---\nSOURCE: C:/codex_workspace/POR-after/data/knowledge/public_opinion/historical_cases/tesla_battery_crises_review.md\nCHUNK ID: f33b8141530977d6-3-86b4cbbb78b6\nMETADATA: heading=Tesla Battery-Related Crisis Cases — Internal Post-Mortem Review > Case 3: 2026 China \"OTA Lock-Charging\" Rumor Wave; source_status=authoritative; authority_score=0.1250; lines=42-64\nEXCERPT:\n**Timeline:** - 2026-03: Social media posts claiming \"8 EV brands summoned by SAMR for OTA battery lock-charging\" - 2026-03: China Association of Automobile Manufacturers debunked as \"AI-generated malicious rumor\" - 2026-05: Tesla China officially denied being summoned or investigated - Current: Residual social media discussion continues **What Went Right:** - Rapid denial through official channels - Industry association external validation - No kneejerk engineering changes **What Could Be Be...\n\n### Sources\n[1] media_response_faq: C:/codex_workspace/POR-after/data/knowledge/public_opinion/faq/media_response_faq.json (chunk: 27c7c59fdd181df5-5-d8b2a2038637)\n[2] Tesla Battery-Related Crisis Cases — Internal Post-Mortem Review: C:/codex_workspace/POR-after/data/knowledge/public_opinion/historical_cases/tesla_battery_crises_review.md (chunk: f33b8141530977d6-3-86b4cbbb78b6)\n[]\nNo relevant local knowledge base results were found for this query. Try a broader query, add more local documents, or fall back to web search."
+            ],
+            "budget_usage": {
+              "model_calls": 3,
+              "tool_calls": 2,
+              "search_calls": 2,
+              "input_tokens": 5305,
+              "output_tokens": 521,
+              "total_tokens": 5826,
+              "budget_warnings": [],
+              "degradation_reasons": []
+            }
+          }
+        }
+      ],
+      "observer_events": [
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 0,
+          "type": "run_started",
+          "span_id": null,
+          "project": "public-opinion-research",
+          "prompt": "请对 Acme EV 近期‘电池续航明显下降/电池异常’舆情开展一次企业级深度调研，不预设最终结论。请分别核查：事件时间线、涉及车型与地区、投诉是否形成可重复的模式及大致影响范围、是否存在技术或安全风险与合理替代解释、企业/售后官方回应和处理进展、公开证据与本地内部资料是否一致，以及仍需核验的不确定性。请区分事实、推断和待证事项，并给出风险判断所依据的来源。",
+          "metadata": {
+            "framework": "langgraph",
+            "workflow": "public_opinion_research",
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "logical_run_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "execution_segment_id": "segment_55975aed33a14a6b8a0b432971d03213",
+            "invocation_kind": "start",
+            "resume": false,
+            "checkpoint_id": "1f1a67f1-9a6e-61e5-8000-500e2894d378",
+            "task_id": "27fe4c37-d768-d18d-f20b-f418ea0c875e"
+          },
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 1,
+          "type": "span_started",
+          "span_id": "span_42e40a9b436640caa3e407fea9af3f16",
+          "name": "enrich_query_images",
+          "kind": "graph_node",
+          "parent_span_id": null,
+          "upstream_span_ids": [],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "enrich_query_images",
+            "node_name": "enrich_query_images",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "task_id": "27fe4c37-d768-d18d-f20b-f418ea0c875e",
+            "checkpoint_id": "1f1a67f1-9a6e-61e5-8000-500e2894d378"
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 2,
+          "type": "span_finished",
+          "span_id": "span_42e40a9b436640caa3e407fea9af3f16",
+          "duration_ms": null,
+          "output_bytes": null,
+          "output_items": null,
+          "stop_reason": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 3,
+          "type": "span_started",
+          "span_id": "span_b1594def3fd248aaa8ecba9706d66b86",
+          "name": "clarify_with_user",
+          "kind": "graph_node",
+          "parent_span_id": null,
+          "upstream_span_ids": [
+            "span_42e40a9b436640caa3e407fea9af3f16"
+          ],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "clarify_with_user",
+            "node_name": "clarify_with_user",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "task_id": "2c54f63f-385b-0e5f-a922-71a608f5454a",
+            "checkpoint_id": "1f1a67f1-9a76-6b06-8001-94452e5c9900"
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 4,
+          "type": "span_finished",
+          "span_id": "span_b1594def3fd248aaa8ecba9706d66b86",
+          "duration_ms": null,
+          "output_bytes": null,
+          "output_items": null,
+          "stop_reason": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 5,
+          "type": "span_started",
+          "span_id": "span_bd13438e9a7f4f44be22ed3649380c4a",
+          "name": "write_research_brief",
+          "kind": "graph_node",
+          "parent_span_id": null,
+          "upstream_span_ids": [
+            "span_b1594def3fd248aaa8ecba9706d66b86"
+          ],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "write_research_brief",
+            "node_name": "write_research_brief",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "task_id": "4d8bd4a3-6068-2339-e44e-e3e6eef33c8b",
+            "checkpoint_id": "1f1a67f1-9a79-6224-8002-787e7fdd9c0b"
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 6,
+          "type": "model_request",
+          "span_id": "span_bd13438e9a7f4f44be22ed3649380c4a",
+          "request_id": "req_0f48269a17614914823185258b20e63b",
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": true,
+          "component": "research_brief"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 7,
+          "type": "model_response",
+          "span_id": "span_bd13438e9a7f4f44be22ed3649380c4a",
+          "request_id": "req_0f48269a17614914823185258b20e63b",
+          "duration_ms": 23756,
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": true,
+          "success": true,
+          "component": "research_brief",
+          "input_tokens": null,
+          "output_tokens": null,
+          "cache_read_tokens": null,
+          "cache_write_tokens": null,
+          "stop_reason": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 8,
+          "type": "span_finished",
+          "span_id": "span_bd13438e9a7f4f44be22ed3649380c4a",
+          "duration_ms": null,
+          "output_bytes": null,
+          "output_items": null,
+          "stop_reason": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 9,
+          "type": "span_started",
+          "span_id": "span_3cbfb61980094187b40b589d1f6851f7",
+          "name": "plan_report_sections",
+          "kind": "graph_node",
+          "parent_span_id": null,
+          "upstream_span_ids": [
+            "span_bd13438e9a7f4f44be22ed3649380c4a"
+          ],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "plan_report_sections",
+            "node_name": "plan_report_sections",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "task_id": "696b643b-bbb2-2472-a78e-d95636b16806",
+            "checkpoint_id": "1f1a67f2-7d1a-6f2d-8003-bec746833088"
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 10,
+          "type": "model_request",
+          "span_id": "span_3cbfb61980094187b40b589d1f6851f7",
+          "request_id": "req_506b85512f264ec29e282371ce066771",
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": true,
+          "component": "report_planner"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 11,
+          "type": "model_response",
+          "span_id": "span_3cbfb61980094187b40b589d1f6851f7",
+          "request_id": "req_506b85512f264ec29e282371ce066771",
+          "duration_ms": 48699,
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": true,
+          "success": true,
+          "component": "report_planner",
+          "input_tokens": null,
+          "output_tokens": null,
+          "cache_read_tokens": null,
+          "cache_write_tokens": null,
+          "stop_reason": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 12,
+          "type": "span_finished",
+          "span_id": "span_3cbfb61980094187b40b589d1f6851f7",
+          "duration_ms": null,
+          "output_bytes": null,
+          "output_items": null,
+          "stop_reason": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 13,
+          "type": "span_started",
+          "span_id": "span_0b12325afc74479e805466c48e9bf61a",
+          "name": "research_supervisor",
+          "kind": "subgraph",
+          "parent_span_id": null,
+          "upstream_span_ids": [
+            "span_3cbfb61980094187b40b589d1f6851f7"
+          ],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "research_supervisor",
+            "node_name": "research_supervisor",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "task_id": "72d95888-3d4c-e391-a6c0-cfc60b932bbe",
+            "checkpoint_id": "1f1a67f4-4d92-6ef4-8004-ca627a2883e5"
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 14,
+          "type": "span_started",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "name": "internal_knowledge_agent",
+          "kind": "agent",
+          "parent_span_id": "span_0b12325afc74479e805466c48e9bf61a",
+          "upstream_span_ids": [],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "internal_knowledge_agent",
+            "node_name": "internal_knowledge_agent",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "task_id": "07de8d8b-0a17-6b54-25c6-c72d0bdc343c",
+            "checkpoint_id": "1f1a67f4-4d96-6de4-8000-6577ebc3a9ba"
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 15,
+          "type": "model_request",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "request_id": "req_061461f9ea464f54a72bbf0e2af42a82",
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": false
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 16,
+          "type": "span_started",
+          "span_id": "span_f9db9b0526f94f498cffdbe9bf48f189",
+          "name": "public_signal_agent",
+          "kind": "agent",
+          "parent_span_id": "span_0b12325afc74479e805466c48e9bf61a",
+          "upstream_span_ids": [],
+          "metadata": {
+            "framework": "langgraph",
+            "graph_node": "public_signal_agent",
+            "node_name": "public_signal_agent",
+            "attempt": 1,
+            "retry": false,
+            "node_execution_index": 0,
+            "thread_id": "plan-execute-ab-before-case_01_product_quality-repeat-1-3a0c498d",
+            "task_id": "9c4d3a5f-612e-3be4-6eea-dbfcd65ab0e6",
+            "checkpoint_id": "1f1a67f4-4d96-6de4-8000-6577ebc3a9ba"
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 17,
+          "type": "model_request",
+          "span_id": "span_f9db9b0526f94f498cffdbe9bf48f189",
+          "request_id": "req_ec8151ad0e5541598c36d0a2eba6751d",
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": false
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 18,
+          "type": "model_response",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "request_id": "req_061461f9ea464f54a72bbf0e2af42a82",
+          "duration_ms": 4247,
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": false,
+          "success": true,
+          "input_tokens": 1246,
+          "output_tokens": 170,
+          "cache_read_tokens": null,
+          "cache_write_tokens": null,
+          "stop_reason": "STOP"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 19,
+          "type": "tool_call",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "tool": "rag_search",
+          "tool_call_id": "7b015131-c2df-47eb-981a-78d9980a8d17",
+          "args_summary": {
+            "keys": [
+              "query"
+            ],
+            "value_lengths": {
+              "query": 17
+            }
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 20,
+          "type": "tool_result",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "tool": "rag_search",
+          "tool_call_id": "7b015131-c2df-47eb-981a-78d9980a8d17",
+          "success": true,
+          "duration_ms": 49,
+          "raw_bytes": 2517,
+          "context_bytes": 2517,
+          "artifact_created": null,
+          "artifact_bytes": null,
+          "artifact_reads": null,
+          "preview": null,
+          "tool_domain": "rag"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 21,
+          "type": "model_request",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "request_id": "req_d27ddc9bd57e4dfdb7ad4c846db67542",
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": false
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 22,
+          "type": "model_response",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "request_id": "req_d27ddc9bd57e4dfdb7ad4c846db67542",
+          "duration_ms": 2972,
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": false,
+          "success": true,
+          "input_tokens": 2155,
+          "output_tokens": 114,
+          "cache_read_tokens": null,
+          "cache_write_tokens": null,
+          "stop_reason": "STOP"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 23,
+          "type": "tool_call",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "tool": "rag_search",
+          "tool_call_id": "e592189d-11f3-4faf-aaa8-34cf5e84b4ea",
+          "args_summary": {
+            "keys": [
+              "query"
+            ],
+            "value_lengths": {
+              "query": 4
+            }
+          }
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 24,
+          "type": "tool_result",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "tool": "rag_search",
+          "tool_call_id": "e592189d-11f3-4faf-aaa8-34cf5e84b4ea",
+          "success": true,
+          "duration_ms": 13,
+          "raw_bytes": 142,
+          "context_bytes": 142,
+          "artifact_created": null,
+          "artifact_bytes": null,
+          "artifact_reads": null,
+          "preview": null,
+          "tool_domain": "rag"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 25,
+          "type": "model_request",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "request_id": "req_aaff22a3e8da415db9d027521609d40a",
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": false
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 26,
+          "type": "model_response",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "request_id": "req_aaff22a3e8da415db9d027521609d40a",
+          "duration_ms": 11127,
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": false,
+          "success": true,
+          "input_tokens": 1904,
+          "output_tokens": 237,
+          "cache_read_tokens": null,
+          "cache_write_tokens": null,
+          "stop_reason": "STOP"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 27,
+          "type": "span_finished",
+          "span_id": "span_8fdce335655c4f45a01c1196be9891a5",
+          "duration_ms": null,
+          "output_bytes": null,
+          "output_items": null,
+          "stop_reason": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 28,
+          "type": "model_response",
+          "span_id": "span_f9db9b0526f94f498cffdbe9bf48f189",
+          "request_id": "req_ec8151ad0e5541598c36d0a2eba6751d",
+          "duration_ms": 29567,
+          "model": "google_genai:gemini-3.5-flash",
+          "provider": "google_genai",
+          "structured_output": false,
+          "success": false,
+          "stop_reason": "error",
+          "error_type": "CancelledError"
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 29,
+          "type": "span_failed",
+          "span_id": "span_f9db9b0526f94f498cffdbe9bf48f189",
+          "error_type": "CancelledError",
+          "error_message": "<object object at 0x000001DCBBD50540>",
+          "duration_ms": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 30,
+          "type": "span_failed",
+          "span_id": "span_0b12325afc74479e805466c48e9bf61a",
+          "error_type": "CancelledError",
+          "error_message": "<object object at 0x000001DCBBD50A50>",
+          "duration_ms": null,
+          "metadata": null
+        },
+        {
+          "run_id": "run_f0d381e85f0b4beeac1f3d34cca957cc",
+          "sequence": 31,
+          "type": "run_failed",
+          "span_id": null,
+          "error_type": "CancelledError",
+          "error_message": "<object object at 0x000001DCBBD50A50>",
+          "duration_ms": 102050
+        }
+      ],
+      "tool_records": [
+        {
+          "tool": "rag_search",
+          "started_at": "2026-09-02T03:35:01.386762+00:00",
+          "args": {
+            "query": "Acme EV 电池续航 电池异常"
+          },
+          "success": true,
+          "duration_ms": 49,
+          "result": {
+            "type": "str",
+            "chars": 2507,
+            "urls": [],
+            "preview": "Local knowledge base results:\nUse only the cited excerpts below for claims about local knowledge or chat memory. If the excerpts do not support an answer, say the local knowledge base does not contain enough cited evidence. If a source is marked memory_type=deprecated or memory_usage=do_not_adopt, treat it as a prohibition or obsolete fact, not a recommendation.\n\n--- SOURCE 1: media_response_faq ---\nSOURCE: C:/codex_workspace/POR-after/data/knowledge/public_opinion/faq/media_response_faq.json\nCHUNK ID: 27c7c59fdd181df5-5-d8b2a2038637\nMETADATA: fields=$.records[4].title, $.records[4].content; source_status=authoritative; authority_score=0.1250; lines=20-21\nEXCERPT:\ntitle: How should Tesla respond to 'lock-charging (锁电)' accusations? content: State clearly: 'Tesla does not artificially limit"
+          }
+        },
+        {
+          "tool": "rag_search",
+          "started_at": "2026-09-02T03:35:04.408372+00:00",
+          "args": {
+            "query": "Acme"
+          },
+          "success": true,
+          "duration_ms": 13,
+          "result": {
+            "type": "str",
+            "chars": 142,
+            "urls": [],
+            "preview": "No relevant local knowledge base results were found for this query. Try a broader query, add more local documents, or fall back to web search."
+          }
+        }
+      ],
+      "role_reports": {
+        "internal_knowledge": "Agent role: internal_knowledge\nAgent name: Internal Knowledge Agent\nExpected output: Internal RAG evidence about company facts, product facts, PR playbooks, FAQs, prior cases, and memory, with local citations.\n\n[]"
+      },
+      "round_reports": [
+        {
+          "role": "internal_knowledge",
+          "round": null,
+          "mode": null,
+          "report": "Agent role: internal_knowledge\nAgent name: Internal Knowledge Agent\nExpected output: Internal RAG evidence about company facts, product facts, PR playbooks, FAQs, prior cases, and memory, with local citations.\n\n[]",
+          "node": "internal_knowledge_agent",
+          "namespace": [
+            "research_supervisor:72d95888-3d4c-e391-a6c0-cfc60b932bbe"
+          ]
+        }
+      ],
+      "research_reviews": [],
+      "completed_research_tasks": [],
+      "final_report": "",
+      "metrics": {
+        "duration_ms": 102191,
+        "node_executions": 7,
+        "agent_executions": 2,
+        "model_calls": 6,
+        "tool_calls": 2,
+        "web_search_calls": 0,
+        "rag_calls": 2,
+        "mcp_calls": 0,
+        "social_media_calls": 0,
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "token_usage_observed_responses": 6,
+        "token_usage_missing_responses": 3,
+        "public_signal_executions": 1,
+        "internal_knowledge_executions": 1,
+        "risk_assessment_executions": 0,
+        "response_strategy_executions": 0,
+        "research_review_executions": 0,
+        "research_rounds": 1,
+        "followup_rounds": 0,
+        "research_review_count": 0,
+        "research_gap_count": 0,
+        "next_tasks_count": 0,
+        "public_signal_followup_tasks": 0,
+        "internal_knowledge_followup_tasks": 0,
+        "duplicate_task_count": 0,
+        "review_triggered_followup": false,
+        "max_research_round_reached": false,
+        "node_sequence": [
+          "enrich_query_images",
+          "clarify_with_user",
+          "write_research_brief",
+          "plan_report_sections",
+          "research_supervisor",
+          "internal_knowledge_agent",
+          "public_signal_agent"
+        ],
+        "node_kinds": {
+          "enrich_query_images": "graph_node",
+          "clarify_with_user": "graph_node",
+          "write_research_brief": "graph_node",
+          "plan_report_sections": "graph_node",
+          "research_supervisor": "subgraph",
+          "internal_knowledge_agent": "agent",
+          "public_signal_agent": "agent"
+        },
+        "tool_names": [
+          "rag_search",
+          "rag_search"
+        ],
+        "final_report_chars": 0,
+        "final_report_tokens": null,
+        "final_report_token_note": "N/A: no tokenizer is used by the benchmark harness; characters are exact.",
+        "observer_event_count": 32
+      }
+    }
+  ],
+  "benchmark_finished_at_utc": "2026-09-02T03:35:26.720762+00:00",
+  "status": "completed"
+}

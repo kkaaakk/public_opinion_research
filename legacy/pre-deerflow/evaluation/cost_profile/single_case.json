@@ -1,0 +1,26 @@
+{
+  "case_id": "cost_case_tesla_safety_public_opinion",
+  "title": "Tesla China vehicle safety and assisted-driving public opinion",
+  "category": "新能源汽车事故/品牌风险",
+  "query": "截至 2026-09-02，请在中国大陆公开资料范围内，回顾 2026-06-01 至 2026-09-02 关于特斯拉中国车辆安全、制动或辅助驾驶事故的公开舆情，完成一次企业级深度研究。研究范围、时间窗口、地区和输出格式已经确定，无需向用户追问。请建立事故与监管时间线，核查车型/软件版本/道路/伤亡等可验证事实，比较车主、目击者、新闻、官方和监管口径，分析技术故障与驾驶行为等替代解释，评估召回/整改、客户服务、法律合规和品牌传播风险，并区分已证实事实、单方说法、历史背景与仍需补查的事项。请给出带来源的风险判断、置信度和后续核验任务，不要预设事故责任或最终结论。",
+  "required_dimensions": [
+    "accident and regulatory timeline",
+    "vehicle/software/road/consequence facts",
+    "official and independent source corroboration",
+    "technical versus driver-behavior alternatives",
+    "recall/remediation/legal/brand implications",
+    "uncertainty and follow-up verification"
+  ],
+  "critical_dimensions": [
+    "accident and regulatory timeline",
+    "official and independent source corroboration",
+    "technical versus driver-behavior alternatives"
+  ],
+  "expected_source_types": [
+    "news_media",
+    "official",
+    "regulatory",
+    "social_media",
+    "historical_cases"
+  ]
+}
