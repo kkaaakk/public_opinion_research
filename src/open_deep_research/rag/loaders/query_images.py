@@ -1,3 +1,4 @@
+# 识别用户消息中的图片引用，并转换为临时查询上下文而非持久化知识。
 """Recognize user images with Vision as temporary query context."""
 
 import base64
@@ -26,6 +27,7 @@ TEXT_IMAGE_PATH_RE = re.compile(
 )
 
 
+# 从消息提取图片，调用识别流程并返回可注入本轮问题的文本。
 def build_query_image_context(
     messages: Sequence[Any],
     *,
@@ -80,18 +82,21 @@ def build_query_image_context(
     return "\n\n".join(sections)
 
 
+# 遍历消息历史，依次提取其中的图片引用。
 def _iter_message_image_refs(messages: Sequence[Any]) -> Iterable[Any]:
     for message in messages:
         content = _message_content(message)
         yield from _iter_content_image_refs(content)
 
 
+# 兼容消息对象与字典，读取消息内容字段。
 def _message_content(message: Any) -> Any:
     if isinstance(message, Mapping):
         return message.get("content")
     return getattr(message, "content", None)
 
 
+# 解析结构化内容块中的图片地址或图片数据。
 def _iter_content_image_refs(content: Any) -> Iterable[Any]:
     if isinstance(content, str):
         yield from _iter_text_image_refs(content)
@@ -127,6 +132,7 @@ def _iter_content_image_refs(content: Any) -> Iterable[Any]:
                 yield value.strip()
 
 
+# 从文本图片引用中提取待读取的图片位置。
 def _iter_text_image_refs(text: str) -> Iterable[str]:
     for data_url in DATA_IMAGE_RE.finditer(text):
         yield data_url.group(0)
@@ -134,6 +140,7 @@ def _iter_text_image_refs(text: str) -> Iterable[str]:
         yield match.group("path").strip().strip("'\"")
 
 
+# 按图片引用类型读取图片字节，并执行大小等校验。
 def _read_image_ref(image_ref: Any, *, max_bytes: int) -> tuple[bytes, str, str]:
     if isinstance(image_ref, bytes):
         return (
@@ -170,6 +177,7 @@ def _read_image_ref(image_ref: Any, *, max_bytes: int) -> tuple[bytes, str, str]
     return _read_image_path(Path(stripped_ref).expanduser(), max_bytes=max_bytes)
 
 
+# 从本地路径读取图片内容，供问题图片识别使用。
 def _read_image_path(path: Path, *, max_bytes: int) -> tuple[bytes, str, str]:
     if path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
         raise ValueError(f"unsupported query image extension: {path.suffix}")
@@ -185,6 +193,7 @@ def _read_image_path(path: Path, *, max_bytes: int) -> tuple[bytes, str, str]:
     )
 
 
+# 检查图片数据大小，超出允许上限时拒绝处理。
 def _validate_size(image_bytes: bytes, *, max_bytes: int) -> bytes:
     if max_bytes <= 0:
         raise ValueError("max query image bytes must be greater than 0")

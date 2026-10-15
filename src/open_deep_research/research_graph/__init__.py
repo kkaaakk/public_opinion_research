@@ -1,3 +1,4 @@
+# 导出研究图模型、存储、检索、工作区和上下文策略的统一接口。
 """Per-run Research Graph and context-management subsystem."""
 
 from open_deep_research.research_graph.compaction import (

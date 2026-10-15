@@ -1,3 +1,4 @@
+# 提供报告两两比较和多份报告统一排序的模型评估入口。
 from langchain_anthropic import ChatAnthropic
 from langsmith.evaluation import evaluate_comparative
 from pydantic import BaseModel, Field
@@ -27,11 +28,13 @@ Which agent was able to find better sources and better answer the question? The 
 With those criteria in mind, please select which response you prefer, and explain why!
 """
 
+# 定义两份报告比较的胜负或排序结果。
 class HeadToHeadRanking(BaseModel):
     reasoning: str = Field(description="The reasoning for why you selected the preferred answer. This should be a detailed explanation!")
     preferred_answer: int = Field(description="The preferred answer between 1 and 2, where 1 is the first response, 2 is the second response.")
 
 
+# 将两份报告交给评估模型，根据统一准则判定排序。
 def head_to_head_evaluator(inputs: dict, outputs: list[dict]) -> list:
     grader_llm = ChatAnthropic(
         model="claude-opus-4-20250514",
@@ -83,12 +86,14 @@ With those criteria in mind, please rank the responses from 1 to 3, where 1 is t
 And please explain why you selected the ranking you did!
 """
 
+# 定义多份报告排名的结构化输出。
 class Rankings(BaseModel):
     reasoning: str = Field(description="The reasoning for why you selected the preferred answer. This should be a detailed explanation!")
     preferred_answer: int = Field(description="The preferred answer between 1 and 3, where 1 is the first response, 2 is the second response, and 3 is the third response.")
     second_best_answer: int = Field(description="The second best answer between 1 and 3, where 1 is the first response, 2 is the second response, and 3 is the third response.")
     worst_answer: int = Field(description="The worst answer between 1 and 3, where 1 is the first response, 2 is the second response, and 3 is the third response.")
 
+# 同时比较多份报告并生成整体排名。
 def free_for_all_evaluator(inputs: dict, outputs: list[dict]) -> list:
     grader_llm = ChatAnthropic(
         model="claude-opus-4-20250514",

@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- 研究仪表盘模板：参数输入、SSE 进度展示、历史归档及报告操作。 -->
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Public Opinion Research</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=20261008-history-3">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
 </head>
@@ -13,9 +14,36 @@
         <header class="header">
             <h1>Public Opinion Research</h1>
             <span class="subtitle">Enterprise public-opinion and brand-risk monitoring</span>
+            <a class="history-jump" href="#history-panel">查看研究历史</a>
         </header>
 
-        <!-- Input -->
+        <div class="workspace">
+        <!-- 历史侧栏：搜索、分页和导入；记录列表由 JavaScript 动态生成。 -->
+        <aside id="history-panel" class="history-panel" aria-labelledby="history-heading">
+            <div class="history-header">
+                <h2 id="history-heading">研究历史</h2>
+                <span id="history-count" class="history-count" aria-live="polite">0</span>
+            </div>
+            <p class="history-description">保留研究结果和中断前的阶段内容</p>
+            <label for="history-search" class="history-search-label">搜索主题或报告内容</label>
+            <input id="history-search" class="history-search" type="search"
+                placeholder="搜索研究历史" maxlength="200" autocomplete="off">
+            <div class="history-actions">
+                <button id="history-refresh" class="btn-action" type="button">刷新</button>
+                <button id="history-import" class="btn-action" type="button">导入 LangSmith</button>
+            </div>
+            <p id="history-feedback" class="history-feedback hidden" role="status"></p>
+            <p id="history-message" class="history-message" role="status">正在加载历史记录…</p>
+            <div id="history-list" class="history-list" aria-label="研究运行记录"></div>
+            <div id="history-pagination" class="history-pagination hidden">
+                <button id="history-prev" class="btn-action" type="button" aria-label="历史记录上一页">上一页</button>
+                <span id="history-page"></span>
+                <button id="history-next" class="btn-action" type="button" aria-label="历史记录下一页">下一页</button>
+            </div>
+        </aside>
+
+        <main class="research-workspace">
+        <!-- 研究表单：收集主题、模型、搜索方式、深度和内部知识开关。 -->
         <section class="input-panel">
             <label for="topic" class="input-label">请输入需要分析的品牌、企业、产品或舆情事件</label>
             <textarea id="topic" class="topic-input"
@@ -27,6 +55,8 @@
                     <label for="model">Model</label>
                     <select id="model">
                         <option value="deepseek:deepseek-flash" selected>DeepSeek V4.1 Flash</option>
+                        <option value="deepseek:deepseek-v4-flash">DeepSeek V4 Flash</option>
+                        <option value="deepseek:deepseek-chat">DeepSeek Chat</option>
                         <option value="openai:gpt-4.1">GPT-4.1</option>
                         <option value="openai:gpt-4o">GPT-4o</option>
                         <option value="anthropic:claude-sonnet-4-20250514">Claude Sonnet 4</option>
@@ -50,12 +80,14 @@
                         <option value="deep">Deep</option>
                     </select>
                 </div>
-                <button id="start-btn" class="btn-start" onclick="startResearch()">
-                    开始舆情分析
-                </button>
-                <button id="stop-btn" class="btn-stop hidden" onclick="stopResearch()">
-                    Stop
-                </button>
+                <div class="research-actions">
+                    <button id="start-btn" class="btn-start" onclick="startResearch()">
+                        开始舆情分析
+                    </button>
+                    <button id="stop-btn" class="btn-stop hidden" onclick="stopResearch()">
+                        Stop
+                    </button>
+                </div>
             </div>
             <div id="po-extra" style="margin-top:12px;padding:14px 16px;background:#f6f8fa;border-radius:8px;border:1px solid var(--border);">
                 <div style="margin-bottom:10px;">
@@ -71,29 +103,40 @@
                     Requires documents in <code>data/knowledge/</code> and <code>data/memory/</code>
                 </div>
             </div>
-            </div>
+            <!-- 可选访问令牌仅由当前页面读取，并作为 API 请求头发送。 -->
+            <details id="api-settings" class="api-settings">
+                <summary>访问设置（可选）</summary>
+                <label for="api-token">访问令牌</label>
+                <input id="api-token" class="topic-input" type="password" autocomplete="off"
+                    placeholder="服务开启认证时填写，仅在当前页面使用">
+            </details>
         </section>
 
-        <!-- Status -->
+        <!-- 运行状态：由 app.js 更新当前阶段与耗时。 -->
         <div id="status-bar" class="status-bar hidden">
             <span id="status-text"></span>
             <span id="status-timer" class="status-timer"></span>
         </div>
 
-        <!-- Live Log -->
+        <!-- 实时日志：显示研究节点产生的进度内容。 -->
         <section id="log-panel" class="log-panel hidden">
             <div id="log-entries" class="log-entries"></div>
         </section>
 
-        <!-- Results -->
+        <!-- 结果区域：展示经过净化的报告、用量与归档信息。 -->
         <section id="results-panel" class="results-panel hidden">
             <div class="results-header">
-                <h2>Research Report</h2>
+                <div class="results-heading">
+                    <h2 id="results-title">研究报告</h2>
+                    <p id="report-meta" class="report-meta"></p>
+                </div>
                 <div class="results-actions">
+                    <button id="reuse-btn" class="btn-action hidden" type="button">沿用参数</button>
                     <button class="btn-action" onclick="downloadReport()">Download</button>
                     <button class="btn-action" onclick="copyReport()">Copy</button>
                 </div>
             </div>
+            <p id="report-notice" class="report-notice hidden" role="alert"></p>
             <div id="report-content" class="report-content"></div>
             <div id="usage-bar" class="usage-bar hidden">
                 <span>Tokens: <strong id="usage-total">0</strong></span>
@@ -105,7 +148,7 @@
             </div>
         </section>
 
-        <!-- Empty State -->
+        <!-- 首次使用占位：提供可一键填入的示例主题。 -->
         <section id="empty-state" class="empty-state">
             <div class="empty-icon">🔬</div>
             <p>输入需要分析的舆情话题，点击 <strong>开始舆情分析</strong></p>
@@ -116,11 +159,14 @@
             </div>
         </section>
 
+        </main>
+        </div>
+
         <footer class="footer">
             Public Opinion Research · 企业舆情风险研究与处置辅助系统
         </footer>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20261008-history-3"></script>
 </body>
 </html>

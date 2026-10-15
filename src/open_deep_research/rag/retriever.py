@@ -1,3 +1,4 @@
+# 组合向量与 BM25 召回，通过 RRF 和元数据加权生成统一候选。
 """本地 RAG hybrid retriever。
 
 本模块解决“召回”问题：给定 query，先找一批可能相关的 chunk。
@@ -34,6 +35,7 @@ class BM25Index:
     的关键词召回需求。对于中小型本地知识库，这样足够轻量。
     """
 
+    # 为分块建立分词统计及 BM25 计算所需的语料索引。
     def __init__(self, chunks: list[RAGChunk], k1: float = 1.5, b: float = 0.75):
         self.chunks = chunks
         self.k1 = k1
@@ -97,6 +99,7 @@ class HybridChunkRetriever:
     Dense 和 BM25 的候选使用 RRF 融合，后续再交给 reranker 精排。
     """
 
+    # 绑定向量、关键词及可选图索引，保存融合召回参数。
     def __init__(
         self,
         vectorstore: VectorStoreBackend,
@@ -245,6 +248,7 @@ class HybridChunkRetriever:
         return selected
 
 
+# 按排名位置执行倒数排名融合，以分块 ID 合并向量和关键词结果。
 def reciprocal_rank_fusion(
     vector_results: list[RetrievalResult],
     keyword_results: list[RetrievalResult],
@@ -289,6 +293,7 @@ def reciprocal_rank_fusion(
     return fused
 
 
+# 为查询与分块元数据匹配的结果增加有限分数。
 def apply_structured_metadata_boost(
     query: str,
     results: list[RetrievalResult],
@@ -318,6 +323,7 @@ def apply_structured_metadata_boost(
     return boosted_results
 
 
+# 计算查询词与结构化元数据之间的匹配分数。
 def _structured_metadata_score(query_terms: set[str], chunk: RAGChunk) -> float:
     structured_context = build_structured_context_text(
         source=chunk.source,

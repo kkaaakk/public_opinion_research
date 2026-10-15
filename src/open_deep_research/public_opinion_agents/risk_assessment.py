@@ -1,3 +1,4 @@
+# 配置风险评估角色：交叉核验主张并分析合规、法律和产品风险。
 """Risk assessment agent specification."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec

@@ -1,3 +1,4 @@
+# 维护代码扩展名与 LangChain 语言枚举的映射，供语言感知分块使用。
 """Code file language mapping for RAG loading and splitting."""
 
 from langchain_text_splitters import Language
@@ -66,6 +67,7 @@ LANGUAGE_ALIASES: dict[str, str] = {
 SUPPORTED_LANGUAGE_VALUES = {language.value for language in Language}
 
 
+# 按源代码扩展名查询对应的分块语言。
 def language_for_extension(extension: str) -> str | None:
     """Return a LangChain language value for a source code extension."""
     normalized_extension = extension.strip().lower()
@@ -77,6 +79,7 @@ def language_for_extension(extension: str) -> str | None:
     return None
 
 
+# 归一化语言名称并解析为 LangChain 的 Language 枚举。
 def language_enum_from_name(language: str | None) -> Language | None:
     """Normalize a language name and return LangChain's Language enum."""
     normalized_language = str(language or "").strip().lower()

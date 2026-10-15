@@ -1,0 +1,62 @@
+## 舆情与品牌风险监测报告——研究范围与方法论说明
+
+### 1. 研究范围界定
+
+本报告针对特斯拉中国（Tesla China）开展企业级深度舆情与品牌风险研究，监测窗口为2026年初至2026年9月上旬，重点聚焦以下维度：
+
+- **监管与合规风险**：2026年8月21日国家市场监督管理总局（SAMR）公告的特斯拉大规模召回事件
+- **市场与竞争风险**：销量走势、市场份额变化、国产竞品（比亚迪、小米、华为等）冲击
+- **技术落地风险**：FSD（全自动驾驶）中国落地进展与监管障碍
+- **地缘与公司治理风险**：WSJ"剥离中国业务"传闻及中美脱钩叙事
+- **产品与设计风险**：隐藏式门把手安全争议、舱内摄像头隐私问题
+- **品牌与舆论风险**：历史维权事件沉淀、社交媒体情绪、车主信任度
+
+### 2. 数据源覆盖与采集方式
+
+本研究综合以下三类数据源：
+
+| 数据源类型 | 具体平台/渠道 | 采集方式 |
+|---|---|---|
+| **官方与监管** | SAMR官网及缺陷产品召回技术中心、工信部、tesla.cn官方公告 | Web搜索 + 官方档案核对 |
+| **媒体与公开报道** | 新浪财经、证券时报、界面新闻、Reuters、BBC中文、NYT中文、CNBC、财联社、IT之家等 | Web搜索（多轮关键词查询） |
+| **内部知识库** | 危机响应预案、合规档案、历史案例复盘、FAQ文档 | RAG本地检索 |
+
+### 3. 关键证据缺口声明（重要）
+
+**社交/情感数据API全部不可用。** 本研究过程中，所有社交平台数据接口（get_public_opinion_snapshot、get_trending_keywords、search_posts、search_complaints）在全部研究轮次中持续返回`URLError (WinError 10061 连接被拒绝)`，数据源处于宕机状态[20]。因此：
+
+- **无法获取**微博、抖音、小红书等原生平台的帖子数量统计
+- **无法获取**热搜排名、上榜时长、话题阅读量等热度量化指标
+- **无法获取**AI情感判定（正面/负面/中立比例）数据
+- **无法获取**12315/12365投诉量统计
+
+此数据空缺**不应被解读为负面社交信号的缺失**。本报告中所有涉及情感方向和热度的判断均来源于媒体报道框架、论坛评论交叉引用和可追溯的社交平台片段文本，属于定性推断而非量化风险等级。若社交API后续恢复，建议补抓2026年8月21日至9月2日窗口内的历史热搜、帖量与投诉数据作为验证性证据。
+
+### 4. 研究方法说明
+
+本研究采用多轮迭代的三角验证方法：首轮（Round 1）进行全维度扫描，确认核心风险事件和叙事框架；第二轮（Round 2）针对四个决策相关研究缺口（PR-001至PR-004）进行定向补查，涵盖：召回数字权威对账、官方声明发布情况、社交平台情绪量化缺失的替代信号、舱内摄像头隐私及规避行为验证。各轮之间通过交叉引用不同来源（官方公告、主流媒体、内部知识库）确保关键事实的可信度分级。
+
+### 5. 报告结构说明
+
+本报告后续章节将依次呈现：核心风险事件全景（召回事件详析）、市场与竞争风险、FSD落地与合规风险、地缘与公司治理风险、品牌情感与信任风险、风险等级评估与应对建议。每章末尾标注引用的详细来源。需要特别说明的是：由于社交API宕机导致的原生平台情绪数据缺失，第六章风险评级部分将更多依赖媒体交叉引用和定性推断，并在评级中明确标注不确定性。
+
+### Sources
+
+[1] 新浪财经 — 《重磅！特斯拉大规模召回超571万辆车》(2026-08-21): https://finance.sina.com.cn/roll/2026-08-21/doc-iniparan1328215.shtml
+[2] Reuters — "Tesla and others begin record vehicle recall in China" (2026-08-21): https://www.reuters.com/world/tesla-fix-software-millions-china-made-imported-evs-china-2026-08-21
+[3] BBC News 中文 — 《特斯拉为何卷入中国大规模汽车召回风波？》: https://www.bbc.com/zhongwen/articles/czxzdwp7re1o/trad
+[4] NYT中文网 — 《中国宣布规模最大汽车召回行动，涉及特斯拉等九家车企》: https://cn.nytimes.com/business/20260824/china-car-recall-doors
+[5] 证券时报/人民财讯 — "特斯拉召回部分国产及进口纯电动汽车" (2026-08-21): https://www.stcn.com/article/detail/4096912.html
+[6] SAMR缺陷产品召回技术中心公告 (2026-08-21): https://www.samrdprc.org.cn/qczh/gnzhqc/202608/t20260821_115904.html
+[7] samr.gov.cn召回公告 (2026-08-21): https://www.samr.gov.cn/zw/zh/art/2026/art_4223bf2706a84189b425d58124dbac7d.html
+[8] Tesla中国官网"车门应急标识及事故后降窗召回": https://www.tesla.cn/support/recall-door-handle-warning-label
+[9] Tesla中国官网"辅助转向注意力监测OTA召回": https://www.tesla.cn/support/recall-autosteer-attention-monitoring
+[10] Electrek — "Tesla China sales are crashing as exports surge" (2026-08-04): https://electrek.co/2026/08/04/tesla-china-sales-crash-exports-surge-h1-2026
+[11] BASENOR评论 — "Tesla China Sales Are Down 10%, Not Up 36%—Here's Why" (2026-07-16): https://www.basenor.com/blogs/news/tesla-china-sales-are-down-10-not-up-36-heres-why
+[12] Tesla China Crisis Response Playbook — CONFIDENTIAL: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/pr_playbooks/tesla_china_crisis_playbook.md
+[13] media_response_faq.json: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/faq/media_response_faq.json
+[14] Tesla China Regulatory Compliance — Battery & Safety: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/compliance/china_regulatory_landscape.md
+[15] Tesla Battery-Related Crisis Cases — Internal Post-Mortem Review: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/historical_cases/tesla_battery_crises_review.md
+[16] Tesla Battery Customer FAQ — Internal Reference: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/faq/tesla_battery_customer_faq.md
+[17] Social media data architecture (memory): memory://memories/po-memory-002
+[18] Tesla Battery Technical Facts — Internal Reference: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/product_docs/tesla_battery_technical_facts.md

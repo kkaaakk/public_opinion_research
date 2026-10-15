@@ -1,3 +1,4 @@
+# 生成稳定图 ID、内容哈希及 Neo4j 约束，保证去重和运行范围隔离。
 """Research Graph schema and deterministic identifier helpers."""
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ RESEARCH_RELATION_TYPES: tuple[ResearchRelationType, ...] = (
 )
 
 
+# 由代码侧身份字段生成确定性且不直接暴露原值的标识。
 def stable_id(prefix: str, *parts: Any, length: int = 20) -> str:
     """Create a deterministic, opaque ID from code-owned values."""
     payload = "\x1f".join(str(part or "") for part in parts)
@@ -49,11 +51,13 @@ def stable_id(prefix: str, *parts: Any, length: int = 20) -> str:
     return f"{prefix}_{digest[:length]}"
 
 
+# 计算来源内容的规范哈希，用于区分和去重来源版本。
 def content_hash(content: str) -> str:
     """Return the canonical hash used for source-version deduplication."""
     return hashlib.sha256((content or "").encode("utf-8", errors="replace")).hexdigest()
 
 
+# 仅为精确去重归一化文本，不代替主张语义判断。
 def normalize_text(value: Any) -> str:
     """Normalize text for cheap exact-deduplication only.
 
@@ -63,6 +67,7 @@ def normalize_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
 
+# 延迟创建官方 neo4j-graphrag 模式对象，允许轻量测试使用内存后端。
 def official_graph_schema() -> Any:
     """Return an optional ``neo4j-graphrag`` GraphSchema.
 
@@ -121,13 +126,19 @@ def official_graph_schema() -> Any:
     )
 
 
+# 返回可重复执行的社区版约束语句，配合模型校验保证范围与身份合法。
 def schema_cypher() -> tuple[str, ...]:
-    """Return idempotent Cypher statements for the project adapter."""
+    """Return idempotent constraints supported by Neo4j Community Edition.
+
+    Typed graph models require non-empty scope and identifier fields before
+    writes. Composite uniqueness constraints enforce their database identity
+    without Enterprise-only node/relationship key constraints.
+    """
     return (
         "CREATE CONSTRAINT research_node_scope_key IF NOT EXISTS "
-        "FOR (node:ResearchNode) REQUIRE (node.run_id, node.node_id) IS NODE KEY",
+        "FOR (node:ResearchNode) REQUIRE (node.run_id, node.node_id) IS UNIQUE",
         "CREATE CONSTRAINT research_edge_scope_key IF NOT EXISTS "
-        "FOR ()-[edge:ResearchEdge]-() REQUIRE (edge.run_id, edge.edge_id) IS RELATIONSHIP KEY",
+        "FOR ()-[edge:ResearchEdge]-() REQUIRE (edge.run_id, edge.edge_id) IS UNIQUE",
         "CREATE INDEX research_node_type IF NOT EXISTS FOR (node:ResearchNode) ON (node.entity_type)",
         "CREATE INDEX research_source_url IF NOT EXISTS FOR (node:ResearchNode) ON (node.url)",
     )

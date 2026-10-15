@@ -1,3 +1,4 @@
+# 导出舆情角色规范及角色到工具领域的权限映射。
 """Encapsulated public-opinion business agents."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec

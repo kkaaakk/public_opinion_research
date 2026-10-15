@@ -1,3 +1,4 @@
+# 回归验证 RAG 配置、加载、分块、混合召回、重排、图扩展及记忆索引刷新。
 import asyncio
 import json
 import sys
@@ -56,6 +57,7 @@ from open_deep_research.rag.vectorstore import (
 from open_deep_research.tools.registry import get_all_tools
 
 
+# 在测试边界清理 RAG 管线缓存，避免案例相互影响。
 @pytest.fixture(autouse=True)
 def clear_rag_cache():
     reset_rag_pipeline_cache()
@@ -63,10 +65,12 @@ def clear_rag_cache():
     reset_rag_pipeline_cache()
 
 
+# 创建测试知识文本并返回路径。
 def write_text_file(path, content: str) -> None:
     path.write_text(textwrap.dedent(content).strip(), encoding="utf-8")
 
 
+# 写入测试 JSONL 记录，供记忆或结构化数据加载使用。
 def write_jsonl_file(path, records: list[dict]) -> None:
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False) for record in records),
@@ -74,6 +78,7 @@ def write_jsonl_file(path, records: list[dict]) -> None:
     )
 
 
+# 验证持久化向量存储默认采用 Milvus。
 def test_rag_defaults_to_milvus_for_persistent_vector_store():
     config = Configuration()
     pipeline_config = RAGPipelineConfig()
@@ -82,6 +87,7 @@ def test_rag_defaults_to_milvus_for_persistent_vector_store():
     assert pipeline_config.vectorstore_provider == "milvus"
 
 
+# 验证默认知识、记忆和索引路径采用规范目录。
 def test_rag_defaults_use_canonical_data_directories():
     config = Configuration()
     pipeline_config = RAGPipelineConfig()
@@ -96,6 +102,7 @@ def test_rag_defaults_use_canonical_data_directories():
     assert pipeline_config.milvus_uri == "data/indexes/rag/milvus.db"
 
 
+# 验证多模态和视觉理解默认启用。
 def test_rag_multimodal_vision_defaults_are_enabled():
     config = Configuration()
     pipeline_config = RAGPipelineConfig()
@@ -113,6 +120,7 @@ def test_rag_multimodal_vision_defaults_are_enabled():
     assert pipeline_config.vision_max_tokens == 512
 
 
+# 验证检索查询改写默认启用。
 def test_rag_query_rewrite_defaults_to_enabled():
     config = Configuration()
 
@@ -121,6 +129,7 @@ def test_rag_query_rewrite_defaults_to_enabled():
     assert config.rag_query_rewrite_max_tokens == 256
 
 
+# 验证默认元数据权重会参与检索。
 def test_rag_structured_metadata_weight_defaults_to_enabled():
     config = Configuration()
     pipeline_config = RAGPipelineConfig()
@@ -129,6 +138,7 @@ def test_rag_structured_metadata_weight_defaults_to_enabled():
     assert pipeline_config.structured_metadata_weight == pytest.approx(0.15)
 
 
+# 验证图 RAG 默认采用 Neo4j 后端。
 def test_graph_rag_defaults_to_neo4j_backend():
     config = Configuration()
     pipeline_config = RAGPipelineConfig()
@@ -143,6 +153,7 @@ def test_graph_rag_defaults_to_neo4j_backend():
     assert pipeline_config.neo4j_username == "neo4j"
 
 
+# 验证结构化元数据权重不接受负数。
 def test_rag_structured_metadata_weight_rejects_negative_values():
     with pytest.raises(ValueError, match="rag_structured_metadata_weight"):
         Configuration(rag_structured_metadata_weight=-0.1)
@@ -152,6 +163,7 @@ def test_rag_structured_metadata_weight_rejects_negative_values():
 # Sub-config class default values
 # ---------------------------------------------------------------------------
 
+# 验证子配置默认值与平铺字段一致。
 def test_sub_config_defaults_match_flat_field_defaults():
     """Sub-config zero-arg construction matches RAGPipelineConfig flat defaults."""
     config = RAGPipelineConfig()
@@ -171,6 +183,7 @@ def test_sub_config_defaults_match_flat_field_defaults():
 # Read-only view: flat field -> property derivation
 # ---------------------------------------------------------------------------
 
+# 验证平铺字段更新能反映到子配置只读视图。
 def test_flat_field_writes_reflect_in_sub_config_property():
     """Setting a flat field should be reflected in the sub-config property."""
     config = RAGPipelineConfig(embedding_provider="hash", vectorstore_provider="memory")
@@ -186,12 +199,14 @@ def test_flat_field_writes_reflect_in_sub_config_property():
 # Read-only view: nested sub-config construction -> flat field unpacking
 # ---------------------------------------------------------------------------
 
+# 验证嵌套子配置可以展开为管线平铺字段。
 def test_nested_sub_config_unpacks_to_flat_fields():
     """Passing embedding=EmbeddingConfig(...) should unpack to flat fields."""
     config = RAGPipelineConfig(embedding=EmbeddingConfig(provider="hash"))
     assert config.embedding_provider == "hash"
 
 
+# 验证嵌套向量配置展开后触发 Milvus 路径推导。
 def test_nested_vectorstore_config_unpacks_and_triggers_milvus_uri_derivation():
     """Passing vectorstore=VectorstoreConfig(persist_path=...) should trigger milvus_uri derivation."""
     config = RAGPipelineConfig(vectorstore=VectorstoreConfig(persist_path="custom/path"))
@@ -199,6 +214,7 @@ def test_nested_vectorstore_config_unpacks_and_triggers_milvus_uri_derivation():
     assert config.milvus_uri == "custom/path/milvus.db"
 
 
+# 验证显式平铺配置优先于嵌套子配置。
 def test_explicit_flat_field_wins_over_sub_config():
     """When both flat field and sub-config are passed, the flat field wins."""
     config = RAGPipelineConfig(
@@ -212,6 +228,7 @@ def test_explicit_flat_field_wins_over_sub_config():
 # model_fields / model_dump invariance
 # ---------------------------------------------------------------------------
 
+# 验证序列化结果不重复输出子配置键。
 def test_model_dump_does_not_contain_sub_config_keys():
     """model_dump() should not contain sub-config property names."""
     dumped = RAGPipelineConfig().model_dump()
@@ -227,6 +244,7 @@ def test_model_dump_does_not_contain_sub_config_keys():
     assert "embedding_provider" in dumped
 
 
+# 验证只读子配置属性未变成 Pydantic 字段。
 def test_model_fields_does_not_contain_sub_config_names():
     """model_fields should not contain sub-config property names."""
     field_names = set(RAGPipelineConfig.model_fields.keys())
@@ -237,6 +255,7 @@ def test_model_fields_does_not_contain_sub_config_names():
         assert sub_key not in field_names
 
 
+# 验证加载器包同时保留新接口和旧兼容入口。
 def test_rag_loader_package_exports_new_and_legacy_loader_apis():
     import open_deep_research.rag.loaders as loader_package
     from open_deep_research.rag import memory as legacy_memory
@@ -253,6 +272,7 @@ def test_rag_loader_package_exports_new_and_legacy_loader_apis():
     assert callable(legacy_query_images.build_query_image_context)
 
 
+# 验证历史路径可继续使用并产生迁移提示。
 def test_rag_legacy_paths_warn_but_remain_usable(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "examples" / "rag_data").mkdir(parents=True)
@@ -270,6 +290,7 @@ def test_rag_legacy_paths_warn_but_remain_usable(tmp_path, monkeypatch):
     assert config.rag_milvus_uri == ".rag_index/milvus.db"
 
 
+# 验证规范目录缺失时按规则回退到已有旧知识目录。
 def test_rag_defaults_fall_back_to_legacy_knowledge_path_when_needed(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "examples" / "rag_data").mkdir(parents=True)
@@ -282,36 +303,46 @@ def test_rag_defaults_fall_back_to_legacy_knowledge_path_when_needed(tmp_path, m
     assert config.rag_milvus_uri == "data/indexes/rag/milvus.db"
 
 
+# 验证 Milvus 分块写入、集合刷新和检索结果转换。
 def test_milvus_vectorstore_backend_adds_and_searches_chunks(monkeypatch, tmp_path):
+    # 以内存集合模拟 Milvus，验证写入与搜索契约。
     class FakeMilvusClient:
+        # 初始化测试替身的 collections、db_name、token、uri 状态。
         def __init__(self, uri, token=None, db_name=None):
             self.uri = uri
             self.token = token
             self.db_name = db_name
             self.collections = {}
 
+        # 检查测试集合是否已创建。
         def has_collection(self, collection_name):
             return collection_name in self.collections
 
+        # 创建包含维数和空数据行的测试集合。
         def create_collection(self, collection_name, dimension, **kwargs):
             self.collections[collection_name] = {
                 "dimension": dimension,
                 "rows": [],
             }
 
+        # 移除测试集合，模拟索引刷新。
         def drop_collection(self, collection_name):
             self.collections.pop(collection_name, None)
 
+        # 向内存测试集合追加向量与分块数据。
         def insert(self, collection_name, data):
             self.collections[collection_name]["rows"].extend(data)
 
+        # 返回测试集合实际数据行数。
         def get_collection_stats(self, collection_name):
             return {"row_count": len(self.collections[collection_name]["rows"])}
 
+        # 按点积排序内存向量，构造 Milvus 风格命中结果。
         def search(self, collection_name, data, limit, output_fields, **kwargs):
             query_vector = data[0]
             rows = self.collections[collection_name]["rows"]
 
+            # 计算查询向量与候选向量的点积。
             def dot(row):
                 return sum(
                     left * right
@@ -368,6 +399,7 @@ def test_milvus_vectorstore_backend_adds_and_searches_chunks(monkeypatch, tmp_pa
     assert results[0].vector_score == pytest.approx(1.0)
 
 
+# 验证图扩展可以补充相关竞品证据。
 def test_graph_rag_expands_related_competitor_evidence():
     seed_chunk = RAGChunk(
         content="NimbusCRM launched a free tier for SMB teams in 2025.",
@@ -415,6 +447,7 @@ def test_graph_rag_expands_related_competitor_evidence():
     assert by_id["related"].score > 0
 
 
+# 验证同时被两个召回器命中的结果获得 RRF 优势。
 def test_reciprocal_rank_fusion_prefers_results_seen_by_both_retrievers():
     vector_only = RAGChunk(
         content="Dense-only result with a very large raw vector score.",
@@ -446,6 +479,7 @@ def test_reciprocal_rank_fusion_prefers_results_seen_by_both_retrievers():
     assert fused[0].keyword_score == 1.0
 
 
+# 验证查询匹配元数据时获得受控加分。
 def test_hybrid_retriever_boosts_structured_metadata_matches():
     vector_preferred = RAGChunk(
         content="General operations note.",
@@ -485,6 +519,7 @@ def test_hybrid_retriever_boosts_structured_metadata_matches():
     assert results[0].score > results[1].score
 
 
+# 验证关键词重排使用分块结构化上下文。
 def test_keyword_reranker_uses_structured_metadata_context():
     content_only = RetrievalResult(
         chunk=RAGChunk(
@@ -520,18 +555,22 @@ def test_keyword_reranker_uses_structured_metadata_context():
     assert reranked[0].rerank_score == pytest.approx(1.0)
 
 
+# 验证改写器清理包装文本且保留原问题语义输入。
 def test_query_rewriter_cleans_model_output_and_preserves_prompt():
     from open_deep_research.rag.query_rewriter import rewrite_query_with_model
 
     captured = {}
 
+    # 提供可记录配置或返回固定消息的模型替身。
     class FakeModel:
+        # 保存改写提示消息并返回带常见前缀的测试输出。
         def invoke(self, messages, config=None):
             captured["messages"] = messages
             return types.SimpleNamespace(
                 content="Rewritten query: Milvus vector index path"
             )
 
+    # 记录改写模型配置并返回固定响应替身。
     def fake_model_factory(**kwargs):
         captured["kwargs"] = kwargs
         return FakeModel()
@@ -551,9 +590,11 @@ def test_query_rewriter_cleans_model_output_and_preserves_prompt():
     assert "where is it?" in captured["messages"][0].content
 
 
+# 验证改写失败后继续使用原查询。
 def test_query_rewriter_falls_back_to_original_query_on_failure():
     from open_deep_research.rag.query_rewriter import rewrite_query_with_model
 
+    # 模拟模型构造失败，验证查询改写回退。
     def failing_model_factory(**kwargs):
         raise RuntimeError("model unavailable")
 
@@ -569,14 +610,18 @@ def test_query_rewriter_falls_back_to_original_query_on_failure():
     )
 
 
+# 验证交叉编码器候选文本包含结构化元数据。
 def test_cross_encoder_reranker_includes_structured_metadata_in_pairs(monkeypatch):
     captured_pairs = []
 
+    # 记录重排文本对并返回固定评分，避免下载真实模型。
     class FakeCrossEncoder:
+        # 初始化测试替身的 device、model_name 状态。
         def __init__(self, model_name, device=None):
             self.model_name = model_name
             self.device = device
 
+        # 保存交叉编码器输入文本对，并返回预设得分。
         def predict(self, pairs, show_progress_bar=False):
             captured_pairs.extend(pairs)
             return [0.42]
@@ -615,17 +660,23 @@ def test_cross_encoder_reranker_includes_structured_metadata_in_pairs(monkeypatc
     assert "json_path: $.posts[0].content" in captured_pairs[0][1]
 
 
+# 验证 Neo4j 分块建图和共享术语邻居扩展。
 def test_neo4j_graph_rag_writes_chunks_and_expands_neighbors():
+    # 记录 Cypher 语句，并为邻居查询返回固定图结果。
     class FakeSession:
+        # 初始化测试替身的 calls 状态。
         def __init__(self):
             self.calls = []
 
+        # 返回当前测试会话，兼容数据库上下文管理接口。
         def __enter__(self):
             return self
 
+        # 退出测试会话且不吞掉业务异常。
         def __exit__(self, exc_type, exc, traceback):
             return False
 
+        # 记录参数化图查询，命中邻居查询时返回预设结果。
         def run(self, query, **params):
             self.calls.append((query, params))
             if "RETURN neighbor.chunk_id" in query:
@@ -637,10 +688,13 @@ def test_neo4j_graph_rag_writes_chunks_and_expands_neighbors():
                 ]
             return []
 
+    # 提供可复用的测试 Neo4j 会话。
     class FakeDriver:
+        # 初始化测试替身的 session_obj 状态。
         def __init__(self):
             self.session_obj = FakeSession()
 
+        # 记录选择的数据库，并返回测试会话。
         def session(self, database=None):
             self.database = database
             return self.session_obj
@@ -693,6 +747,7 @@ def test_neo4j_graph_rag_writes_chunks_and_expands_neighbors():
     )
 
 
+# 验证图片加载器调用 OCR 并生成索引文本。
 def test_multimodal_image_loader_extracts_ocr_text(monkeypatch, tmp_path):
     image_path = tmp_path / "pricing.png"
     image_path.write_bytes(b"fake image bytes")
@@ -716,6 +771,7 @@ def test_multimodal_image_loader_extracts_ocr_text(monkeypatch, tmp_path):
     assert documents[0].metadata["ocr_provider"] == "ocr"
 
 
+# 验证代码加载时保留语言元数据。
 def test_code_file_loader_marks_language_metadata(tmp_path):
     source_path = tmp_path / "auth_service.py"
     write_text_file(
@@ -739,6 +795,7 @@ def test_code_file_loader_marks_language_metadata(tmp_path):
     assert documents[0].metadata["language"] == "python"
 
 
+# 验证文字密集图片优先只使用 OCR。
 def test_image_routing_uses_ocr_only_for_text_heavy_images(monkeypatch, tmp_path):
     image_path = tmp_path / "text_heavy.png"
     image_path.write_bytes(b"fake image bytes")
@@ -783,6 +840,7 @@ def test_image_routing_uses_ocr_only_for_text_heavy_images(monkeypatch, tmp_path
     assert vision_calls == []
 
 
+# 验证图表类图片组合 OCR 与视觉理解。
 def test_image_routing_uses_ocr_and_vision_for_diagrams(monkeypatch, tmp_path):
     image_path = tmp_path / "architecture.png"
     image_path.write_bytes(b"fake image bytes")
@@ -828,6 +886,7 @@ def test_image_routing_uses_ocr_and_vision_for_diagrams(monkeypatch, tmp_path):
     assert documents[0].metadata["image_route"] == "ocr_vision"
 
 
+# 验证照片类图片使用视觉语义提取。
 def test_image_routing_uses_vision_only_for_photos(monkeypatch, tmp_path):
     image_path = tmp_path / "scene.jpg"
     image_path.write_bytes(b"fake image bytes")
@@ -872,6 +931,7 @@ def test_image_routing_uses_vision_only_for_photos(monkeypatch, tmp_path):
     assert ocr_calls == []
 
 
+# 验证低信息量图片可以跳过索引。
 def test_image_routing_skips_low_information_images(monkeypatch, tmp_path):
     image_path = tmp_path / "blank.png"
     image_path.write_bytes(b"fake image bytes")
@@ -913,6 +973,7 @@ def test_image_routing_skips_low_information_images(monkeypatch, tmp_path):
     assert extraction_calls == []
 
 
+# 验证本地规则无法确定时调用视觉分类辅助路由。
 def test_image_routing_uses_vision_classification_when_rules_are_uncertain(
     monkeypatch,
     tmp_path,
@@ -965,6 +1026,7 @@ def test_image_routing_uses_vision_classification_when_rules_are_uncertain(
     assert "queue depth panels" in documents[0].content
 
 
+# 验证视觉模型失败后回退到 OCR。
 def test_image_routing_falls_back_to_ocr_when_vision_fails(monkeypatch, tmp_path):
     image_path = tmp_path / "diagram.png"
     image_path.write_bytes(b"fake image bytes")
@@ -987,6 +1049,7 @@ def test_image_routing_falls_back_to_ocr_when_vision_fails(monkeypatch, tmp_path
         lambda path, provider, ocr_languages: "Worker -> Indexer",
     )
 
+    # 模拟视觉模型不可用，检查 OCR 回退路径。
     def failing_vision(*_args, **_kwargs):
         raise RuntimeError("vision unavailable")
 
@@ -1075,11 +1138,13 @@ def test_query_image_context_reuses_vision_image_bytes(monkeypatch):
     ]
 
 
+# 验证临时图片上下文只追加一次。
 def test_enrich_query_images_appends_synthetic_context_once(monkeypatch):
     from open_deep_research import deep_researcher
 
     calls = []
 
+    # 记录图片上下文构建参数，并返回临时识别内容。
     def fake_context(messages, **kwargs):
         calls.append({"messages": messages, "kwargs": kwargs})
         return "User image 1\nRoute: vision\nVision description:\nUploaded UI screenshot."
@@ -1120,6 +1185,7 @@ def test_enrich_query_images_appends_synthetic_context_once(monkeypatch):
     assert len(calls) == 1
 
 
+# 验证分块 ID 稳定且来源元数据不丢失。
 def test_split_documents_creates_chunk_ids_and_preserves_metadata():
     document = RAGDocument(
         content=(
@@ -1143,6 +1209,7 @@ def test_split_documents_creates_chunk_ids_and_preserves_metadata():
     assert all(len(chunk.content) <= 120 for chunk in chunks)
 
 
+# 验证纯文本按递归字符边界切块。
 def test_split_documents_uses_recursive_character_boundaries():
     document = RAGDocument(
         content=(
@@ -1164,6 +1231,7 @@ def test_split_documents_uses_recursive_character_boundaries():
     assert [chunk.metadata["char_start"] for chunk in chunks] == [0, 20, 39, 61]
 
 
+# 验证 Markdown 切块保留标题结构且不跨章节混合。
 def test_split_documents_splits_markdown_by_headers_without_crossing_sections():
     document = RAGDocument(
         content=textwrap.dedent(
@@ -1209,6 +1277,7 @@ def test_split_documents_splits_markdown_by_headers_without_crossing_sections():
     assert all("char_end" in chunk.metadata for chunk in chunks)
 
 
+# 验证 JSON 条目保持字段上下文，超长字段单独拆分。
 def test_split_documents_groups_json_item_context_and_splits_long_fields():
     long_text = " ".join(f"alpha-{index}" for index in range(80))
     document = RAGDocument(
@@ -1260,6 +1329,7 @@ def test_split_documents_groups_json_item_context_and_splits_long_fields():
     )
 
 
+# 验证 JSON 标量数组元素不会错误合并。
 def test_split_documents_keeps_json_scalar_array_items_separate():
     document = RAGDocument(
         content=json.dumps({"tags": ["alpha", "beta"]}, ensure_ascii=False),
@@ -1275,6 +1345,7 @@ def test_split_documents_keeps_json_scalar_array_items_separate():
     assert by_path["$.tags[1]"].content == "[1]: beta"
 
 
+# 验证中文边界、重叠内容和文本元数据都被保留。
 def test_split_documents_keeps_text_metadata_chinese_boundaries_and_overlap():
     document = RAGDocument(
         content=(
@@ -1300,10 +1371,12 @@ def test_split_documents_keeps_text_metadata_chinese_boundaries_and_overlap():
     )
 
 
+# 验证代码使用对应语言的递归分块器。
 def test_split_documents_uses_recursive_language_splitter_for_code(monkeypatch):
     calls = []
     original_from_language = rag_splitter.RecursiveCharacterTextSplitter.from_language
 
+    # 记录语言分块器参数后委托原实现。
     def recording_from_language(language, **kwargs):
         calls.append((language, kwargs))
         return original_from_language(language=language, **kwargs)
@@ -1347,6 +1420,7 @@ def test_split_documents_uses_recursive_language_splitter_for_code(monkeypatch):
     assert any("def authenticate_user" in chunk.content for chunk in chunks)
 
 
+# 验证 JSON 加载保留原始结构供后续分块。
 def test_knowledge_json_loader_preserves_raw_json_for_structured_split(tmp_path):
     json_path = tmp_path / "faq.json"
     json_path.write_text(
@@ -1367,6 +1441,7 @@ def test_knowledge_json_loader_preserves_raw_json_for_structured_split(tmp_path)
     )
 
 
+# 验证分块附带来源权威性与状态信息。
 def test_split_documents_marks_source_authority_metadata():
     documents = [
         RAGDocument(
@@ -1396,6 +1471,7 @@ def test_split_documents_marks_source_authority_metadata():
     assert chunks[2].metadata["authority_score_penalty"] < chunks[1].metadata["authority_score_penalty"]
 
 
+# 验证低可信或误导来源在重排后降权。
 def test_authority_adjustment_downranks_misleading_rerank_hits():
     authoritative = RAGChunk(
         content="Current rule: rollback owners stay online until verification completes.",
@@ -1434,6 +1510,7 @@ def test_authority_adjustment_downranks_misleading_rerank_hits():
     assert adjusted[1].chunk.metadata["authority_adjusted_score"] == pytest.approx(0.0)
 
 
+# 验证不可信候选不会进入最终回答上下文。
 def test_authority_filter_blocks_misleading_final_context():
     pipeline = object.__new__(RAGPipeline)
     pipeline.config = types.SimpleNamespace(authority_rerank_enabled=True)
@@ -1465,6 +1542,7 @@ def test_authority_filter_blocks_misleading_final_context():
     assert [result.chunk.chunk_id for result in filtered] == ["auth"]
 
 
+# 验证本地知识查询返回相关证据及引用。
 @pytest.mark.integration
 def test_rag_pipeline_retrieves_relevant_local_context(tmp_path):
     write_text_file(
@@ -1502,6 +1580,7 @@ def test_rag_pipeline_retrieves_relevant_local_context(tmp_path):
     assert any("handbook.md" in citation.source for citation in result.citations)
 
 
+# 验证代码文件可加载并被本地检索命中。
 def test_rag_pipeline_retrieves_code_file_context(tmp_path):
     write_text_file(
         tmp_path / "auth_service.py",
@@ -1540,6 +1619,7 @@ def test_rag_pipeline_retrieves_code_file_context(tmp_path):
     assert any("auth_service.py" in citation.source for citation in result.citations)
 
 
+# 验证内部用改写查询召回，但对外保留原始问题。
 def test_rag_pipeline_uses_rewritten_query_but_returns_original_query():
     chunk = RAGChunk(
         content="Milvus Lite stores the vector index under data/indexes/rag.",
@@ -1551,18 +1631,24 @@ def test_rag_pipeline_uses_rewritten_query_but_returns_original_query():
     retrieval_result = RetrievalResult(chunk=chunk, score=0.5, vector_score=0.5)
     calls = {}
 
+    # 记录实际嵌入查询，返回固定向量。
     class FakeEmbeddingBackend:
+        # 保存传入的查询文本并返回测试向量。
         def embed_query(self, text):
             calls["embedded_query"] = text
             return [1.0]
 
+    # 提供预设候选结果，隔离真实检索后端。
     class FakeRetriever:
+        # 返回预设检索候选，供查询改写或漏召诊断检查。
         def retrieve(self, *, query, query_vector, top_k, keyword_top_k):
             calls["retriever_query"] = query
             calls["query_vector"] = query_vector
             return [retrieval_result]
 
+    # 提供可控候选排序结果，隔离真实重排模型。
     class FakeReranker:
+        # 返回测试所需的候选顺序和评分。
         def rerank(self, query, results, top_k):
             calls["reranker_query"] = query
             return [
@@ -1604,6 +1690,7 @@ def test_rag_pipeline_uses_rewritten_query_but_returns_original_query():
     assert calls["reranker_query"] == "Milvus vector index path"
 
 
+# 验证空知识源可以安全初始化和查询。
 @pytest.mark.integration
 def test_rag_pipeline_handles_empty_documents(tmp_path):
     write_text_file(tmp_path / "empty.md", "")
@@ -1625,6 +1712,7 @@ def test_rag_pipeline_handles_empty_documents(tmp_path):
     assert result.citations == []
 
 
+# 验证无召回结果时返回合法空上下文。
 @pytest.mark.integration
 def test_rag_pipeline_handles_empty_results(tmp_path):
     write_text_file(
@@ -1653,6 +1741,7 @@ def test_rag_pipeline_handles_empty_results(tmp_path):
     assert result.citations == []
 
 
+# 验证文件聊天记忆可被检索。
 @pytest.mark.integration
 def test_rag_pipeline_retrieves_chat_memory(tmp_path):
     memory_path = tmp_path / "chat_memory.jsonl"
@@ -1699,6 +1788,7 @@ def test_rag_pipeline_retrieves_chat_memory(tmp_path):
     assert "source_type=memory" in result.context
 
 
+# 验证来源内容变化不改变配置决定的索引 ID。
 def test_rag_index_id_stays_stable_when_file_changes(tmp_path):
     document_path = tmp_path / "policy.txt"
     write_text_file(document_path, "first policy")
@@ -1716,6 +1806,7 @@ def test_rag_index_id_stays_stable_when_file_changes(tmp_path):
     assert first_index_id == second_index_id
 
 
+# 验证文件修改触发原索引刷新而非创建新索引身份。
 @pytest.mark.integration
 def test_pipeline_refreshes_same_index_when_file_changes(tmp_path):
     document_path = tmp_path / "policy.txt"
@@ -1738,6 +1829,7 @@ def test_pipeline_refreshes_same_index_when_file_changes(tmp_path):
     assert "beta review" in second_result.context
 
 
+# 验证记忆文件变化保持索引身份稳定。
 def test_rag_index_id_stays_stable_when_memory_file_changes(tmp_path):
     memory_path = tmp_path / "chat_memory.jsonl"
     write_jsonl_file(memory_path, [{"memory_id": "m1", "content": "first memory"}])
@@ -1757,6 +1849,7 @@ def test_rag_index_id_stays_stable_when_memory_file_changes(tmp_path):
     assert first_index_id == second_index_id
 
 
+# 验证 MySQL 记忆转换后保留原始身份和引用。
 def test_mysql_memory_records_convert_to_rag_documents():
     records = build_chat_memory_records(
         conversation_id="thread-1",
@@ -1803,6 +1896,7 @@ def test_mysql_memory_records_convert_to_rag_documents():
     )
 
 
+# 验证记忆加载辅助函数校验连接参数和表名。
 def test_mysql_memory_helpers_validate_connection_settings():
     assert (
         normalize_mysql_url("mysql://user:pass@localhost:3306/rag")
@@ -1819,6 +1913,7 @@ def test_mysql_memory_helpers_validate_connection_settings():
         normalize_record_types(["debug"])
 
 
+# 验证 MySQL 记忆范围使用稳定索引标识。
 def test_rag_index_id_stays_stable_for_mysql_memory_scope():
     config = RAGPipelineConfig(
         knowledge_base_paths=[],
@@ -1835,6 +1930,7 @@ def test_rag_index_id_stays_stable_for_mysql_memory_scope():
     assert first_index_id == second_index_id
 
 
+# 验证影响图片抽取的配置变化会改变索引身份。
 def test_rag_index_id_changes_for_vision_extraction_settings():
     base_config = RAGPipelineConfig(
         knowledge_base_paths=["data/knowledge"],
@@ -1853,6 +1949,7 @@ def test_rag_index_id_changes_for_vision_extraction_settings():
     assert build_rag_index_id(base_config) != build_rag_index_id(changed_prompt_config)
 
 
+# 验证混合模式同时提供网页与 RAG 检索工具。
 def test_hybrid_mode_exposes_web_and_rag_tools(tmp_path):
     write_text_file(
         tmp_path / "handbook.md",
@@ -1907,6 +2004,7 @@ def test_hybrid_mode_exposes_web_and_rag_tools(tmp_path):
     assert "web_search" not in rag_only_names
 
 
+# 验证启用预算时仍正确装配混合检索工具。
 def test_hybrid_mode_with_budget_exposes_web_and_rag_tools(tmp_path):
     write_text_file(
         tmp_path / "handbook.md",
@@ -1942,6 +2040,7 @@ def test_hybrid_mode_with_budget_exposes_web_and_rag_tools(tmp_path):
     assert "rag_search" in tool_names
 
 
+# 验证只有文件记忆来源时也会提供 RAG 工具。
 def test_rag_only_memory_exposes_rag_tool_without_document_paths(tmp_path):
     memory_path = tmp_path / "chat_memory.jsonl"
     write_jsonl_file(memory_path, [{"memory_id": "m1", "content": "The user prefers concise answers."}])
@@ -1971,6 +2070,7 @@ def test_rag_only_memory_exposes_rag_tool_without_document_paths(tmp_path):
     assert "web_search" not in tool_names
 
 
+# 验证只有 MySQL 记忆来源时仍启用 RAG 工具。
 def test_rag_only_mysql_memory_exposes_rag_tool_without_document_paths():
     tools = asyncio.run(
         get_all_tools(

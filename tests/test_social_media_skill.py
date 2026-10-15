@@ -1,3 +1,4 @@
+# 用本地固定数据验证社交工具契约、别名去重和共享领域统计口径。
 """Tests for social media MCP primitives and thin LangChain tool wrappers."""
 
 from collections import Counter
@@ -33,6 +34,7 @@ SAMPLE_CONFIG = {"data_paths": ["data/social_media/sample_posts.jsonl"]}
 
 # ── low-level MCP primitives ────────────────────────────────────────────
 
+# 验证 X 兼容搜索正确处理游标分页。
 def test_search_x_posts_supports_cursor_pagination() -> None:
     first_page = search_x_posts("battery", limit=2, config=SAMPLE_CONFIG)
     assert first_page["ok"] is True
@@ -46,6 +48,7 @@ def test_search_x_posts_supports_cursor_pagination() -> None:
     assert second_page["next_cursor"] is None
 
 
+# 验证讨论串、评论、图片提取及帖子归一化。
 def test_low_level_thread_comments_images_and_normalization() -> None:
     thread = fetch_x_thread("x-root-001", config=SAMPLE_CONFIG)
     comments = mcp_fetch_comments("x-root-001", config=SAMPLE_CONFIG)
@@ -63,6 +66,7 @@ def test_low_level_thread_comments_images_and_normalization() -> None:
     assert duplicate["is_duplicate"] is True
 
 
+# 验证实体别名匹配和多来源记录去重。
 def test_alias_matching_and_deduplication() -> None:
     records = [
         {"id": "dup-1", "platform": "weibo", "content": "A-EV battery discussion is increasing.",
@@ -78,23 +82,27 @@ def test_alias_matching_and_deduplication() -> None:
     assert _matches_query(records[0], query_groups) is True
 
 
+# 验证 MCP 帖子搜索的输入输出结构。
 def test_search_posts_mcp() -> None:
     result = search_posts("battery", limit=5, config=SAMPLE_CONFIG)
     assert result["ok"] is True
     assert result["total_matches"] >= 3
 
 
+# 验证 MCP 讨论串读取结果。
 def test_fetch_thread_mcp() -> None:
     result = search_x_posts("x-root-001", config=SAMPLE_CONFIG)
     # search_x_posts resolves by thread_id; result contains matching posts
     assert result.get("ok") is True
 
 
+# 验证 MCP 投诉检索的领域规则。
 def test_search_complaints_mcp() -> None:
     result = search_complaints("battery", limit=10, config=SAMPLE_CONFIG)
     assert result["ok"] is True
 
 
+# 验证共享社交领域规则符合固定黄金数据。
 def test_social_media_domain_golden_fixture() -> None:
     records = [
         {
@@ -144,6 +152,7 @@ def test_social_media_domain_golden_fixture() -> None:
     }
 
 
+# 验证 Apify 适配后的汇总统计保持既有口径。
 def test_apify_adapter_preserves_its_golden_aggregate(monkeypatch) -> None:
     records = [
         {
@@ -188,6 +197,7 @@ def test_apify_adapter_preserves_its_golden_aggregate(monkeypatch) -> None:
 
 # ── thin @tool wrappers ────────────────────────────────────────────────
 
+# 验证对外社交工具名称集合符合契约。
 def test_tool_names_match_expected_set() -> None:
     names = {tool.name for tool in get_social_media_tools()}
     assert names == SOCIAL_MEDIA_TOOL_NAMES

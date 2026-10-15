@@ -1,3 +1,4 @@
+# 作为本地 RAG 查询门面，串联索引准备、混合召回、重排与引用格式化。
 """RAG query pipeline.
 
 `RAGPipeline` is now only the query entry point:
@@ -44,6 +45,7 @@ from open_deep_research.rag.reranker import create_reranker
 from open_deep_research.rag.types import AnswerReadyContext, RetrievalResult
 
 
+# 汇总本地 RAG 管线全部有效配置，并提供各子系统只读视图。
 class RAGPipelineConfig(BaseModel):
     """Complete config needed by the local RAG subsystem."""
 
@@ -108,6 +110,7 @@ class RAGPipelineConfig(BaseModel):
     neo4j_database: Optional[str] = None
     authority_rerank_enabled: bool = True
 
+    # 展开显式设置的子配置字段；平铺字段优先，避免默认值污染字段设置状态。
     @model_validator(mode="before")
     @classmethod
     def _unpack_sub_configs(cls, data: Any) -> Any:
@@ -144,6 +147,7 @@ class RAGPipelineConfig(BaseModel):
 
         return data
 
+    # 自定义向量目录时同步推导 Milvus Lite 路径，保持数据共址。
     @model_validator(mode="after")
     def apply_path_defaults(self) -> "RAGPipelineConfig":
         """Keep Milvus Lite colocated with custom vectorstore paths."""
@@ -159,6 +163,7 @@ class RAGPipelineConfig(BaseModel):
     # / model_json_schema are completely unaffected.
     # ------------------------------------------------------------------
 
+    # 返回当前嵌入子配置的只读视图。
     @property
     def embedding(self) -> EmbeddingConfig:
         """Embedding subsystem configuration (read-only view)."""
@@ -169,6 +174,7 @@ class RAGPipelineConfig(BaseModel):
             hash_dimensions=self.hash_embedding_dimensions,
         )
 
+    # 返回当前向量存储子配置的只读视图。
     @property
     def vectorstore(self) -> VectorstoreConfig:
         """Vector store subsystem configuration (read-only view)."""
@@ -182,6 +188,7 @@ class RAGPipelineConfig(BaseModel):
             milvus_metric_type=self.milvus_metric_type,
         )
 
+    # 返回当前重排子配置的只读视图。
     @property
     def reranker(self) -> RerankerConfig:
         """Reranker subsystem configuration (read-only view)."""
@@ -191,6 +198,7 @@ class RAGPipelineConfig(BaseModel):
             device=self.reranker_device,
         )
 
+    # 返回当前 OCR 与视觉处理子配置的只读视图。
     @property
     def multimodal(self) -> MultimodalConfig:
         """Multimodal processing configuration (read-only view)."""
@@ -204,6 +212,7 @@ class RAGPipelineConfig(BaseModel):
             vision_max_tokens=self.vision_max_tokens,
         )
 
+    # 返回当前记忆来源及范围配置的只读视图。
     @property
     def memory(self) -> MemoryConfig:
         """Memory subsystem configuration (read-only view)."""
@@ -219,6 +228,7 @@ class RAGPipelineConfig(BaseModel):
             user_id=self.memory_user_id,
         )
 
+    # 返回关键词检索子配置的只读视图。
     @property
     def keyword_search(self) -> KeywordSearchConfig:
         """Keyword search configuration (read-only view)."""
@@ -229,6 +239,7 @@ class RAGPipelineConfig(BaseModel):
             elasticsearch_index=self.elasticsearch_index,
         )
 
+    # 返回混合召回与融合参数的只读视图。
     @property
     def hybrid_retrieval(self) -> HybridRetrievalConfig:
         """Hybrid retrieval configuration (read-only view)."""
@@ -237,6 +248,7 @@ class RAGPipelineConfig(BaseModel):
             structured_metadata_weight=self.structured_metadata_weight,
         )
 
+    # 返回图扩展子配置的只读视图。
     @property
     def graph_rag(self) -> GraphRAGConfig:
         """Graph RAG configuration (read-only view)."""
@@ -256,6 +268,7 @@ class RAGPipelineConfig(BaseModel):
             neo4j_database=self.neo4j_database,
         )
 
+    # 返回文档分块子配置的只读视图。
     @property
     def chunking(self) -> ChunkingConfig:
         """Document chunking configuration (read-only view)."""
@@ -270,9 +283,11 @@ class RAGPipelineConfig(BaseModel):
         )
 
 
+# 封装端到端检索查询，索引维护委托给 RAGIndexer。
 class RAGPipeline:
     """End-to-end query facade for local RAG."""
 
+    # 创建索引器和重排后端，并初始化查询管线状态。
     def __init__(self, config: RAGPipelineConfig, index_id: Optional[str] = None):
         self.config = config
         self.index_id = index_id or build_rag_index_id(config)
@@ -284,6 +299,9 @@ class RAGPipeline:
             device=reranker_config.device,
         )
 
+    # 确保索引可用后召回、过滤和重排证据，返回可直接用于回答的引用上下文。
+    # query 是实际检索语句；original_query 只用于对外展示，避免改写问题替代原问题。
+    # 返回 AnswerReadyContext，包含选定片段及来源引用；无数据时返回说明性空结果。
     def query(self, query: str, *, original_query: str | None = None) -> AnswerReadyContext:
         """Retrieve cited local context for a natural-language query."""
         display_query = original_query or query
@@ -313,6 +331,7 @@ class RAGPipeline:
             },
         ):
             query_vector = self.indexer.embedding_backend.embed_query(query)
+        # 先召回多于最终输出数量的候选，为重排和可信度过滤保留选择空间。
         candidate_count = max(self.config.top_k, self.config.rerank_top_n)
         with trace_span(
             "rag_retrieval",
@@ -349,6 +368,7 @@ class RAGPipeline:
             )
             if rerank_run is not None:
                 rerank_run.add_outputs({"output_count": len(retrieval_results)})
+        # 语义相关性重排后再调整来源权威性，最后筛选并裁到输出数量上限。
         if self.config.authority_rerank_enabled:
             retrieval_results = apply_authority_adjustment(retrieval_results)
         with trace_span(
@@ -369,14 +389,17 @@ class RAGPipeline:
             matched_chunks=selected,
         )
 
+    # 保留显式索引准备接口，实际委托索引器执行。
     def ensure_indexed(self) -> None:
         """Compatibility hook for explicit indexing jobs."""
         self.indexer.ensure_ready()
 
+    # 刷新索引并标记已成功同步的 MySQL 记忆。
     def index_pending_memories(self) -> None:
         """Refresh the index and mark pending MySQL memory rows as indexed."""
         self.indexer.index_pending_memories()
 
+    # 保留在语义或词汇层面相关的候选结果。
     def _filter_results(self, results: list[RetrievalResult]) -> list[RetrievalResult]:
         """Keep semantically or lexically relevant retrieval results."""
         return [
@@ -390,6 +413,7 @@ class RAGPipeline:
             )
         ]
 
+    # 检查候选来源的权威性或状态是否要求排除该证据。
     def _is_blocked_by_authority(self, result: RetrievalResult) -> bool:
         if not self.config.authority_rerank_enabled:
             return False
@@ -398,6 +422,7 @@ class RAGPipeline:
         return source_status in {"misleading", "unanswerable_trap"}
 
 
+# 在语义重排后按来源可信度施加分数调整。
 def apply_authority_adjustment(results: list[RetrievalResult]) -> list[RetrievalResult]:
     """Apply source authority penalties after semantic reranking."""
     adjusted_results = []
@@ -418,6 +443,7 @@ def apply_authority_adjustment(results: list[RetrievalResult]) -> list[Retrieval
     return adjusted_results
 
 
+# 根据向量存储路径生成默认 Milvus Lite 地址。
 def _milvus_uri_from_vectorstore_path(vectorstore_path: str) -> str:
     stripped = str(vectorstore_path).strip()
     if "://" in stripped or stripped.endswith(".db"):
@@ -506,6 +532,7 @@ _SUB_TO_FLAT: dict[str, dict[str, str]] = {
 }
 
 
+# 将子配置字段映射为管线平铺字段；未知映射返回 None。
 def _sub_to_flat_field_name(sub_key: str, field_name: str) -> str | None:
     """Return the flat field name for a sub-config field, or None if unknown."""
     return _SUB_TO_FLAT.get(sub_key, {}).get(field_name)
@@ -569,6 +596,8 @@ _CONFIG_TO_PIPELINE_FIELDS: dict[str, str] = {
 }
 
 
+# 合并应用级 rag_ 配置、直接映射及记忆身份范围，形成统一有效配置。
+# 显式 memory_* 参数覆盖自动推导的身份，用于让查询与后台记忆刷新使用相同范围。
 def build_rag_pipeline_config(
     configurable: Configuration | Mapping[str, Any] | RAGPipelineConfig | None = None,
     runtime_config: RunnableConfig | Mapping[str, Any] | None = None,
@@ -630,6 +659,7 @@ _PIPELINE_CACHE: dict[str, RAGPipeline] = {}
 _PIPELINE_CACHE_LOCK = threading.Lock()
 
 
+# 根据配置生成稳定索引 ID，不将来源内容指纹混入名称。
 def build_rag_index_id(config: RAGPipelineConfig) -> str:
     """Build a stable index id from config, not source-content fingerprints."""
     payload = config.model_dump()
@@ -637,10 +667,12 @@ def build_rag_index_id(config: RAGPipelineConfig) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+# 按有效配置复用缓存管线，避免重复加载模型及索引。
 def get_or_create_rag_pipeline(config: RAGPipelineConfig) -> RAGPipeline:
     """Return a cached pipeline for the effective RAG configuration."""
     index_id = build_rag_index_id(config)
     with _PIPELINE_CACHE_LOCK:
+        # 在锁内同时完成查找与构造，防止并发请求重复加载嵌入和重排模型。
         cached_pipeline = _PIPELINE_CACHE.get(index_id)
         if cached_pipeline is not None:
             return cached_pipeline
@@ -650,6 +682,7 @@ def get_or_create_rag_pipeline(config: RAGPipelineConfig) -> RAGPipeline:
         return created_pipeline
 
 
+# 清空当前进程的 RAG 管线缓存。
 def reset_rag_pipeline_cache() -> None:
     """Clear in-process RAG pipeline cache."""
     with _PIPELINE_CACHE_LOCK:

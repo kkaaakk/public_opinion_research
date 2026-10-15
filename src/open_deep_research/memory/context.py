@@ -1,3 +1,4 @@
+# 统一解析记忆读写使用的会话与用户范围，避免写入和检索身份不一致。
 """Runtime identity helpers for memory.
 
 All memory writers, readers, and RAG tools should call this module so the same
@@ -9,6 +10,7 @@ from typing import Any, Mapping, Optional
 from langchain_core.runnables import RunnableConfig
 
 
+# 按配置及元数据中的会话、线程标识解析记忆范围，最后回退到用户或默认值。
 def get_conversation_id(config: RunnableConfig | Mapping[str, Any] | None) -> str:
     """Return the stable conversation/thread id used to scope memory."""
     configurable, metadata = _config_parts(config)
@@ -24,6 +26,7 @@ def get_conversation_id(config: RunnableConfig | Mapping[str, Any] | None) -> st
     )
 
 
+# 解析用户标识，并兼容历史 owner 元数据。
 def get_user_id(config: RunnableConfig | Mapping[str, Any] | None) -> Optional[str]:
     """Return the user id when the runtime config exposes one.
 
@@ -39,6 +42,7 @@ def get_user_id(config: RunnableConfig | Mapping[str, Any] | None) -> Optional[s
     )
 
 
+# 安全取出运行配置中的 configurable 和 metadata 两个映射。
 def _config_parts(
     config: RunnableConfig | Mapping[str, Any] | None,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
@@ -49,6 +53,7 @@ def _config_parts(
     )
 
 
+# 按优先顺序返回首个去空白后非空的文本值。
 def _first_text(*values: Any) -> Optional[str]:
     for value in values:
         if value is None:

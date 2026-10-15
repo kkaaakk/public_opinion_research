@@ -225,6 +225,42 @@ python -m open_deep_research.rag.mcp_server --transport streamable-http --host 1
 
 ## 🌐 Local Web UI
 
+### 用 Docker 启用 Research Graph
+
+先启动 Docker Desktop，然后在项目根目录执行：
+
+```powershell
+# 生成本地数据库密码并配置连接；密码只保存在已被 Git 忽略的 .env 中
+.\.venv\Scripts\python.exe scripts/neo4j_local.py configure
+
+# 创建 Neo4j 5.26 LTS 容器，等待数据库健康检查通过
+docker compose --env-file .env -f compose.neo4j.yaml up -d --wait --wait-timeout 120
+
+# 验证真实 Neo4j 的图写入、溯源关系、检索与运行隔离
+.\.venv\Scripts\python.exe scripts/neo4j_local.py verify
+```
+
+容器名为 `public-opinion-neo4j`，浏览器入口是 `http://127.0.0.1:7474`，
+Bolt 地址是 `bolt://127.0.0.1:7687`。登录用户名为 `neo4j`，密码查看 `.env`
+中的 `RESEARCH_GRAPH_PASSWORD`。Compose 只向本机开放端口，使用命名数据卷
+保存数据库和日志，并在 Docker 重启后自动恢复容器。
+
+验证脚本不调用模型 API，验证后清理本次生成的临时测试图。它会同时检查四个业务
+Agent 使用 Neo4j 的初始化路径，但不会替代真实研究请求的模型调用验证。
+节点和关系使用社区版支持的复合唯一约束，图标识字段由项目数据模型校验。
+
+Research Graph 默认开启，连接参数由项目根目录的 `.env` 自动读取，日常启动无需
+设置 `RESEARCH_GRAPH_ENABLED`。首次配置后重启 Web 服务即可；如果旧终端曾临时
+关闭该功能，使用一个新终端启动，避免沿用旧的环境变量覆盖值。
+
+停止数据库可执行 `docker compose -f compose.neo4j.yaml stop`，再次启动使用上面的
+`up` 命令。命名数据卷会保留；不要使用 `down --volumes`，除非明确要删除数据库。
+
+Research Graph 与页面的 **Enable RAG** 是独立功能：前者管理本次研究的证据图，
+后者检索本地知识库。关闭 RAG 时，Web 流程会跳过依赖本地知识库的内部知识 Agent。
+
+### 启动页面
+
 启动独立的 FastAPI Demo 页面：
 
 ```bash
@@ -235,6 +271,34 @@ python -m open_deep_research.web.server
 请设置强随机的 `PUBLIC_OPINION_API_TOKEN`，并在代理层启用 HTTPS 和认证；
 不要直接将未认证的 Demo 服务暴露到公网。客户端只能选择服务端允许的模型，
 研究请求也有输入大小和并发保护。
+
+### 研究历史
+
+页面左侧的 **研究历史** 支持搜索主题或报告内容、按时间分页、重新打开完整报告、
+下载和复制报告，以及通过 **沿用参数** 填入原研究主题、模型、检索方式和组织背景。
+成功、失败和主动停止的运行都会保留；未生成最终报告时，可查看中断前完成的阶段报告。
+刷新页面或重启 Web 服务后，已归档的记录仍可查看；打开历史记录不会重新调用模型。
+
+历史档案使用现有 **Neo4j**，复用 `RESEARCH_GRAPH_URI`、`RESEARCH_GRAPH_USERNAME`、
+`RESEARCH_GRAPH_PASSWORD` 和 `RESEARCH_GRAPH_DATABASE`，无需配置另一套数据库。
+完整报告保存在独立的 `ResearchHistory` 节点中，以研究 `run_id` 对应同次研究的证据图。
+每次网页研究结束或中断后自动归档，历史列表展示运行状态和时间，详情保留参数、
+已有 token 用量及原始阶段报告。阶段输出从子图逐条保存，后续 Agent 失败不会让
+已完成的采集或评估报告从历史记录中消失。
+即使关闭研究图构建，已配置的 Neo4j 仍可用于报告归档。
+
+已有的研究可以点击 **导入 LangSmith**，从 `LANGSMITH_PROJECT` 指定的项目中读取
+已经结束的研究 trace，分批保存到 Neo4j，包含失败运行。对没有最终报告的运行，
+会沿同一个 trace 查询已完成的 Agent 输出，保留不同研究轮次的原始报告，并标明
+失败阶段；这些内容以“研究阶段记录”展示。导入使用现有 LangSmith
+访问凭据，重复导入不会重复创建记录，也不会覆盖已保存的最终报告；可补充后来
+恢复的阶段输出。旧工作流的名称变化不会导致已有最终报告被过滤。LangSmith trace 有
+[数据保留期限](https://support.langchain.com/articles/8458147520-can-i-recover-deleted-traces-in-langsmith)，
+因此仅作为旧报告导入来源；已导入的历史通过 Neo4j 保存。
+
+Neo4j 暂时不可用时，页面会显示历史读取或保存失败的提示，已生成的报告仍能下载。
+启用 `PUBLIC_OPINION_API_TOKEN` 后，在页面的 **访问设置** 中填写令牌；历史列表、
+报告详情、LangSmith 导入和研究 API 都使用同一认证。令牌仅在当前页面使用。
 
 ## 📱 社交媒媒体 MCP Server
 

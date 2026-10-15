@@ -1,3 +1,4 @@
+# 汇总研究、模型、工具、存储和预算配置，并校验环境变量及运行时覆盖值。
 """Configuration management for the Open Deep Research system."""
 
 import json
@@ -11,6 +12,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+# 定义可选搜索供应商，供配置解析和工具注册使用。
 class SearchAPI(Enum):
     """Enumeration of available search API providers."""
     
@@ -20,6 +22,7 @@ class SearchAPI(Enum):
     NONE = "none"
 
 
+# 定义联网搜索、本地 RAG 及混合检索模式。
 class RetrievalMode(Enum):
     """Enumeration of available research retrieval modes."""
 
@@ -89,6 +92,7 @@ LEGACY_RAG_KNOWLEDGE_BASE_PATH = "examples/rag_data"
 LEGACY_RAG_VECTORSTORE_PATH = ".rag_index"
 LEGACY_RAG_MILVUS_URI = ".rag_index/milvus.db"
 
+# 描述旧版单 MCP 服务的连接、认证及工具筛选配置。
 class MCPConfig(BaseModel):
     """Configuration for Model Context Protocol (MCP) servers."""
     
@@ -108,10 +112,11 @@ class MCPConfig(BaseModel):
     )
     """Whether the MCP server requires authentication"""
 
+# 集中声明研究系统的配置字段、默认值、校验规则与运行时读取方式。
 class Configuration(BaseModel):
     """Main configuration class for the Deep Research agent."""
     
-    # General Configuration
+    # 通用配置：研究并发、结构化输出重试与需求澄清开关。
     max_structured_output_retries: int = Field(
         default=3,
         metadata={
@@ -134,7 +139,7 @@ class Configuration(BaseModel):
             }
         }
     )
-    # Research Configuration
+    # 研究配置：工具循环上限、研究轮次和上下文策略。
     search_api: SearchAPI = Field(
         default=SearchAPI.TAVILY,
         metadata={
@@ -199,11 +204,11 @@ class Configuration(BaseModel):
         },
     )
     research_graph_enabled: bool = Field(
-        default=False,
+        default=True,
         metadata={
             "x_oap_ui_config": {
                 "type": "boolean",
-                "default": False,
+                "default": True,
                 "description": "Enable the per-run Neo4j Research Graph and bounded Research Workspace.",
             }
         },
@@ -357,7 +362,7 @@ class Configuration(BaseModel):
         default=".tmp/runtime/transcripts",
         metadata={"x_oap_ui_config": {"type": "text", "default": ".tmp/runtime/transcripts"}},
     )
-    # Business Scenario Configuration
+    # 业务场景配置：企业背景、启用角色与品牌监测范围。
     business_scenario: str = Field(
         default="public_opinion_risk",
         metadata={
@@ -402,7 +407,7 @@ class Configuration(BaseModel):
             }
         },
     )
-    # Budget Guard Configuration
+    # 预算管理：模型、工具、搜索和令牌限额，以及预警与上下文压力阈值。
     budget_enabled: bool = Field(
         default=False,
         metadata={
@@ -1186,7 +1191,7 @@ class Configuration(BaseModel):
             }
         }
     )
-    # Model Configuration
+    # 模型配置：为研究、压缩、摘要和最终报告分别选择模型与输出上限。
     summarization_model: str = Field(
         default="volcengine:doubao-seed-2-0-mini-260428",
         metadata={
@@ -1279,7 +1284,7 @@ class Configuration(BaseModel):
             }
         }
     )
-    # MCP server configuration
+    # MCP 连接配置：兼容单服务入口并支持多服务装配。
     mcp_config: Optional[MCPConfig] = Field(
         default=None,
         optional=True,
@@ -1301,7 +1306,7 @@ class Configuration(BaseModel):
         }
     )
     # ------------------------------------------------------------------
-    # Bytebase DBHub MCP — database query tools
+    # DBHub 数据库工具：连接串、启动条件与查询能力。
     # ------------------------------------------------------------------
 
     dbhub_enabled: bool = Field(
@@ -1352,7 +1357,7 @@ class Configuration(BaseModel):
     )
 
     # ------------------------------------------------------------------
-    # Microsoft MarkItDown MCP — file-to-markdown conversion
+    # MarkItDown 文档工具：把支持的文件转换为 Markdown。
     # ------------------------------------------------------------------
 
     markitdown_enabled: bool = Field(
@@ -1367,7 +1372,7 @@ class Configuration(BaseModel):
     )
 
     # ------------------------------------------------------------------
-    # Feishu / Lark Official MCP — Feishu API tools
+    # 飞书/Lark 工具：凭据、连接和预设工具白名单。
     # ------------------------------------------------------------------
 
     feishu_enabled: bool = Field(
@@ -1436,7 +1441,7 @@ class Configuration(BaseModel):
     )
 
     # ------------------------------------------------------------------
-    # Plan-and-Execute Configuration (public-opinion mode)
+    # 计划执行配置：章节规划、人工反馈及并发写作。
     # ------------------------------------------------------------------
 
     allow_plan_feedback: bool = Field(
@@ -1500,6 +1505,7 @@ class Configuration(BaseModel):
         },
     )
 
+    # 将环境变量字符串或运行时序列转换为列表配置，统一处理空值。
     @field_validator(
         "rag_knowledge_base_paths",
         "rag_json_text_fields",
@@ -1533,6 +1539,7 @@ class Configuration(BaseModel):
             return normalized_items or None
         return value
 
+    # 检查分块、检索、模型预算等配置约束，并应用路径兼容规则。
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> "Configuration":
         """Validate local RAG chunking and budget settings."""
@@ -1705,6 +1712,7 @@ class Configuration(BaseModel):
         return self
 
 
+    # 从环境变量和 RunnableConfig 组装配置，按实现中的覆盖顺序解析字段。
     @classmethod
     def from_runnable_config(
         cls, config: Optional[RunnableConfig] = None
@@ -1718,12 +1726,14 @@ class Configuration(BaseModel):
         }
         return cls(**{k: v for k, v in values.items() if v is not None})
 
+    # 声明 Pydantic 配置行为，控制额外字段等模型解析选项。
     class Config:
         """Pydantic configuration."""
         
         arbitrary_types_allowed = True
 
 
+# 兼容历史 RAG 数据目录，并对旧路径给出迁移提示。
 def _apply_rag_path_compatibility(config: Configuration) -> None:
     """Keep old RAG paths usable while nudging callers toward canonical data dirs."""
     fields_set = config.model_fields_set
@@ -1774,22 +1784,26 @@ def _apply_rag_path_compatibility(config: Configuration) -> None:
         )
 
 
+# 判断候选路径中是否至少有一个本地路径已存在。
 def _any_local_path_exists(paths: list[str]) -> bool:
     return any(_local_path_exists(path) for path in paths)
 
 
+# 检查单个本地路径是否存在，供兼容目录选择使用。
 def _local_path_exists(value: str) -> bool:
     if "://" in str(value):
         return False
     return Path(str(value)).expanduser().exists()
 
 
+# 归一化后比较当前路径与历史默认路径。
 def _is_legacy_path(value: str, legacy_value: str) -> bool:
     normalized = _normalize_local_path(value)
     legacy = _normalize_local_path(legacy_value)
     return normalized == legacy or normalized.endswith(f"/{legacy}")
 
 
+# 统一本地路径表示，减少分隔符等差异对兼容判断的影响。
 def _normalize_local_path(value: str) -> str:
     normalized = str(value).replace("\\", "/").strip().rstrip("/")
     if normalized.startswith("./"):
@@ -1797,6 +1811,7 @@ def _normalize_local_path(value: str) -> str:
     return normalized
 
 
+# 根据向量索引目录推导同目录下的 Milvus Lite 数据库路径。
 def _milvus_uri_from_vectorstore_path(vectorstore_path: str) -> str:
     stripped = str(vectorstore_path).strip()
     if "://" in stripped or stripped.endswith(".db"):
@@ -1804,6 +1819,7 @@ def _milvus_uri_from_vectorstore_path(vectorstore_path: str) -> str:
     return str(Path(stripped).expanduser() / "milvus.db").replace("\\", "/")
 
 
+# 记录旧配置路径及推荐替代位置，帮助定位迁移目标。
 def _warn_legacy_path(setting: str, value: str, replacement: str) -> None:
     if not _local_path_exists(value):
         return

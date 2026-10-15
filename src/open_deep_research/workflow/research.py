@@ -1,3 +1,4 @@
+# 调度首轮舆情研究、证据复核和针对缺口的角色补充研究。
 """Research stage of the public-opinion workflow."""
 
 import logging
@@ -60,6 +61,7 @@ LOGGER = logging.getLogger("open_deep_research.deep_researcher")
 
 _RESEARCH_TASK_ROLES = ("public_signal", "internal_knowledge")
 
+# 取得已启用且支持补充研究的公众信号、内部知识角色集合。
 def _enabled_research_roles(configurable: Configuration) -> set[str]:
     """Return enabled roles that can execute dynamic follow-up research."""
     enabled = configurable.enabled_business_agents or []
@@ -67,6 +69,8 @@ def _enabled_research_roles(configurable: Configuration) -> set[str]:
     return normalized.intersection(_RESEARCH_TASK_ROLES)
 
 
+# 过滤不可执行、已完成、重复或描述不完整的任务，并遵守研究轮次上限。
+# 只有公众信号和内部知识角色可以补充取证；风险与策略角色继续消费已收集证据。
 def _effective_followup_tasks(
     state: PublicOpinionState,
     review: ResearchReview,
@@ -99,6 +103,7 @@ def _effective_followup_tasks(
     return effective_tasks
 
 
+# 按完整状态域构造下一轮 Send 数据，更新轮次及待办任务。
 def _build_followup_send_payload(
     state: PublicOpinionState,
     tasks: list[ResearchTask],
@@ -122,6 +127,7 @@ def _build_followup_send_payload(
     }
 
 
+# 复核现有证据充分性，结合上一轮任务生成是否继续研究的结构化结论。
 async def research_review(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Review collected evidence and optionally create targeted follow-up tasks."""
     configurable = Configuration.from_runnable_config(config)
@@ -231,6 +237,8 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     }
 
 
+# 将有效补充任务按角色分组发送；无需补充时转入风险评估。
+# 同角色多个缺口共享一次 Send；载荷携带完整状态域，避免丢失报告、记忆和记账。
 def route_after_research_review(
     state: PublicOpinionState,
     config: RunnableConfig | None = None,
@@ -275,6 +283,7 @@ def route_after_research_review(
     return sends or ["risk_assessment_agent"]
 
 
+# 仅让由补充 Send 启动的角色回到复核节点。
 def route_after_research_agent(state: PublicOpinionState) -> list[str]:
     """Return to review only for agents launched by a follow-up Send."""
     if is_followup(state):
@@ -282,21 +291,25 @@ def route_after_research_agent(state: PublicOpinionState) -> list[str]:
     return []
 
 
+# 执行公众信号角色，收集新闻、社交、投诉、竞争与传播证据。
 async def public_signal_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Collect integrated news, social, complaint, competitor, and spread evidence."""
     return await run_business_agent(role="public_signal", state=state, config=config)
 
 
+# 执行内部知识角色，检索企业资料、预案和历史记忆。
 async def internal_knowledge_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Collect internal RAG evidence from company knowledge, playbooks, and memory."""
     return await run_business_agent(role="internal_knowledge", state=state, config=config)
 
 
+# 执行风险角色，核验主张并评估合规、法律及产品风险。
 async def risk_assessment_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Verify claims and assess compliance, legal, and product-risk signals."""
     return await run_business_agent(role="risk_assessment", state=state, config=config)
 
 
+# 执行策略角色，生成回应口径、FAQ、处置行动和监测词。
 async def response_strategy_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
     """Create PR response posture, FAQ points, actions, and monitoring keywords."""
     return await run_business_agent(role="response_strategy", state=state, config=config)
@@ -363,6 +376,7 @@ public_opinion_builder.add_edge("response_strategy_agent", END)
 public_opinion_subgraph = public_opinion_builder.compile(name="public_opinion_agents")
 
 
+# 运行首轮及缺口驱动的研究子图，汇总结果交给报告阶段。
 async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     """Run initial and gap-driven public-opinion research before report writing."""
     input_budget = runtime_state(state).get("budget", {})

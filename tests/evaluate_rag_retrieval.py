@@ -1,3 +1,4 @@
+# 评估本地 RAG 的来源和证据召回，并提供图扩展开关消融及漏召诊断。
 """Evaluate local RAG retrieval metrics against a JSONL test set.
 
 This script intentionally measures retrieval only. It does not call an LLM and
@@ -64,11 +65,13 @@ DEFAULT_RERANKER_PROVIDER = "cross_encoder"
 DEFAULT_RERANKER_MODEL = ".rag_models/cross-encoder-ms-marco-MiniLM-L6-v2"
 
 
+# 输出不含终端颜色或控制字符的文本行。
 def emit(line: str = "") -> None:
     """Write one plain text line without terminal color/control sequences."""
     sys.stdout.write(f"{line}\n")
 
 
+# 配置纯文本输出，使 Windows 终端和日志捕获保持可读。
 def configure_plain_output() -> None:
     """Keep CLI output readable in Windows terminals and log captures."""
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
@@ -76,12 +79,14 @@ def configure_plain_output() -> None:
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 
 
+# 从引用来源提取可比较的文件名。
 def normalize_source(source: str) -> str:
     """Return the comparable source file name from a citation source."""
     normalized = source.replace("\\", "/")
     return normalized.rsplit("/", 1)[-1].split("#", 1)[0]
 
 
+# 计算单个可回答案例的来源级召回指标。
 def score_retrieval(
     expected_sources: list[str],
     retrieved_sources: list[str],
@@ -108,6 +113,7 @@ def score_retrieval(
     }
 
 
+# 计算单案例分块或证据级检索指标。
 def score_evidence_retrieval(
     expected_sources: list[str],
     expected_keywords: list[str],
@@ -159,6 +165,7 @@ def score_evidence_retrieval(
     }
 
 
+# 判断候选详情是否命中任一目标证据关键词。
 def _detail_matches_any_keyword(
     detail: dict[str, Any],
     normalized_keywords: list[str],
@@ -169,6 +176,7 @@ def _detail_matches_any_keyword(
     return any(keyword in content for keyword in normalized_keywords)
 
 
+# 统计召回结果中指定来源状态的占比。
 def _source_status_rate(
     details: list[dict[str, Any]],
     denominator: int,
@@ -191,12 +199,14 @@ def _source_status_rate(
     return count / denominator
 
 
+# 对评分字典中的指定有效指标求平均。
 def average_metric(scores: list[dict[str, Any]], metric_key: str) -> float:
     """Average one metric over score dictionaries."""
     values = [float(score[metric_key]) for score in scores]
     return statistics.mean(values) if values else 0.0
 
 
+# 按评估类别聚合检索指标。
 def summarize_by_category(
     scores: list[dict[str, Any]],
     metric_keys: list[str],
@@ -215,6 +225,7 @@ def summarize_by_category(
     }
 
 
+# 读取 JSONL 检索评估案例。
 def load_cases(path: Path) -> list[dict[str, Any]]:
     """Load JSONL evaluation cases."""
     return [
@@ -224,11 +235,13 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     ]
 
 
+# 生成适合终端诊断的单行文本预览。
 def compact_text(text: str, limit: int = 300) -> str:
     """Return a one-line text preview suitable for terminal diagnostics."""
     return " ".join(text.split())[:limit]
 
 
+# 格式化可选得分，保留缺失状态并控制精度。
 def format_optional_score(value: float | None) -> str:
     """Format optional retrieval scores without adding noisy precision."""
     if value is None:
@@ -236,6 +249,7 @@ def format_optional_score(value: float | None) -> str:
     return f"{float(value):.4f}"
 
 
+# 将检索结果对象转换为精简调试字典。
 def serialize_retrieval_detail(result: Any, rank: int) -> dict[str, Any]:
     """Convert a RetrievalResult-like object to a compact debug dictionary."""
     chunk = result.chunk
@@ -255,6 +269,7 @@ def serialize_retrieval_detail(result: Any, rank: int) -> dict[str, Any]:
     }
 
 
+# 收集重排候选详情，供漏召分析使用。
 def collect_retrieval_details(
     pipeline: RAGPipeline,
     query: str,
@@ -289,6 +304,7 @@ def collect_retrieval_details(
     ]
 
 
+# 为未命中案例追加候选分块等诊断信息。
 def add_miss_diagnostics(
     record: dict[str, Any],
     pipeline: RAGPipeline,
@@ -314,6 +330,7 @@ def add_miss_diagnostics(
     record["expected_retrieved_but_low_rank"] = any(rank > k for rank in expected_ranks)
 
 
+# 拒绝用非语义嵌入后端产生正式检索质量指标。
 def validate_metric_embedding_provider(provider: str) -> None:
     """Reject non-semantic embedding backends for retrieval quality metrics."""
     if provider.lower().strip() == "hash":
@@ -323,6 +340,7 @@ def validate_metric_embedding_provider(provider: str) -> None:
         )
 
 
+# 创建只评估检索效果的本地 RAG 管线。
 def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
     """Create the local RAG pipeline used for retrieval-only evaluation."""
     configure_plain_output()
@@ -368,6 +386,7 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
     )
 
 
+# 在评估前展示本次实际使用的检索技术栈。
 def print_run_config(args: argparse.Namespace) -> None:
     """Print the effective retrieval stack before running evaluation."""
     emit("Config")
@@ -405,6 +424,7 @@ def print_run_config(args: argparse.Namespace) -> None:
     emit()
 
 
+# 逐案例执行检索，返回已评分及被跳过的案例。
 def evaluate_cases(
     cases: list[dict[str, Any]],
     pipeline: RAGPipeline,
@@ -467,6 +487,7 @@ def evaluate_cases(
     return scores, skipped
 
 
+# 读取已就绪索引的文档、分块和向量数量。
 def collect_index_stats(pipeline: RAGPipeline) -> dict[str, int]:
     """Return document, chunk, and vector counts from the ready RAG index."""
     indexer = pipeline.indexer
@@ -477,6 +498,7 @@ def collect_index_stats(pipeline: RAGPipeline) -> dict[str, int]:
     }
 
 
+# 输出精简检索质量报告。
 def print_report(
     scores: list[dict[str, Any]],
     skipped: list[dict[str, Any]],
@@ -535,6 +557,7 @@ def print_report(
             print_miss_diagnostics(score)
 
 
+# 展示单个漏召案例的分块级诊断。
 def print_miss_diagnostics(score: dict[str, Any]) -> None:
     """Print chunk-level debug details for one missed case."""
     details = score.get("retrieved_details", [])
@@ -584,6 +607,7 @@ def print_miss_diagnostics(score: dict[str, Any]) -> None:
         emit(f"    metadata: {metadata}")
 
 
+# 对同一案例分别启用和关闭图扩展，返回对比详情。
 def score_graph_ablation_case(
     case: dict[str, Any],
     pipeline_on: RAGPipeline,
@@ -636,6 +660,7 @@ def score_graph_ablation_case(
     }
 
 
+# 查找首个预期来源的一基排名，未命中时返回 None。
 def _first_expected_rank(
     sources: list[str], expected: set[str], k: int,
 ) -> int | None:
@@ -646,6 +671,7 @@ def _first_expected_rank(
     return None
 
 
+# 聚合全部案例的图扩展消融结果。
 def compute_graph_ablation_metrics(
     ablation_results: list[dict[str, Any]],
 ) -> dict[str, float]:
@@ -686,6 +712,7 @@ def compute_graph_ablation_metrics(
     }
 
 
+# 打印图开关对比报告。
 def print_ablation_report(
     ablation_results: list[dict[str, Any]],
     graph_metrics: dict[str, float],
@@ -736,6 +763,7 @@ def print_ablation_report(
         )
 
 
+# 为所有案例执行图启用和关闭的完整消融评估。
 def run_graph_ablation(
     cases: list[dict[str, Any]],
     args: argparse.Namespace,
@@ -776,6 +804,7 @@ def run_graph_ablation(
     print_ablation_report(ablation_results, graph_metrics)
 
 
+# 解析检索评估和消融参数。
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -828,6 +857,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+# 运行评估命令行入口并输出报告。
 def main() -> None:
     """CLI entry point."""
     args = parse_args()

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 从 LangSmith 提取评估或诊断数据并导出为 JSONL。
 """Extract data from LangSmith and save to JSONL file with configurable dataset."""
 
 import os
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# 按筛选条件读取 LangSmith 数据，整理后保存为 JSONL 文件。
 def extract_langsmith_data(project_name, model_name, dataset_name, api_key):
     """Extract data from LangSmith and save to JSONL file."""
     print(f"Extracting data from LangSmith project: {project_name}")
@@ -58,6 +60,7 @@ def extract_langsmith_data(project_name, model_name, dataset_name, api_key):
     return output_file_path
 
 
+# 读取导出参数并运行数据提取。
 def main():
     parser = argparse.ArgumentParser(description='Extract data from LangSmith project')
     parser.add_argument('--project-name', required=True, help='LangSmith project name')

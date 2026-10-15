@@ -1,3 +1,4 @@
+# 按标准、图生产和图消费策略管理模型上下文与工具批次生命周期。
 """Producer/consumer strategies operating on a per-run Research Workspace."""
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 
+# 保存工具批次处理后的消息、回执和统计更新。
 @dataclass
 class WorkspaceHookResult:
     """Lifecycle output returned after a tool batch."""
@@ -55,6 +57,7 @@ class WorkspaceHookResult:
     metrics: dict[str, Any] = field(default_factory=dict)
 
 
+# 保存图策略负责生成的最终角色报告。
 @dataclass
 class WorkspaceFinalResult:
     """Final role report output from a graph strategy."""
@@ -65,6 +68,7 @@ class WorkspaceFinalResult:
     metrics: dict[str, Any] = field(default_factory=dict)
 
 
+# 约定模型调用前、工具批次后和报告收尾的上下文生命周期。
 class ContextStrategy(Protocol):
     """Small lifecycle interface shared by standard and graph strategies."""
 
@@ -72,9 +76,11 @@ class ContextStrategy(Protocol):
     graph_enabled: bool
     is_producer: bool
 
+    # 约定构建下一次模型调用所需的有限上下文。
     async def before_model(self, workspace: ResearchWorkspace, messages: list[Any]) -> list[Any]:
         """Build the next bounded model input."""
 
+    # 约定消费刚执行完的工具批次。
     async def after_tool_batch(
         self,
         workspace: ResearchWorkspace,
@@ -83,6 +89,7 @@ class ContextStrategy(Protocol):
     ) -> WorkspaceHookResult:
         """Consume a completed tool batch."""
 
+    # 约定由策略负责时生成最终角色报告。
     async def finalize(
         self,
         workspace: ResearchWorkspace,
@@ -93,6 +100,7 @@ class ContextStrategy(Protocol):
 
 
 
+# 保留原有消息历史与报告压缩行为的兼容策略。
 class StandardContextStrategy:
     """Compatibility strategy that preserves the existing lifecycle."""
 
@@ -100,10 +108,12 @@ class StandardContextStrategy:
     graph_enabled = False
     is_producer = False
 
+    # 原样返回标准系统消息与历史组成的模型输入。
     async def before_model(self, workspace: ResearchWorkspace, messages: list[Any]) -> list[Any]:
         """Return the unmodified standard system-plus-history input."""
         return list(messages)
 
+    # 保留标准模式工具结果，不执行图抽取。
     async def after_tool_batch(
         self,
         workspace: ResearchWorkspace,
@@ -113,6 +123,7 @@ class StandardContextStrategy:
         """Leave standard tool results unchanged."""
         return WorkspaceHookResult(messages=list(messages))
 
+    # 将标准模式的报告压缩交回原调用流程。
     async def finalize(
         self,
         workspace: ResearchWorkspace,
@@ -123,11 +134,13 @@ class StandardContextStrategy:
         return None
 
 
+# 复用图生产与图消费共有的有限上下文行为。
 class _ResearchGraphStrategyBase:
     """Shared bounded context behavior for producer and consumer strategies."""
 
     graph_enabled = True
 
+    # 检索相关子图并组合当前工作上下文，构造有界模型输入。
     async def before_model(self, workspace: ResearchWorkspace, messages: list[Any]) -> list[Any]:
         if not workspace.relevant_subgraph.nodes and workspace.store is not None:
             workspace.context_for()
@@ -146,6 +159,7 @@ class _ResearchGraphStrategyBase:
         )
         return [*assignment, context_message, *history]
 
+    # 基于当前图证据和工作上下文生成可追溯的角色报告。
     async def finalize(
         self,
         workspace: ResearchWorkspace,
@@ -197,12 +211,14 @@ class _ResearchGraphStrategyBase:
         )
 
 
+# 执行原始工具结果、抽取、图写入和工作上下文更新的生产链路。
 class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
     """Producer lifecycle: raw tools -> extraction -> graph -> context."""
 
     name = "research_graph_producer"
     is_producer = True
 
+    # 持久化成功工具批次的证据，并用写入回执压缩原始正文。
     async def after_tool_batch(
         self,
         workspace: ResearchWorkspace,
@@ -440,12 +456,14 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
             )
 
 
+# 为分析角色检索当前运行的图证据，提供有限分析上下文。
 class ResearchGraphConsumerStrategy(_ResearchGraphStrategyBase):
     """Consumer lifecycle: scoped graph retrieval plus bounded analysis."""
 
     name = "research_graph_consumer"
     is_producer = False
 
+    # 刷新限定范围的图检索，同时保留消费角色原始工具结果。
     async def after_tool_batch(
         self,
         workspace: ResearchWorkspace,
@@ -483,6 +501,7 @@ class ResearchGraphConsumerStrategy(_ResearchGraphStrategyBase):
         )
 
 
+# 在工作区初始化时解析并创建上下文策略。
 def create_context_strategy(
     strategy_name: str,
     *,
@@ -499,6 +518,7 @@ def create_context_strategy(
     raise ValueError(f"Unsupported context strategy: {strategy_name}")
 
 
+# 合并批次写入回执，保留可追踪的节点和来源标识。
 def _merge_receipts(left: WriteReceipt | None, right: WriteReceipt) -> WriteReceipt:
     if left is None:
         return right
@@ -517,10 +537,12 @@ def _merge_receipts(left: WriteReceipt | None, right: WriteReceipt) -> WriteRece
     )
 
 
+# 将来源文档整理为受控模型输入文本。
 def _render_documents(documents: Iterable[RawResearchDocument]) -> str:
     return "\n".join(f"{document.source_id}: {document.content}" for document in documents)
 
 
+# 渲染近期消息，补充当前任务的最新观察。
 def _render_recent_messages(messages: Iterable[Any], *, max_steps: int = 3) -> str:
     items = list(messages)
     text_parts = [

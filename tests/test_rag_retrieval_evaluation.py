@@ -1,3 +1,4 @@
+# 验证检索评估指标、漏召诊断、真实模型约束和纯文本输出。
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,11 +22,13 @@ from tests.evaluate_rag_retrieval import (
 )
 
 
+# 验证来源归一化保留预期文件名。
 def test_normalize_source_keeps_expected_file_name():
     assert normalize_source("C:/repo/data/knowledge/faq.json#item-2") == "faq.json"
     assert normalize_source(r"C:\repo\data\knowledge\team_handbook.md") == "team_handbook.md"
 
 
+# 验证命中率、召回率、精确率及 MRR 的计算。
 def test_score_retrieval_computes_hit_recall_precision_and_mrr():
     score = score_retrieval(
         expected_sources=["team_handbook.md", "faq.json"],
@@ -40,10 +43,12 @@ def test_score_retrieval_computes_hit_recall_precision_and_mrr():
     assert score["mrr@3"] == 0.5
 
 
+# 验证没有预期来源的不可回答案例被跳过。
 def test_score_retrieval_skips_unanswerable_cases_without_sources():
     assert score_retrieval(expected_sources=[], retrieved_sources=["runbook.txt"], k=5) is None
 
 
+# 验证证据级评分结合分块内容与来源状态。
 def test_score_evidence_retrieval_uses_chunk_content_and_authority_status():
     details = [
         {
@@ -81,6 +86,7 @@ def test_score_evidence_retrieval_uses_chunk_content_and_authority_status():
     assert score["authoritative_rate@3"] == 2 / 3
 
 
+# 验证按案例类别正确汇总指标。
 def test_summarize_by_category_groups_scores():
     scores = [
         {
@@ -127,8 +133,11 @@ def test_summarize_by_category_groups_scores():
     }
 
 
+# 验证已评分和跳过案例均保留实际耗时。
 def test_evaluate_cases_records_latency_for_scored_and_skipped_cases():
+    # 提供可记录配置或返回预设引用的管线替身。
     class FakePipeline:
+        # 按问题返回预设来源引用，检查评估与耗时记录。
         def query(self, query):
             if query == "answerable":
                 citations = [SimpleNamespace(source="C:/repo/data/knowledge/faq.json#item-1")]
@@ -160,6 +169,7 @@ def test_evaluate_cases_records_latency_for_scored_and_skipped_cases():
     assert skipped[0]["avg_latency_ms"] == 50.0
 
 
+# 验证预期来源位于截断范围之外时给出漏召诊断。
 def test_add_miss_diagnostics_flags_expected_source_below_top_k():
     expected_chunk = SimpleNamespace(
         source="C:/repo/data/knowledge/expected.md",
@@ -190,11 +200,15 @@ def test_add_miss_diagnostics_flags_expected_source_below_top_k():
         ),
     ]
 
+    # 提供预设候选结果，隔离真实检索后端。
     class FakeRetriever:
+        # 返回预设检索候选，供查询改写或漏召诊断检查。
         def retrieve(self, **kwargs):
             return retrieval_results
 
+    # 提供可控候选排序结果，隔离真实重排模型。
     class FakeReranker:
+        # 返回测试所需的候选顺序和评分。
         def rerank(self, **kwargs):
             return kwargs["results"]
 
@@ -230,6 +244,7 @@ def test_add_miss_diagnostics_flags_expected_source_below_top_k():
     assert record["retrieved_details"][1]["source"] == "expected.md"
 
 
+# 验证索引统计读取实际文档、分块和向量数。
 def test_collect_index_stats_reads_ready_index_counts():
     pipeline = SimpleNamespace(
         indexer=SimpleNamespace(
@@ -246,10 +261,13 @@ def test_collect_index_stats_reads_ready_index_counts():
     }
 
 
+# 验证显式真实模型参数正确传入管线。
 def test_build_pipeline_wires_explicit_real_model_options(monkeypatch):
     captured = {}
 
+    # 提供可记录配置或返回预设引用的管线替身。
     class FakePipeline:
+        # 接收测试构造参数，不建立真实外部连接。
         def __init__(self, config):
             captured["config"] = config
 
@@ -283,6 +301,7 @@ def test_build_pipeline_wires_explicit_real_model_options(monkeypatch):
     assert config.reranker_device == "cpu"
 
 
+# 验证正式质量评估拒绝哈希嵌入。
 def test_build_pipeline_rejects_hash_embedding_for_retrieval_metrics():
     with pytest.raises(ValueError, match="hash embeddings"):
         build_pipeline(
@@ -306,6 +325,7 @@ def test_build_pipeline_rejects_hash_embedding_for_retrieval_metrics():
         )
 
 
+# 验证命令行默认选用真实语义模型栈。
 def test_parse_args_defaults_to_real_model_stack(monkeypatch):
     monkeypatch.setattr("sys.argv", ["evaluate_rag_retrieval.py"])
 
@@ -323,6 +343,7 @@ def test_parse_args_defaults_to_real_model_stack(monkeypatch):
     assert args.reranker_model == ".rag_models/cross-encoder-ms-marco-MiniLM-L6-v2"
 
 
+# 验证命令行参数校验拒绝非语义嵌入评估。
 def test_parse_args_rejects_hash_embedding_for_retrieval_metrics(monkeypatch):
     monkeypatch.setattr(
         "sys.argv",
@@ -333,6 +354,7 @@ def test_parse_args_rejects_hash_embedding_for_retrieval_metrics(monkeypatch):
         parse_args()
 
 
+# 验证运行配置输出为无终端控制字符的单行文本。
 def test_print_run_config_uses_plain_single_line_output(capsys):
     print_run_config(
         SimpleNamespace(
@@ -358,6 +380,7 @@ def test_print_run_config_uses_plain_single_line_output(capsys):
     assert "top_k: 5" in output
 
 
+# 验证类别统计与漏召说明采用纯文本格式。
 def test_print_report_uses_plain_single_line_category_and_miss_output(capsys):
     scores = [
         {
@@ -423,6 +446,7 @@ def test_print_report_uses_plain_single_line_category_and_miss_output(capsys):
     assert 'metadata: {"heading_path": ["Runbook"]}' in output
 
 
+# 验证纯文本模式关闭进度条。
 def test_configure_plain_output_disables_progress_bars(monkeypatch):
     monkeypatch.delenv("HF_HUB_DISABLE_PROGRESS_BARS", raising=False)
     monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)

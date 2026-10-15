@@ -1,5 +1,7 @@
+# 从供应商原始模型响应中识别内置联网搜索是否发生。
 """Detect provider-native web search usage for budget accounting."""
 
+# 检查 Anthropic 响应块，判断是否执行了原生网页搜索。
 def anthropic_websearch_called(response):
     """Detect if Anthropic's native web search was used in the response.
 
@@ -32,6 +34,7 @@ def anthropic_websearch_called(response):
         # Handle cases where response structure is unexpected
         return False
 
+# 检查 OpenAI 响应中的搜索调用记录，供搜索预算统计使用。
 def openai_websearch_called(response):
     """Detect if OpenAI's web search functionality was used in the response.
 

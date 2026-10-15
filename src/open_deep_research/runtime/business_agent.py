@@ -1,3 +1,4 @@
+# 将角色规范、工具权限、上下文策略与共享运行时装配为业务智能体。
 """Assemble and run one configured public-opinion business agent."""
 
 from __future__ import annotations
@@ -34,16 +35,13 @@ from open_deep_research.research_graph import (
 )
 from open_deep_research.research_graph.schema import stable_id
 from open_deep_research.runtime.agent_runtime import AgentRuntime, AgentRuntimeResult
-from open_deep_research.social_media.tools import (
-    SOCIAL_MEDIA_TOOL_NAMES,
-    get_social_media_tools,
-)
+from open_deep_research.social_media.tools import get_social_media_tools
 from open_deep_research.state import DeepResearchState
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.tools.registry import (
+    build_dynamic_tool_prompt,
     get_all_tools,
     get_raw_search_tool,
-    get_research_tool_prompt,
     has_external_research_tool,
 )
 from open_deep_research.workflow.state_utils import (
@@ -76,6 +74,7 @@ _UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
 }
 
 
+# 优先使用显式上下文策略，auto 时采用角色规范中的默认策略。
 def _effective_context_strategy(configurable: Configuration, spec: Any) -> str:
     configured = configurable.context_strategy.strip().lower()
     if configured != "auto":
@@ -83,6 +82,7 @@ def _effective_context_strategy(configurable: Configuration, spec: Any) -> str:
     return str(spec.context_strategy)
 
 
+# 取得当前角色的补充任务，首轮则按运行范围生成稳定任务描述。
 def _task_descriptor(
     state: DeepResearchState,
     role: str,
@@ -109,6 +109,7 @@ def _task_descriptor(
     )
 
 
+# 组装研究简报、上游证据和角色契约；补充轮次聚焦尚未解决的证据缺口。
 def _build_business_agent_assignment(
     state: DeepResearchState,
     role: str,
@@ -168,26 +169,28 @@ def _build_business_agent_assignment(
     )
 
 
-def _role_tool_prompt(configurable: Configuration, spec: Any) -> str:
+# 描述当前角色实际可用工具及领域白名单，并说明内部检索缺失时的处理原则。
+def _role_tool_prompt(configurable: Configuration, spec: Any, tools: list[Any]) -> str:
     allowed_domains = spec.allowed_domains
-    allowed_tools = []
-    if "core" in allowed_domains:
-        allowed_tools.extend(["think_tool", "ResearchComplete"])
-    if "web_search" in allowed_domains:
-        allowed_tools.append("web_search")
-    if "rag" in allowed_domains:
-        allowed_tools.append("rag_search")
-    if "social_media" in allowed_domains:
-        allowed_tools.extend(sorted(SOCIAL_MEDIA_TOOL_NAMES))
+    allowed_tools = sorted({tool_name(tool) for tool in tools})
+    missing_rag_guidance = (
+        "\nrag_search is unavailable. Use cited upstream evidence supplied in "
+        "the research context. Flag missing internal playbooks or approvals; "
+        "do not invent approved company facts or response language."
+        if "rag" in allowed_domains and "rag_search" not in allowed_tools
+        else ""
+    )
     return (
-        f"{get_research_tool_prompt(configurable)}\n\n"
+        f"{build_dynamic_tool_prompt(tools, configurable)}\n\n"
         f"Role-specific allowed domains: {', '.join(sorted(allowed_domains))}. "
         "Role-specific tool whitelist: "
         f"{', '.join(allowed_tools)}. "
         "Do not attempt to use tools outside this whitelist."
+        f"{missing_rag_guidance}"
     )
 
 
+# 装配工具后按角色领域严格过滤，图生产角色使用原始搜索结果入口。
 async def _business_agent_tools(
     config: RunnableConfig,
     role: str,
@@ -228,6 +231,7 @@ async def _business_agent_tools(
     return filtered_tools
 
 
+# 执行工具并返回结果、嵌套消耗和成功标记；所有退出路径都恢复预算捕获上下文。
 async def _execute_tool_safely(
     tool: Any,
     args: Any,
@@ -249,6 +253,7 @@ async def _execute_tool_safely(
     return observation, captured_budget, not failed
 
 
+# 压缩研究记录并统计用量，预算不足时保留原始笔记以预留最终报告调用。
 async def _compress_research(
     messages: list[Any],
     task: str,
@@ -345,6 +350,7 @@ async def _compress_research(
     )
 
 
+# 把角色运行结果映射为各状态域的增量，供 LangGraph reducer 合并。
 def _build_state_patch(
     *,
     role: str,
@@ -383,6 +389,7 @@ def _build_state_patch(
     return patch
 
 
+# 装配模型、工具和工作区，执行指定角色并返回状态更新。
 async def run_business_agent(
     *,
     role: str,
@@ -407,7 +414,10 @@ async def run_business_agent(
     )
     assignment = _build_business_agent_assignment(state, role, configurable, spec)
     tools = await _business_agent_tools(config, role, spec)
-    if not has_external_research_tool(tools):
+    # Consumers retrieve their evidence through ResearchWorkspace, so they
+    # can synthesize a report without an optional external retrieval tool.
+    uses_graph_evidence = strategy.graph_enabled and not strategy.is_producer
+    if not has_external_research_tool(tools) and not uses_graph_evidence:
         required = sorted(spec.allowed_domains - {"core"})
         raise ValueError(
             f"Public Opinion agent '{role}' ({spec.display_name}) requires "
@@ -432,6 +442,7 @@ async def run_business_agent(
         .with_config(model_config)
     )
 
+    # 按本次调用配置创建并绑定角色实际可用的模型与工具。
     def model_factory(model_name: str, max_tokens: int | None) -> Any:
         nested_model_config: dict[str, Any] = {
             "model": model_name,
@@ -453,12 +464,13 @@ async def run_business_agent(
         research_round=research_round,
     )
     system_prompt = spec.format_system_prompt(
-        retrieval_tool_prompt=_role_tool_prompt(configurable, spec),
+        retrieval_tool_prompt=_role_tool_prompt(configurable, spec, tools),
         mcp_prompt=configurable.mcp_prompt or "",
         date=get_today_str(),
         organization_context=business_context(configurable),
     )
 
+    # 将运行时的研究压缩请求转发到共享压缩实现。
     async def compress_report(
         messages: list[Any],
         task: str,

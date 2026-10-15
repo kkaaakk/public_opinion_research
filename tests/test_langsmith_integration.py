@@ -1,3 +1,4 @@
+# 验证可选追踪的配置、有限元数据、阶段区间和记账一致性。
 """Integration-boundary tests for the LangSmith tracing split.
 
 These tests exercise the project's own boundary, not the LangSmith SaaS:
@@ -41,7 +42,9 @@ from open_deep_research.observability.langsmith import (
 # ---------------------------------------------------------------------------
 
 
+# 模拟追踪运行对象，记录输出和追加元数据。
 class _RecordingRun:
+    # 初始化模拟运行的名称、输出与元数据容器。
     def __init__(self, name: str, run_type: str, metadata: dict[str, Any] | None):
         self.name = name
         self.run_type = run_type
@@ -50,22 +53,28 @@ class _RecordingRun:
         self.ended = False
         self.error: str | None = None
 
+    # 保存测试中追踪区间附加的输出。
     def add_outputs(self, outputs: dict[str, Any]) -> None:
         self.outputs.update(outputs)
 
+    # 保存测试中追加的追踪元数据。
     def add_metadata(self, metadata: dict[str, Any]) -> None:
         self.metadata.update(metadata)
 
 
+# 模拟同步与异步追踪上下文的进入和退出行为。
 class _RecordingContext:
+    # 绑定追踪记录及上下文状态。
     def __init__(self, run: _RecordingRun, journal: list[dict[str, Any]]):
         self._run = run
         self._journal = journal
 
+    # 返回模拟同步追踪运行。
     def __enter__(self) -> _RecordingRun:
         self._journal.append({"event": "enter", "run": self._run})
         return self._run
 
+    # 记录同步退出时的异常信息。
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
         self._run.ended = True
         if exc_type is not None:
@@ -73,16 +82,20 @@ class _RecordingContext:
         self._journal.append({"event": "exit", "run": self._run, "exc": exc_type})
         return False
 
+    # 进入模拟异步追踪上下文。
     async def __aenter__(self) -> _RecordingRun:
         return self.__enter__()
 
+    # 记录异步退出及异常信息。
     async def __aexit__(self, exc_type, exc_value, traceback) -> bool:
         return self.__exit__(exc_type, exc_value, traceback)
 
 
+# 安装记录型追踪替身，供断言实际阶段调用。
 def _recording_trace(journal: list[dict[str, Any]]):
     """Build a stand-in for ``langsmith.trace`` capturing every span request."""
 
+    # 创建并记录一次测试追踪上下文。
     def _trace(name: str, run_type: str = "chain", **kwargs: Any) -> _RecordingContext:
         run = _RecordingRun(name, run_type, kwargs.get("metadata"))
         journal.append({"event": "request", "name": name, "run_type": run_type, "run": run})
@@ -91,6 +104,7 @@ def _recording_trace(journal: list[dict[str, Any]]):
     return _trace
 
 
+# 构造已启用追踪的隔离测试环境。
 @contextlib.contextmanager
 def _enabled_langsmith(monkeypatch: pytest.MonkeyPatch, journal: list[dict[str, Any]]):
     # Exercise the project tracing boundary without enabling LangChain's global
@@ -103,10 +117,12 @@ def _enabled_langsmith(monkeypatch: pytest.MonkeyPatch, journal: list[dict[str, 
     yield
 
 
+# 提取已记录追踪区间的名称列表。
 def _span_names(journal: list[dict[str, Any]]) -> list[str]:
     return [entry["name"] for entry in journal if entry["event"] == "request"]
 
 
+# 按名称查询单个记录的追踪区间。
 def _span(name: str, journal: list[dict[str, Any]]) -> _RecordingRun:
     return next(
         entry["run"]
@@ -120,12 +136,14 @@ def _span(name: str, journal: list[dict[str, Any]]) -> _RecordingRun:
 # ---------------------------------------------------------------------------
 
 
+# 验证默认关闭追踪时辅助接口仍可安全调用。
 def test_tracing_disabled_by_default_and_helpers_stay_safe():
     assert not langsmith_enabled()
     with trace_span("never_created") as run:
         assert run is None
 
 
+# 验证启用追踪需要有效 API 密钥配置。
 def test_tracing_enabled_requires_api_key(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
     monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
@@ -139,6 +157,7 @@ def test_tracing_enabled_requires_api_key(monkeypatch):
     assert not langsmith_enabled()
 
 
+# 验证缺省项目名被补齐且不覆盖用户设置。
 def test_project_defaults_are_normalized_without_overriding_user_values(monkeypatch):
     monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
     monkeypatch.delenv("LANGCHAIN_PROJECT", raising=False)
@@ -150,6 +169,7 @@ def test_project_defaults_are_normalized_without_overriding_user_values(monkeypa
     assert langsmith_project() == "my-team-project"
 
 
+# 验证缺少密钥时显式启用的追踪会被规范为关闭。
 def test_enabled_tracing_without_key_is_normalized_off(monkeypatch, caplog):
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
     monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
@@ -165,6 +185,7 @@ def test_enabled_tracing_without_key_is_normalized_off(monkeypatch, caplog):
 # ---------------------------------------------------------------------------
 
 
+# 验证关联元数据仅包含长度受限的标识。
 def test_correlation_metadata_contains_only_bounded_identifiers():
     metadata = correlation_metadata(
         {"configurable": {"thread_id": "thread-1", "checkpoint_id": "ckpt-9"}}
@@ -176,6 +197,7 @@ def test_correlation_metadata_contains_only_bounded_identifiers():
     assert len(metadata["logical_run_id"]) < 80
 
 
+# 验证同一线程的逻辑运行 ID 稳定。
 def test_logical_run_id_is_stable_per_thread(monkeypatch):
     monkeypatch.delenv("ENVIRONMENT", raising=False)
     first = correlation_metadata({"configurable": {"thread_id": "thread-1"}})
@@ -185,6 +207,7 @@ def test_logical_run_id_is_stable_per_thread(monkeypatch):
     assert other["logical_run_id"] != first["logical_run_id"]
 
 
+# 验证追踪元数据不携带状态正文和凭据。
 def test_metadata_never_carries_state_or_secrets():
     metadata = correlation_metadata(
         {
@@ -200,6 +223,7 @@ def test_metadata_never_carries_state_or_secrets():
     assert "research_model" not in serialized
 
 
+# 验证节点与角色元数据能明确标识对应智能体。
 def test_node_and_agent_metadata_identify_agents():
     node = node_metadata("public_signal_agent", kind="agent")
     assert node == {
@@ -218,12 +242,14 @@ def test_node_and_agent_metadata_identify_agents():
     assert agent["workflow"] == WORKFLOW_NAME
 
 
+# 验证模型追踪字段受长度限制。
 def test_model_metadata_is_bounded():
     metadata = model_metadata(component="rag_query_rewrite", structured_output=True)
     assert metadata == {"component": "rag_query_rewrite", "structured_output": True}
     assert model_metadata() == {}
 
 
+# 验证图调用元数据包含运行关联信息。
 def test_invocation_metadata_includes_correlation():
     metadata = invocation_metadata({"configurable": {"thread_id": "thread-1"}})
     assert metadata["workflow"] == WORKFLOW_NAME
@@ -235,11 +261,13 @@ def test_invocation_metadata_includes_correlation():
 # ---------------------------------------------------------------------------
 
 
+# 验证关闭追踪时区间上下文为无操作。
 def test_trace_span_is_noop_when_disabled():
     with trace_span("disabled_stage", "retriever") as run:
         assert run is None
 
 
+# 验证启用追踪时创建带正确元数据的区间。
 def test_trace_span_creates_span_with_metadata_when_enabled(monkeypatch):
     journal: list[dict[str, Any]] = []
     with _enabled_langsmith(monkeypatch, journal):
@@ -258,6 +286,7 @@ def test_trace_span_creates_span_with_metadata_when_enabled(monkeypatch):
     assert span.ended and span.error is None
 
 
+# 验证区间记录业务错误且不吞掉异常。
 def test_trace_span_records_errors_without_swallowing_them(monkeypatch):
     journal: list[dict[str, Any]] = []
     with _enabled_langsmith(monkeypatch, journal):
@@ -269,7 +298,9 @@ def test_trace_span_records_errors_without_swallowing_them(monkeypatch):
     assert span.error == "RuntimeError"
 
 
+# 验证追踪初始化失败不会阻断业务执行。
 def test_trace_span_setup_failure_never_breaks_business(monkeypatch):
+    # 主动模拟追踪服务不可用，检查业务降级。
     def _broken_trace(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("langsmith unavailable")
 
@@ -285,6 +316,7 @@ def test_trace_span_setup_failure_never_breaks_business(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+# 验证 RAG 管线对关键阶段发出约定名称的追踪。
 def test_rag_pipeline_emits_named_stage_spans(monkeypatch):
     from open_deep_research.rag.retriever import BM25Index, HybridChunkRetriever
     from open_deep_research.rag.service import RAGPipeline, RAGPipelineConfig
@@ -337,12 +369,15 @@ def test_rag_pipeline_emits_named_stage_spans(monkeypatch):
     assert rerank_span.outputs["output_count"] >= 1
 
 
+# 验证查询改写追踪只记录受限长度等诊断信息。
 def test_rag_query_rewrite_records_bounded_lengths(monkeypatch):
     from open_deep_research.rag import query_rewriter
 
     journal: list[dict[str, Any]] = []
 
+    # 提供可记录配置或返回固定消息的模型替身。
     class FakeModel:
+        # 返回固定查询改写消息，供改写结果和追踪检查。
         def invoke(self, payload, config=None):
             from langchain_core.messages import AIMessage
 
@@ -370,6 +405,7 @@ def test_rag_query_rewrite_records_bounded_lengths(monkeypatch):
     assert "battery" not in repr(span.metadata)
 
 
+# 验证追踪包装不会导致向量或关键词检索重复执行。
 def test_hybrid_retriever_does_not_execute_a_stage_twice(monkeypatch):
     from open_deep_research.rag.retriever import BM25Index, HybridChunkRetriever
     from open_deep_research.rag.types import RAGChunk
@@ -384,6 +420,7 @@ def test_hybrid_retriever_does_not_execute_a_stage_twice(monkeypatch):
 
     original_search = vectorstore.search
 
+    # 记录向量检索次数后委托原实现，检查没有重复执行。
     def counted_search(query_vector, top_k):
         calls["vector"] += 1
         return original_search(query_vector, top_k=top_k)
@@ -392,6 +429,7 @@ def test_hybrid_retriever_does_not_execute_a_stage_twice(monkeypatch):
     keyword_index = BM25Index([chunk])
     original_keyword = keyword_index.search
 
+    # 记录 BM25 检索次数后委托原实现。
     def counted_keyword(query, top_k):
         calls["bm25"] += 1
         return original_keyword(query, top_k=top_k)
@@ -417,14 +455,17 @@ def test_hybrid_retriever_does_not_execute_a_stage_twice(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+# 验证图节点携带角色信息，并依赖原生子调用追踪。
 def test_graph_nodes_carry_agent_metadata_and_auto_trace_children(monkeypatch):
     import open_deep_research.deep_researcher as deep_researcher_module
 
     journal: list[dict[str, Any]] = []
 
+    # 提供图节点追踪测试所需的聊天模型类型。
     class _NodeModel(GenericFakeChatModel):
         pass
 
+    # 创建返回固定消息的模型，隔离供应商服务。
     def _model_messages(*_args, **_kwargs):
         return GenericFakeChatModel(messages=iter(["hello"]))
 
@@ -455,9 +496,11 @@ def test_graph_nodes_carry_agent_metadata_and_auto_trace_children(monkeypatch):
     assert builder_nodes <= set(metadata_by_node)
 
 
+# 安装子图调用记录器，以检查传入配置。
 def _spy_subgraph_call(graph: Any, journal: list[dict[str, Any]]):
     original = graph.ainvoke
 
+    # 记录子图调用配置后委托原实现。
     async def spy(value: Any, config: Any = None, **kwargs: Any) -> Any:
         journal.append({"event": "subgraph_call", "metadata": (config or {}).get("metadata")})
         return await original(value, config, **kwargs)
@@ -465,6 +508,7 @@ def _spy_subgraph_call(graph: Any, journal: list[dict[str, Any]]):
     return spy
 
 
+# 验证图关联元数据传递到子节点与工具调用。
 @pytest.mark.integration
 def test_graph_metadata_propagates_to_children(monkeypatch):
     """Node metadata and config metadata must reach LLM/tool child runs."""
@@ -472,11 +516,13 @@ def test_graph_metadata_propagates_to_children(monkeypatch):
     monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_pt_test-only")
     monkeypatch.setenv("LANGSMITH_ENDPOINT", "http://127.0.0.1:9")
 
+    # 定义追踪传播测试使用的最小图状态。
     class _State(TypedDict, total=False):
         value: int
 
     calls: list[dict[str, Any]] = []
 
+    # 记录测试工具调用，并返回固定成功结果。
     def _search(query: str) -> str:
         """fixture search"""
         calls.append({"tool": "dbhub__execute_sql"})
@@ -488,6 +534,7 @@ def test_graph_metadata_propagates_to_children(monkeypatch):
         metadata={"tool_domain": "database", "mcp_server": "dbhub"},
     )
 
+    # 在真实图节点内调用模型与工具，检查关联元数据向子调用传播。
     async def node(state):
         model = GenericFakeChatModel(messages=iter(["hi"]))
         await model.ainvoke([HumanMessage(content="x")])
@@ -521,6 +568,7 @@ def test_graph_metadata_propagates_to_children(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+# 验证追踪开关不影响预算和令牌统计。
 def test_token_accounting_is_identical_with_tracing_enabled(monkeypatch):
     journal: list[dict[str, Any]] = []
     usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
@@ -542,6 +590,7 @@ def test_token_accounting_is_identical_with_tracing_enabled(monkeypatch):
     assert delta["total_tokens"] == 15
 
 
+# 构造带官方用量元数据的响应消息。
 def _usage_message(content: str, usage: dict[str, int]):
     from langchain_core.messages import AIMessage
 

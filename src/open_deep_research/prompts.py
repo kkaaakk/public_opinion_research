@@ -1,3 +1,4 @@
+# 集中定义澄清、研究、复核和报告生成提示词；字符串内容会直接发送给模型。
 """System prompts and prompt templates for the Deep Research agent."""
 
 clarify_with_user_instructions="""

@@ -1,3 +1,4 @@
+# 实现带运行范围隔离的研究图存储、来源版本检查和子图检索。
 """Research Graph storage adapters.
 
 The in-memory adapter is intentionally feature-complete enough for unit and
@@ -35,17 +36,21 @@ from open_deep_research.research_graph.schema import (
 LOGGER = logging.getLogger(__name__)
 
 
+# 表示显式启用的研究图后端不可用或操作失败。
 class ResearchGraphError(RuntimeError):
     """Raised when an explicitly enabled Research Graph cannot be used."""
 
 
+# 定义图写入、来源检查、检索和关闭的最小存储契约。
 class ResearchGraphStore(ABC):
     """Minimal storage contract used by graph strategies and tests."""
 
+    # 约定写入一份关联图增量并返回短回执。
     @abstractmethod
     def write_delta(self, delta: ResearchDeltaGraph) -> WriteReceipt:
         """Persist one related delta graph and return a compact receipt."""
 
+    # 约定检查指定来源的精确内容版本是否已保存。
     @abstractmethod
     def source_is_persisted(
         self,
@@ -54,6 +59,7 @@ class ResearchGraphStore(ABC):
     ) -> bool:
         """Return whether this exact source version is already persisted."""
 
+    # 约定返回有规模限制且保留来源关系的相关子图。
     @abstractmethod
     def retrieve(
         self,
@@ -66,16 +72,19 @@ class ResearchGraphStore(ABC):
     ) -> RelevantSubgraph:
         """Return a bounded, provenance-preserving relevant subgraph."""
 
+    # 约定释放适配器拥有的外部资源。
     def close(self) -> None:
         """Release external resources when the adapter owns any."""
 
 
+# 统一解析存储操作中的范围值。
 def _scope_value(scope: ResearchGraphScope | str, name: str, default: Any = "") -> Any:
     if isinstance(scope, ResearchGraphScope):
         return getattr(scope, name, default)
     return scope if name == "run_id" else default
 
 
+# 提取节点可用于检索匹配的文本字段。
 def _node_text(node: GraphNode) -> str:
     return " ".join(
         (
@@ -88,6 +97,7 @@ def _node_text(node: GraphNode) -> str:
     ).casefold()
 
 
+# 将查询拆分为检索评分使用的词项。
 def _query_terms(query: str) -> list[str]:
     # This is only a cheap retrieval pre-filter.  Semantic decisions are made
     # by the Context Manager, never by this tokenization step.
@@ -95,9 +105,11 @@ def _query_terms(query: str) -> list[str]:
     return [term for term in terms if len(term) >= 2]
 
 
+# 提供确定性的内存图后端，适用于测试和本地开发。
 class InMemoryResearchGraphStore(ResearchGraphStore):
     """Deterministic graph store used by tests and local development."""
 
+    # 初始化按范围保存的节点、关系与来源版本索引。
     def __init__(self) -> None:
         """Initialize empty scoped node, edge, and source-version indexes."""
         self.nodes: dict[tuple[str, str], GraphNode] = {}
@@ -105,6 +117,7 @@ class InMemoryResearchGraphStore(ResearchGraphStore):
         self._source_versions: dict[tuple[str, str], str] = {}
         self._lock = threading.RLock()
 
+    # 按稳定标识插入或更新内存图节点与关系。
     def write_delta(self, delta: ResearchDeltaGraph) -> WriteReceipt:
         """Upsert a delta into the in-memory scoped graph."""
         nodes, edges = delta.materialize()
@@ -134,6 +147,7 @@ class InMemoryResearchGraphStore(ResearchGraphStore):
             edge_ids=[edge.edge_id for edge in edges],
         )
 
+    # 检查当前范围内是否已保存同一来源内容版本。
     def source_is_persisted(
         self,
         scope: ResearchGraphScope,
@@ -145,6 +159,7 @@ class InMemoryResearchGraphStore(ResearchGraphStore):
         with self._lock:
             return self._source_versions.get((scope.run_id, source_key)) == version
 
+    # 在单次运行内评分匹配节点并做一跳扩展，返回有限子图。
     def retrieve(
         self,
         query: str,
@@ -203,10 +218,12 @@ class InMemoryResearchGraphStore(ResearchGraphStore):
         ][:max_edges]
         return RelevantSubgraph(run_id=run_id, query=query, nodes=nodes, edges=edges)
 
+    # 保留统一关闭接口；内存实现无需释放外部连接。
     def close(self) -> None:
         """Clear no external resources; retained for adapter symmetry."""
 
 
+# 通过官方驱动持久化确定性来源关系，并可适配官方图类型。
 class Neo4jResearchGraphStore(ResearchGraphStore):
     """Neo4j adapter for the Research Graph schema.
 
@@ -216,6 +233,7 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
     Builder's one-LLM-call-per-chunk default.
     """
 
+    # 初始化驱动和图模式，连接不可用时明确报错。
     def __init__(
         self,
         *,
@@ -256,6 +274,7 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
                 "Check research_graph_uri, credentials, database, and Neo4j availability."
             ) from exc
 
+    # 根据连接参数创建 Neo4j 驱动。
     def _create_driver(
         self,
         *,
@@ -275,6 +294,7 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
         auth = (username, password) if username and password else None
         return driver_factory(uri, auth=auth)
 
+    # 统一执行参数化 Cypher，并处理后端操作异常。
     def _execute(self, query: str, **params: Any) -> list[Any]:
         if hasattr(self.driver, "execute_query"):
             result = self.driver.execute_query(
@@ -297,11 +317,13 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
             if callable(close):
                 close()
 
+    # 创建项目自身维护的幂等约束和索引。
     def ensure_schema(self) -> None:
         """Create only idempotent project-owned constraints and indexes."""
         for query in schema_cypher():
             self._execute(query)
 
+    # 用范围和稳定键更新节点、关系，避免跨运行覆盖。
     def write_delta(self, delta: ResearchDeltaGraph) -> WriteReceipt:
         """Upsert a scoped delta with deterministic node and edge keys."""
         nodes, edges = delta.materialize()
@@ -389,6 +411,7 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
             edge_ids=[edge.edge_id for edge in edges],
         )
 
+    # 将内部图增量转换为可用的官方 neo4j-graphrag 类型。
     @staticmethod
     def to_official_graph(delta: ResearchDeltaGraph) -> Any:
         """Convert a delta to official ``neo4j-graphrag`` graph types if present."""
@@ -433,6 +456,7 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
             LOGGER.debug("neo4j-graphrag graph type conversion failed", exc_info=True)
             return None
 
+    # 在当前运行内检查同一 URL 是否已有对应内容版本。
     def source_is_persisted(
         self,
         scope: ResearchGraphScope,
@@ -455,6 +479,7 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
             for row in rows
         )
 
+    # 始终携带 run_id 查询节点与溯源关系，限制结果规模。
     def retrieve(
         self,
         query: str,
@@ -545,6 +570,7 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
             )
         return RelevantSubgraph(run_id=run_id, query=query, nodes=nodes, edges=edges)
 
+    # 关闭当前适配器拥有的 Neo4j 驱动。
     def close(self) -> None:
         """Close the owned Neo4j driver."""
         close = getattr(self.driver, "close", None)
@@ -556,6 +582,7 @@ _STORE_CACHE: dict[tuple[Any, ...], ResearchGraphStore] = {}
 _STORE_CACHE_LOCK = threading.RLock()
 
 
+# 按连接与运行标识创建或复用后端；查询仍显式限制运行范围。
 def create_research_graph_store(
     configurable: Any,
     *,
@@ -600,6 +627,7 @@ def create_research_graph_store(
         return store
 
 
+# 关闭并清理缓存适配器，用于测试隔离及服务退出。
 def clear_research_graph_store_cache() -> None:
     """Close and clear cached adapters, primarily for tests and shutdown."""
     with _STORE_CACHE_LOCK:

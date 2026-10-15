@@ -1,3 +1,4 @@
+# 统一统计模型、工具、检索和令牌消耗，并在预算不足时控制降级与上下文裁剪。
 """Budget policy and enforcement for bounded deep research runs.
 
 LangChain owns the model-call facts: ``AIMessage.usage_metadata`` for tokens and the
@@ -44,6 +45,7 @@ _BUDGET_CAPTURE: ContextVar[dict[str, Any] | None] = ContextVar(
 )
 
 
+# 创建各计数器为零的预算记录，作为累加和状态初始化的起点。
 def empty_budget_usage() -> dict[str, Any]:
     """Return an empty budget usage payload."""
     usage: dict[str, Any] = {
@@ -54,6 +56,7 @@ def empty_budget_usage() -> dict[str, Any]:
     return usage
 
 
+# 将缺失或不完整的消耗数据补齐为统一结构，兼容旧版预算字段。
 def normalize_budget_usage(value: Any) -> dict[str, Any]:
     """Normalize partial or absent budget usage into the canonical dict shape."""
     usage = empty_budget_usage()
@@ -88,6 +91,7 @@ def normalize_budget_usage(value: Any) -> dict[str, Any]:
     return usage
 
 
+# 从预算字典提取 LangChain 用量字段，供官方令牌聚合逻辑处理。
 def _usage_metadata_from(usage: Mapping[str, Any]) -> UsageMetadata:
     """Project a normalized budget payload onto LangChain ``UsageMetadata``."""
     metadata: dict[str, Any] = {
@@ -102,6 +106,7 @@ def _usage_metadata_from(usage: Mapping[str, Any]) -> UsageMetadata:
     return cast(UsageMetadata, metadata)
 
 
+# 把聚合后的令牌元数据写回传入的预算字典，包含缓存和推理明细。
 def _apply_usage_metadata(usage: dict[str, Any], metadata: UsageMetadata | None) -> None:
     """Write a ``UsageMetadata`` payload back into the flat budget fields."""
     if not metadata:
@@ -116,6 +121,7 @@ def _apply_usage_metadata(usage: dict[str, Any], metadata: UsageMetadata | None)
             usage[field] = dict(details)
 
 
+# 合并两份消耗：调用次数累加，令牌使用官方聚合函数处理。
 def merge_budget_usage(current_value: Any, new_value: Any = None) -> dict[str, Any]:
     """Merge two budget usage payloads: counters sum, tokens go through ``add_usage``."""
     merged = normalize_budget_usage(current_value)
@@ -137,6 +143,7 @@ def merge_budget_usage(current_value: Any, new_value: Any = None) -> dict[str, A
     return merged
 
 
+# 计算累计消耗相对基线的非负增量，避免重复记账。
 def diff_budget_usage(total_value: Any, baseline_value: Any) -> dict[str, Any]:
     """Return the non-negative usage delta between a total payload and baseline."""
     total = normalize_budget_usage(total_value)
@@ -161,11 +168,13 @@ def diff_budget_usage(total_value: Any, baseline_value: Any) -> dict[str, Any]:
     return diff
 
 
+# 在当前异步上下文开启嵌套用量捕获，返回用于恢复上下文的令牌。
 def start_budget_capture() -> Token:
     """Start capturing nested budget usage in the current async context."""
     return _BUDGET_CAPTURE.set(empty_budget_usage())
 
 
+# 取出本次捕获的消耗，并用令牌恢复之前的上下文。
 def stop_budget_capture(token: Token) -> dict[str, Any]:
     """Stop nested budget capture and return the captured usage."""
     captured_usage = normalize_budget_usage(_BUDGET_CAPTURE.get())
@@ -173,6 +182,7 @@ def stop_budget_capture(token: Token) -> dict[str, Any]:
     return captured_usage
 
 
+# 以上下文管理器捕获内部调用消耗；退出时始终恢复原来的上下文变量。
 @contextmanager
 def budget_capture() -> Iterator[dict[str, Any]]:
     """Capture nested usage and always restore the previous ContextVar value.
@@ -190,6 +200,7 @@ def budget_capture() -> Iterator[dict[str, Any]]:
         stop_budget_capture(token)
 
 
+# 向当前捕获上下文累计用量；未开启捕获时直接忽略。
 def capture_budget_usage(usage: Any) -> None:
     """Record nested budget usage when a capture context is active."""
     captured_usage = _BUDGET_CAPTURE.get()
@@ -200,6 +211,7 @@ def capture_budget_usage(usage: Any) -> None:
     captured_usage.update(merged_usage)
 
 
+# 创建仅包含降级原因的消耗记录，供后续汇总到报告。
 def budget_usage_with_reason(reason: str) -> dict[str, Any]:
     """Create a budget payload that only records a degradation reason."""
     usage = empty_budget_usage()
@@ -207,6 +219,7 @@ def budget_usage_with_reason(reason: str) -> dict[str, Any]:
     return usage
 
 
+# 创建仅包含预算警告的记录，不增加实际调用和令牌计数。
 def budget_usage_with_warning(warning: str) -> dict[str, Any]:
     """Create a budget payload that only records a warning."""
     usage = empty_budget_usage()
@@ -214,6 +227,7 @@ def budget_usage_with_warning(warning: str) -> dict[str, Any]:
     return usage
 
 
+# 通过 LangChain 模型启动回调统计真实尝试次数，自动涵盖重试。
 class ModelAttemptCounter(BaseCallbackHandler):
     """Count real model attempts through LangChain's official start lifecycle.
 
@@ -223,11 +237,13 @@ class ModelAttemptCounter(BaseCallbackHandler):
     ``on_chat_model_start``, so a single attempt is never counted twice.
     """
 
+    # 初始化调用计数及回调处理所需的实例状态。
     def __init__(self) -> None:
         """Initialize the attempt counter."""
         super().__init__()
         self.starts = 0
 
+    # 每次聊天模型真正开始请求时增加一次尝试计数。
     def on_chat_model_start(
         self,
         serialized: dict[str, Any],
@@ -242,6 +258,7 @@ class ModelAttemptCounter(BaseCallbackHandler):
         """Count one chat-model attempt."""
         self.starts += 1
 
+    # 记录非聊天 LLM 的启动次数，与聊天模型回调分别适配。
     def on_llm_start(
         self,
         serialized: dict[str, Any],
@@ -257,6 +274,7 @@ class ModelAttemptCounter(BaseCallbackHandler):
         self.starts += 1
 
 
+# 复制调用配置并挂载尝试计数、令牌用量回调，返回配置与两个处理器。
 def model_accounting_config(
     config: Any = None,
     *,
@@ -282,6 +300,7 @@ def model_accounting_config(
     return merged, counter, usage_handler
 
 
+# 构造本次模型调用的有限追踪字段，标记模型、组件和结构化输出模式。
 def _model_langsmith_metadata(
     model_name: str | None = None,
     *,
@@ -297,6 +316,7 @@ def _model_langsmith_metadata(
     )
 
 
+# 将真实尝试次数与供应商上报的令牌用量转换为预算增量；缺失用量不估算。
 def budget_from_model_accounting(
     attempts: int,
     usage_handler: UsageMetadataCallbackHandler,
@@ -315,6 +335,9 @@ def budget_from_model_accounting(
     return usage
 
 
+# 异步调用模型并返回响应和消耗增量；异常退出时也保留已发生的用量。
+# runnable/payload 是实际模型链和输入；config 中原有回调会与记账回调合并。
+# 成功返回 (response, delta)，失败时先写入当前捕获上下文，再原样抛出异常。
 async def ainvoke_model_with_budget(
     runnable: Any,
     payload: Any,
@@ -356,6 +379,7 @@ async def ainvoke_model_with_budget(
     return response, delta
 
 
+# 同步执行模型调用，采用与异步入口一致的尝试次数和令牌记账规则。
 def invoke_model_with_budget(
     runnable: Any,
     payload: Any,
@@ -390,6 +414,7 @@ def invoke_model_with_budget(
     return response, delta
 
 
+# 校验包含原始响应的结构化输出；解析失败时抛错，让外层重试重新请求模型。
 def require_valid_structured_output(envelope: Any) -> Any:
     """Validate a LangChain ``include_raw=True`` structured envelope.
 
@@ -407,6 +432,7 @@ def require_valid_structured_output(envelope: Any) -> Any:
     return envelope
 
 
+# 组合原始响应保留、结构化校验和重试，确保重试覆盖真实模型调用。
 def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -> Any:
     """Build a structured-output chain that keeps raw usage and retries real calls.
 
@@ -422,6 +448,7 @@ def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -
     return chain
 
 
+# 为模型供应商内置搜索生成一次检索消耗记录。
 def budget_from_native_search() -> dict[str, Any]:
     """Create a budget payload for provider-side native web search."""
     usage = empty_budget_usage()
@@ -430,6 +457,7 @@ def budget_from_native_search() -> dict[str, Any]:
     return usage
 
 
+# 根据实际执行的工具列表统计工具和搜索调用增量。
 def budget_from_tool_calls(
     tool_calls: list[dict[str, Any]],
     tools_by_name: dict[str, Any] | None = None,
@@ -443,6 +471,7 @@ def budget_from_tool_calls(
     return usage
 
 
+# 结合工具名、定义和元数据判断调用是否属于搜索或检索。
 def is_search_tool_call(
     tool_call: dict[str, Any],
     tools_by_name: dict[str, Any] | None = None,
@@ -466,6 +495,23 @@ def is_search_tool_call(
     return metadata.get("type") == "search" or metadata.get("name") in SEARCH_TOOL_NAMES
 
 
+# 返回剩余模型调用次数，按需为最终报告预留一次；None 表示不限次数。
+def remaining_model_calls(
+    configurable: Configuration,
+    usage: Any,
+    *,
+    reserve_final_report_call: bool = False,
+) -> int | None:
+    """Return the remaining model-call allowance, or None when unlimited."""
+    limit = configurable.max_model_calls
+    if not configurable.budget_enabled or limit is None:
+        return None
+
+    reserve = 1 if reserve_final_report_call and configurable.reserve_final_report_call else 0
+    return max(0, limit - reserve - normalize_budget_usage(usage)["model_calls"])
+
+
+# 判断剩余预算能否再调用模型，可额外为最终报告预留一次调用。
 def can_spend_model_call(
     configurable: Configuration,
     usage: Any,
@@ -473,17 +519,13 @@ def can_spend_model_call(
     reserve_final_report_call: bool = False,
 ) -> bool:
     """Return whether another model call can be made."""
-    if not configurable.budget_enabled:
-        return True
-    limit = configurable.max_model_calls
-    if limit is None:
-        return True
-
-    reserve = 1 if reserve_final_report_call and configurable.reserve_final_report_call else 0
-    effective_limit = max(0, limit - reserve)
-    return normalize_budget_usage(usage)["model_calls"] < effective_limit
+    remaining = remaining_model_calls(
+        configurable, usage, reserve_final_report_call=reserve_final_report_call
+    )
+    return remaining is None or remaining > 0
 
 
+# 检查新增工具及搜索消耗是否会突破配置上限。
 def can_spend_tool_call(
     configurable: Configuration,
     usage: Any,
@@ -508,6 +550,8 @@ def can_spend_tool_call(
     return True
 
 
+# 按当前预算拆分可执行与需跳过的工具调用，逐项预占后续消耗。
+# 返回 (allowed, skipped)；调用方仍需为 skipped 生成匹配原 tool_call_id 的工具消息。
 def filter_tool_calls_for_budget(
     configurable: Configuration,
     usage: Any,
@@ -533,6 +577,7 @@ def filter_tool_calls_for_budget(
     return allowed, skipped
 
 
+# 返回还可启动的研究单元数量；未限制时返回 None。
 def available_research_unit_slots(configurable: Configuration, usage: Any) -> int | None:
     """Return how many new researcher subgraphs can start, or None when unlimited."""
     if not configurable.budget_enabled or configurable.max_model_calls is None:
@@ -544,6 +589,7 @@ def available_research_unit_slots(configurable: Configuration, usage: Any) -> in
     return remaining // MIN_MODEL_CALLS_PER_RESEARCH_UNIT
 
 
+# 检查任一受限预算是否已超额，用于终止或降级研究。
 def is_over_budget(configurable: Configuration, usage: Any) -> bool:
     """Return whether any configured budget has already been exceeded."""
     if not configurable.budget_enabled:
@@ -559,6 +605,7 @@ def is_over_budget(configurable: Configuration, usage: Any) -> bool:
     return any(limit is not None and normalized[field] >= limit for field, limit in limits.items())
 
 
+# 列出达到预警比例的预算项，提示接近上限的资源消耗。
 def get_budget_warnings(configurable: Configuration, usage: Any) -> list[str]:
     """Return warning strings for budgets at or above the configured warning ratio."""
     if not configurable.budget_enabled:
@@ -582,6 +629,7 @@ def get_budget_warnings(configurable: Configuration, usage: Any) -> list[str]:
     return warnings
 
 
+# 估算真实消息和绑定工具结构的输入令牌量，用于请求前的上下文检查。
 def estimate_context_tokens(
     messages: Any,
     *,
@@ -604,6 +652,7 @@ def estimate_context_tokens(
         return count_tokens_approximately(messages)
 
 
+# 通过 LangChain 近似计数器估算单段纯文本的令牌数。
 def estimate_text_tokens(text: str) -> int:
     """Estimate tokens for one plain text block via LangChain's approximate counter."""
     if not text:
@@ -611,6 +660,7 @@ def estimate_text_tokens(text: str) -> int:
     return count_tokens_approximately([HumanMessage(content=text)])
 
 
+# 计算预估输入相对模型窗口的占用比例。
 def context_pressure_ratio(estimated_tokens: int, context_window: int | None) -> float:
     """Return how full the next request is relative to the model context window."""
     if not context_window or context_window <= 0 or estimated_tokens <= 0:
@@ -618,6 +668,7 @@ def context_pressure_ratio(estimated_tokens: int, context_window: int | None) ->
     return estimated_tokens / context_window
 
 
+# 按近似令牌计数裁剪文本，返回裁剪后的内容及是否发生截断。
 def truncate_text_to_token_budget(text: str, token_budget: int) -> tuple[str, bool]:
     """Approximate-truncate text to fit within a token budget.
 
@@ -638,6 +689,7 @@ def truncate_text_to_token_budget(text: str, token_budget: int) -> tuple[str, bo
     return candidate.rstrip(), True
 
 
+# 读取可用输入令牌余额；未设置上限时返回 None。
 def remaining_input_tokens(configurable: Configuration, usage: Any) -> int | None:
     """Return remaining input tokens, if the user configured that budget."""
     if not configurable.budget_enabled or configurable.max_input_tokens is None:
@@ -645,6 +697,7 @@ def remaining_input_tokens(configurable: Configuration, usage: Any) -> int | Non
     return configurable.max_input_tokens - normalize_budget_usage(usage)["input_tokens"]
 
 
+# 读取可用输出令牌余额；未设置上限时返回 None。
 def remaining_output_tokens(configurable: Configuration, usage: Any) -> int | None:
     """Return remaining output tokens, if the user configured that budget."""
     if not configurable.budget_enabled or configurable.max_output_tokens is None:
@@ -652,6 +705,7 @@ def remaining_output_tokens(configurable: Configuration, usage: Any) -> int | No
     return configurable.max_output_tokens - normalize_budget_usage(usage)["output_tokens"]
 
 
+# 将各项用量、上限、预警和降级原因整理为报告中的预算摘要。
 def format_budget_summary(configurable: Configuration, usage: Any) -> str:
     """Format a concise budget summary for final reports."""
     if not configurable.budget_enabled:
@@ -694,6 +748,7 @@ def format_budget_summary(configurable: Configuration, usage: Any) -> str:
     return "\n".join(lines)
 
 
+# 仅在启用预算管理时，为报告追加资源消耗说明。
 def append_budget_summary(report: str, configurable: Configuration, usage: Any) -> str:
     """Append budget usage details to a final report when budgeting is enabled."""
     summary = format_budget_summary(configurable, usage)
@@ -702,6 +757,7 @@ def append_budget_summary(report: str, configurable: Configuration, usage: Any) 
     return f"{report.rstrip()}\n\n---\n\n{summary}"
 
 
+# 仅展示供应商实际提供的缓存与推理令牌明细。
 def _format_token_details(normalized: Mapping[str, Any]) -> list[str]:
     """Render cache/reasoning details only when the provider actually reported them."""
     input_details = normalized.get("input_token_details") or {}
@@ -723,6 +779,7 @@ def _format_token_details(normalized: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+# 把预算上限转换为可读文本，区分有限值和未限制状态。
 def _format_limit(limit: int | None) -> str:
     if limit is None:
         return ""

@@ -1,3 +1,4 @@
+# 汇总知识、记忆和用户图片加载器，并保留旧测试补丁入口。
 """Public RAG loader API.
 
 This package keeps the old `open_deep_research.rag.loaders` import path while
@@ -67,17 +68,20 @@ _KNOWLEDGE_PATCHABLE_NAMES = (
 )
 
 
+# 将兼容入口上的可替换依赖同步到实际知识加载模块。
 def _sync_knowledge_patchables() -> None:
     for name in _KNOWLEDGE_PATCHABLE_NAMES:
         setattr(_knowledge, name, globals()[name])
 
 
+# 转发文档加载请求，同时保留旧版 monkeypatch 行为。
 def load_documents_from_paths(*args, **kwargs):
     """Compatibility wrapper that preserves old monkeypatch behavior."""
     _sync_knowledge_patchables()
     return _knowledge.load_documents_from_paths(*args, **kwargs)
 
 
+# 转发用户问题图片解析，保留历史调用方式。
 def build_query_image_context(*args, **kwargs):
     """Compatibility wrapper for query-time image context loading."""
     _query_images.extract_image_bytes_vision_text = extract_image_bytes_vision_text

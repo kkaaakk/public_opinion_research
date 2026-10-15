@@ -1,3 +1,4 @@
+# 统一内存、FAISS、Chroma 与 Milvus 向量存储的写入和相似度检索接口。
 """本地 RAG 向量库后端。
 
 本模块负责保存 chunk 向量并根据 query 向量做相似度搜索。当前支持：
@@ -47,6 +48,7 @@ class InMemoryVectorStore(VectorStoreBackend):
     所以单测默认使用它。
     """
 
+    # 初始化内存分块及向量集合。
     def __init__(self):
         self._records: list[tuple[RAGChunk, list[float]]] = []
 
@@ -83,6 +85,7 @@ class FaissVectorStore(VectorStoreBackend):
     再用下标从 sidecar 加载的 `_chunks` 中找回原文和 metadata。
     """
 
+    # 初始化 FAISS 索引及分块映射，准备本地向量检索。
     def __init__(self, persist_path: str, index_id: str):
         # 每个 index_id 使用独立目录。index_id 已包含配置和文件 fingerprint，
         # 因此知识库变化后不会误读旧索引。
@@ -165,6 +168,7 @@ class ChromaVectorStore(VectorStoreBackend):
     的 `chunk` 字段中，查询返回后再反序列化成 `RAGChunk`。
     """
 
+    # 连接持久化 Chroma 集合，并保存向量存储参数。
     def __init__(self, persist_path: str, collection_name: str, index_id: str):
         try:
             # Chroma 也是可选重依赖，只在选中该 provider 时导入。
@@ -215,6 +219,7 @@ class ChromaVectorStore(VectorStoreBackend):
             )
         return results
 
+    # 刷新集合前清理旧分块，避免已删除内容继续命中。
     def _delete_existing_records(self) -> None:
         """Clear stale chunks before writing a refreshed chunk set."""
         if self.collection.count() <= 0:
@@ -225,9 +230,11 @@ class ChromaVectorStore(VectorStoreBackend):
             self.collection.delete(ids=ids)
 
 
+# 封装 Milvus 持久化向量集合及标准检索结果转换。
 class MilvusVectorStore(VectorStoreBackend):
     """Milvus-backed vector store for persistent local RAG indexes."""
 
+    # 创建 Milvus 客户端并保存集合、数据库及距离配置。
     def __init__(
         self,
         persist_path: str,
@@ -256,6 +263,7 @@ class MilvusVectorStore(VectorStoreBackend):
             client_kwargs["db_name"] = db_name
         self.client = MilvusClient(**client_kwargs)
 
+    # 检查目标集合是否存在且含有数据。
     def is_ready(self) -> bool:
         """Return whether the Milvus collection exists and has rows."""
         if not self.client.has_collection(self.collection_name):
@@ -267,6 +275,7 @@ class MilvusVectorStore(VectorStoreBackend):
         except Exception:  # pragma: no cover - older client fallback
             return True
 
+    # 刷新集合中的分块向量及序列化分块数据。
     def add(self, chunks: list[RAGChunk], vectors: list[list[float]]) -> None:
         """Refresh the Milvus collection with chunk vectors and serialized chunks."""
         if len(chunks) != len(vectors):
@@ -295,6 +304,7 @@ class MilvusVectorStore(VectorStoreBackend):
         ]
         self.client.insert(collection_name=self.collection_name, data=rows)
 
+    # 执行 Milvus 相似度搜索，并将命中项还原为 RetrievalResult。
     def search(self, query_vector: list[float], top_k: int) -> list[RetrievalResult]:
         """Search Milvus and convert hits into RetrievalResult objects."""
         if not self.is_ready() or not query_vector:
@@ -324,10 +334,12 @@ class MilvusVectorStore(VectorStoreBackend):
             )
         return results
 
+    # 写入刷新数据前移除旧集合。
     def _drop_existing_collection(self) -> None:
         if self.client.has_collection(self.collection_name):
             self.client.drop_collection(self.collection_name)
 
+    # 按向量维数和字段结构创建集合。
     def _create_collection(self, dimension: int) -> None:
         self._cleanup_partial_collection()
         if "://" not in self.uri:
@@ -387,6 +399,7 @@ class MilvusVectorStore(VectorStoreBackend):
             self._cleanup_partial_collection()
             self._create_collection_quick(dimension=dimension)
 
+    # 使用简化创建接口初始化集合，兼容不同 Milvus 客户端能力。
     def _create_collection_quick(self, dimension: int) -> None:
         self.client.create_collection(
             collection_name=self.collection_name,
@@ -397,6 +410,7 @@ class MilvusVectorStore(VectorStoreBackend):
             auto_id=False,
         )
 
+    # 建表失败后清理未完成集合，避免后续重试复用残留结构。
     def _cleanup_partial_collection(self) -> None:
         if "://" in self.uri:
             return
@@ -472,6 +486,7 @@ def _cosine_similarity(left_vector: list[float], right_vector: list[float]) -> f
     return dot_product / (left_norm * right_norm)
 
 
+# 将集合名称归一化为 Milvus 与 Chroma 均可接受的保守格式。
 def _clean_collection_name(value: str) -> str:
     """Clean a vector-store collection name.
 
@@ -481,6 +496,7 @@ def _clean_collection_name(value: str) -> str:
     return cleaned[:63].strip("_") or "open_deep_research"
 
 
+# 区分远程服务地址与本地目录，为目录形式生成 Milvus Lite 数据库路径。
 def _milvus_uri_from_path(persist_path: str) -> str:
     """Interpret the existing vectorstore path as a Milvus URI.
 
@@ -495,18 +511,21 @@ def _milvus_uri_from_path(persist_path: str) -> str:
     return str(Path(stripped).expanduser() / "milvus.db")
 
 
+# 为本地 Milvus 数据库准备父目录，远程地址不创建目录。
 def _ensure_local_milvus_parent(uri: str) -> None:
     if "://" in uri:
         return
     Path(uri).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
 
+# 兼容不同命中结构，提取存储的实体字段。
 def _milvus_hit_entity(hit) -> dict:
     if isinstance(hit, dict):
         return hit.get("entity") or {}
     return getattr(hit, "entity", {}) or {}
 
 
+# 兼容不同命中结构，读取距离或相似度分数。
 def _milvus_hit_score(hit) -> float:
     if isinstance(hit, dict):
         return hit.get("distance", hit.get("score", 0.0))

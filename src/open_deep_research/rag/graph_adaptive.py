@@ -1,3 +1,4 @@
+# 根据查询具体程度、种子来源集中度和术语信息量决定是否进行图扩展。
 """Adaptive expansion decision for GraphRAG.
 
 This module determines whether graph expansion should be applied for a
@@ -25,6 +26,7 @@ from dataclasses import dataclass, field
 from open_deep_research.rag.types import RetrievalResult
 
 
+# 记录是否扩展及其判断依据和相关评分。
 @dataclass
 class ExpansionDecision:
     """Result of an adaptive expansion check."""
@@ -35,6 +37,7 @@ class ExpansionDecision:
     signals: dict[str, float] = field(default_factory=dict)
 
 
+# 用长词和大写词比例估算查询具体程度，返回 0 到 1 的分数。
 def _query_specificity(query: str) -> float:
     """Return 0-1 score: higher means more specific / less generic.
 
@@ -51,6 +54,7 @@ def _query_specificity(query: str) -> float:
     return min(1.0, specific / max(1, len(tokens)))
 
 
+# 计算前四个种子中最大来源占比；值越高表示结果越集中。
 def _seed_diversity(seed_results: list[RetrievalResult]) -> float:
     """Return 0-1 score: higher means seeds are concentrated (good for expansion).
 
@@ -68,6 +72,7 @@ def _seed_diversity(seed_results: list[RetrievalResult]) -> float:
     return max_count / len(top)
 
 
+# 以归一化逆文档频率估算查询术语信息量，抑制过于常见的词。
 def _term_entropy(
     query_terms: set[str],
     term_to_chunk_ids: dict[str, set[str]],
@@ -94,6 +99,7 @@ def _term_entropy(
     return sum(scores) / len(scores)
 
 
+# 综合查询、种子和术语统计判断图扩展是否可能改善召回。
 def decide_expansion(
     query: str,
     seed_results: list[RetrievalResult],

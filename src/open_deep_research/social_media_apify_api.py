@@ -1,3 +1,4 @@
+# 将 Apify Actor 数据归一化为社交媒体契约，并以本地 HTTP API 提供检索和统计。
 """HTTP adapter that maps Apify Actors to the social media API contract."""
 
 import argparse
@@ -38,6 +39,7 @@ MAX_LIMIT = 200
 _POST_CACHE: dict[str, dict[str, Any]] = {}
 
 
+# 运行配置的 Apify Actor，过滤去重后返回标准帖子与分页信息。
 def search_social_posts(params: Mapping[str, Any]) -> dict[str, Any]:
     """Run configured Apify Actors and return normalized social posts."""
     query = _param(params, "query")
@@ -107,6 +109,7 @@ def search_social_posts(params: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+# 汇总帖子数量、情绪、时间趋势和风险指标。
 def aggregate_public_sentiment(params: Mapping[str, Any]) -> dict[str, Any]:
     """Aggregate volume, sentiment, trend, and risk from Apify social posts."""
     search_result = search_social_posts({**dict(params), "limit": _param(params, "limit", MAX_LIMIT)})
@@ -151,6 +154,7 @@ def aggregate_public_sentiment(params: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+# 按 ID 从缓存或本地持久化记录获取标准帖子。
 def get_post_detail(params: Mapping[str, Any]) -> dict[str, Any]:
     """Return one cached or locally persisted normalized post."""
     post_id = _param(params, "post_id")
@@ -164,6 +168,7 @@ def get_post_detail(params: Mapping[str, Any]) -> dict[str, Any]:
     return _error_payload("get_post_detail", f"Post not found in adapter cache: {post_id}")
 
 
+# 检索包含质量、退款、售后等投诉信号的帖子。
 def search_complaints(params: Mapping[str, Any]) -> dict[str, Any]:
     """Search complaint-like posts."""
     limit = _bounded_limit(_param(params, "limit", DEFAULT_LIMIT))
@@ -208,6 +213,7 @@ def search_complaints(params: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+# 统计相关热门词与负面关键词。
 def get_trending_keywords(params: Mapping[str, Any]) -> dict[str, Any]:
     """Return related hot words and negative keywords."""
     search_result = search_social_posts({**dict(params), "limit": _param(params, "limit", MAX_LIMIT)})
@@ -228,6 +234,7 @@ def get_trending_keywords(params: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+# 合并情绪、风险、热度和代表帖子，生成决策可用快照。
 def get_public_opinion_snapshot(params: Mapping[str, Any]) -> dict[str, Any]:
     """Return a decision-ready public-opinion snapshot."""
     aggregate = aggregate_public_sentiment(params)
@@ -261,6 +268,7 @@ def get_public_opinion_snapshot(params: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+# 调用 Apify Actor 并读取数据集结果，统一处理请求失败。
 def _run_actor(
     actor_config: Mapping[str, Any],
     query: str,
@@ -308,6 +316,7 @@ def _run_actor(
     return []
 
 
+# 兼容不同 Actor 字段，将原始条目转换为统一帖子结构。
 def _normalize_apify_item(
     item: Mapping[str, Any],
     platform: str,
@@ -434,6 +443,7 @@ def _normalize_apify_item(
     return normalized
 
 
+# 从环境变量解析按平台组织的 Actor 配置，忽略无效配置项。
 def _actor_config() -> dict[str, dict[str, Any]]:
     raw_config = os.getenv("APIFY_SOCIAL_ACTORS") or os.getenv("APIFY_ACTORS") or ""
     if not raw_config.strip():
@@ -451,6 +461,7 @@ def _actor_config() -> dict[str, dict[str, Any]]:
     }
 
 
+# 根据请求平台选择需要执行的 Actor 配置。
 def _selected_actor_configs(platforms: list[str]) -> dict[str, dict[str, Any]]:
     configs = _actor_config()
     if not platforms:
@@ -462,6 +473,7 @@ def _selected_actor_configs(platforms: list[str]) -> dict[str, dict[str, Any]]:
     }
 
 
+# 检查运行配置并返回缺少凭据或 Actor 等初始化错误。
 def _setup_error() -> dict[str, Any] | None:
     missing = []
     if not _apify_token():
@@ -506,6 +518,7 @@ def _setup_error() -> dict[str, Any] | None:
     }
 
 
+# 读取 Apify 服务访问令牌。
 def _apify_token() -> str:
     token = str(os.getenv("APIFY_TOKEN") or "").strip()
     if token in {"your-apify-token", "apify_api_xxx"}:
@@ -513,6 +526,7 @@ def _apify_token() -> str:
     return token
 
 
+# 递归替换 Actor 输入模板中的查询参数，并保留 limit 的整数类型。
 def _render_template(value: Any, params: Mapping[str, Any]) -> Any:
     if isinstance(value, Mapping):
         return {key: _render_template(item, params) for key, item in value.items()}
@@ -526,6 +540,7 @@ def _render_template(value: Any, params: Mapping[str, Any]) -> Any:
     return value
 
 
+# 读取 HTTP 参数，兼容解析后的列表值与默认值。
 def _param(params: Mapping[str, Any], key: str, default: Any = None) -> Any:
     value = params.get(key, default)
     if isinstance(value, list):
@@ -533,6 +548,7 @@ def _param(params: Mapping[str, Any], key: str, default: Any = None) -> Any:
     return default if value is None else value
 
 
+# 将平台参数归一化为平台集合。
 def _platforms(params: Mapping[str, Any]) -> list[str]:
     value = _param(params, "platforms", "")
     if isinstance(value, list):
@@ -542,6 +558,7 @@ def _platforms(params: Mapping[str, Any]) -> list[str]:
     return [str(platform).strip().lower() for platform in raw_platforms if str(platform).strip()]
 
 
+# 按查询、平台和时间范围筛选标准帖子。
 def _filter_posts(
     posts: list[dict[str, Any]],
     query: str,
@@ -570,6 +587,7 @@ def _filter_posts(
     return sorted(filtered, key=lambda post: (_post_datetime(post) or datetime.min), reverse=True)
 
 
+# 按帖子身份去重，避免多个 Actor 返回同一证据。
 def _dedupe_posts(posts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen = set()
     deduped = []
@@ -582,6 +600,7 @@ def _dedupe_posts(posts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+# 按游标或偏移切分结果，并构造后续分页信息。
 def _paginate(records: list[dict[str, Any]], limit: int, cursor: str | None) -> tuple[list[dict[str, Any]], str | None]:
     offset = int(cursor or 0) if str(cursor or "").isdigit() else 0
     page = records[offset:offset + limit]
@@ -590,6 +609,7 @@ def _paginate(records: list[dict[str, Any]], limit: int, cursor: str | None) -> 
     return page, next_cursor
 
 
+# 从候选字段中选择首个有效文本。
 def _first_text(item: Mapping[str, Any], keys: list[str]) -> str:
     for key in keys:
         value = _deep_get(item, key)
@@ -599,6 +619,7 @@ def _first_text(item: Mapping[str, Any], keys: list[str]) -> str:
     return ""
 
 
+# 将不同 Actor 的内容值转换为统一文本。
 def _coerce_text(value: Any) -> str:
     if value in (None, "", []):
         return ""
@@ -630,6 +651,7 @@ def _coerce_text(value: Any) -> str:
     return str(value)
 
 
+# 从候选统计字段中选择可解析的整数值。
 def _first_int(item: Mapping[str, Any], keys: list[str]) -> int:
     for key in keys:
         value = _deep_get(item, key)
@@ -642,6 +664,7 @@ def _first_int(item: Mapping[str, Any], keys: list[str]) -> int:
     return 0
 
 
+# 按嵌套键路径安全读取 Actor 原始字段。
 def _deep_get(item: Mapping[str, Any], key: str) -> Any:
     if key in item:
         return item[key]
@@ -653,6 +676,7 @@ def _deep_get(item: Mapping[str, Any], key: str) -> Any:
     return current
 
 
+# 将不同形式的标签归一化为文本列表。
 def _normalize_tags(item: Mapping[str, Any]) -> list[str]:
     raw_tags = item.get("tags") or item.get("hashtags") or item.get("keywords") or []
     tags = []
@@ -669,6 +693,7 @@ def _normalize_tags(item: Mapping[str, Any]) -> list[str]:
     return sorted({tag for tag in tags if tag})
 
 
+# 统一图片及其他媒体字段的表示。
 def _normalize_media(item: Mapping[str, Any]) -> list[dict[str, Any]]:
     media = item.get("images") or item.get("media") or item.get("imageUrls") or item.get("displayUrl") or []
     if isinstance(media, str):
@@ -686,6 +711,7 @@ def _normalize_media(item: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [entry for entry in normalized if entry.get("url")]
 
 
+# 结合原始情绪标记与文本信号推断标准情绪。
 def _infer_sentiment(item: Mapping[str, Any]) -> str:
     explicit = str(item.get("sentiment") or item.get("polarity") or "").lower()
     if explicit in {"negative", "positive", "neutral", "unknown"}:
@@ -699,6 +725,7 @@ def _infer_sentiment(item: Mapping[str, Any]) -> str:
     return "unknown"
 
 
+# 将不同格式的发布时间转换为统一时间表示。
 def _normalize_datetime(value: str) -> str:
     if not value:
         return ""
@@ -711,6 +738,7 @@ def _normalize_datetime(value: str) -> str:
     return value
 
 
+# 解析可选日期参数，供时间范围筛选使用。
 def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
@@ -723,6 +751,7 @@ def _parse_date(value: str | None) -> date | None:
             return None
 
 
+# 读取标准帖子的发布时间对象。
 def _post_datetime(post: Mapping[str, Any]) -> datetime | None:
     value = str(post.get("published_at") or "")
     if not value:
@@ -733,28 +762,34 @@ def _post_datetime(post: Mapping[str, Any]) -> datetime | None:
         return None
 
 
+# 从帖子时间取得日期，用于按日统计。
 def _post_date(post: Mapping[str, Any]) -> date | None:
     value = _post_datetime(post)
     return value.date() if value else None
 
 
+# 将帖子日期转换为趋势统计的分组键。
 def _date_key(post: Mapping[str, Any]) -> str:
     value = _post_date(post)
     return value.isoformat() if value else ""
 
 
+# 获取归一化后的帖子情绪类别。
 def _sentiment(post: Mapping[str, Any]) -> str:
     return str(post.get("sentiment") or "unknown").lower()
 
 
+# 判断帖子是否符合共享投诉信号规则。
 def _is_complaint(post: Mapping[str, Any]) -> bool:
     return _contains_any(_signal_text(post), COMPLAINT_TERMS)
 
 
+# 判断帖子能否作为负面证据，结合情绪及领域信号。
 def _is_negative_evidence(post: Mapping[str, Any]) -> bool:
     return _sentiment(post) == "negative" or _is_complaint(post)
 
 
+# 合并用于风险与投诉判断的帖子文本字段。
 def _signal_text(post: Mapping[str, Any]) -> str:
     return " ".join(
         [
@@ -767,14 +802,17 @@ def _signal_text(post: Mapping[str, Any]) -> str:
     ).lower()
 
 
+# 委托共享规则判断是否包含任一信号词。
 def _contains_any(text: str, terms: list[str]) -> bool:
     return contains_any(text, terms)
 
 
+# 委托共享规则提取已命中的风险词。
 def _matched_signal_terms(post: Mapping[str, Any]) -> list[str]:
     return matched_signal_terms(_signal_text(post))
 
 
+# 使用共享词表生成负面信号补充查询。
 def _negative_query_variants(query: Any, params: Mapping[str, Any]) -> list[str]:
     base_query = str(query or "").strip()
     if not base_query:
@@ -789,6 +827,7 @@ def _negative_query_variants(query: Any, params: Mapping[str, Any]) -> list[str]
     return negative_query_variants(base_query, variant_count)
 
 
+# 将 HTTP 参数解析为布尔开关。
 def _truthy_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
     value = _param(params, key, default)
     if isinstance(value, bool):
@@ -796,6 +835,7 @@ def _truthy_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
     return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
 
+# 解析整数参数并限制到允许范围。
 def _bounded_int(value: Any, minimum: int, maximum: int) -> int:
     try:
         parsed = int(float(str(value)))
@@ -804,6 +844,7 @@ def _bounded_int(value: Any, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, parsed))
 
 
+# 汇总点赞、评论、转发等互动量，作为热度排序依据。
 def _engagement_score(post: Mapping[str, Any]) -> int:
     engagement = post.get("engagement") or {}
     if not isinstance(engagement, Mapping):
@@ -811,6 +852,7 @@ def _engagement_score(post: Mapping[str, Any]) -> int:
     return sum(int(engagement.get(key) or 0) for key in ("likes", "comments", "shares", "reposts", "views"))
 
 
+# 统计帖子文本及标签中的高频关键词。
 def _top_keywords(posts: list[Mapping[str, Any]], top_n: int = 20) -> list[dict[str, Any]]:
     counter: Counter[str] = Counter()
     for post in posts:
@@ -818,6 +860,7 @@ def _top_keywords(posts: list[Mapping[str, Any]], top_n: int = 20) -> list[dict[
     return [{"keyword": keyword, "count": count} for keyword, count in counter.most_common(top_n)]
 
 
+# 根据情绪、投诉与互动等信息汇总风险指标。
 def _risk_metrics(
     records: list[dict[str, Any]],
     sentiment_counts: Counter[str],
@@ -861,14 +904,17 @@ def _risk_metrics(
     }
 
 
+# 用共享阈值将互动规模转换为热度等级。
 def _heat_level(total_engagement: int) -> str:
     return heat_level(total_engagement)
 
 
+# 调用共享比例格式化规则。
 def _ratio(numerator: int, denominator: int) -> float:
     return ratio(numerator, denominator)
 
 
+# 将请求数量限制在服务允许的区间内。
 def _bounded_limit(value: Any) -> int:
     try:
         return max(1, min(int(value or DEFAULT_LIMIT), MAX_LIMIT))
@@ -876,11 +922,13 @@ def _bounded_limit(value: Any) -> int:
         return DEFAULT_LIMIT
 
 
+# 生成帖子内容指纹，供去重与缓存使用。
 def _content_hash(post: Mapping[str, Any]) -> str:
     content = f"{post.get('platform')}|{post.get('author')}|{post.get('content')}"
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+# 读取本地缓存或持久化的标准帖子记录。
 def _load_cached_posts() -> list[dict[str, Any]]:
     cache_path = os.getenv("APIFY_SOCIAL_CACHE_PATH") or ""
     if not cache_path:
@@ -897,6 +945,7 @@ def _load_cached_posts() -> list[dict[str, Any]]:
     return posts
 
 
+# 生成已启用平台及 Actor ID 的来源摘要。
 def _source_summary(actor_configs: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "mode": "apify",
@@ -907,10 +956,12 @@ def _source_summary(actor_configs: Mapping[str, Mapping[str, Any]]) -> dict[str,
     }
 
 
+# 读取或更新帖子缓存关联的来源说明。
 def _cache_source_summary() -> dict[str, Any]:
     return {"mode": "apify_adapter_cache", "cache_size": len(_POST_CACHE)}
 
 
+# 构造适配器统一错误响应。
 def _error_payload(operation: str, error: str, setup_required: bool = False) -> dict[str, Any]:
     return {
         "ok": False,
@@ -920,6 +971,7 @@ def _error_payload(operation: str, error: str, setup_required: bool = False) -> 
     }
 
 
+# 提供社交媒体 API 契约的 HTTP 请求处理器。
 class ApifySocialRequestHandler(BaseHTTPRequestHandler):
     """Serve the social media API contract over HTTP."""
 
@@ -933,6 +985,7 @@ class ApifySocialRequestHandler(BaseHTTPRequestHandler):
         "/health": lambda params: {"ok": True, "service": "apify_social_api"},
     }
 
+    # 按路径分派 GET 请求到检索、详情或舆情统计接口。
     def do_GET(self) -> None:
         """Dispatch one HTTP GET request to the adapter route table."""
         parsed = urlparse(self.path)
@@ -954,12 +1007,14 @@ class ApifySocialRequestHandler(BaseHTTPRequestHandler):
                 status=500,
             )
 
+    # 按环境变量的静默设置控制 HTTP 访问日志。
     def log_message(self, format: str, *args: Any) -> None:
         """Honor the adapter's quiet-mode environment setting."""
         if os.getenv("APIFY_SOCIAL_API_QUIET", "false").lower() in {"1", "true", "yes"}:
             return
         super().log_message(format, *args)
 
+    # 设置 HTTP 状态和 JSON 响应头，并输出 UTF-8 数据。
     def _send_json(self, payload: Mapping[str, Any], status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
@@ -969,6 +1024,7 @@ class ApifySocialRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+# 读取监听配置并启动 Apify 社交媒体 HTTP 适配服务。
 def main() -> None:
     """Run the Apify social API adapter."""
     parser = argparse.ArgumentParser(description="Run the Apify social API adapter.")

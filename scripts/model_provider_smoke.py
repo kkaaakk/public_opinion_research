@@ -1,3 +1,4 @@
+# 在显式启用后对真实模型供应商执行文本、工具和结构化输出冒烟检查。
 """Opt-in live smoke tests for the configured model providers."""
 
 from __future__ import annotations
@@ -19,18 +20,21 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_VOLCENGINE_MODEL = "doubao-seed-2-0-mini-260428"
 
 
+# 回显模型传入的短代码，供工具调用链路验证。
 @tool
 def echo_code(code: str) -> str:
     """Echo a short code supplied by the model."""
     return code
 
 
+# 提取模型响应的令牌用量供诊断展示。
 def _usage(response: object) -> object:
     return getattr(response, "usage_metadata", None) or getattr(
         response, "response_metadata", {}
     ).get("token_usage")
 
 
+# 验证方舟普通响应与结构化输出调用。
 def smoke_volcengine(model_id: str = DEFAULT_VOLCENGINE_MODEL) -> None:
     """Exercise Ark plain and structured-output calls."""
     logical_model = (
@@ -58,6 +62,7 @@ def smoke_volcengine(model_id: str = DEFAULT_VOLCENGINE_MODEL) -> None:
     )
 
 
+# 验证 DeepSeek 思考、工具调用和结构化输出组合。
 def smoke_deepseek() -> None:
     """Exercise DeepSeek thinking, tool-calling, and structured-output calls."""
     logical_model = "deepseek:deepseek-flash"
@@ -96,6 +101,7 @@ def smoke_deepseek() -> None:
     )
 
 
+# 仅运行用户显式启用的真实供应商检查。
 def main() -> None:
     """Run explicitly enabled live provider smoke tests."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")

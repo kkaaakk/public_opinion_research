@@ -1,3 +1,4 @@
+# 通过 MCP 暴露本地 RAG 查询、建索引、状态和来源管理能力。
 """MCP server wrapper for the local RAG pipeline."""
 
 import argparse
@@ -39,11 +40,13 @@ mcp = FastMCP(
 )
 
 
+# 兼容直接字段及 rag_ 前缀字段，构造有效管线配置。
 def build_pipeline_config(config: Mapping[str, Any] | RAGPipelineConfig | None = None) -> RAGPipelineConfig:
     """Build a RAG pipeline config from direct or `rag_`-prefixed settings."""
     return build_rag_pipeline_config(_raw_config_dict(config))
 
 
+# 执行本地检索并返回带来源引用的上下文。
 @mcp.tool(
     name="rag_search",
     description=(
@@ -95,6 +98,7 @@ def rag_search(query: str, config: dict[str, Any] | None = None) -> dict[str, An
         return _error_payload("rag_search", exc)
 
 
+# 确保配置的 RAG 索引已准备就绪。
 @mcp.tool(
     name="rag_ensure_indexed",
     description="Build or refresh the configured local RAG index and return index status.",
@@ -112,6 +116,7 @@ def rag_ensure_indexed(
         return _error_payload("rag_ensure_indexed", exc)
 
 
+# 刷新完整索引，并更新成功同步的 MySQL 记忆状态。
 @mcp.tool(
     name="rag_index_pending_memories",
     description=(
@@ -128,6 +133,7 @@ def rag_index_pending_memories(config: dict[str, Any] | None = None) -> dict[str
         return _error_payload("rag_index_pending_memories", exc)
 
 
+# 读取管线当前状态，不强制触发索引构建。
 @mcp.tool(
     name="rag_status",
     description="Inspect the configured RAG index id and cached pipeline state.",
@@ -154,6 +160,7 @@ def rag_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
         return _error_payload("rag_status", exc)
 
 
+# 加载并列出配置的数据源文档，不创建检索索引。
 @mcp.tool(
     name="rag_list_sources",
     description=(
@@ -186,6 +193,7 @@ def rag_list_sources(
         return _error_payload("rag_list_sources", exc)
 
 
+# 清理进程内管线缓存，使后续请求重新创建实例。
 @mcp.tool(
     name="rag_reset_cache",
     description="Clear the in-process RAG pipeline cache.",
@@ -199,6 +207,7 @@ def rag_reset_cache() -> dict[str, Any]:
         return _error_payload("rag_reset_cache", exc)
 
 
+# 将输入配置统一为字典，供配置解析使用。
 def _raw_config_dict(config: Mapping[str, Any] | Any | None) -> dict[str, Any]:
     if config is None:
         return {}
@@ -212,11 +221,13 @@ def _raw_config_dict(config: Mapping[str, Any] | Any | None) -> dict[str, Any]:
     return {key: value for key, value in raw.items() if value is not None}
 
 
+# 按有效配置取得缓存的 RAG 管线。
 def _cached_pipeline(index_id: str) -> RAGPipeline | None:
     with _PIPELINE_CACHE_LOCK:
         return _PIPELINE_CACHE.get(index_id)
 
 
+# 把管线当前索引状态整理为 MCP 响应结构。
 def _pipeline_status_payload(pipeline: RAGPipeline, cached: bool) -> dict[str, Any]:
     indexer = pipeline.indexer
     ready = bool(getattr(indexer, "_ready", False))
@@ -234,6 +245,7 @@ def _pipeline_status_payload(pipeline: RAGPipeline, cached: bool) -> dict[str, A
     }
 
 
+# 加载配置中的知识和记忆来源，用于来源列表等操作。
 def _load_configured_documents(config: RAGPipelineConfig) -> list[RAGDocument]:
     documents: list[RAGDocument] = []
     if config.knowledge_base_paths:
@@ -271,6 +283,7 @@ def _load_configured_documents(config: RAGPipelineConfig) -> list[RAGDocument]:
     return documents
 
 
+# 提取可展示的管线配置摘要。
 def _config_summary(config: RAGPipelineConfig) -> dict[str, Any]:
     return {
         "knowledge_base_paths": config.knowledge_base_paths,
@@ -296,6 +309,7 @@ def _config_summary(config: RAGPipelineConfig) -> dict[str, Any]:
     }
 
 
+# 将标准文档转为可序列化的 MCP 数据。
 def _document_payload(document: RAGDocument) -> dict[str, Any]:
     return {
         "source": document.source,
@@ -306,10 +320,12 @@ def _document_payload(document: RAGDocument) -> dict[str, Any]:
     }
 
 
+# 将引用对象转换为来源响应字段。
 def _citation_payload(citation: Citation) -> dict[str, Any]:
     return citation.model_dump()
 
 
+# 将检索分块与得分转换为 MCP 结果数据。
 def _retrieval_result_payload(result: RetrievalResult) -> dict[str, Any]:
     return {
         "chunk_id": result.chunk.chunk_id,
@@ -326,6 +342,7 @@ def _retrieval_result_payload(result: RetrievalResult) -> dict[str, Any]:
     }
 
 
+# 将异常整理为统一错误响应。
 def _error_payload(operation: str, exc: Exception) -> dict[str, Any]:
     return {
         "ok": False,
@@ -335,6 +352,7 @@ def _error_payload(operation: str, exc: Exception) -> dict[str, Any]:
     }
 
 
+# 启动 RAG MCP 服务并注册其对外工具。
 def main() -> None:
     """Run the RAG MCP server."""
     parser = argparse.ArgumentParser(description="Run the Open Deep Research RAG MCP server.")

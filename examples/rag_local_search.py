@@ -1,3 +1,4 @@
+# 展示如何建立内存 RAG 索引并执行单次本地知识查询。
 """Minimal local RAG example for Open Deep Research."""
 
 from pathlib import Path
@@ -9,6 +10,7 @@ from open_deep_research.rag.service import (
 )
 
 
+# 创建本地内存检索管线，准备索引后执行示例查询并显示引用结果。
 def main() -> None:
     """Build a local in-memory index and run a single RAG query."""
     example_data_dir = Path(__file__).resolve().parents[1] / "data" / "knowledge"

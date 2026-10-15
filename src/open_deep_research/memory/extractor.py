@@ -1,3 +1,4 @@
+# 将对话原文、摘要和长期事实整理为可持久化的标准记忆记录。
 """Build structured memory records from conversation artifacts.
 
 This module decides what should be stored. It does not write MySQL and does not
@@ -14,6 +15,7 @@ from open_deep_research.memory.types import (
 )
 
 
+# 构造对话、摘要和事实记录；兼容字符串事实并归类为项目事实。
 def build_chat_memory_records(
     *,
     conversation_id: str,
@@ -71,6 +73,7 @@ def build_chat_memory_records(
     return records
 
 
+# 根据最终报告阶段的对话材料提取标准记忆记录。
 def extract_conversation_memories(
     *,
     conversation_id: str,
@@ -91,6 +94,7 @@ def extract_conversation_memories(
     )
 
 
+# 把字符串或结构化记忆统一为类型、标题和内容。
 def _normalize_memory_item(
     memory: str | Mapping[str, Any],
     index: int,
@@ -113,6 +117,7 @@ def _normalize_memory_item(
     )
 
 
+# 根据记录类型与序号生成缺省标题。
 def _default_title(record_type: str, index: int) -> str:
     titles = {
         MemoryType.PREFERENCE.value: "User Preference",

@@ -1,3 +1,4 @@
+# 装配多 MCP 服务连接，处理令牌认证，并隔离单个服务的初始化失败。
 """Multi-server MCP tool loader with fault isolation.
 
 Extracted from ``open_deep_research.utils`` so that MCP concerns live in a
@@ -54,6 +55,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# 隐藏数据库连接串中的密码，避免日志泄露凭据。
 def _mask_dsn(dsn: str) -> str:
     """Replace password in a database DSN with ``***`` for logging."""
     return re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", dsn)
@@ -64,6 +66,7 @@ def _mask_dsn(dsn: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# 读取 Node.js 版本并提示 DBHub 运行要求；不可用时返回 None。
 def _check_node_version() -> str | None:
     """Return the installed Node.js version string, or ``None`` if unavailable.
 
@@ -108,6 +111,7 @@ def _check_node_version() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+# 以 Supabase 令牌执行 OAuth 交换，取得 MCP 访问令牌。
 async def get_mcp_access_token(
     supabase_token: str,
     base_mcp_url: str,
@@ -136,6 +140,7 @@ async def get_mcp_access_token(
     return None
 
 
+# 从配置存储读取令牌，并检查有效期。
 async def get_tokens(config: RunnableConfig) -> dict[str, Any] | None:
     """Retrieve stored MCP tokens, validating expiration."""
     store = get_store()
@@ -160,6 +165,7 @@ async def get_tokens(config: RunnableConfig) -> dict[str, Any] | None:
     return tokens.value
 
 
+# 把 MCP 令牌保存到当前运行配置对应的存储。
 async def set_tokens(config: RunnableConfig, tokens: dict[str, Any]) -> None:
     """Persist MCP tokens into the configuration store."""
     store = get_store()
@@ -172,6 +178,7 @@ async def set_tokens(config: RunnableConfig, tokens: dict[str, Any]) -> None:
     await store.aput((user_id, "tokens"), "data", tokens)
 
 
+# 复用有效令牌，必要时通过 Supabase 凭据获取或刷新令牌。
 async def fetch_tokens(config: RunnableConfig) -> dict[str, Any] | None:
     """Fetch / refresh MCP tokens, exchanging a Supabase token if needed."""
     current_tokens = await get_tokens(config)
@@ -194,6 +201,7 @@ async def fetch_tokens(config: RunnableConfig) -> dict[str, Any] | None:
     return mcp_tokens
 
 
+# 包装工具认证错误，将 MCP 的未授权响应转换为可理解的结果。
 def wrap_mcp_authenticate_tool(tool: StructuredTool) -> StructuredTool:
     """Wrap an MCP tool so that ``-32003`` errors surface as user-friendly messages.
 
@@ -201,7 +209,9 @@ def wrap_mcp_authenticate_tool(tool: StructuredTool) -> StructuredTool:
     """
     original_coroutine = tool.coroutine
 
+    # 执行原工具并捕获认证异常，同时保留其他异常的传播行为。
     async def _authentication_wrapper(**kwargs: Any) -> Any:
+        # 沿嵌套异常结构寻找实际的 McpError，以兼容异常分组。
         def _find_mcp_error(exc: BaseException) -> McpError | None:
             if isinstance(exc, McpError):
                 return exc
@@ -246,6 +256,7 @@ _SERVER_DOMAIN_MAP: dict[str, str] = {
 }
 
 
+# 为 MCP 工具标注权限领域和服务来源，供角色过滤及追踪使用。
 def _tag_tools_with_domain(tools: list[BaseTool], server_name: str) -> list[BaseTool]:
     """Tag every MCP tool with its server domain and MCP server name.
 
@@ -269,6 +280,7 @@ def _tag_tools_with_domain(tools: list[BaseTool], server_name: str) -> list[Base
 # ---------------------------------------------------------------------------
 
 
+# 把旧版单服务配置转换为多服务连接格式；配置不完整时不启用。
 async def _build_legacy_config(
     configurable: Configuration, config: RunnableConfig
 ) -> dict[str, Any] | None:
@@ -303,6 +315,7 @@ async def _build_legacy_config(
     }
 
 
+# 校验 Node.js 和数据库连接参数后构造 DBHub 配置，失败仅影响该服务。
 def _build_dbhub_config(configurable: Configuration) -> dict[str, Any] | None:
     """Build the Bytebase DBHub connection config.
 
@@ -343,6 +356,7 @@ def _build_dbhub_config(configurable: Configuration) -> dict[str, Any] | None:
     }
 
 
+# 构造通过标准输入输出启动 MarkItDown 文档转换服务的配置。
 def _build_markitdown_config(configurable: Configuration) -> dict[str, Any]:
     """Microsoft official ``markitdown-mcp`` server (stdio)."""
     return {
@@ -352,6 +366,7 @@ def _build_markitdown_config(configurable: Configuration) -> dict[str, Any]:
     }
 
 
+# 构造飞书/Lark MCP 连接，并应用工具预设白名单。
 def _build_feishu_config(configurable: Configuration) -> dict[str, Any] | None:
     """Feishu / Lark official MCP with tool-preset whitelist."""
     app_id = (configurable.feishu_app_id or "").strip()
@@ -393,6 +408,7 @@ def _build_feishu_config(configurable: Configuration) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
+# 逐个加载已启用的 MCP 服务、包装名称并收集工具；单服务失败时记录后继续。
 async def load_mcp_tools(
     config: RunnableConfig,
     existing_tool_names: set[str],

@@ -1,3 +1,4 @@
+# 执行研究基准评估，将研究图输出交给报告质量评估器。
 from langsmith import Client
 from tests.evaluators import eval_overall_quality, eval_relevance, eval_structure, eval_correctness, eval_groundedness, eval_completeness
 from dotenv import load_dotenv
@@ -27,6 +28,7 @@ compression_model_max_tokens = 10000
 final_report_model = "openai:gpt-4.1"
 final_report_model_max_tokens = 10000
 
+# 运行单条评估输入并返回评估器需要的研究结果。
 async def target(
     inputs: dict,
 ):
@@ -56,6 +58,7 @@ async def target(
     )
     return final_state
 
+# 配置数据集、目标函数和评估器后启动综合评估。
 async def main():
     return await client.aevaluate(
         target,

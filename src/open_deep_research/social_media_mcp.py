@@ -1,3 +1,4 @@
+# 提供社交媒体 MCP 工具，可读取本地数据或调用配置的 HTTP 适配服务。
 """Low-level MCP server and local adapters for social media data sources."""
 
 import argparse
@@ -46,6 +47,7 @@ mcp = FastMCP(
 )
 
 
+# 提供 X/Twitter 兼容搜索入口，返回标准帖子。
 @mcp.tool(
     name="search_x_posts",
     description="Search X/Twitter-like posts from configured social media data sources.",
@@ -72,6 +74,7 @@ def search_x_posts(
     )
 
 
+# 按平台、关键词、时间范围和游标搜索通用社交帖子。
 @mcp.tool(
     name="search_posts",
     description=(
@@ -100,6 +103,7 @@ def search_posts(
     )
 
 
+# 提供 X/Twitter 兼容入口，按根帖子读取完整讨论串。
 @mcp.tool(
     name="fetch_x_thread",
     description="Fetch a thread rooted at a post id, including replies and comments when available.",
@@ -146,6 +150,7 @@ def fetch_x_thread(
         return _error_payload("fetch_x_thread", exc)
 
 
+# 按根帖子 ID 获取标准化讨论线程。
 @mcp.tool(
     name="fetch_thread",
     description="Fetch a platform-neutral discussion thread rooted at a post id.",
@@ -161,6 +166,7 @@ def fetch_thread(
     return thread
 
 
+# 读取指定帖子的评论并应用数量上限。
 @mcp.tool(
     name="fetch_comments",
     description="Fetch comments or replies for a post id.",
@@ -197,6 +203,7 @@ def fetch_comments(
         return _error_payload("fetch_comments", exc)
 
 
+# 根据已有帖子生成轻量作者资料和发帖概况。
 @mcp.tool(
     name="fetch_author_profile",
     description="Fetch an author profile summary from configured social records.",
@@ -238,6 +245,7 @@ def fetch_author_profile(
         return _error_payload("fetch_author_profile", exc)
 
 
+# 从帖子媒体中提取图片类内容。
 @mcp.tool(
     name="extract_images",
     description="Extract image/media URLs and captions from a post record.",
@@ -275,6 +283,7 @@ def extract_images(
         return _error_payload("extract_images", exc)
 
 
+# 提供平台无关的帖子图片媒体提取入口。
 @mcp.tool(
     name="extract_post_media",
     description="Extract image/media URLs and captions from a normalized post id.",
@@ -290,6 +299,7 @@ def extract_post_media(
     return media
 
 
+# 把原始平台帖子转换为统一结构。
 @mcp.tool(
     name="normalize_post",
     description="Normalize one raw platform post into the standard social media schema.",
@@ -307,6 +317,7 @@ def normalize_post(raw_post: dict[str, Any]) -> dict[str, Any]:
         return _error_payload("normalize_post", exc)
 
 
+# 将一个标准帖子追加到本地 JSONL 存储。
 @mcp.tool(
     name="save_to_database",
     description="Persist one normalized post to the configured JSONL store. Dry-run by default.",
@@ -355,6 +366,7 @@ def save_to_database(
         return _error_payload("save_to_database", exc)
 
 
+# 提供通用社交证据持久化入口。
 @mcp.tool(
     name="save_social_evidence",
     description="Persist one normalized social evidence record to the configured JSONL store. Dry-run by default.",
@@ -371,6 +383,7 @@ def save_social_evidence(
     return result
 
 
+# 按 ID、URL 或内容指纹检查证据是否已存在。
 @mcp.tool(
     name="check_duplicate",
     description="Check whether a normalized post already exists in configured local sources.",
@@ -401,6 +414,7 @@ def check_duplicate(
         return _error_payload("check_duplicate", exc)
 
 
+# 按配置来源查询舆情帖子，兼容 HTTP API 和本地文件。
 @mcp.tool(
     name="search_social_posts",
     description=(
@@ -458,6 +472,7 @@ def search_social_posts(
         return _error_payload("search_social_posts", exc)
 
 
+# 聚合检索范围内的情绪、数量和趋势统计。
 @mcp.tool(
     name="aggregate_public_sentiment",
     description=(
@@ -543,6 +558,7 @@ def aggregate_public_sentiment(
         return _error_payload("aggregate_public_sentiment", exc)
 
 
+# 按记录 ID 获取单条舆情材料。
 @mcp.tool(
     name="get_post_detail",
     description="Get one normalized post, complaint, or discussion item by id.",
@@ -574,6 +590,7 @@ def get_post_detail(
         return _error_payload("get_post_detail", exc)
 
 
+# 查询投诉类舆情记录，必要时扩展负面关键词。
 @mcp.tool(
     name="search_complaints",
     description=(
@@ -642,6 +659,7 @@ def search_complaints(
         return _error_payload("search_complaints", exc)
 
 
+# 汇总检索记录中的热门词和相关话题。
 @mcp.tool(
     name="get_trending_keywords",
     description=(
@@ -695,6 +713,7 @@ def get_trending_keywords(
         return _error_payload("get_trending_keywords", exc)
 
 
+# 构造包含风险、情绪、热度和代表性记录的精简监测快照。
 @mcp.tool(
     name="get_public_opinion_snapshot",
     description=(
@@ -800,6 +819,7 @@ def get_public_opinion_snapshot(
         return _error_payload("get_public_opinion_snapshot", exc)
 
 
+# 兼容配置模型和映射，转换为可处理字典。
 def _raw_config_dict(config: Mapping[str, Any] | Any | None) -> dict[str, Any]:
     if config is None:
         raw: dict[str, Any] = {}
@@ -813,6 +833,7 @@ def _raw_config_dict(config: Mapping[str, Any] | Any | None) -> dict[str, Any]:
     return {key: value for key, value in raw.items() if value is not None}
 
 
+# 合并显式配置和兼容环境变量，确定文件、HTTP 来源及风险规则。
 def _social_config(config: Mapping[str, Any] | Any | None) -> dict[str, Any]:
     raw = _raw_config_dict(config)
     if "data_paths" not in raw:
@@ -858,10 +879,12 @@ def _social_config(config: Mapping[str, Any] | Any | None) -> dict[str, Any]:
     return raw
 
 
+# 按配置、环境变量、默认值的顺序读取单项设置。
 def _config_value(config: Mapping[str, Any], key: str, env_name: str, default: Any = None) -> Any:
     return config.get(key) or os.getenv(env_name) or default
 
 
+# 解析并规范化社交媒体 HTTP API 根地址。
 def _api_base_url(config: Mapping[str, Any]) -> str:
     if "api_base_url" in config:
         return str(config.get("api_base_url") or "").rstrip("/")
@@ -874,6 +897,7 @@ def _api_base_url(config: Mapping[str, Any]) -> str:
     ).rstrip("/")
 
 
+# 发送配置认证信息的 HTTP GET 请求，并解析统一响应。
 def _api_get(endpoint: str, params: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
     base_url = _api_base_url(config)
     query_params = {
@@ -904,6 +928,7 @@ def _api_get(endpoint: str, params: Mapping[str, Any], config: Mapping[str, Any]
     return {"ok": True, "data": payload}
 
 
+# 遍历配置数据源加载并归一化舆情记录。
 def _load_records(config: Mapping[str, Any]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for data_path in _data_paths(config):
@@ -919,6 +944,7 @@ def _load_records(config: Mapping[str, Any]) -> list[dict[str, Any]]:
     return _dedupe_records([_normalize_record(record) for record in records])
 
 
+# 解析本地数据路径列表，兼容环境变量形式。
 def _data_paths(config: Mapping[str, Any]) -> list[str]:
     configured_paths = _config_value(
         config,
@@ -935,6 +961,7 @@ def _data_paths(config: Mapping[str, Any]) -> list[str]:
     ]
 
 
+# 从支持的文件格式读取原始记录。
 def _load_records_from_file(path: Path) -> list[dict[str, Any]]:
     if path.suffix.lower() == ".jsonl":
         records = []
@@ -954,6 +981,7 @@ def _load_records_from_file(path: Path) -> list[dict[str, Any]]:
     return []
 
 
+# 统一帖子身份、文本、来源、时间、情绪和互动字段。
 def _normalize_record(record: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(record)
     normalized["id"] = str(record.get("id") or record.get("post_id") or record.get("url") or "")
@@ -964,6 +992,7 @@ def _normalize_record(record: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+# 从配置来源查找指定 ID 的记录。
 def _record_by_id(records: list[Mapping[str, Any]], post_id: str) -> Mapping[str, Any] | None:
     for record in records:
         if str(record.get("id") or record.get("post_id") or "") == str(post_id):
@@ -971,6 +1000,7 @@ def _record_by_id(records: list[Mapping[str, Any]], post_id: str) -> Mapping[str
     return None
 
 
+# 按查询词、平台与日期筛选本地标准记录。
 def _filtered_records(
     query: str,
     platforms: list[str] | str | None,
@@ -1000,11 +1030,13 @@ def _filtered_records(
     return sorted(filtered, key=lambda record: (_record_datetime(record) or datetime.min), reverse=True)
 
 
+# 将查询拆分为用于本地匹配的词项。
 def _query_terms(query: str) -> list[str]:
     terms = [term.strip().lower() for term in re.split(r"\s+", query or "") if term.strip()]
     return terms or [str(query).strip().lower()] if str(query).strip() else []
 
 
+# 按实体别名扩展词组，同组别名用于匹配同一实体。
 def _query_groups(query: str, config: Mapping[str, Any]) -> list[set[str]]:
     aliases = _entity_aliases(config)
     stripped_query = str(query or "").strip().lower()
@@ -1024,6 +1056,7 @@ def _query_groups(query: str, config: Mapping[str, Any]) -> list[set[str]]:
     return groups
 
 
+# 用查询词组及别名判断帖子是否符合查询。
 def _matches_query(record: Mapping[str, Any], query_groups: list[set[str]]) -> bool:
     haystack = " ".join(
         [
@@ -1038,6 +1071,7 @@ def _matches_query(record: Mapping[str, Any], query_groups: list[set[str]]) -> b
     return all(any(term in haystack for term in group) for group in query_groups)
 
 
+# 读取并归一化品牌或实体的别名配置。
 def _entity_aliases(config: Mapping[str, Any]) -> dict[str, list[str]]:
     raw_aliases = (
         config.get("entity_aliases")
@@ -1071,6 +1105,7 @@ def _entity_aliases(config: Mapping[str, Any]) -> dict[str, list[str]]:
     return aliases
 
 
+# 将平台字符串或序列转换为标准集合。
 def _platform_set(platforms: list[str] | str | None) -> set[str]:
     if not platforms:
         return set()
@@ -1081,6 +1116,7 @@ def _platform_set(platforms: list[str] | str | None) -> set[str]:
     return {str(platform).strip().lower() for platform in raw_platforms if str(platform).strip()}
 
 
+# 把平台集合整理为 HTTP 接口接受的逗号分隔参数。
 def _platforms_csv(platforms: list[str] | str | None) -> str | None:
     if platforms is None:
         return None
@@ -1089,6 +1125,7 @@ def _platforms_csv(platforms: list[str] | str | None) -> str | None:
     return ",".join(str(platform) for platform in platforms)
 
 
+# 解析日期边界参数，供帖子筛选使用。
 def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
@@ -1101,6 +1138,7 @@ def _parse_date(value: str | None) -> date | None:
             return None
 
 
+# 从记录解析发布时间对象。
 def _record_datetime(record: Mapping[str, Any]) -> datetime | None:
     value = str(record.get("published_at") or record.get("created_at") or "")
     if not value:
@@ -1111,16 +1149,19 @@ def _record_datetime(record: Mapping[str, Any]) -> datetime | None:
         return None
 
 
+# 取得记录所属日期，用于时间筛选与聚合。
 def _record_date(record: Mapping[str, Any]) -> date | None:
     record_datetime = _record_datetime(record)
     return record_datetime.date() if record_datetime else None
 
 
+# 生成趋势统计中的日期分组键。
 def _date_key(record: Mapping[str, Any]) -> str:
     record_date = _record_date(record)
     return record_date.isoformat() if record_date else ""
 
 
+# 读取并规范化记录情绪类别。
 def _sentiment(record: Mapping[str, Any]) -> str:
     sentiment = str(record.get("sentiment") or record.get("polarity") or "unknown").lower()
     if sentiment in {"negative", "neg", "\u8d1f\u9762"}:
@@ -1137,14 +1178,17 @@ def _sentiment(record: Mapping[str, Any]) -> str:
     return "unknown"
 
 
+# 判断记录是否命中投诉领域信号。
 def _is_complaint(record: Mapping[str, Any]) -> bool:
     return _contains_any(_signal_text(record), COMPLAINT_TERMS)
 
 
+# 综合情绪及投诉词判断记录是否属于负面证据。
 def _is_negative_evidence(record: Mapping[str, Any]) -> bool:
     return _sentiment(record) == "negative" or _is_complaint(record)
 
 
+# 合并风险规则需要检查的正文和标签文本。
 def _signal_text(record: Mapping[str, Any]) -> str:
     return " ".join(
         [
@@ -1160,18 +1204,22 @@ def _signal_text(record: Mapping[str, Any]) -> str:
     ).lower()
 
 
+# 复用共享的词语包含判断。
 def _contains_any(text: str, terms: list[str]) -> bool:
     return contains_any(text, terms)
 
 
+# 复用共享规则提取负面与投诉信号词。
 def _matched_signal_terms(record: Mapping[str, Any]) -> list[str]:
     return matched_signal_terms(_signal_text(record))
 
 
+# 基于共享负面词表生成补充搜索语句。
 def _negative_query_variants(query: str, config: Mapping[str, Any]) -> list[str]:
     return negative_query_variants(query, _negative_query_variant_count(config))
 
 
+# 解析补充负面查询数量，并限制为 1 到 10 条。
 def _negative_query_variant_count(config: Mapping[str, Any]) -> int:
     raw_value = (
         config.get("negative_query_variant_count")
@@ -1187,6 +1235,7 @@ def _negative_query_variant_count(config: Mapping[str, Any]) -> int:
     return max(1, min(10, parsed))
 
 
+# 累加帖子互动指标，供排序和热度评估使用。
 def _engagement_score(record: Mapping[str, Any]) -> int:
     engagement = record.get("engagement") or {}
     if isinstance(engagement, Mapping):
@@ -1200,6 +1249,7 @@ def _engagement_score(record: Mapping[str, Any]) -> int:
         return 0
 
 
+# 从记录提取规范化标签列表。
 def _tags(record: Mapping[str, Any]) -> list[str]:
     tags = record.get("tags") or record.get("keywords") or []
     if isinstance(tags, str):
@@ -1209,6 +1259,7 @@ def _tags(record: Mapping[str, Any]) -> list[str]:
     return []
 
 
+# 统计结果中的高频关键词和标签。
 def _top_keywords(records: list[Mapping[str, Any]], top_n: int = 20) -> list[dict[str, Any]]:
     counter: Counter[str] = Counter()
     for record in records:
@@ -1226,6 +1277,7 @@ def _top_keywords(records: list[Mapping[str, Any]], top_n: int = 20) -> list[dic
     ]
 
 
+# 将内部标准记录转换为对外帖子响应结构。
 def _post_payload(record: Mapping[str, Any], include_metadata: bool = False) -> dict[str, Any]:
     payload = {
         "id": record.get("id"),
@@ -1251,6 +1303,7 @@ def _post_payload(record: Mapping[str, Any], include_metadata: bool = False) -> 
     return payload
 
 
+# 按稳定记录键去重，减少重复证据对统计的影响。
 def _dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped = []
     seen = set()
@@ -1263,6 +1316,7 @@ def _dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+# 根据记录身份、来源或内容生成去重键。
 def _record_key(record: Mapping[str, Any]) -> str:
     explicit_key = record.get("id") or record.get("url")
     if explicit_key:
@@ -1278,6 +1332,7 @@ def _record_key(record: Mapping[str, Any]) -> str:
     return hashlib.sha256(content_fingerprint.encode("utf-8")).hexdigest()
 
 
+# 按当前游标和页大小截取记录，生成下一页游标。
 def _paginate(
     records: list[dict[str, Any]],
     limit: int,
@@ -1290,6 +1345,7 @@ def _paginate(
     return page_records, next_cursor
 
 
+# 解析分页游标为合法偏移量。
 def _cursor_offset(cursor: str | None) -> int:
     if not cursor:
         return 0
@@ -1299,6 +1355,7 @@ def _cursor_offset(cursor: str | None) -> int:
         return 0
 
 
+# 按风险规则汇总负面、投诉及传播等统计并确定风险等级。
 def _risk_metrics(
     records: list[Mapping[str, Any]],
     sentiment_counts: Counter[str],
@@ -1353,10 +1410,12 @@ def _risk_metrics(
     }
 
 
+# 将互动量映射到共享热度阈值。
 def _heat_level(total_engagement: int) -> str:
     return heat_level(total_engagement)
 
 
+# 合并默认风险规则与已知等级的自定义覆盖，格式错误时使用默认规则。
 def _risk_rules(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     raw_rules = (
         config.get("risk_rules")
@@ -1378,14 +1437,17 @@ def _risk_rules(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return merged_rules
 
 
+# 将请求结果数量约束到允许范围。
 def _bounded_limit(limit: int) -> int:
     return max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
 
 
+# 返回共享四位小数比例表示。
 def _ratio(numerator: int, denominator: int) -> float:
     return ratio(numerator, denominator)
 
 
+# 说明当前使用 HTTP API 还是本地文件，并列出来源路径或根地址。
 def _source_summary(config: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "mode": "http_api" if _api_base_url(config) else "local_files",
@@ -1394,6 +1456,7 @@ def _source_summary(config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+# 将服务或数据错误整理为统一工具返回结构。
 def _error_payload(operation: str, exc: Exception) -> dict[str, Any]:
     return {
         "ok": False,
@@ -1403,6 +1466,7 @@ def _error_payload(operation: str, exc: Exception) -> dict[str, Any]:
     }
 
 
+# 启动社交媒体 MCP 服务并注册工具。
 def main() -> None:
     """Run the social media MCP server."""
     parser = argparse.ArgumentParser(description="Run the social media MCP server.")

@@ -1,3 +1,4 @@
+# 导出可选 LangSmith 追踪能力，供各层统一附加关联元数据。
 """Observability integrations for Public Opinion Research.
 
 One boundary with a deliberate scope:

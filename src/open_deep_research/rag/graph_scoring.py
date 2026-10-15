@@ -1,3 +1,4 @@
+# 结合种子分数、共享术语和信息量计算图邻居的扩展得分与置信度。
 """Data-driven graph scoring for GraphRAG.
 
 This module replaces the hard-coded ``graph_score`` formula with a version
@@ -20,6 +21,7 @@ from typing import Any
 from open_deep_research.rag.graph_terms import TermExtractor
 
 
+# 计算图扩展候选的分数及置信度，供阈值过滤使用。
 def compute_graph_score(
     seed_score: float,
     shared_terms: set[str],
@@ -55,6 +57,7 @@ def compute_graph_score(
     return round(final_score, 6), round(confidence, 4)
 
 
+# 优先使用 IDF 估算共享术语信息量，无统计时回退到词长启发式。
 def _term_informativeness(
     shared_terms: set[str],
     term_extractor: TermExtractor | None,

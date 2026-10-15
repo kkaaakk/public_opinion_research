@@ -1,3 +1,4 @@
+# 配置回应策略角色：依据证据和风险评估制定口径、FAQ、行动及监测建议。
 """Response strategy agent specification."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec
@@ -39,7 +40,7 @@ AGENT = PublicOpinionAgentSpec(
         "Do not overpromise or introduce facts that risk_assessment has not verified."
     ),
     tool_policy=(
-        "Use rag_search for approved PR playbooks, FAQs, historical response patterns, and stakeholder guidance.",
+        "Use rag_search when available for approved PR playbooks, FAQs, historical response patterns, and stakeholder guidance. Otherwise use cited internal evidence already in the research context and explicitly flag missing playbooks or approvals.",
         "Do not use web_search or social_media_skill unless the workflow is later extended; rely on upstream reports for public evidence.",
         "Treat risk_assessment red lines as binding constraints.",
     ),
@@ -50,7 +51,7 @@ AGENT = PublicOpinionAgentSpec(
     ),
     execution_strategy=(
         "Read upstream reports and identify verified facts, red lines, public narratives, and heat level.",
-        "Retrieve approved internal response principles and prior cases from RAG.",
+        "Retrieve approved internal response principles and prior cases from RAG when available; otherwise keep missing internal guidance visible as an evidence gap.",
         "Choose a response posture that fits risk_level, heat_level, and evidence confidence.",
         "Draft concise messaging, action steps, monitoring keywords, and escalation triggers.",
     ),

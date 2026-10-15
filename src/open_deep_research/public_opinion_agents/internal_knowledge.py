@@ -1,3 +1,4 @@
+# 配置内部知识角色：检索企业资料、处置预案和历史记忆，形成内部证据。
 """Internal knowledge agent specification."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec

@@ -1,3 +1,4 @@
+# 将成本测量 JSON 渲染为阶段、模型、工具和前后版本对比报告。
 """Render single-case cost-profile Markdown artifacts from JSON."""
 
 from __future__ import annotations
@@ -8,11 +9,13 @@ from pathlib import Path
 from typing import Any
 
 
+# 读取一份成本分析产物。
 def load(path: Path) -> dict[str, Any]:
     """Load one profile."""
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# 格式化观测值，缺失值明确显示为不可用。
 def fmt(value: Any) -> str:
     """Format missing observations explicitly."""
     if value is None:
@@ -24,6 +27,7 @@ def fmt(value: Any) -> str:
     return str(value)
 
 
+# 计算有观测依据的差值，缺失时保留不可用状态。
 def delta(before: Any, after: Any) -> str:
     """Return an observed delta, preserving N/A."""
     if not isinstance(before, (int, float)) or isinstance(before, bool):
@@ -33,6 +37,7 @@ def delta(before: Any, after: Any) -> str:
     return f"{after - before:+.2f}"
 
 
+# 展示完整令牌总量或已知部分的小计，区分数据是否齐全。
 def rollup(rollup_value: Mapping[str, Any] | None, field: str) -> str:
     """Show exact token values or a partial known subtotal."""
     if not rollup_value:
@@ -49,14 +54,17 @@ def rollup(rollup_value: Mapping[str, Any] | None, field: str) -> str:
     return f"N/A (known {fmt(known)})" if known else "N/A"
 
 
+# 提取当前产物中的模型调用记录。
 def calls(profile: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [item for item in profile.get("model_calls", []) if isinstance(item, Mapping)]
 
 
+# 提取当前产物中的工具调用记录。
 def tools(profile: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [item for item in profile.get("tool_calls", []) if isinstance(item, Mapping)]
 
 
+# 生成按模型调用阶段汇总的成本表。
 def stage_table(profile: Mapping[str, Any]) -> str:
     """Render model-call stages."""
     rows = [
@@ -85,6 +93,7 @@ def stage_table(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 生成按研究图节点聚合的统计表。
 def node_table(profile: Mapping[str, Any]) -> str:
     """Render graph-node aggregates."""
     rows = [
@@ -105,6 +114,7 @@ def node_table(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 展示证据复核结论与补充任务数量。
 def review_section(profile: Mapping[str, Any]) -> str:
     """Render Research Review decisions and follow-up task counts."""
     reviews = profile.get("research_reviews", []) or []
@@ -128,6 +138,7 @@ def review_section(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 逐条展示已观测模型请求及其用量。
 def model_table(profile: Mapping[str, Any]) -> str:
     """Render one row for every observed model request."""
     rows = [
@@ -149,6 +160,7 @@ def model_table(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 展示工具调用与受大小限制的查询、结果摘要。
 def tool_table(profile: Mapping[str, Any]) -> str:
     """Render tools with bounded benchmark-only query/result captures."""
     rows = [
@@ -171,6 +183,7 @@ def tool_table(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 展示各角色 ReAct 输入消耗变化。
 def react_table(profile: Mapping[str, Any]) -> str:
     """Render per-agent ReAct input usage."""
     rows = [
@@ -191,6 +204,7 @@ def react_table(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 展示角色报告重复使用的估算结果。
 def reuse_table(profile: Mapping[str, Any]) -> str:
     """Render estimated role-report reuse."""
     rows = [
@@ -210,6 +224,7 @@ def reuse_table(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 展示各调用类别的令牌占比估算。
 def shares_table(profile: Mapping[str, Any]) -> str:
     """Render token-share estimates."""
     labels = [
@@ -231,6 +246,7 @@ def shares_table(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 将一个版本的全部成本信息组合为 Markdown 报告。
 def single_markdown(profile: Mapping[str, Any], label: str) -> str:
     """Render one full version profile."""
     cfg = profile.get("effective_configuration", {}) or {}
@@ -374,6 +390,7 @@ This is estimated from code-path contracts and report character lengths because 
 """
 
 
+# 列出研究压缩调用及用量。
 def compression_table(profile: Mapping[str, Any]) -> str:
     """Render compression calls."""
     rows = ["| # | Node/role | Round | Input | Output | Total | Duration ms |", "|---:|---|---:|---:|---:|---:|---:|"]
@@ -390,6 +407,7 @@ def compression_table(profile: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# 读取跨版本比较需要的指定指标。
 def profile_metric(profile: Mapping[str, Any], name: str) -> Any:
     """Read a comparison metric."""
     if name == "model_calls":
@@ -413,6 +431,7 @@ def profile_metric(profile: Mapping[str, Any], name: str) -> Any:
     return None
 
 
+# 寻找已知令牌小计最大的节点。
 def top_node(profile: Mapping[str, Any]) -> str:
     """Find the node with the largest known token subtotal."""
     rows = profile.get("flow", {}).get("node_rows", []) or []
@@ -422,6 +441,7 @@ def top_node(profile: Mapping[str, Any]) -> str:
     return str(selected.get("node", "N/A"))
 
 
+# 渲染修改前后成本及差异对比。
 def comparison_markdown(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
     """Render the Before/After cost comparison."""
     metric_rows = [
@@ -585,6 +605,7 @@ Character/token estimates are explicitly estimated because per-call prompt prove
 """
 
 
+# 把请求的单版本和对比报告写入 Markdown 文件。
 def render_all(*, after_path: Path, before_path: Path, results_dir: Path) -> None:
     """Write all requested Markdown files."""
     after = load(after_path)

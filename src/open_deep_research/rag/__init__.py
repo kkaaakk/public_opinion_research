@@ -1,3 +1,4 @@
+# 导出本地 RAG 的配置与查询入口，并延迟解析工具以避免循环导入。
 """Open Deep Research 的本地 RAG 子模块导出入口。
 
 这里集中导出最常用的 RAG API，方便外部代码用：
@@ -37,6 +38,7 @@ from open_deep_research.rag.service import (
 )
 
 
+# 在包初始化后按需解析公共工具属性，兼容延迟导入。
 def __getattr__(name: str):
     """Resolve the public tool after the RAG package has initialized."""
     if name == "rag_search":

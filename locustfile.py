@@ -1,3 +1,4 @@
+# 定义健康检查与舆情研究压测场景，并验证 SSE 流中的节点及结束事件。
 """Locust load-testing script for Public Opinion Research web server.
 
 Exercises the public_opinion_risk scenario with all three modes (fast / normal / deep),
@@ -87,10 +88,12 @@ SEARCH_APIS = ["tavily", "openai", "anthropic"]
 # Research profile — a complete parameter set for one request
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 保存压测场景的请求参数与预期行为。
 class Scenario(str, Enum):
     PUBLIC_OPINION = "public_opinion_risk"
 
 
+# 构造企业舆情风险场景的实际请求载荷。
 def _build_profile(scenario: Scenario, mode: str) -> dict:
     """Build a realistic request payload for public_opinion_risk scenario."""
     topic = random.choice(PUBLIC_OPINION_TOPICS)
@@ -111,9 +114,11 @@ def _build_profile(scenario: Scenario, mode: str) -> dict:
 # SSE event consumer — validates the research endpoint's streaming contract
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 逐行解析 SSE 事件并记录观察到的节点与完成状态。
 class SSEValidator:
     """Parses SSE stream and records which nodes / events were observed."""
 
+    # 初始化事件解析缓存、节点集合及校验状态。
     def __init__(self):
         self.nodes_seen: set[str] = set()
         self.events: list[dict] = []
@@ -124,6 +129,7 @@ class SSEValidator:
         self.first_status_time: float | None = None
         self.report_time: float | None = None
 
+    # 消费一行 SSE 数据并更新已观测事件。
     def feed_line(self, raw_line: str):
         line = raw_line.strip()
         if not line:
@@ -159,6 +165,7 @@ class SSEValidator:
         elif etype == "done":
             pass
 
+    # 返回当前流是否符合场景要求及失败原因。
     def is_valid(self, scenario: Scenario) -> tuple[bool, str]:
         """Return (passed, reason)."""
         if self.error:
@@ -184,9 +191,11 @@ class SSEValidator:
 # Locust task sets
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 定义服务健康和页面路由的轻量检查任务。
 class SmokeChecks:
     """Lightweight baseline — verify the server process is alive and routing."""
 
+    # 请求健康检查接口并记录响应结果。
     @task(3)
     def health(self):
         with self.client.get("/api/health", catch_response=True, name="GET /api/health") as r:
@@ -195,6 +204,7 @@ class SmokeChecks:
             else:
                 r.failure(f"status={r.status_code} body={r.text[:100]}")
 
+    # 请求仪表盘首页并检查可用性。
     @task(2)
     def index(self):
         with self.client.get("/", catch_response=True, name="GET /") as r:
@@ -204,17 +214,21 @@ class SmokeChecks:
                 r.failure(f"status={r.status_code} len={len(r.text)}")
 
 
+# 定义企业品牌舆情研究的压测任务集合。
 class ResearchPublicOpinion:
     """Run the public_opinion_risk scenario — enterprise brand monitoring."""
 
+    # 执行较低开销的快速舆情场景。
     @task(2)
     def public_opinion_fast(self):
         self._run(mode="fast", name="POST /api/research [public_opinion_risk / fast]")
 
+    # 执行常规舆情研究场景。
     @task(1)
     def public_opinion_normal(self):
         self._run(mode="normal", name="POST /api/research [public_opinion_risk / normal]")
 
+    # 发送研究请求，消费 SSE 并按预期节点和结束状态判定成功。
     def _run(self, mode: str, name: str):
         payload = _build_profile(Scenario.PUBLIC_OPINION, mode)
         validator = SSEValidator()
@@ -249,6 +263,7 @@ class ResearchPublicOpinion:
 # User classes — assembled from the task-set building blocks above
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 按权重混合页面健康检查与研究请求，模拟实际用户访问。
 class ResearchUser(HttpUser):
     """Simulates real users: health checks + public-opinion research.
 
@@ -264,6 +279,7 @@ class ResearchUser(HttpUser):
     }
 
 
+# 只执行健康与首页检查，适合不产生模型调用的基线压测。
 class ReadOnlyUser(HttpUser):
     """Safe baseline — only health / index, zero LLM cost."""
     wait_time = between(2, 5)
@@ -284,6 +300,7 @@ else:
 # Custom event hooks — emit metrics for downstream analysis
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 在压测开始时输出运行设置与场景提示。
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
     print(f"\n[locust] SKIP_RESEARCH_LOAD = {SKIP_RESEARCH}")
@@ -294,6 +311,7 @@ def on_test_start(environment, **kwargs):
         print("[locust] ⚠  Research endpoints WILL call real LLMs — costs money!\n")
 
 
+# 记录研究请求失败及诊断信息。
 @events.request.add_listener
 def log_research_failure(request_type, name, response_time, response_length,
                          exception, **kwargs):

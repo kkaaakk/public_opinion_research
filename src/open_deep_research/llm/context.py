@@ -1,3 +1,4 @@
+# 管理模型上下文窗口查询及超限后的消息历史裁剪。
 """Model context limits and message-history trimming."""
 
 from langchain_core.messages import AIMessage, MessageLikeRepresentation
@@ -48,6 +49,7 @@ MODEL_TOKEN_LIMITS = {
     "deepseek:deepseek-v4-flash": 131072,
 }
 
+# 按模型标识查找上下文令牌上限；未知模型返回 None。
 def get_model_token_limit(model_string):
     """Look up the token limit for a specific model.
 
@@ -65,6 +67,7 @@ def get_model_token_limit(model_string):
     # Model not found in lookup table
     return None
 
+# 移除最后一条 AI 消息及其后的历史，以缩减超限请求的上下文。
 def remove_up_to_last_ai_message(messages: list[MessageLikeRepresentation]) -> list[MessageLikeRepresentation]:
     """Truncate message history by removing up to the last AI message.
 

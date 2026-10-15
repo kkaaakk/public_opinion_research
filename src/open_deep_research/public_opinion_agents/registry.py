@@ -1,3 +1,4 @@
+# 注册舆情角色规范，集中提供职责、领域权限和兼容渠道视图。
 """Registry for compact public-opinion business agents."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec
@@ -29,6 +30,7 @@ PUBLIC_OPINION_AGENT_SPECS: dict[str, PublicOpinionAgentSpec] = {
 }
 
 
+# 按角色名返回规范定义，供运行时装配智能体。
 def get_public_opinion_agent_spec(role: str) -> PublicOpinionAgentSpec:
     """Return one public-opinion agent spec by role."""
     normalized_role = str(role).strip().lower()
@@ -38,6 +40,7 @@ def get_public_opinion_agent_spec(role: str) -> PublicOpinionAgentSpec:
     return PUBLIC_OPINION_AGENT_SPECS[normalized_role]
 
 
+# 返回角色与预期输出的映射，兼容已有调用方。
 def public_opinion_role_expectations() -> dict[str, str]:
     """Return role-to-expected-output mapping for compatibility."""
     return {
@@ -46,6 +49,7 @@ def public_opinion_role_expectations() -> dict[str, str]:
     }
 
 
+# 返回角色明确允许访问的工具领域，作为权限判断依据。
 def public_opinion_role_domains() -> dict[str, frozenset[str]]:
     """Return the explicit role-to-tool-domain mapping."""
     return {
@@ -54,6 +58,7 @@ def public_opinion_role_domains() -> dict[str, frozenset[str]]:
     }
 
 
+# 从领域权限生成旧版渠道视图，仅用于兼容展示。
 def public_opinion_role_channels() -> dict[str, frozenset[str]]:
     """Return a deprecated channel view derived from domain permissions.
 

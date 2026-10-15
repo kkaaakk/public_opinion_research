@@ -1,3 +1,4 @@
+# 导出 MCP 连接、认证、命名包装及工具领域管理的公共入口。
 """MCP (Model Context Protocol) server integration package.
 
 Provides multi-server MCP tool loading with fault isolation, tool name

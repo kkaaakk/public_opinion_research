@@ -1,3 +1,4 @@
+# 根据固定案例评分规则评估覆盖、来源、多轮研究及报告质量。
 """Evaluate raw benchmark runs with a fixed, transparent local rubric."""
 
 from __future__ import annotations
@@ -30,11 +31,13 @@ CONFLICT_RE = re.compile(
 )
 
 
+# 读取 UTF-8 JSON 原始执行产物。
 def load_json(path: Path) -> Any:
     """Read one UTF-8 JSON artifact."""
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# 规范化单个评分维度的名称和关键词。
 def _dimension(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         identifier = str(value.get("id") or value.get("label") or "dimension")
@@ -45,11 +48,13 @@ def _dimension(value: Any) -> dict[str, Any]:
     return {"id": identifier, "label": identifier, "keywords": [identifier]}
 
 
+# 解析案例评分契约，不修改原案例数据。
 def dimensions_for_case(case: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Normalize the case contract without changing its source data."""
     return [_dimension(value) for value in case.get("required_dimensions", [])]
 
 
+# 从待评分对象提取统一文本。
 def _text(value: Any) -> str:
     if value is None:
         return ""
@@ -62,11 +67,13 @@ def _text(value: Any) -> str:
     return str(value)
 
 
+# 检查文本对维度关键词的命中情况。
 def _match_keywords(text: str, keywords: list[str]) -> list[str]:
     lowered = text.casefold()
     return [keyword for keyword in keywords if keyword.casefold() in lowered]
 
 
+# 按案例 JSON 量表的词汇规则计算证据覆盖率。
 def coverage_metric(report: str, case: Mapping[str, Any]) -> dict[str, Any]:
     """Apply the JSON rubric's lexical evidence coverage rule."""
     normalized = report or ""
@@ -97,6 +104,7 @@ def coverage_metric(report: str, case: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+# 合并报告可见内容与捕获的工具摘要，供来源分析。
 def _evidence_text(run: Mapping[str, Any]) -> str:
     """Combine report-visible and captured tool summaries for source analysis."""
     parts = [str(run.get("final_report") or "")]
@@ -109,6 +117,7 @@ def _evidence_text(run: Mapping[str, Any]) -> str:
     return "\n".join(parts)
 
 
+# 根据报告和工具证据识别来源类别及多样性。
 def source_diversity(run: Mapping[str, Any], rubric: Mapping[str, Any]) -> dict[str, Any]:
     """Classify source categories from report text and captured tool evidence."""
     text = _evidence_text(run)
@@ -135,6 +144,7 @@ def source_diversity(run: Mapping[str, Any], rubric: Mapping[str, Any]) -> dict[
     }
 
 
+# 用主张附近的来源标记估算缺乏支撑的事实和风险判断。
 def unsupported_claim_metric(report: str) -> dict[str, Any]:
     """Estimate unsupported factual/risk claims using nearby source markers."""
     candidates: list[str] = []
@@ -158,6 +168,7 @@ def unsupported_claim_metric(report: str) -> dict[str, Any]:
     }
 
 
+# 检查报告或复核是否明确处理跨来源冲突。
 def conflict_metric(run: Mapping[str, Any], rubric: Mapping[str, Any]) -> dict[str, Any]:
     """Check whether the report/review explicitly handles cross-source conflict."""
     report = str(run.get("final_report") or "")
@@ -176,6 +187,7 @@ def conflict_metric(run: Mapping[str, Any], rubric: Mapping[str, Any]) -> dict[s
     }
 
 
+# 生成五个固定维度的 1 到 5 分启发式评分，并保留依据。
 def quality_scores(
     report: str,
     coverage: Mapping[str, Any],
@@ -200,6 +212,7 @@ def quality_scores(
     else:
         unsupported_component = max(0.0, 1.0 - float(unsupported_rate))
 
+    # 把单个质量分量映射为评分区间内的分值。
     def score(value: float) -> float:
         return round(max(1.0, min(5.0, value)), 1)
 
@@ -222,6 +235,7 @@ def quality_scores(
     }
 
 
+# 提取首轮报告文本，供补充研究增益比较。
 def _first_round_text(run: Mapping[str, Any]) -> str:
     reports = run.get("round_reports") or []
     first = [str(item.get("report") or "") for item in reports if item.get("round") == 1 or item.get("mode") == "initial"]
@@ -230,6 +244,7 @@ def _first_round_text(run: Mapping[str, Any]) -> str:
     return "\n".join(str(value or "") for value in (run.get("role_reports") or {}).values())
 
 
+# 通过标签与关键词把复核缺口映射到量表维度。
 def _gap_matches(gap_text: str, dimensions: list[dict[str, Any]]) -> list[str]:
     """Map review language to rubric dimensions using label/keyword overlap."""
     lowered = gap_text.casefold()
@@ -241,6 +256,7 @@ def _gap_matches(gap_text: str, dimensions: list[dict[str, Any]]) -> list[str]:
     return matches
 
 
+# 根据实际复核、任务和报告计算动态研究循环指标。
 def dynamic_metrics(run: Mapping[str, Any], case: Mapping[str, Any]) -> dict[str, Any]:
     """Calculate dynamic-loop metrics from observed reviews and reports."""
     dimensions = dimensions_for_case(case)
@@ -311,6 +327,7 @@ def dynamic_metrics(run: Mapping[str, Any], case: Mapping[str, Any]) -> dict[str
     }
 
 
+# 评估单次执行并保留其原始运行身份。
 def evaluate_run(run: Mapping[str, Any], case: Mapping[str, Any], rubric: Mapping[str, Any]) -> dict[str, Any]:
     """Evaluate one raw run while retaining the raw run identity."""
     report = str(run.get("final_report") or "")
@@ -334,10 +351,12 @@ def evaluate_run(run: Mapping[str, Any], case: Mapping[str, Any], rubric: Mappin
     }
 
 
+# 判断值是否可参与数值聚合。
 def _numeric(values: list[Any]) -> list[float]:
     return [float(value) for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
 
 
+# 聚合多次执行指标，显式跳过不可用观测。
 def aggregate_runs(evaluated_runs: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Aggregate numeric observations with explicit N/A omission."""
     metric_names = {
@@ -410,12 +429,14 @@ def aggregate_runs(evaluated_runs: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+# 计算简单数值指标的汇总统计。
 def _aggregate_simple(values: list[float]) -> dict[str, Any] | None:
     if not values:
         return None
     return {"mean": round(statistics.mean(values), 4), "median": round(statistics.median(values), 4), "n": len(values)}
 
 
+# 读取某版本产物并生成机器可读评估结果。
 def evaluate_file(results_path: Path, cases_path: Path, rubric_path: Path) -> dict[str, Any]:
     """Load a raw version artifact and return the machine-readable evaluation."""
     raw = load_json(results_path)
@@ -450,6 +471,7 @@ def evaluate_file(results_path: Path, cases_path: Path, rubric_path: Path) -> di
     }
 
 
+# 直接读取 JSONL 案例，使评估脚本可独立运行。
 def load_cases(path: Path) -> list[dict[str, Any]]:
     """Local copy of JSONL loading to keep this script directly runnable."""
     return [

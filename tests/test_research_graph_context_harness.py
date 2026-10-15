@@ -1,3 +1,4 @@
+# 通过确定性替身验证来源链、图范围隔离及生产角色的压缩生命周期。
 """Focused tests for ResearchWorkspace graph/context behavior."""
 
 import json
@@ -31,6 +32,7 @@ from open_deep_research.research_graph.schema import content_hash
 from open_deep_research.state import agents_reducer
 
 
+# 创建固定运行范围的研究图测试对象。
 def _scope(run_id: str = "run-a") -> ResearchGraphScope:
     return ResearchGraphScope(
         run_id=run_id,
@@ -40,6 +42,7 @@ def _scope(run_id: str = "run-a") -> ResearchGraphScope:
     )
 
 
+# 创建带代码侧来源身份的原始研究材料。
 def _document(run_id: str = "run-a", source_id: str = "SRC1") -> RawResearchDocument:
     content = "Official notice confirms a brake investigation."
     return RawResearchDocument(
@@ -53,6 +56,7 @@ def _document(run_id: str = "run-a", source_id: str = "SRC1") -> RawResearchDocu
     )
 
 
+# 验证业务角色分配到图生产和图消费策略。
 def test_agent_specs_route_to_the_two_context_strategies() -> None:
     assert PUBLIC_OPINION_AGENT_SPECS["public_signal"].context_strategy == "research_graph_producer"
     assert PUBLIC_OPINION_AGENT_SPECS["internal_knowledge"].context_strategy == "research_graph_producer"
@@ -60,6 +64,7 @@ def test_agent_specs_route_to_the_two_context_strategies() -> None:
     assert PUBLIC_OPINION_AGENT_SPECS["response_strategy"].context_strategy == "research_graph_consumer"
 
 
+# 验证发现、主张、证据与来源关系完整物化。
 def test_provenance_materializes_finding_claim_evidence_source_edges() -> None:
     scope = _scope()
     delta = normalize_extraction_output(
@@ -97,6 +102,7 @@ def test_provenance_materializes_finding_claim_evidence_source_edges() -> None:
     assert any(kind == "SUPPORTED_BY" for kind, _, _ in edges)
 
 
+# 验证不同 run_id 的图检索相互隔离。
 def test_graph_retrieval_isolation_by_run_id() -> None:
     store = InMemoryResearchGraphStore()
     for run_id, source_id in (("run-a", "SRC-A"), ("run-b", "SRC-B")):
@@ -118,6 +124,7 @@ def test_graph_retrieval_isolation_by_run_id() -> None:
     assert any(node.node_id == "SRC-B" for node in store.retrieve("Evidence", run_id="run-b").nodes)
 
 
+# 验证已保存的相同 URL 内容版本不重复写入。
 def test_url_dedup_skips_exact_source_version() -> None:
     store = InMemoryResearchGraphStore()
     scope = _scope()
@@ -129,6 +136,7 @@ def test_url_dedup_skips_exact_source_version() -> None:
     assert not store.source_is_persisted(scope, changed)
 
 
+# 验证上下文更新保留冲突的来源引用。
 def test_context_manager_delta_keeps_conflict_provenance() -> None:
     current = WorkingContext(current_objective="assess safety")
     delta = WorkingContextDelta(
@@ -150,6 +158,7 @@ def test_context_manager_delta_keeps_conflict_provenance() -> None:
     assert updated.conflicts[0].evidence_ids == ["EVD1", "EVD2"]
 
 
+# 验证微压缩替换旧正文并保留近期完整工具步骤。
 def test_micro_compact_replaces_old_tool_body_and_keeps_recent_step() -> None:
     first_call = {"name": "web_search", "args": {"queries": ["old"]}, "id": "call-old"}
     second_call = {"name": "web_search", "args": {"queries": ["new"]}, "id": "call-new"}
@@ -171,6 +180,7 @@ def test_micro_compact_replaces_old_tool_body_and_keeps_recent_step() -> None:
     assert result.messages[4].content == "recent raw result"
 
 
+# 验证滚动压缩触发依据上下文压力而非无关预算。
 def test_rolling_compact_threshold_is_context_only() -> None:
     messages = [HumanMessage(content="x" * 400)]
     estimated = estimate_context_tokens(messages)
@@ -178,6 +188,7 @@ def test_rolling_compact_threshold_is_context_only() -> None:
     assert context_pressure_ratio(estimated, 10) >= 0.75
 
 
+# 验证抽取按令牌量分批，避免固定文档数造成超限。
 def test_extraction_batches_by_tokens_instead_of_fixed_document_count() -> None:
     documents = [
         RawResearchDocument(source_id=f"S{i}", content="x" * 80)
@@ -188,11 +199,13 @@ def test_extraction_batches_by_tokens_instead_of_fixed_document_count() -> None:
     assert all(len(batch) == 1 for batch in batches)
 
 
+# 验证原始搜索保留来源边界且不调用逐页摘要。
 def test_tavily_raw_tool_keeps_source_boundaries_without_page_summarization(monkeypatch) -> None:
     import asyncio
 
     import open_deep_research.search.tavily as utils
 
+    # 返回固定网页来源与正文，隔离实际 Tavily 请求。
     async def fake_search(*_args, **_kwargs):
         return [
             {
@@ -222,23 +235,29 @@ def test_tavily_raw_tool_keeps_source_boundaries_without_page_summarization(monk
     assert decoded["results"][0]["content"] == "raw A"
 
 
+# 提供图抽取、上下文更新和报告生成的预设模型响应。
 class _GraphFixtureModel:
     """Fixture structured model emitting real ``include_raw=True`` envelopes."""
 
+    # 初始化预设响应及调用记录。
     def __init__(self) -> None:
         self.schema = None
         self.extraction_calls = 0
 
+    # 保存结构化输出模式并提供测试调用链。
     def with_structured_output(self, schema, include_raw=False):
         self.schema = schema
         return RunnableLambda(self._structured_call)
 
+    # 保留测试模型的链式重试接口。
     def with_retry(self, **_kwargs):
         return self
 
+    # 接收运行配置并返回可执行模型替身。
     def with_config(self, _config):
         return self
 
+    # 按请求结构返回预设图或工作上下文响应。
     async def _structured_call(self, messages, config=None):
         parsed = await self.ainvoke(messages)
         return {
@@ -251,6 +270,7 @@ class _GraphFixtureModel:
             "parsing_error": None,
         }
 
+    # 异步返回脚本指定的模型消息。
     async def ainvoke(self, messages, config=None):
         prompt = str(messages[0].content)
         if self.schema is GraphExtractionOutput:
@@ -272,6 +292,7 @@ class _GraphFixtureModel:
         return SimpleNamespace(content="role report")
 
 
+# 验证生产钩子先持久化证据，再压缩原始工具结果。
 def test_producer_hook_persists_then_compacts_raw_tool_result(tmp_path) -> None:
     model = _GraphFixtureModel()
     config = Configuration(
@@ -322,6 +343,7 @@ def test_producer_hook_persists_then_compacts_raw_tool_result(tmp_path) -> None:
     assert (tmp_path / "run-fixture.jsonl").exists()
 
 
+# 验证图模式同角色报告替换，旧映射更新仍兼容追加。
 def test_graph_report_updates_replace_same_role_but_legacy_mapping_still_appends() -> None:
     updated = agents_reducer(
         {"public_signal": {"report": "old"}},
@@ -336,13 +358,16 @@ def test_graph_report_updates_replace_same_role_but_legacy_mapping_still_appends
     assert "new" in legacy["public_signal"]["report"]
 
 
+# 验证图角色路径不再调用旧完整历史压缩。
 def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tmp_path) -> None:
     import asyncio
 
+    # 提供固定原始搜索结果的异步工具替身。
     class FixtureTool:
         name = "web_search"
         metadata = {"type": "search", "name": "web_search"}
 
+        # 返回带真实来源字段的固定原始搜索 JSON。
         async def ainvoke(self, _args, _config=None):
             return json.dumps(
                 {
@@ -357,25 +382,32 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
                 }
             )
 
+    # 按模型和输出结构模拟图角色的抽取、工作区更新及报告生成。
     class AgentFixtureModel:
+        # 初始化测试替身的 agent_calls、model_name、schema 状态。
         def __init__(self, model_name="fixture", schema=None):
             self.model_name = model_name
             self.schema = schema
             self.agent_calls = 0
 
+        # 提供工具绑定测试接口，保留链式模型调用。
         def bind_tools(self, _tools):
             return self
 
+        # 提供链式重试配置接口，不执行真实请求。
         def with_retry(self, **_kwargs):
             return self
 
+        # 将测试结构化响应函数包装为 Runnable，兼容真实输出链。
         def with_structured_output(self, schema, include_raw=False):
             structured = AgentFixtureModel(self.model_name, schema=schema)
             return RunnableLambda(structured._structured_call)
 
+        # 根据传入模型名创建新的图角色模型替身。
         def with_config(self, config):
             return AgentFixtureModel(config.get("model", self.model_name))
 
+        # 返回包含原始响应、解析结果和错误字段的结构化测试响应。
         async def _structured_call(self, messages, config=None):
             parsed = await self._parse(messages)
             return {
@@ -388,6 +420,7 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
                 "parsing_error": None,
             }
 
+        # 按当前结构化模式构造预设图抽取或工作上下文结果。
         async def _parse(self, messages):
             if self.schema is GraphExtractionOutput:
                 source_id = re.search(r'"source_id":\s*"([^"]+)"', str(messages[0].content)).group(1)
@@ -406,6 +439,7 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
                 return WorkingContextDelta(recent_progress="updated")
             return None
 
+        # 按请求阶段返回结构化输出、工具调用或最终图报告。
         async def ainvoke(self, messages, config=None):
             if self.schema is not None:
                 return await self._structured_call(messages, config)
@@ -433,6 +467,7 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(monkeypatch, tm
         lambda _config, _role, _spec=None: asyncio.sleep(0, result=[FixtureTool()]),
     )
 
+    # 若图生产路径调用旧版全历史压缩则立即使测试失败。
     async def fail_legacy_compression(*_args, **_kwargs):
         raise AssertionError("Graph Producer must not invoke compress_research")
 

@@ -1,3 +1,4 @@
+# 验证五个状态域的归属、并发合并、动态任务载荷及最终记忆保存。
 """Regression tests for the domain-owned Deep Research state architecture."""
 
 import asyncio
@@ -22,6 +23,7 @@ from open_deep_research.state import (
 )
 
 
+# 构造标准研究任务供状态合并测试使用。
 def _task(task_id: str, role: str = "public_signal") -> ResearchTask:
     return ResearchTask(
         task_id=task_id,
@@ -32,6 +34,7 @@ def _task(task_id: str, role: str = "public_signal") -> ResearchTask:
     )
 
 
+# 验证顶层状态只包含约定状态域和原生消息。
 def test_top_level_state_contains_only_owned_domains_and_messages() -> None:
     """The checkpoint schema exposes six stable top-level concepts."""
     assert set(DeepResearchState.__annotations__) == {
@@ -39,6 +42,7 @@ def test_top_level_state_contains_only_owned_domains_and_messages() -> None:
     }
 
 
+# 验证旧状态别名共用同一个规范结构。
 def test_state_aliases_share_one_schema_source_of_truth() -> None:
     """Main, subgraph, and compatibility names resolve to one schema object."""
     assert AgentState is DeepResearchState
@@ -47,6 +51,7 @@ def test_state_aliases_share_one_schema_source_of_truth() -> None:
     assert deep_researcher_module.public_opinion_builder.state_schema is DeepResearchState
 
 
+# 验证并行角色的报告、记忆和摘要不会互相覆盖。
 def test_parallel_agents_merge_report_memory_and_summary_by_role() -> None:
     """Parallel producer updates cannot overwrite another role's state."""
     merged = agents_reducer(
@@ -74,6 +79,7 @@ def test_parallel_agents_merge_report_memory_and_summary_by_role() -> None:
     assert merged["public_signal"]["rolling_summary"] == "public summary"
 
 
+# 验证工作上下文和运行统计合并时不丢失其他角色数据。
 def test_working_context_and_runtime_updates_merge_without_cross_role_loss() -> None:
     """Workspace context, budget, and metrics use their domain reducers."""
     research = research_reducer(
@@ -91,6 +97,7 @@ def test_working_context_and_runtime_updates_merge_without_cross_role_loss() -> 
     assert runtime["metrics"]["retrieved_nodes"] == 5
 
 
+# 验证补充 Send 按完整状态域传输数据。
 def test_followup_send_transports_domain_packets() -> None:
     """Dynamic Send payloads carry aggregates and no former flat channels."""
     task = _task("gap-1")
@@ -112,6 +119,7 @@ def test_followup_send_transports_domain_packets() -> None:
     assert "research_mode" not in payload
 
 
+# 验证显式清空待办时仍保留已完成任务历史。
 def test_workflow_reducer_can_clear_pending_tasks_without_losing_history() -> None:
     """Review can clear transient work while completed tasks remain deduplicated."""
     task = _task("gap-1")
@@ -124,6 +132,7 @@ def test_workflow_reducer_can_clear_pending_tasks_without_losing_history() -> No
     assert [item.task_id for item in merged["completed_tasks"]] == ["gap-1"]
 
 
+# 验证私有记忆只注入一次动态上下文。
 def test_private_memory_has_one_dynamic_context_entry() -> None:
     """Private memory is in the assignment and absent from the stable system prompt."""
     state = {
@@ -146,10 +155,12 @@ def test_private_memory_has_one_dynamic_context_entry() -> None:
     assert "PRIVATE_SENTINEL" not in system_prompt
 
 
+# 验证最终报告完成后仍调用对话记忆持久化。
 def test_final_report_still_persists_conversation_memory(monkeypatch) -> None:
     """Conversation persistence remains outside research-run state."""
     captured = {}
 
+    # 记录最终报告阶段传给记忆持久化入口的参数。
     def fake_persist(**kwargs):
         captured.update(kwargs)
 

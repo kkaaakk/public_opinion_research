@@ -1,3 +1,4 @@
+# 扫描图扩展参数组合，并根据检索指标筛选帕累托候选。
 """Sweep graph_weight × graph_max_neighbors and report retrieval metrics.
 
 This script runs a grid search over GraphRAG parameter combinations, comparing
@@ -36,21 +37,25 @@ from evaluate_rag_retrieval import (
 from open_deep_research.rag.service import reset_rag_pipeline_cache
 
 
+# 解析逗号分隔浮点参数并稳定排序。
 def parse_float_list(value: str) -> list[float]:
     """Parse a comma-separated string into a sorted list of floats."""
     return sorted({float(v.strip()) for v in value.split(",") if v.strip()})
 
 
+# 解析逗号分隔整数参数并稳定排序。
 def parse_int_list(value: str) -> list[int]:
     """Parse a comma-separated string into a sorted list of ints."""
     return sorted({int(v.strip()) for v in value.split(",") if v.strip()})
 
 
+# 输出一行纯文本扫描进度或结果。
 def emit(line: str = "") -> None:
     """Write one plain text line."""
     sys.stdout.write(f"{line}\n")
 
 
+# 检查当前参数点是否在全部目标上被其他点支配。
 def is_pareto_dominated(
     point: dict[str, float],
     others: list[dict[str, float]],
@@ -67,6 +72,7 @@ def is_pareto_dominated(
     return False
 
 
+# 解析参数扫描范围与评估路径。
 def parse_args() -> argparse.Namespace:
     """Parse sweep arguments."""
     parser = argparse.ArgumentParser(
@@ -124,6 +130,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# 执行全部参数组合并汇总检索效果和帕累托结果。
 def run_sweep(args: argparse.Namespace) -> None:
     """Execute the full parameter sweep."""
     configure_plain_output()

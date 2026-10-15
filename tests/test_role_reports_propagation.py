@@ -1,3 +1,4 @@
+# 验证完整角色报告跨阶段传递，并与私有短期记忆和滚动摘要保持各自职责。
 """Regression tests for complete public-opinion role-report propagation."""
 
 import asyncio
@@ -10,37 +11,48 @@ import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.runtime.business_agent as business_agent_module
 import open_deep_research.workflow.research as workflow_research
 import open_deep_research.workflow.shared as workflow_shared
+from open_deep_research.configuration import Configuration
 from open_deep_research.state import ResearchReview, Section, agents_reducer
 
 
+# 构造报告传播测试使用的舆情配置。
 def _public_opinion_config(*roles: str) -> dict:
     return {
         "configurable": {
+            "research_graph_enabled": False,
             "enabled_business_agents": list(roles),
         }
     }
 
 
+# 验证精简记忆不会替代正式完整报告。
 def test_full_role_report_is_not_replaced_by_compact_memory(monkeypatch) -> None:
     """A long formal report stays complete while its private memory is bounded."""
     full_report_body = "A" * 5_000 + "\nCOMPLETE_REPORT_TAIL"
 
+    # 提供可记录配置或返回固定消息的模型替身。
     class FakeModel:
+        # 提供工具绑定测试接口，保留链式模型调用。
         def bind_tools(self, _tools):
             return self
 
+        # 提供链式重试配置接口，不执行真实请求。
         def with_retry(self, **_kwargs):
             return self
 
+        # 接收运行配置并返回测试模型，兼容真实调用链。
         def with_config(self, _config):
             return self
 
+        # 异步返回固定模型消息，避免真实供应商调用。
         async def ainvoke(self, _messages, config=None):
             return AIMessage(content="agent step")
 
+    # 返回固定网页工具，避免初始化真实搜索与 MCP 服务。
     async def fake_tools(_config, _role, _spec=None):
         return [SimpleNamespace(name="web_search")]
 
+    # 返回预设完整报告及预算增量，检查正式报告的传播。
     async def fake_compress(*_args, **_kwargs):
         return full_report_body, [], {}
 
@@ -69,27 +81,35 @@ def test_full_role_report_is_not_replaced_by_compact_memory(monkeypatch) -> None
     assert "COMPLETE_REPORT_TAIL" not in private_memory
 
 
+# 验证角色执行保留私有记忆和滚动摘要。
 def test_business_agent_preserves_private_memory_and_rolling_summary(monkeypatch) -> None:
     """The assembly entry keeps agent-owned dynamic context and summary state."""
     captured_messages = []
 
+    # 记录输入提示或消息，并返回固定报告以检查证据传递。
     class CapturingModel:
+        # 提供工具绑定测试接口，保留链式模型调用。
         def bind_tools(self, _tools):
             return self
 
+        # 提供链式重试配置接口，不执行真实请求。
         def with_retry(self, **_kwargs):
             return self
 
+        # 接收运行配置并返回测试模型，兼容真实调用链。
         def with_config(self, _config):
             return self
 
+        # 记录模型实际输入，并返回预设章节或报告消息。
         async def ainvoke(self, messages, config=None):
             captured_messages.extend(messages)
             return AIMessage(content="done")
 
+    # 返回固定网页工具，避免初始化真实搜索与 MCP 服务。
     async def fake_tools(_config, _role, _spec=None):
         return [SimpleNamespace(name="web_search")]
 
+    # 返回预设完整报告及预算增量，检查正式报告的传播。
     async def fake_compress(*_args, **_kwargs):
         return "report", [], {"model_calls": 1}
 
@@ -120,6 +140,7 @@ def test_business_agent_preserves_private_memory_and_rolling_summary(monkeypatch
     assert result["runtime"]["budget"]["model_calls"] >= 1
 
 
+# 验证并行报告按角色分别合并。
 def test_parallel_role_reports_merge_by_role() -> None:
     """Concurrent partial updates retain every role's complete report."""
     merged = agents_reducer(
@@ -136,6 +157,7 @@ def test_parallel_role_reports_merge_by_role() -> None:
     }
 
 
+# 验证子图向下游风险及策略角色提供完整上游报告。
 def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkeypatch) -> None:
     """The compiled subgraph applies the report reducer between agent stages."""
     reports = {
@@ -146,6 +168,7 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
     }
     seen_states: dict[str, dict[str, str]] = {}
 
+    # 记录角色看到的上游状态，再返回当前角色报告和精简记忆。
     async def fake_agent(*, state, config, role):
         del config
         seen_states[role] = {
@@ -157,16 +180,21 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
             "runtime": {"budget": {}},
         }
 
+    # 固定返回证据充分的复核结论，隔离真实研究循环模型。
     class FakeReviewModel:
+        # 将测试结构化响应函数包装为 Runnable，兼容真实输出链。
         def with_structured_output(self, _schema, include_raw=False):
             return RunnableLambda(self._structured_call)
 
+        # 提供链式重试配置接口，不执行真实请求。
         def with_retry(self, **_kwargs):
             return self
 
+        # 接收运行配置并返回测试模型，兼容真实调用链。
         def with_config(self, _config):
             return self
 
+        # 返回包含原始响应、解析结果和错误字段的结构化测试响应。
         async def _structured_call(self, _messages, config=None):
             return {"raw": None, "parsed": ResearchReview(research_complete=True), "parsing_error": None}
 
@@ -197,6 +225,7 @@ def test_public_opinion_subgraph_keeps_full_reports_for_downstream_agents(monkey
     ]
 
 
+# 验证风险任务说明包含完整上游证据报告。
 def test_risk_assessment_assignment_uses_full_upstream_reports() -> None:
     """Risk assessment receives evidence after the memory truncation boundary."""
     public_signal_report = "A" * 1_800 + "CRITICAL_EVIDENCE_AT_END"
@@ -211,11 +240,13 @@ def test_risk_assessment_assignment_uses_full_upstream_reports() -> None:
             },
         },
         "risk_assessment",
+        configurable=Configuration(research_graph_enabled=False),
     )
 
     assert "CRITICAL_EVIDENCE_AT_END" in prompt
 
 
+# 验证回应策略任务说明保留完整风险报告。
 def test_response_strategy_assignment_uses_full_risk_report() -> None:
     """Response strategy receives the complete risk assessment output."""
     risk_report = "R" * 1_800 + "HIGH_PRIORITY_RESPONSE_ACTION"
@@ -231,19 +262,24 @@ def test_response_strategy_assignment_uses_full_risk_report() -> None:
             },
         },
         "response_strategy",
+        configurable=Configuration(research_graph_enabled=False),
     )
 
     assert "HIGH_PRIORITY_RESPONSE_ACTION" in prompt
 
 
+# 验证章节证据优先选择正式报告而非短期记忆。
 def test_section_writer_prefers_full_role_report_over_memory(monkeypatch) -> None:
     """Section writing uses formal role reports even when memory omits the tail."""
     captured_prompts: list[str] = []
 
+    # 记录输入提示或消息，并返回固定报告以检查证据传递。
     class CapturingModel:
+        # 接收运行配置并返回测试模型，兼容真实调用链。
         def with_config(self, _config):
             return self
 
+        # 记录模型实际输入，并返回预设章节或报告消息。
         async def ainvoke(self, messages, config=None):
             captured_prompts.append(str(messages[0].content))
             return SimpleNamespace(content="section output")
@@ -269,7 +305,7 @@ def test_section_writer_prefers_full_role_report_over_memory(monkeypatch) -> Non
                 },
                 "runtime": {"budget": {}},
             },
-            {"configurable": {"section_writer_model": "fixture:model"}},
+            {"configurable": {"section_writer_model": "fixture:model", "research_graph_enabled": False}},
         )
     )
 
@@ -277,11 +313,14 @@ def test_section_writer_prefers_full_role_report_over_memory(monkeypatch) -> Non
     assert "FINAL_RISK_EVIDENCE" in captured_prompts[0]
 
 
+# 验证研究阶段正确传回子图角色报告。
 def test_research_phase_propagates_subgraph_role_reports(monkeypatch) -> None:
     """The research wrapper forwards both formal reports and compact memories."""
     full_report = "P" * 4_000 + "\nSUBGRAPH_REPORT_TAIL"
 
+    # 返回包含完整报告和精简记忆的子图状态，检查外层传播。
     class FakeSubgraph:
+        # 校验输入角色状态为空，并返回包含完整角色报告的子图结果。
         async def ainvoke(self, payload, _config):
             assert payload["agents"] == {}
             return {
@@ -320,14 +359,18 @@ def test_research_phase_propagates_subgraph_role_reports(monkeypatch) -> None:
     )
 
 
+# 验证兜底报告读取正式角色报告。
 def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
     """The final-report fallback also receives the complete formal reports."""
     captured_prompts: list[str] = []
 
+    # 记录输入提示或消息，并返回固定报告以检查证据传递。
     class CapturingModel:
+        # 接收运行配置并返回测试模型，兼容真实调用链。
         def with_config(self, _config):
             return self
 
+        # 记录模型实际输入，并返回预设章节或报告消息。
         async def ainvoke(self, messages, config=None):
             captured_prompts.append(str(messages[0].content))
             return SimpleNamespace(content="final report")
@@ -348,6 +391,7 @@ def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
             },
             {
                 "configurable": {
+                    "research_graph_enabled": False,
                     "final_report_model": "fixture:model",
                     "rag_memory_write_enabled": False,
                 }

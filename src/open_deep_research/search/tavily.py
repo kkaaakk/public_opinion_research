@@ -1,3 +1,4 @@
+# 实现 Tavily 并发搜索、原始结果收集和网页摘要生成。
 """Tavily search tools and webpage summarization."""
 
 import asyncio
@@ -24,6 +25,7 @@ TAVILY_SEARCH_DESCRIPTION = (
     "A search engine optimized for comprehensive, accurate, and trusted results. "
     "Useful for when you need to answer questions about current events."
 )
+# 并发检索多条查询，对带原文的结果生成摘要并汇总来源。
 @tool(description=TAVILY_SEARCH_DESCRIPTION)
 async def tavily_search(
     queries: List[str],
@@ -79,6 +81,7 @@ async def tavily_search(
     )
 
     # Step 4: Create summarization tasks (skip empty content)
+    # 对无需摘要的内容直接返回原值，使并发任务使用统一接口。
     async def noop():
         """No-op function for results without raw content."""
         return None
@@ -123,6 +126,7 @@ async def tavily_search(
     return formatted_output
 
 
+# 保留 Tavily 原始结果，跳过逐网页摘要，供研究图生产流程使用。
 @tool(
     description=(
         "Fetch raw, source-bound Tavily results for Research Graph extraction. "
@@ -169,6 +173,7 @@ async def tavily_search_raw(
         ensure_ascii=False,
     )
 
+# 并发发送多条 Tavily 查询，并应用结果数量、主题等搜索参数。
 async def tavily_search_async(
     search_queries,
     max_results: int = 5,
@@ -206,6 +211,7 @@ async def tavily_search_async(
     search_results = await asyncio.gather(*search_tasks)
     return search_results
 
+# 在超时保护下调用摘要模型处理网页，异常时按现有逻辑回退。
 async def summarize_webpage(
     model: BaseChatModel,
     webpage_content: str,
@@ -263,6 +269,7 @@ async def summarize_webpage(
 # Reflection Tool Utils
 ##########################
 
+# 从运行配置或环境变量中解析 Tavily API 密钥。
 @tool(description="Strategic reflection tool for research planning")
 def get_tavily_api_key(config: RunnableConfig):
     """Get Tavily API key from environment or config."""

@@ -1,3 +1,4 @@
+# 用确定性模型与角色替身验证证据复核、动态 Send 和补充任务合并。
 """Tests for dynamic Plan-and-Execute research inside the public-opinion subgraph."""
 
 import asyncio
@@ -12,10 +13,12 @@ import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.state import ResearchReview, ResearchTask, agents_reducer
 
 
+# 构造启用指定研究轮数的隔离配置。
 def _config(*, max_research_rounds: int = 2) -> dict:
     """Build a small deterministic subgraph configuration for loop tests."""
     return {
         "configurable": {
+            "research_graph_enabled": False,
             "enabled_business_agents": [
                 "public_signal",
                 "internal_knowledge",
@@ -28,6 +31,7 @@ def _config(*, max_research_rounds: int = 2) -> dict:
     }
 
 
+# 创建带角色、目标和证据要求的标准研究任务。
 def _task(task_id: str, role: str) -> ResearchTask:
     """Create a valid fixture task."""
     return ResearchTask(
@@ -40,31 +44,39 @@ def _task(task_id: str, role: str) -> ResearchTask:
     )
 
 
+# 按预设顺序返回证据复核结果的模型替身。
 class _ReviewModel:
     """Minimal structured-output model fixture used by the review node."""
 
+    # 保存预设复核响应及调用状态。
     def __init__(self, reviews: list[ResearchReview]) -> None:
         self.reviews = iter(reviews)
         self.calls = 0
 
+    # 提供与真实结构化模型一致的测试调用入口。
     def with_structured_output(self, _schema, include_raw=False):
         return RunnableLambda(self._structured_call)
 
+    # 兼容模型重试链式配置。
     def with_retry(self, **_kwargs):
         return self
 
+    # 兼容运行配置绑定并返回可调用替身。
     def with_config(self, _config):
         return self
 
+    # 按脚本返回下一条复核结论。
     async def _structured_call(self, _messages, config=None):
         self.calls += 1
         parsed = next(self.reviews)
         return {"raw": None, "parsed": parsed, "parsing_error": None}
 
 
+# 创建记录角色执行次数和轮次的智能体替身。
 def _fake_agent(calls: list[tuple[str, str, list[str]]]):
     """Return a fake formal agent implementation while preserving loop state."""
 
+    # 生成当前角色的测试报告与任务完成增量。
     async def run(*, state, config, role):
         del config
         workflow = state.get("workflow", {})
@@ -87,6 +99,7 @@ def _fake_agent(calls: list[tuple[str, str, list[str]]]):
     return run
 
 
+# 构造首轮研究开始所需的状态。
 def _initial_state() -> dict:
     """Build the complete public-opinion state input used by the graph."""
     return {
@@ -100,6 +113,7 @@ def _initial_state() -> dict:
     }
 
 
+# 安装确定性模型和角色后调用研究子图。
 def _invoke_with_fixtures(
     monkeypatch,
     reviews: list[ResearchReview],
@@ -124,6 +138,7 @@ def _invoke_with_fixtures(
     return result, calls, reviewer
 
 
+# 验证首轮证据充分时直接进入风险评估。
 def test_sufficient_initial_research_goes_directly_to_risk(monkeypatch) -> None:
     """A complete first review does not launch a follow-up round."""
     result, calls, reviewer = _invoke_with_fixtures(
@@ -141,6 +156,7 @@ def test_sufficient_initial_research_goes_directly_to_risk(monkeypatch) -> None:
     assert result["workflow"]["round"] == 1
 
 
+# 验证仅公众信号补充后回到复核并合并报告。
 def test_public_only_followup_returns_to_review_and_merges_reports(monkeypatch) -> None:
     """A public-only gap re-enters the formal public agent and then review."""
     task = _task("public-baseline", "public_signal")
@@ -167,6 +183,7 @@ def test_public_only_followup_returns_to_review_and_merges_reports(monkeypatch) 
     assert "public_signal followup report" in result["agents"]["public_signal"]["report"]
 
 
+# 验证内部缺口只调度内部知识角色。
 def test_internal_only_followup_uses_internal_agent(monkeypatch) -> None:
     """An internal-only gap does not launch the public-signal agent again."""
     task = _task("policy-check", "internal_knowledge")
@@ -183,6 +200,7 @@ def test_internal_only_followup_uses_internal_agent(monkeypatch) -> None:
     assert [call for call in calls if call[:2] == ("internal_knowledge", "followup")]
 
 
+# 验证两个角色的补充输出都汇合后再执行下一次复核。
 def test_both_followups_are_joined_before_the_next_review(monkeypatch) -> None:
     """Two dynamic Sends complete before the next review runs."""
     public_task = _task("public-gap", "public_signal")
@@ -214,6 +232,7 @@ def test_both_followups_are_joined_before_the_next_review(monkeypatch) -> None:
     }
 
 
+# 验证同角色多个任务合并为一次动态 Send。
 def test_multiple_same_role_tasks_are_batched_into_one_send() -> None:
     """Three public tasks result in one public-agent Send with three tasks."""
     tasks = [_task(f"public-{index}", "public_signal") for index in range(3)]
@@ -238,6 +257,7 @@ def test_multiple_same_role_tasks_are_batched_into_one_send() -> None:
     ]
 
 
+# 验证已完成任务和轮数上限阻止无效循环。
 def test_completed_task_and_max_round_prevent_another_loop(monkeypatch) -> None:
     """Completed tasks and the workflow safety limit both stop re-planning."""
     task = _task("already-done", "public_signal")
@@ -262,6 +282,7 @@ def test_completed_task_and_max_round_prevent_another_loop(monkeypatch) -> None:
     assert not [call for call in calls if call[1] == "followup"]
 
 
+# 验证预算统计本身不改变证据复核路由规则。
 def test_budget_usage_does_not_change_review_routing() -> None:
     """Budget counters remain observational and do not suppress a valid Send."""
     task = _task("budget-independent-gap", "public_signal")
@@ -285,6 +306,7 @@ def test_budget_usage_does_not_change_review_routing() -> None:
     assert sends[0].node == "public_signal_agent"
 
 
+# 验证报告合并保留首轮与补充轮次证据。
 def test_role_report_reducer_preserves_initial_and_followup_reports() -> None:
     """A follow-up report is appended instead of replacing the initial report."""
     merged = agents_reducer(
@@ -296,6 +318,7 @@ def test_role_report_reducer_preserves_initial_and_followup_reports() -> None:
     assert "round two evidence" in merged["public_signal"]["report"]
 
 
+# 验证补充任务说明聚焦缺口，不重新要求全面调查。
 def test_followup_assignment_contains_only_gap_tasks() -> None:
     """Follow-up assignments explain the gap and avoid a generic repeat survey."""
     task = _task("regulator-notice", "public_signal")
