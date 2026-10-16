@@ -2,6 +2,15 @@
 
 基于 LangGraph、RAG、MCP 和多 Agent 协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒体监控、长期记忆等能力。
 
+## 当前开发方向（2026-10-16）
+
+后续 Agent Runtime 选用 OpenAI Agents SDK，并按需自主组合 Harness 能力。
+当前 `codex/openai-agents-migration` 从 DeerFlow 改造前的完整备份恢复，
+仅完成仓库清理、业务边界审计和迁移准备，仍使用原 LangGraph 运行实现。
+DeerFlow Phase 0、RAG 配置整理和 DSH 轨迹观测成果保留在各自分支，尚未合并到本分支。
+详见[清理与测试记录](docs/audits/pre-openai-sdk-cleanup.md)和
+[SDK 迁移计划](docs/architecture/openai-agents-sdk-migration-plan.md)。
+
 ## 🆕 扩展功能
 
 ### 📚 本地 RAG 知识库
@@ -39,8 +48,8 @@
 ### 1. 克隆并激活虚拟环境
 
 ```bash
-git clone https://github.com/kkaaakk/open_deep_research.git
-cd open_deep_research
+git clone https://github.com/kkaaakk/public_opinion_research.git
+cd public_opinion_research
 uv venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ```
@@ -48,8 +57,11 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ### 2. 安装依赖
 
 ```bash
-uv sync
+uv sync --locked
 ```
+
+开发与离线测试安装 `uv sync --extra dev --locked`；运行学习笔记本时增加
+`--extra notebooks`。评测脚本可能调用付费模型，请先阅读对应目录说明。
 
 ### 3. 配置环境变量
 

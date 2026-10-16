@@ -5,7 +5,7 @@
 | 项目     | 内容                                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------------------------- |
 | 阅读目标 | 理解 Public Opinion 业务 Agent 可调用工具如何注册、筛选、执行和失败兜底。                                    |
-| 关键代码 | `src/open_deep_research/utils.py`、`src/open_deep_research/tools/rag_tool.py`、`src/open_deep_research/deep_researcher.py` |
+| 关键代码 | `src/open_deep_research/tools/registry.py`、`src/open_deep_research/tools/rag_tool.py`、`src/open_deep_research/runtime/business_agent.py`、`src/open_deep_research/runtime/agent_runtime.py` |
 | 上游文档 | [Agent Loop 模块说明](agent-loop.md)                                                                                       |
 | 下游文档 | [RAG 模块说明](rag.md)、[RAG 检索测试记录](../evaluation/rag-retrieval-test-records.md)                                    |
 
@@ -15,13 +15,12 @@
 
 `tools` 模块负责把项目内能力包装成 LangChain/LangGraph 可调用工具，让 Public Opinion 业务 Agent 在工具调用循环中使用。
 
-当前独立的 `src/open_deep_research/tools/` 目录主要暴露本地 RAG 检索工具：
+当前独立的 `src/open_deep_research/tools/` 目录包含本地 RAG 检索工具及共享装配逻辑：
 
 - `src/open_deep_research/tools/rag_tool.py`
+- `src/open_deep_research/tools/registry.py`
 
-此外，项目中还有一批通用工具装配逻辑位于：
-
-- `src/open_deep_research/utils.py`
+`src/open_deep_research/utils.py` 仅保留旧导入路径的兼容导出；新调用应使用具体实现模块。
 
 因此实际工具体系可以分成两层：
 
@@ -67,7 +66,7 @@ Local RAG search failed: ...
 
 位置：
 
-- `src/open_deep_research/utils.py`
+- `src/open_deep_research/search/tavily.py`
 
 职责：
 
@@ -82,7 +81,7 @@ Local RAG search failed: ...
 
 位置：
 
-- `src/open_deep_research/utils.py`
+- `src/open_deep_research/tools/registry.py`
 
 入口：
 
@@ -98,7 +97,7 @@ Local RAG search failed: ...
 
 位置：
 
-- `src/open_deep_research/utils.py`
+- `src/open_deep_research/tools/registry.py`
 
 职责：
 
@@ -132,7 +131,7 @@ async def get_all_tools(config: RunnableConfig)
 
 位置：
 
-- `src/open_deep_research/utils.py`
+- `src/open_deep_research/tools/registry.py`
 
 装配顺序：
 
@@ -176,7 +175,7 @@ class RetrievalMode(Enum):
 
 位置：
 
-- `src/open_deep_research/utils.py`
+- `src/open_deep_research/mcp/tools.py`
 
 核心函数：
 
@@ -185,7 +184,7 @@ class RetrievalMode(Enum):
 - `fetch_tokens(config)`
 - `get_mcp_access_token(...)`
 
-配置对象：
+兼容的单服务器配置对象（`mcp_config` 路径）：
 
 ```python
 class MCPConfig(BaseModel):
@@ -216,22 +215,25 @@ class MCPConfig(BaseModel):
 
 位置：
 
-- `src/open_deep_research/deep_researcher.py`
+- `src/open_deep_research/runtime/business_agent.py`
+- `src/open_deep_research/runtime/agent_runtime.py`
 
 相关函数：
 
-- `_run_public_opinion_agent(...)`
-- `execute_tool_safely(...)`
+- `run_business_agent(...)`
+- `_business_agent_tools(...)`
+- `_execute_tool_safely(...)`
+- `AgentRuntime.run(...)`
 
 执行流程：
 
-1. `_run_public_opinion_agent` 按角色调用工具装配函数获取工具列表。
+1. `run_business_agent` 通过 `_business_agent_tools` 装配并按角色领域白名单过滤工具。
 2. 模型基于工具列表生成 tool calls。
 3. Agent loop 从最近一条 AI 消息取出 tool calls。
 4. 通过 Budget Guard 过滤不可执行的 tool calls。
-5. 对允许执行的工具并行调用 `execute_tool_safely`。
+5. 对允许执行的工具并行调用 `_execute_tool_safely`。
 6. 把结果包装成 `ToolMessage`。
-7. 根据迭代次数、`ResearchComplete`、预算状态决定继续当前角色循环或进入 `compress_research`。
+7. 根据迭代次数、`ResearchComplete`、预算状态决定继续当前角色循环或结束研究；图策略通过 `ResearchWorkspace.finalize` 收尾，标准策略通过 `_compress_research` 压缩研究结果。
 
 工具执行异常会被捕获成文本：
 
@@ -246,7 +248,7 @@ Error executing tool: ...
 位置：
 
 - `src/open_deep_research/budget.py`
-- `src/open_deep_research/deep_researcher.py`
+- `src/open_deep_research/runtime/agent_runtime.py`
 
 工具相关预算：
 
@@ -264,18 +266,19 @@ Error executing tool: ...
 
 ## 8. 工具提示词
 
-位置：
+当前入口是 [`build_dynamic_tool_prompt(tools, configurable)`](../../src/open_deep_research/tools/registry.py#L258)，根据本次实际绑定的工具列表按领域生成名称与简短说明。
 
-- `get_research_tool_prompt(configurable)`
-- `src/open_deep_research/prompts.py`
+业务角色调用链：
 
-提示词会根据 retrieval mode 动态描述当前可用工具：
+1. [`_business_agent_tools`](../../src/open_deep_research/runtime/business_agent.py#L194) 根据配置装配工具，再按角色的 `allowed_domains` 过滤，未知或未分类领域默认拒绝。
+2. [`_role_tool_prompt`](../../src/open_deep_research/runtime/business_agent.py#L173) 把过滤后的同一工具列表传给 `build_dynamic_tool_prompt`，补充角色领域及实际工具名称白名单。
+3. [`PublicOpinionAgentSpec.format_system_prompt`](../../src/open_deep_research/public_opinion_agents/base.py#L28) 将生成的 `retrieval_tool_prompt` 注入角色系统提示词。
 
-- `web_search`：用于外部或实时信息。
-- `rag_search`：用于本地文档和 chat memory，并要求只基于引用片段做本地知识声明。
-- `think_tool`：用于反思和规划。
+动态说明始终要求检索后单独调用 `think_tool` 反思；只有实际列表包含 `rag_search` 时，才加入基于 SOURCE 引用作出本地知识或记忆声明的约束。允许 RAG 的角色若没有取得 `rag_search`，`_role_tool_prompt` 会说明内部资料或审批依据缺失时应明确标记，避免编造。
 
-当 `retrieval_mode=hybrid` 时，prompt 会提醒模型在本地资料需要外部确认时同时使用 RAG 和 web search。
+[`get_research_tool_prompt(configurable)`](../../src/open_deep_research/tools/registry.py#L213) 是已标记弃用的静态兼容 helper，仍经 `utils.py` 导出；当前四角色运行链使用上述动态入口。`retrieval_mode` 控制前置工具装配，提示词最终以角色过滤后的实际工具集合为准。
+
+现有契约验证可参见 [角色工具隔离测试](../../tests/test_public_opinion_tool_permissions.py#L53)、[角色 prompt 契约测试](../../tests/test_public_opinion_agents.py#L59) 和 [无 RAG 图消费测试](../../tests/test_graph_consumer_without_rag.py#L27)；后者验证缺失 RAG 提示及实际工具白名单进入模型上下文。
 
 ## 9. 扩展新工具
 
@@ -304,11 +307,13 @@ tool.metadata = {
 
 业务 Agent 会调用 `has_external_research_tool(tools)`。
 
-如果只有 `ResearchComplete` 和 `think_tool`，会抛出错误：
+生产者和标准策略角色如果只有 `ResearchComplete` 和 `think_tool`，会抛出包含以下信息的错误：
 
 ```text
-No external research tools found to conduct research...
+Public Opinion agent '...' (...) requires tool domains: ... Missing tools ...
 ```
+
+图消费策略的风险/回应角色可以通过 ResearchWorkspace 检索图证据，不要求额外外部检索工具；对应契约见上文的无 RAG 图消费测试。
 
 解决方式：
 

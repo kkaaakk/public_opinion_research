@@ -1,5 +1,7 @@
 # LangGraph Agent Server 原生能力复用与重复实现审计
 
+> 历史方案记录：本报告的 LangGraph Agent Server 目标架构已被后续 OpenAI Agents SDK 迁移方向取代，下面的建议没有自动转化为当前实施任务。身份隔离、人工审批恢复、排队、取消、流协议、存储可靠性和资源管理问题仍应按实际条件验证；SDK 不会自动提供 Agent Server 的生产队列或持久化运行服务。正式迁移边界以 [OpenAI Agents SDK 迁移准备方案](../architecture/openai-agents-sdk-migration-plan.md) 为准。保留下文用于追溯原始证据、版本和测试条件。
+
 审计日期：2026-10-14（Asia/Shanghai）。仓库：`kkaaakk/public_opinion_research`。
 
 本报告以当前工作区源码为主要审计对象，同时核对本地 HEAD、本地远端跟踪引用、GitHub 实际 main 和开放 PR。**本轮只交付审计与改造建议，没有修改生产代码、依赖、数据库或 Git 历史，没有启动业务研究或调用真实付费模型。** 下文的目标架构、文件修改和验收项均为建议，尚未实施。

@@ -105,7 +105,7 @@ def ratio(numerator: int, denominator: int) -> float:
 __all__ = [
     "COMPLAINT_TERMS", "DEFAULT_RISK_RULES", "NEGATIVE_QUERY_TERMS",
     "NEGATIVE_TERMS", "POSITIVE_TERMS", "contains_any", "heat_level",
-    "matched_signal_terms", "negative_query_variants", "ratio", "risk_score",
+    "matched_signal_terms", "negative_query_variants", "ratio", "risk_level", "risk_score",
 ]
 
 
