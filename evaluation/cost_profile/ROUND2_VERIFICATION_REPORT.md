@@ -216,6 +216,6 @@
 | `round2_full_cost_profile_reports.json` | Round 2 报告级后处理（role reports/review/final/重复注入） |
 | `after_v4flash_cost_profile.json` | 对照组原始数据（5989480 + v4-flash） |
 | `round2_cost_profile.json` | 早期 40 分钟超时快照（用于 rolling_compact 触发序列） |
-| `r2_final.txt` / `af_final.txt` | 两版最终报告文本 |
-| `ps_report.txt` / `ik_report.txt` | Round 2 角色报告文本 |
+| `archive/reports/r2_final.txt` / `archive/reports/af_final.txt` | 两版最终报告文本（迁移准备时原样归档） |
+| `archive/reports/ps_report.txt` / `archive/reports/ik_report.txt` | Round 2 角色报告文本（迁移准备时原样归档） |
 | `compare_three.py` / `analyze_round2.py` / `analyze_time.py` / `analyze_growth.py` / `analyze_quality.py` / `analyze_tools.py` | 分析脚本 |

@@ -10,6 +10,7 @@
 - `sources.md`：章节级源码、文档与 Git 提交清单。
 - `source-learning-index.md`：知识点到文件、symbol、断点和观察变量的完整映射。
 - `diagrams/`：九张可单独复用的 SVG 架构图。
+- `archive/`：折线修订之前的 PPT 原稿与来源说明，保留用于历史对照。
 
 ## 如何更新
 

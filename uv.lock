@@ -3642,7 +3642,6 @@ dependencies = [
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "ipykernel" },
     { name = "langchain-anthropic" },
     { name = "langchain-aws" },
     { name = "langchain-community" },
@@ -3669,7 +3668,6 @@ dependencies = [
     { name = "pymupdf" },
     { name = "pymysql" },
     { name = "pytesseract" },
-    { name = "pytest" },
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "sentence-transformers" },
@@ -3682,7 +3680,11 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "mypy" },
+    { name = "pytest" },
     { name = "ruff" },
+]
+notebooks = [
+    { name = "ipykernel" },
 ]
 web = [
     { name = "fastapi" },
@@ -3695,7 +3697,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.138.0" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.24.0" },
-    { name = "ipykernel", specifier = ">=6.29.5" },
+    { name = "ipykernel", marker = "extra == 'notebooks'", specifier = ">=6.29.5" },
     { name = "langchain-anthropic", specifier = ">=0.3.15" },
     { name = "langchain-aws", specifier = ">=0.2.28" },
     { name = "langchain-community", specifier = ">=0.3.9" },
@@ -3722,7 +3724,7 @@ requires-dist = [
     { name = "pymupdf", specifier = ">=1.25.3" },
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "pytesseract", specifier = ">=0.3.10" },
-    { name = "pytest" },
+    { name = "pytest", marker = "extra == 'dev'" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.1" },
@@ -3733,7 +3735,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.34.3" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.34.0" },
 ]
-provides-extras = ["dev", "web"]
+provides-extras = ["dev", "notebooks", "web"]
 
 [[package]]
 name = "openai"
