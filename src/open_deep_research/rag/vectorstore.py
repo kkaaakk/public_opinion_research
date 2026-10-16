@@ -4,7 +4,7 @@
 
 - `InMemoryVectorStore`：内存向量库，适合测试和临时实验。
 - `FaissVectorStore`：本地持久化 FAISS index，加 JSON sidecar 保存 chunk。
-- `ChromaVectorStore`：本地持久化 Chroma collection，默认生产后端。
+- `ChromaVectorStore`：本地持久化 Chroma collection，作为兼容性备选后端。
 
 统一接口是 `VectorStoreBackend`，这样 service/retriever 不需要关心底层使用
 哪种向量库。

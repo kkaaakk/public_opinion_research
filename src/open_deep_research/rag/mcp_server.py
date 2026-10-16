@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from mcp.server.fastmcp import FastMCP
 
+from open_deep_research.rag.config import RAGConfig
 from open_deep_research.rag.loaders import (
     load_documents_from_paths,
     load_memory_documents_from_mysql,
@@ -19,7 +20,6 @@ from open_deep_research.rag.service import (
     _PIPELINE_CACHE,
     _PIPELINE_CACHE_LOCK,
     RAGPipeline,
-    RAGPipelineConfig,
     build_rag_index_id,
     build_rag_pipeline_config,
     get_or_create_rag_pipeline,
@@ -39,9 +39,9 @@ mcp = FastMCP(
 )
 
 
-def build_pipeline_config(config: Mapping[str, Any] | RAGPipelineConfig | None = None) -> RAGPipelineConfig:
+def build_pipeline_config(config: Mapping[str, Any] | RAGConfig | None = None) -> RAGConfig:
     """Build a RAG pipeline config from direct or `rag_`-prefixed settings."""
-    return build_rag_pipeline_config(_raw_config_dict(config))
+    return build_rag_pipeline_config(config if isinstance(config, RAGConfig) else _raw_config_dict(config))
 
 
 @mcp.tool(
@@ -229,70 +229,75 @@ def _pipeline_status_payload(pipeline: RAGPipeline, cached: bool) -> dict[str, A
         "chunk_count": len(indexer.chunks),
         "vector_count": indexer.last_vector_count,
         "vectorstore_ready": indexer.vectorstore.is_ready(),
-        "keyword_backend": pipeline.config.keyword_backend,
+        "keyword_backend": pipeline.config.keyword_search.backend,
         "config": _config_summary(pipeline.config),
     }
 
 
-def _load_configured_documents(config: RAGPipelineConfig) -> list[RAGDocument]:
+def _load_configured_documents(config: RAGConfig) -> list[RAGDocument]:
     documents: list[RAGDocument] = []
-    if config.knowledge_base_paths:
+    chunking = config.chunking
+    multimodal = config.multimodal
+    memory = config.memory
+    if chunking.knowledge_base_paths:
         documents.extend(
             load_documents_from_paths(
-                config.knowledge_base_paths,
-                json_text_fields=config.json_text_fields,
-                multimodal_enabled=config.multimodal_enabled,
-                multimodal_provider=config.multimodal_provider,
-                ocr_languages=config.ocr_languages,
-                vision_enabled=config.vision_enabled,
-                vision_model=config.vision_model,
-                vision_prompt=config.vision_prompt,
-                vision_max_tokens=config.vision_max_tokens,
+                chunking.knowledge_base_paths,
+                json_text_fields=chunking.json_text_fields,
+                multimodal_enabled=multimodal.enabled,
+                multimodal_provider=multimodal.provider,
+                ocr_languages=multimodal.ocr_languages,
+                vision_enabled=multimodal.vision_enabled,
+                vision_model=multimodal.vision_model,
+                vision_prompt=multimodal.vision_prompt,
+                vision_max_tokens=multimodal.vision_max_tokens,
             )
         )
-    if config.memory_enabled and config.memory_paths:
+    if memory.enabled and memory.paths:
         documents.extend(
             load_memory_documents_from_paths(
-                config.memory_paths,
-                json_text_fields=config.memory_json_text_fields,
+                memory.paths,
+                json_text_fields=memory.json_text_fields,
             )
         )
-    if config.memory_enabled and config.memory_mysql_url:
+    if memory.enabled and memory.mysql_url:
         documents.extend(
             load_memory_documents_from_mysql(
-                database_url=config.memory_mysql_url,
-                table_name=config.memory_mysql_table,
-                conversation_id=config.memory_conversation_id,
-                user_id=config.memory_user_id,
-                limit=config.memory_mysql_limit,
-                record_types=config.memory_mysql_index_record_types,
+                database_url=memory.mysql_url,
+                table_name=memory.mysql_table,
+                conversation_id=memory.conversation_id,
+                user_id=memory.user_id,
+                limit=memory.mysql_limit,
+                record_types=memory.mysql_index_record_types,
             )
         )
     return documents
 
 
-def _config_summary(config: RAGPipelineConfig) -> dict[str, Any]:
+def _config_summary(config: RAGConfig) -> dict[str, Any]:
+    chunking = config.chunking
+    memory = config.memory
     return {
-        "knowledge_base_paths": config.knowledge_base_paths,
-        "memory_enabled": config.memory_enabled,
-        "memory_paths": config.memory_paths,
-        "has_memory_mysql_url": bool(config.memory_mysql_url),
-        "memory_mysql_table": config.memory_mysql_table,
-        "embedding_provider": config.embedding_provider,
-        "embedding_model": config.embedding_model,
-        "vectorstore_provider": config.vectorstore_provider,
-        "vectorstore_path": config.vectorstore_path,
-        "collection_name": config.collection_name,
-        "keyword_backend": config.keyword_backend,
-        "reranker_provider": config.reranker_provider,
-        "reranker_model": config.reranker_model,
-        "top_k": config.top_k,
-        "rerank_top_n": config.rerank_top_n,
-        "chunk_size": config.chunk_size,
-        "chunk_overlap": config.chunk_overlap,
-        "multimodal_enabled": config.multimodal_enabled,
-        "vision_enabled": config.vision_enabled,
-        "graph_enabled": config.graph_enabled,
+        "knowledge_base_paths": chunking.knowledge_base_paths,
+        "memory_enabled": memory.enabled,
+        "memory_paths": memory.paths,
+        "has_memory_mysql_url": bool(memory.mysql_url),
+        "memory_mysql_table": memory.mysql_table,
+        "embedding_provider": config.embedding.provider,
+        "embedding_model": config.embedding.model,
+        "vectorstore_provider": config.vectorstore.provider,
+        "vectorstore_path": config.vectorstore.persist_path,
+        "collection_name": config.vectorstore.collection_name,
+        "keyword_backend": config.keyword_search.backend,
+        "reranker_provider": config.reranker.provider,
+        "reranker_model": config.reranker.model,
+        "top_k": chunking.top_k,
+        "rerank_top_n": chunking.rerank_top_n,
+        "chunk_size": chunking.chunk_size,
+        "chunk_overlap": chunking.chunk_overlap,
+        "multimodal_enabled": config.multimodal.enabled,
+        "vision_enabled": config.multimodal.vision_enabled,
+        "graph_enabled": config.graph_rag.enabled,
     }
 
 
