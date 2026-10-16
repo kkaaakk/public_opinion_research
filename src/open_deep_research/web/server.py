@@ -27,7 +27,7 @@ from open_deep_research.observability import (  # noqa: E402, I001
 
 ensure_langsmith_configuration()
 
-from fastapi import FastAPI, HTTPException, Request  # noqa: E402, I001
+from fastapi import FastAPI, HTTPException, Query, Request  # noqa: E402, I001
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
@@ -35,6 +35,9 @@ from langchain_core.messages import HumanMessage  # noqa: E402
 from pydantic import BaseModel, Field, field_validator  # noqa: E402
 
 from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_factory  # noqa: E402, I001
+from open_deep_research.trajectory.service import TrajectoryService  # noqa: E402
+from open_deep_research.trajectory.events import validate_session_id  # noqa: E402
+from open_deep_research.web.research import ResearchExecution  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
 LOGGER = logging.getLogger(__name__)
@@ -73,12 +76,14 @@ if STATIC_DIR.is_dir():
 
 
 class ResearchRequest(BaseModel):
+    """Validate the existing public research request and local trajectory opt-in."""
     topic: str = Field(min_length=1, max_length=MAX_TOPIC_LENGTH)
     model: str = "deepseek:deepseek-flash"
     search_api: Literal["tavily", "openai", "anthropic"] = "tavily"
     mode: Literal["fast", "normal", "deep"] = "normal"
     org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
     rag_enabled: bool = False
+    trajectory_enabled: bool = True
 
     @field_validator("topic")
     @classmethod
@@ -145,182 +150,143 @@ def _event(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-# ── Node → human label ─────────────────────────────────────────────
-_NODE_LABEL = {
-    "write_research_brief": "Planning research…",
-    "research_phase": "Analyzing public opinion…",
-    "final_report_generation": "Writing report…",
-    "compress_research": "Summarizing…",
-}
-
-
-def _extract_text(value) -> str:
-    """Pull readable text out of various LangChain object shapes."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        parts = []
-        for item in value[-3:]:  # last 3 items
-            if hasattr(item, "content"):
-                parts.append(str(item.content)[:300])
-            elif isinstance(item, str):
-                parts.append(item[:300])
-        return "\n".join(parts)
-    if isinstance(value, dict):
-        for k in ("content", "text", "message"):
-            if k in value:
-                return str(value[k])[:500]
-        return str(value)[:500]
-    return str(value)[:300]
-
-
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    index_path = STATIC_DIR / "index.html"
+    """Serve the packaged React entry point."""
+    index_path = STATIC_DIR / "dist" / "index.html"
     if index_path.is_file():
         return index_path.read_text(encoding="utf-8")
-    return "<h1>Open Deep Research</h1><p>Frontend not found.</p>"
+    return "<h1>Public Opinion Research</h1><p>Build the frontend with npm run build.</p>"
 
 
 @app.get("/api/health")
 async def health() -> dict:
+    """Report process health without calling any provider."""
     return {"status": "ok"}
+
+
+_trajectory_service: TrajectoryService | None = None
+_executions: dict[str, ResearchExecution] = {}
+
+
+def trajectory_service() -> TrajectoryService:
+    """Initialize storage lazily; tests can replace the service in isolation."""
+    global _trajectory_service
+    if _trajectory_service is None:
+        _trajectory_service = TrajectoryService()
+    return _trajectory_service
+
+
+def _authorize(raw: Request) -> None:
+    if not _request_is_authorized(raw):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+
+def _history(session_id: str, before_seq: int | None, limit: int) -> dict:
+    try:
+        validate_session_id(session_id)
+        return trajectory_service().history(session_id, before_seq=before_seq, limit=limit)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Trajectory session not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid or corrupt trajectory history.") from exc
+    except Exception as exc:
+        LOGGER.warning("Trajectory history unavailable: category=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Trajectory history unavailable.") from exc
+
+
+@app.get("/api/trajectory/sessions")
+async def trajectory_sessions(raw: Request) -> dict:
+    """List local history under the existing API authorization policy."""
+    _authorize(raw)
+    try:
+        return {"sessions": trajectory_service().list()[:100]}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Trajectory history unavailable.") from exc
+
+
+@app.get("/api/trajectory/sessions/{session_id}")
+async def trajectory_session(session_id: str, raw: Request) -> dict:
+    """Read status and the latest replay snapshot without executing a graph."""
+    _authorize(raw)
+    return _history(session_id, None, 100)
+
+
+@app.get("/api/trajectory/sessions/{session_id}/events")
+async def trajectory_events(session_id: str, raw: Request,
+                            before_seq: int | None = Query(default=None, ge=0),
+                            limit: int = Query(default=100, ge=1, le=500)) -> dict:
+    """Read a bounded older event page with a cumulative deterministic projection."""
+    _authorize(raw)
+    return _history(session_id, before_seq, limit)
+
+
+def _stream_response(execution: ResearchExecution, session_id: str) -> StreamingResponse:
+    async def stream():
+        async for packet in execution.stream():
+            yield _event(packet)
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+        "X-Research-Session-Id": session_id,
+    })
+
+
+@app.get("/api/trajectory/sessions/{session_id}/stream")
+async def trajectory_stream(session_id: str, raw: Request) -> StreamingResponse:
+    """Reconnect to the original live writer, never reinvoke research for replay."""
+    _authorize(raw)
+    execution = _executions.get(session_id)
+    if execution is None:
+        raise HTTPException(status_code=409, detail="Live writer unavailable here; read history instead.")
+    return _stream_response(execution, session_id)
+
+
+@app.post("/api/research/{session_id}/cancel")
+async def cancel_research(session_id: str, raw: Request) -> dict:
+    """Await backend cancellation and preserve every committed history record."""
+    _authorize(raw)
+    execution = _executions.get(session_id)
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Research execution not found.")
+    await execution.cancel()
+    return {"session_id": session_id, "status": execution.session.projection.status if execution.session else "cancelled"}
 
 
 @app.post("/api/research")
 async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
-    """Run deep research with real-time streaming via SSE."""
-
-    if not _request_is_authorized(raw):
-        raise HTTPException(status_code=401, detail="Authentication required.")
-
-    async def _research_event_stream():
-        trace_id = uuid.uuid4().hex[:12]
-        try:
-            yield _event({"type": "status", "message": "Starting research…"})
-
-            mode_configs = {
-                "fast": {
-                    "max_react_tool_calls": 2,
-                    "max_content_length": 8000,
-                },
-                "normal": {
-                    "max_react_tool_calls": 4,
-                    "max_content_length": 20000,
-                },
-                "deep": {},
-            }
-            mode = mode_configs.get(request.mode, mode_configs["normal"])
-
-            thread_id = uuid.uuid4().hex
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "research_model": request.model,
-                    "compression_model": request.model,
-                    "final_report_model": request.model,
-                    "summarization_model": request.model,
-                    "search_api": request.search_api,
-                    "allow_clarification": False,
-                    "business_scenario": "public_opinion_risk",
-                    "organization_context": request.org_context or None,
-                    "rag_enabled": request.rag_enabled,
-                    "retrieval_mode": "hybrid" if request.rag_enabled else "web_only",
-                    **mode,
-                },
-                # Bounded correlation facts only; LangSmith reads them without
-                # copying state, prompt, or user content.
-                "metadata": correlation_metadata({"configurable": {"thread_id": thread_id}}),
-            }
-
-            initial_state = {
-                "messages": [HumanMessage(content=request.topic)],
-            }
-
-            final_report = None
-            budget = {}
-
-            # Stream graph execution with node-level updates
-            async for chunk in _deep_researcher_factory(config).astream(
-                initial_state, config, stream_mode="updates"
-            ):
-                for node_name, node_output in chunk.items():
-                    # ── Status update ──────────────────────────
-                    label = _NODE_LABEL.get(node_name)
-                    if label:
-                        yield _event({"type": "status", "message": label})
-
-                    # ── Content streaming ─────────────────────
-                    content = _extract_text(node_output)
-                    if content and node_name not in ("enrich_query_images", "identify_skill", "load_skill"):
-                        yield _event({
-                            "type": "stream",
-                            "node": node_name,
-                            "content": content,
-                        })
-
-                    # ── Capture final report ──────────────────
-                    if isinstance(node_output, dict):
-                        report_update = node_output.get("report", {}) or {}
-                        runtime_update = node_output.get("runtime", {}) or {}
-                        if isinstance(report_update, dict) and report_update.get("final"):
-                            final_report = report_update["final"]
-                        if isinstance(runtime_update, dict) and runtime_update.get("budget"):
-                            budget = runtime_update["budget"]
-
-            # ── Final result ────────────────────────────────────────
-            usage = {
-                "model_calls": budget.get("model_calls", 0),
-                "input_tokens": budget.get("input_tokens", 0),
-                "output_tokens": budget.get("output_tokens", 0),
-                "total_tokens": budget.get("total_tokens", 0),
-            }
-
-            if final_report:
-                yield _event({
-                    "type": "report",
-                    "content": final_report,
-                })
-                yield _event({
-                    "type": "usage",
-                    **usage,
-                })
-            else:
-                yield _event({
-                    "type": "error",
-                    "message": "Research completed but no report was generated.",
-                })
-
-            yield _event({"type": "done"})
-
-        except asyncio.CancelledError:
-            yield _event({"type": "error", "message": "Research cancelled."})
-        except Exception:
-            LOGGER.exception("Research request failed; trace_id=%s", trace_id)
-            yield _event({
-                "type": "error",
-                "message": f"Research request failed. Trace ID: {trace_id}.",
-            })
-
-    async def event_stream():
-        async with _RESEARCH_SEMAPHORE:
-            async for event in _research_event_stream():
-                yield event
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    """Admit one workflow with independent tracing, ledger and SSE subscribers."""
+    _authorize(raw)
+    thread_id = uuid.uuid4().hex
+    mode = {"fast": {"max_react_tool_calls": 2, "max_content_length": 8000},
+            "normal": {"max_react_tool_calls": 4, "max_content_length": 20000}, "deep": {}}[request.mode]
+    config = {"configurable": {
+        "thread_id": thread_id, "research_run_id": thread_id,
+        "research_model": request.model, "compression_model": request.model,
+        "final_report_model": request.model, "summarization_model": request.model,
+        "search_api": request.search_api, "allow_clarification": False,
+        "business_scenario": "public_opinion_risk", "organization_context": request.org_context or None,
+        "rag_enabled": request.rag_enabled, "retrieval_mode": "hybrid" if request.rag_enabled else "web_only", **mode}}
+    config["metadata"] = {**correlation_metadata(config), "trajectory_session_id": thread_id}
+    session = None
+    if request.trajectory_enabled:
+        session = trajectory_service().create(thread_id, config["metadata"])
+        session.start_turn(request.topic, {"business_scenario": "public_opinion_risk",
+            "retrieval_mode": config["configurable"]["retrieval_mode"], "rag_enabled": request.rag_enabled,
+            "search_api": request.search_api, "mode": request.mode})
+    execution = ResearchExecution(_deep_researcher_factory,
+        {"messages": [HumanMessage(content=request.topic)]}, config, _RESEARCH_SEMAPHORE, session)
+    for key, previous in list(_executions.items()):
+        if len(_executions) < 8:
+            break
+        if previous.task is not None and previous.task.done():
+            del _executions[key]
+    _executions[thread_id] = execution
+    execution.start()
+    return _stream_response(execution, thread_id)
 
 
 def main():
+    """Launch the local web server with the configured host and port."""
     import uvicorn
 
     host = os.environ.get("HOST", "127.0.0.1")
@@ -333,9 +299,7 @@ def main():
             host,
         )
 
-    print("\n  Open Deep Research web UI")
-    print("  ─────────────────────────")
-    print(f"  http://{host}:{port}\n")
+    LOGGER.info("Open Deep Research web UI: http://%s:%s", host, port)
 
     uvicorn.run(
         "open_deep_research.web.server:app",

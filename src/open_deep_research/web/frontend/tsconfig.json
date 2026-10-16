@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2022","module":"ESNext","moduleResolution":"Bundler","jsx":"react-jsx","strict":true,"noEmit":true,"skipLibCheck":true,"allowImportingTsExtensions":true,"lib":["ES2022","DOM","DOM.Iterable"]},"include":["src/main.tsx","src/app/**/*.ts","src/app/**/*.tsx","src/trajectory/adapter/**/*.ts","src/types.d.ts"]}

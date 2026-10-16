@@ -11,12 +11,34 @@ on:
     #   - "src/**/*.jsx"
 
 jobs:
+  claude-review-configuration:
+    name: Check Claude Review configuration
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      configured: ${{ steps.api-key.outputs.configured }}
+    steps:
+      # Only expose presence, never the secret itself, as a job output.
+      - name: Check required ANTHROPIC_API_KEY secret
+        id: api-key
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [[ -n "$ANTHROPIC_API_KEY" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Claude Review is configured; the review job will run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Claude Review not configured: ANTHROPIC_API_KEY is unavailable; claude-review will be skipped."
+            echo "Claude Review **not configured**: ANTHROPIC_API_KEY is unavailable. The claude-review job is **skipped**; no Claude review was performed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Claude Review requires the ANTHROPIC_API_KEY repository/organization secret.
+    # Gate the job via presence-only output: secrets cannot be used in jobs.if.
+    needs: claude-review-configuration
+    if: needs.claude-review-configuration.outputs.configured == 'true'
     
     runs-on: ubuntu-latest
     env:
@@ -34,7 +56,6 @@ jobs:
           fetch-depth: 1
 
       - name: Run Claude Code Review
-        if: env.ANTHROPIC_API_KEY != ''
         id: claude-review
         uses: anthropics/claude-code-action@beta
         with:

@@ -1,21 +1,28 @@
 # Observability Architecture
 
-Public Opinion Research has exactly two observability responsibilities with a
-deliberate boundary:
+The project has separate execution, conversation history and usage authorities:
 
 ```text
-LangSmith         → Execution observability (Trace / Span / Graph / Agent / Node /
-                    LLM / Tool / MCP / RAG / latency / error / retry / debug)
-budget.py         → Token & usage policy (model attempts / input tokens /
-                    output tokens / cache tokens / budget / cost policy)
+LangSmith                 -> Trace / Span / graph / Agent / LLM / Tool / MCP /
+                             RAG internals / performance / errors / debugging
+Trajectory Session Ledger -> Durable conversation execution facts and replay
+DSH Trajectory            -> Deterministic UI projection of that event log
+budget.py                 -> Provider usage aggregation and budget policy
+LangGraph                 -> Business state and checkpoint/resume authority
 ```
+
+The ledger is append-only conversation history, not another Span system. It
+consumes the same official callbacks as tracing, never reads the LangSmith API,
+never requires a browser API key, and never invokes the graph a second time.
+Storage faults degrade trajectory while business execution proceeds once.
+See [Conversation Trajectory Ledger](trajectory-ui.md).
 
 `budget.py` is **not** an external observability platform. It is the project's
 own usage/budget policy layer, built on LangChain's official callbacks
 (`ModelAttemptCounter` + `UsageMetadataCallbackHandler` + `add_usage`).
 
 All LangSmith integration lives in `src/open_deep_research/observability/`.
-Business modules call thin boundaries only; neither channel may change research
+Business modules call thin boundaries only; observability may not change research
 behavior, RAG results, prompts, or agent decisions.
 
 ## 1. LangSmith — execution tracing
@@ -135,6 +142,10 @@ Token accounting — the authoritative semantics — lives in
 | `LANGSMITH_TRACING=false` | Research runs normally; no spans created. |
 | LangSmith network unreachable | Upload errors are logged in the background; research continues. |
 | Tracing code raises | All span/metadata helpers catch and degrade; business exceptions still propagate. |
+| Trajectory persistence/serialization fails | Mark trajectory degraded and retain sanitized live history; never repeat research. |
+| SSE reader disconnects | The original task continues; reconnect reads/subscribes to its session. |
+| Explicit Stop | Cancel the original task and durably settle attempts/tools/turn/session. |
+| Cold history ends with open execution | Read-only projection labels it interrupted; no successful result is invented. |
 
 ## 4. Troubleshooting
 

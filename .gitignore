@@ -83,3 +83,6 @@ data/indexes/rag/*
 !data/indexes/rag/.gitkeep
 
 .venv/
+
+# Private conversation execution history
+.data/trajectory/

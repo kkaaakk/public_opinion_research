@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables.config import merge_configs
 
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
@@ -315,7 +316,10 @@ class AgentRuntime:
                         self.execute_tool(
                             tools_by_name[call["name"]],
                             call["args"],
-                            self.runtime_config,
+                            # Preserve the model's actual id at the shared
+                            # dispatcher boundary. Native tool callbacks receive
+                            # metadata without changing tool arguments/results.
+                            merge_configs(self.runtime_config, {"metadata": {"tool_call_id": call["id"]}}),
                         )
                         for call in known
                     ]

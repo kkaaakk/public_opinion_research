@@ -263,7 +263,6 @@ async def summarize_webpage(
 # Reflection Tool Utils
 ##########################
 
-@tool(description="Strategic reflection tool for research planning")
 def get_tavily_api_key(config: RunnableConfig):
     """Get Tavily API key from environment or config."""
     should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
