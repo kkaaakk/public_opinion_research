@@ -1,0 +1,77 @@
+{
+  "schema_version": "deerflow.skill-review-waivers.v1",
+  "waivers": [
+    {
+      "package": "skills/public/skill-creator",
+      "source": "skillscan",
+      "rule_id": "python-subprocess",
+      "path": "scripts/improve_description.py",
+      "line": 35,
+      "evidence": "subprocess.run",
+      "file_sha256": "sha256:87d864570220b699fac52da309d2d6efdb060647bfebc74f768128e646accf80",
+      "preapproved_file_sha256s": [
+        "sha256:2877bde08bf3f437b9dae3d57585a0840b9b1024736d2e5c6c657b71899269d0"
+      ],
+      "reason": "Required Claude CLI invocation uses a fixed executable, an argv list, prompt input over stdin, and shell=False.",
+      "expires_on": "2027-02-28"
+    },
+    {
+      "package": "skills/public/skill-creator",
+      "source": "skillscan",
+      "rule_id": "python-subprocess",
+      "path": "scripts/run_eval.py",
+      "line": 85,
+      "evidence": "subprocess.Popen",
+      "file_sha256": "sha256:43e3b8f80dbf69c343967ba77e268fae991d9fa3ed68b32a0ff02532cd48657f",
+      "preapproved_file_sha256s": [
+        "sha256:ea2521ba41c8fd16b2900758c890bb6c6d2b4b01da10b4a860facb8587ed0bde"
+      ],
+      "reason": "Required Claude CLI invocation uses a fixed executable, an argv list, captured output streams, and shell=False.",
+      "expires_on": "2027-02-28"
+    },
+    {
+      "package": "skills/public/data-analysis",
+      "source": "skillscan",
+      "rule_id": "python-subprocess",
+      "path": "scripts/analyze.py",
+      "line": 25,
+      "evidence": "subprocess.run",
+      "file_sha256": "sha256:42b393b7e2892e57ffe04a077e1858ee463d8c7e126b73ecbfb250998d49dd9b",
+      "reason": "Reviewed unchanged upstream 8d994cc1e7ee63c61283a71a169248beb4ed1c52: optional dependency bootstrap invokes sys.executable with fixed pip/install argv and shell=False by default; package names are fixed. Operator-triggered script may download and install unversioned duckdb/openpyxl when missing; this network/package-install risk is explicitly accepted only for this exact Phase 0 upstream file, pending dependency-hardening review.",
+      "expires_on": "2026-11-15"
+    },
+    {
+      "package": "skills/public/data-analysis",
+      "source": "skillscan",
+      "rule_id": "python-subprocess",
+      "path": "scripts/analyze.py",
+      "line": 31,
+      "evidence": "subprocess.run",
+      "file_sha256": "sha256:42b393b7e2892e57ffe04a077e1858ee463d8c7e126b73ecbfb250998d49dd9b",
+      "reason": "Reviewed unchanged upstream 8d994cc1e7ee63c61283a71a169248beb4ed1c52: optional dependency bootstrap invokes sys.executable with fixed pip/install argv and shell=False by default; package names are fixed. Operator-triggered script may download and install unversioned duckdb/openpyxl when missing; this network/package-install risk is explicitly accepted only for this exact Phase 0 upstream file, pending dependency-hardening review.",
+      "expires_on": "2026-11-15"
+    },
+    {
+      "package": "skills/public/skill-creator",
+      "source": "skillscan",
+      "rule_id": "secret-env-assignment",
+      "path": "SKILL.md",
+      "line": 262,
+      "evidence": "[redacted]",
+      "file_sha256": "sha256:313a95a145d9926693f8c053b63047212dd1db217c061891865b6546c4e70d02",
+      "reason": "Reviewed unchanged upstream 8d994cc1e7ee63c61283a71a169248beb4ed1c52: this exact JSON field records numeric total_tokens usage in timing.json; it is public example telemetry, not an environment credential or secret. Temporary exact-file waiver for Phase 0 baseline adoption.",
+      "expires_on": "2026-11-15"
+    },
+    {
+      "package": "skills/public/skill-creator",
+      "source": "skillscan",
+      "rule_id": "secret-env-assignment",
+      "path": "references/schemas.md",
+      "line": 205,
+      "evidence": "[redacted]",
+      "file_sha256": "sha256:8e8876180a8989b406a4d3edddf875b04cdfd5805cc8616686d552b11ce4455f",
+      "reason": "Reviewed unchanged upstream 8d994cc1e7ee63c61283a71a169248beb4ed1c52: this exact JSON field records numeric total_tokens usage in timing.json; it is public example telemetry, not an environment credential or secret. Temporary exact-file waiver for Phase 0 baseline adoption.",
+      "expires_on": "2026-11-15"
+    }
+  ]
+}
