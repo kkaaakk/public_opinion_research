@@ -2,10 +2,12 @@
 
 ## 基线
 
-- 默认主分支：`origin/main`
-- 默认主分支提交：`12e2f0e`，Merge pull request #11
-- 当前工作树提交：`41f180b`
-- `git diff HEAD origin/main`：无文件差异
+以下记录学习资料制作时的源码快照，保留原有文件与 symbol 映射用于复盘；不是当前分支状态。当前架构以 [Agent Loop](../architecture/agent-loop.md)、[RAG](../architecture/rag.md) 和 [SDK 迁移计划](../architecture/openai-agents-sdk-migration-plan.md) 为准。
+
+- 制作时默认主分支：`origin/main`
+- 制作时默认主分支提交：`12e2f0e`，Merge pull request #11
+- 制作时工作树提交：`41f180b`
+- 制作时 `git diff HEAD origin/main`：无文件差异
 - LangGraph 入口：`langgraph.json` → `src/open_deep_research/deep_researcher.py:deep_researcher`
 - Web 入口：`src/open_deep_research/web/server.py:research`
 
@@ -56,7 +58,7 @@
 - `src/open_deep_research/mcp/domain_filter.py:DOMAIN_REGISTRY`
 - `src/open_deep_research/social_media/tools.py:get_social_media_tools`
 - `docs/guide/social-media-skill.md`
-- `README.md` 中的 `skills/` 目录树为残留文档；当前源码树不存在该目录。
+- 制作时 `README.md` 中的 `skills/` 目录树为残留文档；该源码快照不存在此目录。
 
 ## Chapter 5 Context 与 Memory
 
@@ -81,7 +83,8 @@
 - `src/open_deep_research/rag/vectorstore.py`
 - `src/open_deep_research/rag/graph.py`
 - `docs/architecture/rag-design-rationale.md`
-- `docs/graphrag_effectiveness.md`
+- [当前 RAG / GraphRAG 说明](../architecture/rag.md)
+- [制作时的 GraphRAG 改进说明](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/docs/graphrag_effectiveness.md)
 
 ## Chapter 7 舆情业务流程
 

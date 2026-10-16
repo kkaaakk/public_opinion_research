@@ -5022,8 +5022,8 @@
   },
   "after": {
     "summary": {
-      "files": 316,
-      "bytes": 27915350,
+      "files": 297,
+      "bytes": 27636405,
       "python_files": 162,
       "python_physical_lines": 45731,
       "python_lines_by_scope": {
@@ -5036,10 +5036,9 @@
         "test": 10000,
         "support": 5128
       },
-      "historical_or_generated_files": 61,
+      "historical_or_generated_files": 52,
       "historical_or_generated_by_category": {
         "archived_material": 12,
-        "historical_design_record": 9,
         "historical_evaluation_baseline": 3,
         "historical_evaluation_output": 22,
         "learning_or_interview_asset": 15
@@ -5048,9 +5047,9 @@
     },
     "directories": {
       ".": {
-        "files": 316,
-        "bytes": 27915350,
-        "text_lines": 249364,
+        "files": 297,
+        "bytes": 27636405,
+        "text_lines": 244182,
         "python_files": 162,
         "python_lines": 45731
       },
@@ -5063,26 +5062,6 @@
         "files": 3,
         "bytes": 7361,
         "text_lines": 215
-      },
-      ".trae": {
-        "files": 6,
-        "bytes": 53890,
-        "text_lines": 826
-      },
-      ".trae/specs": {
-        "files": 6,
-        "bytes": 53890,
-        "text_lines": 826
-      },
-      ".trae/specs/integrate-plan-execute-into-deep-researcher": {
-        "files": 3,
-        "bytes": 35989,
-        "text_lines": 513
-      },
-      ".trae/specs/split-rag-config": {
-        "files": 3,
-        "bytes": 17901,
-        "text_lines": 313
       },
       "data": {
         "files": 12,
@@ -5150,28 +5129,28 @@
         "text_lines": 24
       },
       "docs": {
-        "files": 66,
-        "bytes": 5301258,
-        "text_lines": 32311
+        "files": 54,
+        "bytes": 5091000,
+        "text_lines": 28289
       },
       "docs/.vitepress": {
         "files": 1,
-        "bytes": 2996,
-        "text_lines": 87
+        "bytes": 2961,
+        "text_lines": 80
       },
       "docs/adr": {
         "files": 2,
-        "bytes": 5648,
+        "bytes": 5779,
         "text_lines": 131
       },
       "docs/architecture": {
-        "files": 9,
-        "bytes": 166567,
-        "text_lines": 4029
+        "files": 7,
+        "bytes": 148761,
+        "text_lines": 2909
       },
       "docs/archive": {
         "files": 2,
-        "bytes": 44740,
+        "bytes": 44845,
         "text_lines": 14
       },
       "docs/archive/observability": {
@@ -5180,53 +5159,48 @@
         "text_lines": 0
       },
       "docs/audits": {
-        "files": 3,
-        "bytes": 526429,
-        "text_lines": 11648
+        "files": 2,
+        "bytes": 411778,
+        "text_lines": 10632
       },
       "docs/evaluation": {
         "files": 1,
-        "bytes": 59073,
+        "bytes": 59815,
         "text_lines": 742
       },
       "docs/examples": {
         "files": 4,
-        "bytes": 47499,
+        "bytes": 48044,
         "text_lines": 545
       },
       "docs/guide": {
-        "files": 2,
-        "bytes": 22817,
-        "text_lines": 447
+        "files": 1,
+        "bytes": 5663,
+        "text_lines": 171
       },
       "docs/interview-architecture": {
         "files": 10,
-        "bytes": 2099835,
-        "text_lines": 11739
+        "bytes": 2101717,
+        "text_lines": 11744
       },
       "docs/knowledge": {
         "files": 4,
-        "bytes": 85116,
+        "bytes": 85731,
         "text_lines": 615
-      },
-      "docs/project": {
-        "files": 3,
-        "bytes": 15685,
-        "text_lines": 332
       },
       "docs/project-learning": {
         "files": 18,
-        "bytes": 2164916,
-        "text_lines": 504
+        "bytes": 2165919,
+        "text_lines": 507
       },
       "docs/project-learning/archive": {
         "files": 2,
-        "bytes": 244616,
+        "bytes": 244621,
         "text_lines": 5
       },
       "docs/project-learning/assets": {
         "files": 1,
-        "bytes": 357,
+        "bytes": 362,
         "text_lines": 5
       },
       "docs/project-learning/diagrams": {
@@ -5789,7 +5763,6 @@
         "path": "src/open_deep_research/utils.py",
         "text_references": [
           "docs/architecture/agent-loop.md",
-          "docs/architecture/technical-stack.md",
           "docs/architecture/tools.md",
           "docs/audits/pre-openai-sdk-inventory.json",
           "docs/interview-architecture/code-graph-analysis.json",
@@ -5806,7 +5779,6 @@
         "path": "src/security/auth.py",
         "text_references": [
           "docs/architecture/openai-agents-sdk-migration-plan.md",
-          "docs/audits/langgraph-agent-server-overlap-audit.md",
           "docs/audits/pre-openai-sdk-cleanup.md",
           "docs/audits/pre-openai-sdk-inventory.json",
           "langgraph.json",
@@ -6453,84 +6425,14 @@
         "artifact_category": null
       },
       {
-        "path": ".trae/specs/integrate-plan-execute-into-deep-researcher/checklist.md",
-        "bytes": 7916,
-        "sha256": "57574fdc36db620e620c07579cfa4d37cb9c43b9f308f37149c91f2d8ef71b0f",
-        "lf_normalized_sha256": "57574fdc36db620e620c07579cfa4d37cb9c43b9f308f37149c91f2d8ef71b0f",
-        "text_lines": 119,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
-      },
-      {
-        "path": ".trae/specs/integrate-plan-execute-into-deep-researcher/spec.md",
-        "bytes": 18183,
-        "sha256": "baa892755947b0b9e1f92c15da3711e11866871dd5db2ea282fb0adb673c2dd4",
-        "lf_normalized_sha256": "baa892755947b0b9e1f92c15da3711e11866871dd5db2ea282fb0adb673c2dd4",
-        "text_lines": 276,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
-      },
-      {
-        "path": ".trae/specs/integrate-plan-execute-into-deep-researcher/tasks.md",
-        "bytes": 9890,
-        "sha256": "2427e642089bcaba4c67fa88900ebdfe43b2c1d7462deb268afb5a4677bde58f",
-        "lf_normalized_sha256": "2427e642089bcaba4c67fa88900ebdfe43b2c1d7462deb268afb5a4677bde58f",
-        "text_lines": 118,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
-      },
-      {
-        "path": ".trae/specs/split-rag-config/checklist.md",
-        "bytes": 4374,
-        "sha256": "2b0f31fafec1143a06e4868a6ade1d1f3930e2a93f5da7c13d99c7c949a47901",
-        "lf_normalized_sha256": "2b0f31fafec1143a06e4868a6ade1d1f3930e2a93f5da7c13d99c7c949a47901",
-        "text_lines": 104,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
-      },
-      {
-        "path": ".trae/specs/split-rag-config/spec.md",
-        "bytes": 10248,
-        "sha256": "75ffd7aab41712605d390d92dba5166561e4956bec16858e6cee3f24dc995962",
-        "lf_normalized_sha256": "75ffd7aab41712605d390d92dba5166561e4956bec16858e6cee3f24dc995962",
-        "text_lines": 164,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
-      },
-      {
-        "path": ".trae/specs/split-rag-config/tasks.md",
-        "bytes": 3279,
-        "sha256": "1a07de6a7c7dc518fefd0d109016c3f897c8a805ca1928ef7ff6cf611af5afc3",
-        "lf_normalized_sha256": "1a07de6a7c7dc518fefd0d109016c3f897c8a805ca1928ef7ff6cf611af5afc3",
-        "text_lines": 45,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
-      },
-      {
         "path": "AGENTS.md",
-        "bytes": 3733,
-        "sha256": "4dffc39bf6f274e5591de0c8142bd75d12795b4a9e11ec35b8ab3a1b5a031ec3",
-        "lf_normalized_sha256": "4dffc39bf6f274e5591de0c8142bd75d12795b4a9e11ec35b8ab3a1b5a031ec3",
+        "bytes": 3827,
+        "sha256": "f208ebb18c5af0be259551ddcf3b7f6ac5ad09fc634c2bb1d108ab358dae91c4",
+        "lf_normalized_sha256": "3dea8c2b95dbfd6b616c7c8b8bc7c8296edfdf87c73327bdc941f3090a4759e8",
         "text_lines": 67,
         "python": false,
         "scope": "support",
         "artifact_category": null
-      },
-      {
-        "path": "CHANGELOG_general_mode_removal.md",
-        "bytes": 14505,
-        "sha256": "f20e80ec45bafcea0ca48ce0714e129ced836e1879031cc53ce3dfb82c7b0fd5",
-        "lf_normalized_sha256": "f20e80ec45bafcea0ca48ce0714e129ced836e1879031cc53ce3dfb82c7b0fd5",
-        "text_lines": 334,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
       },
       {
         "path": "CLAUDE.md",
@@ -6554,8 +6456,8 @@
       },
       {
         "path": "README.md",
-        "bytes": 17306,
-        "sha256": "ddfd2ca03da65100454fce8b457e033e9c72b64f3eadf49b6d0a570ee0a7f63f",
+        "bytes": 16920,
+        "sha256": "4fc290a5661ac75a4984728d973e049ae1f52ed8047fb25eac3fbc3421088130",
         "lf_normalized_sha256": "4fc290a5661ac75a4984728d973e049ae1f52ed8047fb25eac3fbc3421088130",
         "text_lines": 386,
         "python": false,
@@ -6694,38 +6596,18 @@
       },
       {
         "path": "docs/.vitepress/config.mts",
-        "bytes": 2996,
-        "sha256": "dcc84a6197cb44bd0a17d40df9e7392750f2ba916809f6e354cbdbcfef9fc80b",
-        "lf_normalized_sha256": "bd63a243187a24730f306674c8ee40b1f0083408d5263a03c9ed933f0e52e5c2",
-        "text_lines": 87,
+        "bytes": 2961,
+        "sha256": "4053cf11995a5f3dde2f8da69f379ff802c09514b6c333e22c2b945bf35aad5d",
+        "lf_normalized_sha256": "7f2035c2b6b21b0219f4787a9ed3fb659b35aa2ea152945d743a1dea1d76dcd3",
+        "text_lines": 80,
         "python": false,
         "scope": "support",
         "artifact_category": null
       },
       {
-        "path": "docs/ARCHITECTURE_OPTIMIZATION_LOG.md",
-        "bytes": 29790,
-        "sha256": "8a493166abc27f89df9b0ce7b3333ce6280219d286b68b1daf5b8c78ec6a70ad",
-        "lf_normalized_sha256": "9f6ede33a8432fa313996ce33790d65e2a7fefe51da6a7ecd9dbd0fda5487ebc",
-        "text_lines": 615,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
-      },
-      {
-        "path": "docs/ARCHITECTURE_OPTIMIZATION_LOG_CN.md",
-        "bytes": 6497,
-        "sha256": "e734ad81a4da4031076965e7f1a47ef65a12bc6d5c51f043a7ecff1f7cc44ebc",
-        "lf_normalized_sha256": "e734ad81a4da4031076965e7f1a47ef65a12bc6d5c51f043a7ecff1f7cc44ebc",
-        "text_lines": 224,
-        "python": false,
-        "scope": "support",
-        "artifact_category": "historical_design_record"
-      },
-      {
         "path": "docs/adr/0001-research-graph-context-harness.md",
-        "bytes": 3852,
-        "sha256": "eb406529377d4afe78d936e22753689196cee0e01bd4c15bc355bb37608f20a8",
+        "bytes": 3943,
+        "sha256": "27deab9d4b7ccf6a5df256af5b227a9fd46a8476aa527c8d127ca1f9ead05dc2",
         "lf_normalized_sha256": "eb406529377d4afe78d936e22753689196cee0e01bd4c15bc355bb37608f20a8",
         "text_lines": 91,
         "python": false,
@@ -6734,8 +6616,8 @@
       },
       {
         "path": "docs/adr/001-domain-owned-research-state.md",
-        "bytes": 1796,
-        "sha256": "96f743b1ba149fdec8aedd502e5aac612b44b67087061ebd95a6ee9c3dd2ea1a",
+        "bytes": 1836,
+        "sha256": "0831e6bbbfffc2031b75f59c3a17c8fc91507b4b264518a26439b031fff165d5",
         "lf_normalized_sha256": "96f743b1ba149fdec8aedd502e5aac612b44b67087061ebd95a6ee9c3dd2ea1a",
         "text_lines": 40,
         "python": false,
@@ -6744,9 +6626,9 @@
       },
       {
         "path": "docs/architecture/agent-loop.md",
-        "bytes": 9742,
-        "sha256": "401f55151ea37570f0faddaa3060639714d3833ee036f8582cad2075a371372f",
-        "lf_normalized_sha256": "212efdac76efbc49194e9cef476e0b491571cf6859af592e7d00ce3dc4abbab5",
+        "bytes": 9759,
+        "sha256": "d9bea1d011229b8d10bce071e2824ce7949ca7d07c8ba9f48394981fb1100400",
+        "lf_normalized_sha256": "028e96992639eb3bb899775ef1765843ef9e78bfe4338443ceacdafc661805f8",
         "text_lines": 281,
         "python": false,
         "scope": "support",
@@ -6754,9 +6636,9 @@
       },
       {
         "path": "docs/architecture/memory.md",
-        "bytes": 11594,
-        "sha256": "4b20d989ed3da052f3f51c4653606f0b4acace2cdf7bb1131145fcdc05f29aee",
-        "lf_normalized_sha256": "4b20d989ed3da052f3f51c4653606f0b4acace2cdf7bb1131145fcdc05f29aee",
+        "bytes": 12051,
+        "sha256": "75ec947862bb3a136250a3dc9cf283f0e6ffa9f01f672d6b6ef51a5f59e6aeae",
+        "lf_normalized_sha256": "30e8a8110040e5f197d35371093de6d72f54f04973041d719e42e616d882325f",
         "text_lines": 495,
         "python": false,
         "scope": "support",
@@ -6774,18 +6656,18 @@
       },
       {
         "path": "docs/architecture/openai-agents-sdk-migration-plan.md",
-        "bytes": 51268,
-        "sha256": "76d1935f7870a65f8636a7753cefe9181cb0daac30f849acd73d4e0e3c98c1cd",
-        "lf_normalized_sha256": "76d1935f7870a65f8636a7753cefe9181cb0daac30f849acd73d4e0e3c98c1cd",
-        "text_lines": 311,
+        "bytes": 54824,
+        "sha256": "42e87f707d61936086f1debc0cad837d89bbe46e599ed7070c8bf42a0c5b7338",
+        "lf_normalized_sha256": "d63d3a75713f0d739fbd2895f299392847f915556a9ffcdafadd197939c2b607",
+        "text_lines": 318,
         "python": false,
         "scope": "support",
         "artifact_category": null
       },
       {
         "path": "docs/architecture/rag-design-rationale.md",
-        "bytes": 25275,
-        "sha256": "563eb43a39f9930f7986d57a4333598cb59399c387c6828fb4c20e298cdfb51b",
+        "bytes": 25761,
+        "sha256": "2c2d075adf6013241dbd04ea41c80585697f946d6f6cedd1d57d46c10d641631",
         "lf_normalized_sha256": "563eb43a39f9930f7986d57a4333598cb59399c387c6828fb4c20e298cdfb51b",
         "text_lines": 486,
         "python": false,
@@ -6793,40 +6675,20 @@
         "artifact_category": null
       },
       {
-        "path": "docs/architecture/rag-notes.md",
-        "bytes": 5847,
-        "sha256": "2eedfde3fc9f27526829d389f8c78efc7489447174f98c3705fa4be294435e36",
-        "lf_normalized_sha256": "2eedfde3fc9f27526829d389f8c78efc7489447174f98c3705fa4be294435e36",
-        "text_lines": 169,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
         "path": "docs/architecture/rag.md",
-        "bytes": 18273,
-        "sha256": "4950df0076ac38ad401dba879717690ef8615f2e0680ce701e49766829d7e605",
-        "lf_normalized_sha256": "4950df0076ac38ad401dba879717690ef8615f2e0680ce701e49766829d7e605",
-        "text_lines": 770,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
-        "path": "docs/architecture/technical-stack.md",
-        "bytes": 25193,
-        "sha256": "3097005f4cdf4eead1afe886a8d7a3b0b7d9ac6ced1537986d729aa5569ab00e",
-        "lf_normalized_sha256": "d1ffa352566ce101e40a963edcff6a81f83538759eaf916a11332a26373cf01c",
-        "text_lines": 1025,
+        "bytes": 25924,
+        "sha256": "45c02c85d0768061381253a581740f4b594b1c0b28e65b50b7ac025c9c69abff",
+        "lf_normalized_sha256": "7129a7742ef58866ea605ef1079d37513f9813401ba97503865bdd9457b911b6",
+        "text_lines": 837,
         "python": false,
         "scope": "support",
         "artifact_category": null
       },
       {
         "path": "docs/architecture/tools.md",
-        "bytes": 11457,
-        "sha256": "3e9688c1a4444c49e306b42bffa4d63962464d5bac9abe261ef80ef01d668e8c",
-        "lf_normalized_sha256": "3e9688c1a4444c49e306b42bffa4d63962464d5bac9abe261ef80ef01d668e8c",
+        "bytes": 12524,
+        "sha256": "f708c939b53a12cb8dea8696025ed684755ced1a981c635f69f8420631b1a560",
+        "lf_normalized_sha256": "28561a7015169ad18ffc4ddc190fcd1f3a1f8c41c88e5367ab91402df335e6cf",
         "text_lines": 339,
         "python": false,
         "scope": "support",
@@ -6834,9 +6696,9 @@
       },
       {
         "path": "docs/archive/README.md",
-        "bytes": 814,
-        "sha256": "1452b39b7d7328e0d964e3005055bb0b4d021daa8195c936c5f95ea34a545b4a",
-        "lf_normalized_sha256": "1452b39b7d7328e0d964e3005055bb0b4d021daa8195c936c5f95ea34a545b4a",
+        "bytes": 919,
+        "sha256": "e36b4b3ab78769c3cebb5e2ecacaa269db1e88adf6f4ca5ce5750cfc9166bf94",
+        "lf_normalized_sha256": "fc3adc88c8dfdcbfb7b6f3d7358dbdd815b05b307a91f75a90d904d653002c43",
         "text_lines": 14,
         "python": false,
         "scope": "support",
@@ -6853,21 +6715,11 @@
         "artifact_category": "archived_material"
       },
       {
-        "path": "docs/audits/langgraph-agent-server-overlap-audit.md",
-        "bytes": 114928,
-        "sha256": "2420ccba26e3269ff88e9369609a2cc9f9ac62d8273e73bdb7b24141b7f2bbfd",
-        "lf_normalized_sha256": "2420ccba26e3269ff88e9369609a2cc9f9ac62d8273e73bdb7b24141b7f2bbfd",
-        "text_lines": 1018,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
         "path": "docs/audits/pre-openai-sdk-cleanup.md",
-        "bytes": 29213,
-        "sha256": "f3be3ac7800529e9b2f3ad3aef83f605e159e78b4bce84de21f8c3811d07e697",
-        "lf_normalized_sha256": "d6507ecb1aa0c8ca6fb7e0f56d6e0754dc6b3320890b9a11ab6800e3e65f0360",
-        "text_lines": 394,
+        "bytes": 29490,
+        "sha256": "693d72cd7bdf582ec81963e43a07d74df38ed851195efdb46bb336b7619ab214",
+        "lf_normalized_sha256": "3da078ab6ae6285acd80269add24affffdac126e9eb7b233f7b218e564a71a04",
+        "text_lines": 396,
         "python": false,
         "scope": "support",
         "artifact_category": null
@@ -6875,8 +6727,8 @@
       {
         "path": "docs/audits/pre-openai-sdk-inventory.json",
         "bytes": 382288,
-        "sha256": "107c20ca2816075e485b9f100461bddee65990eb9e9788b757f8af377eec065c",
-        "lf_normalized_sha256": "c10cfbc3b11b47228f1ce0e6ede30b66341f6cf0e61862fe79510455127c8674",
+        "sha256": "d37b1906a229426636aac95203e5fd126ac82df091b55908bfd0b7ef18aae774",
+        "lf_normalized_sha256": "b634b46cb058ad90d55aa41b60f7916169184ad8ffc6a478a0b00fba5942183b",
         "text_lines": 10236,
         "python": false,
         "scope": "support",
@@ -6884,9 +6736,9 @@
       },
       {
         "path": "docs/evaluation/rag-retrieval-test-records.md",
-        "bytes": 59073,
-        "sha256": "a3e3f9acdfd6901b2db84c3971bbf936e00a004164867eef69b9eac60082310e",
-        "lf_normalized_sha256": "a3e3f9acdfd6901b2db84c3971bbf936e00a004164867eef69b9eac60082310e",
+        "bytes": 59815,
+        "sha256": "46009dc0ac1d1c4827ba8ddedd5e7ecae33f632163046f1ffcb2b81853233d5c",
+        "lf_normalized_sha256": "132a34804b2ada94ef018a0564d84300ce62bb5d25d8a80af63d9610e9d87330",
         "text_lines": 742,
         "python": false,
         "scope": "support",
@@ -6894,8 +6746,8 @@
       },
       {
         "path": "docs/examples/arxiv.md",
-        "bytes": 11612,
-        "sha256": "0c0ba38a0ed062455a6e86305c528159d05e8a6eee231af8499e9f209fee9aa1",
+        "bytes": 11751,
+        "sha256": "f08ea4997381d78ba61953a80650086a6d193f78b1f7dacdbd9a846a269e9320",
         "lf_normalized_sha256": "0c0ba38a0ed062455a6e86305c528159d05e8a6eee231af8499e9f209fee9aa1",
         "text_lines": 139,
         "python": false,
@@ -6904,8 +6756,8 @@
       },
       {
         "path": "docs/examples/inference-market-gpt45.md",
-        "bytes": 11907,
-        "sha256": "f3f1cf2af3802d3d9b68799db154b7b75ff7d76cc51327c5a400071bb23220ca",
+        "bytes": 12026,
+        "sha256": "c73b1978363bc6bca9ff3d77723e5fe7716254edf8e284d17950c386ad7f6a26",
         "lf_normalized_sha256": "f3f1cf2af3802d3d9b68799db154b7b75ff7d76cc51327c5a400071bb23220ca",
         "text_lines": 119,
         "python": false,
@@ -6914,8 +6766,8 @@
       },
       {
         "path": "docs/examples/inference-market.md",
-        "bytes": 10291,
-        "sha256": "ed643180a7d3b5bf57ec76a01fa4a6c2f7e4b8be1f0457b0a8ca2ffb622c0628",
+        "bytes": 10416,
+        "sha256": "7f5b1a0001537517f3ca8ad66b30722e2103bb57d33f1ac2b4c20c3a005f0d18",
         "lf_normalized_sha256": "ed643180a7d3b5bf57ec76a01fa4a6c2f7e4b8be1f0457b0a8ca2ffb622c0628",
         "text_lines": 125,
         "python": false,
@@ -6924,8 +6776,8 @@
       },
       {
         "path": "docs/examples/pubmed.md",
-        "bytes": 13689,
-        "sha256": "f73ea48b2e53556b24156fe968cd6814aab44891b7f91ecb344fbbf10e38d241",
+        "bytes": 13851,
+        "sha256": "4d2ee6b5630e64e7bd34e7317d82c8335ef5a23547138a4303df9fb15f928733",
         "lf_normalized_sha256": "f73ea48b2e53556b24156fe968cd6814aab44891b7f91ecb344fbbf10e38d241",
         "text_lines": 162,
         "python": false,
@@ -6933,40 +6785,20 @@
         "artifact_category": null
       },
       {
-        "path": "docs/graphrag_effectiveness.md",
-        "bytes": 6201,
-        "sha256": "a88120aba6627ccea5a2f512874529082bcc81ed1b03568fd698176079b4b33b",
-        "lf_normalized_sha256": "a88120aba6627ccea5a2f512874529082bcc81ed1b03568fd698176079b4b33b",
-        "text_lines": 199,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
-        "path": "docs/guide/project-readme.md",
-        "bytes": 19916,
-        "sha256": "fcac62e7b4a58e93f1990e5bde25160a16e4eeba7352e820ea3d20a4cc1598a3",
-        "lf_normalized_sha256": "cf51083d6c5d1b78d6557ed8f84ef2172655fedb62b0ab14e86287b1e60d8c8e",
-        "text_lines": 321,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
         "path": "docs/guide/social-media-skill.md",
-        "bytes": 2901,
-        "sha256": "d98d4f8bf8472137d9d41453983f5c2b66346613712a001c1375d358be407f9e",
-        "lf_normalized_sha256": "d98d4f8bf8472137d9d41453983f5c2b66346613712a001c1375d358be407f9e",
-        "text_lines": 126,
+        "bytes": 5663,
+        "sha256": "6354d1a0f8752ceb241ca7c9b61f25c3bb7c0ab5808e508aadf47f51ddd1c026",
+        "lf_normalized_sha256": "f6c12d425e632cb2215eb2d25b7877633131e82b628a9ed3618ac93cb8064298",
+        "text_lines": 171,
         "python": false,
         "scope": "support",
         "artifact_category": null
       },
       {
         "path": "docs/index.md",
-        "bytes": 3682,
-        "sha256": "5cd33d4998b530af739bc20c66078a2fc0d3debd1f8f178d463044a9675d1a78",
-        "lf_normalized_sha256": "98ebf3fe9f12e607c49e5e72df67a954f3f748ae8437935a24d856e74fd9dcea",
+        "bytes": 3827,
+        "sha256": "df34c763a7dfdd757f56364c35df1fa16fdcffd218566f551851741febe88d79",
+        "lf_normalized_sha256": "c733e062847bd038c45b048b3d9ad403049fe3200c701ba65d1852049cd36a3d",
         "text_lines": 61,
         "python": false,
         "scope": "support",
@@ -6974,8 +6806,8 @@
       },
       {
         "path": "docs/interview-architecture/README.md",
-        "bytes": 1186,
-        "sha256": "851541b85a2b3dfd543ce981683ad939ba83da9b743c7d92a21839defad2afa3",
+        "bytes": 1212,
+        "sha256": "002baddb4b35985140752efa8c0c2f596583309a89ab838c3a0478187a843bdf",
         "lf_normalized_sha256": "851541b85a2b3dfd543ce981683ad939ba83da9b743c7d92a21839defad2afa3",
         "text_lines": 26,
         "python": false,
@@ -6984,8 +6816,8 @@
       },
       {
         "path": "docs/interview-architecture/architecture-decisions.md",
-        "bytes": 3621,
-        "sha256": "97822ab6c0327a67f3fd0cfb9951fdd53d81b55fc2508c40fc0e97455092fb5d",
+        "bytes": 3716,
+        "sha256": "c3c104d8b0113318d5b46de60e2b3875e52724e4c0f2224930bc5f7c5f56679b",
         "lf_normalized_sha256": "97822ab6c0327a67f3fd0cfb9951fdd53d81b55fc2508c40fc0e97455092fb5d",
         "text_lines": 95,
         "python": false,
@@ -7014,18 +6846,18 @@
       },
       {
         "path": "docs/interview-architecture/interview-question-bank.md",
-        "bytes": 9341,
-        "sha256": "97a52080095f6cdebd5cc75e3bd0e3dcc32542228bb03ea9d4caa41c3c733188",
-        "lf_normalized_sha256": "97a52080095f6cdebd5cc75e3bd0e3dcc32542228bb03ea9d4caa41c3c733188",
-        "text_lines": 241,
+        "bytes": 10128,
+        "sha256": "499fe1f5abd0366b244f9ce91e28166082901ed69d629a9eee61fbda07a364f1",
+        "lf_normalized_sha256": "90df9c4a3fd76e52d877f0811e4bd638ff4a0c2c1ff711b5ebac15c2c9130e78",
+        "text_lines": 244,
         "python": false,
         "scope": "support",
         "artifact_category": null
       },
       {
         "path": "docs/interview-architecture/interview-source-map.md",
-        "bytes": 4677,
-        "sha256": "8753e6fa5e5746897da75fb10aa942e9df6c8e3861aa39300534120da7a9845f",
+        "bytes": 4795,
+        "sha256": "05937a050d4a0d219d70871acfb88a891a88c09365bb227ae3a3cfecc434e000",
         "lf_normalized_sha256": "8753e6fa5e5746897da75fb10aa942e9df6c8e3861aa39300534120da7a9845f",
         "text_lines": 118,
         "python": false,
@@ -7054,18 +6886,18 @@
       },
       {
         "path": "docs/interview-architecture/risk-register.md",
-        "bytes": 4385,
-        "sha256": "e375d2788bb180b63b6b7016751d0e7695b7d7101b8df74614041e4ec42dfb4d",
-        "lf_normalized_sha256": "e375d2788bb180b63b6b7016751d0e7695b7d7101b8df74614041e4ec42dfb4d",
-        "text_lines": 31,
+        "bytes": 5205,
+        "sha256": "3e48935f10f13e390cc0ea063371d7b94fc930a939881d779d56bd0590b0012e",
+        "lf_normalized_sha256": "dcf7c5e57640eae7e938109961b26c0816343154a5ccd7199c41b8ee2a6b6696",
+        "text_lines": 33,
         "python": false,
         "scope": "support",
         "artifact_category": null
       },
       {
         "path": "docs/interview-architecture/slide-outline.md",
-        "bytes": 2398,
-        "sha256": "f82cacdd0f96b9291fca1cb398ac688a8880e03ee7e677014e50d025a5f21d85",
+        "bytes": 2434,
+        "sha256": "40199a3fde6c3eaa63f480f47cef058b85d728664b3b1695a094916b9652b382",
         "lf_normalized_sha256": "f82cacdd0f96b9291fca1cb398ac688a8880e03ee7e677014e50d025a5f21d85",
         "text_lines": 36,
         "python": false,
@@ -7074,8 +6906,8 @@
       },
       {
         "path": "docs/knowledge/data-governance.md",
-        "bytes": 3821,
-        "sha256": "1b6294dc622fb8e50cb487f25b141691c74c84d01fe994d75ff4e328f1291a56",
+        "bytes": 3896,
+        "sha256": "ecd8b31959a8f008038dc76c3e1c7501f250e0a47471cc0777ec25eccb7cc212",
         "lf_normalized_sha256": "1b6294dc622fb8e50cb487f25b141691c74c84d01fe994d75ff4e328f1291a56",
         "text_lines": 75,
         "python": false,
@@ -7084,8 +6916,8 @@
       },
       {
         "path": "docs/knowledge/github-testsets.md",
-        "bytes": 1580,
-        "sha256": "53dec4c5ff2ac4381b90df5677e0202fe4a86e2c1ab26de236a92ce81f7c3f81",
+        "bytes": 1603,
+        "sha256": "d4a88dc24cf9a651f7b35c57484dc29bc7e19666a7537aecdab925a5d1850e22",
         "lf_normalized_sha256": "53dec4c5ff2ac4381b90df5677e0202fe4a86e2c1ab26de236a92ce81f7c3f81",
         "text_lines": 23,
         "python": false,
@@ -7094,8 +6926,8 @@
       },
       {
         "path": "docs/knowledge/misleading-archive.md",
-        "bytes": 76474,
-        "sha256": "2e1ed06b99d7c0390abc3e328ede7fc658f46e2c14a805409cefd7a36fa69347",
+        "bytes": 76920,
+        "sha256": "bf5dfa15cf3da016855d39c38a981469bbb12626bf4d24630a73a2f88e7d99ee",
         "lf_normalized_sha256": "2e1ed06b99d7c0390abc3e328ede7fc658f46e2c14a805409cefd7a36fa69347",
         "text_lines": 446,
         "python": false,
@@ -7104,8 +6936,8 @@
       },
       {
         "path": "docs/knowledge/team-handbook.md",
-        "bytes": 3241,
-        "sha256": "ec5403f53bbd36d33c7b0aa5e893613da6cf558c7ea14d55dc977c246b88fc7e",
+        "bytes": 3312,
+        "sha256": "b717e86c59c61cef7f5c6df9cf3639d1d59c3ab159aeb65f7ac2572be1b3c119",
         "lf_normalized_sha256": "ec5403f53bbd36d33c7b0aa5e893613da6cf558c7ea14d55dc977c246b88fc7e",
         "text_lines": 71,
         "python": false,
@@ -7114,8 +6946,8 @@
       },
       {
         "path": "docs/project-learning/README.md",
-        "bytes": 2212,
-        "sha256": "0968586b5d685ba70fca79b98fa3bb975a4ae178cb2e579b2f23e6515b6e363c",
+        "bytes": 2245,
+        "sha256": "fa6b1a44a857b8b526ef7e7d3db5edb14d3620d738eb930ed81a60f8cc18d88d",
         "lf_normalized_sha256": "0968586b5d685ba70fca79b98fa3bb975a4ae178cb2e579b2f23e6515b6e363c",
         "text_lines": 33,
         "python": false,
@@ -7124,8 +6956,8 @@
       },
       {
         "path": "docs/project-learning/archive/README.md",
-        "bytes": 475,
-        "sha256": "ddb1c74c01d407c20ebe6fe33ce2cbfde1dcebe8e2fee92f18b2daacb5468932",
+        "bytes": 480,
+        "sha256": "20aba3619e7cfb523d5e148ef1e16965e79c12d86ef0d4a8d992d4fb3d9648d8",
         "lf_normalized_sha256": "ddb1c74c01d407c20ebe6fe33ce2cbfde1dcebe8e2fee92f18b2daacb5468932",
         "text_lines": 5,
         "python": false,
@@ -7144,8 +6976,8 @@
       },
       {
         "path": "docs/project-learning/assets/README.md",
-        "bytes": 357,
-        "sha256": "a0436ebd732b3ca95ce9fae4aea8cf5c44c0508c4299a9717cec755f0a2c6c40",
+        "bytes": 362,
+        "sha256": "963a44af9d682d16b2866beb50fe00334a98336d734ea6f3c980ffbe258cc6a7",
         "lf_normalized_sha256": "a0436ebd732b3ca95ce9fae4aea8cf5c44c0508c4299a9717cec755f0a2c6c40",
         "text_lines": 5,
         "python": false,
@@ -7264,8 +7096,8 @@
       },
       {
         "path": "docs/project-learning/slide-outline.md",
-        "bytes": 4274,
-        "sha256": "59b18f7ce0bffd451748abe24d497df4df63fed20c9df2dd66711f95427b7981",
+        "bytes": 4324,
+        "sha256": "6b5c77c0864fb9e770dc52d260fd6306f2652aaee90482a5f65e369d7d04148d",
         "lf_normalized_sha256": "59b18f7ce0bffd451748abe24d497df4df63fed20c9df2dd66711f95427b7981",
         "text_lines": 50,
         "python": false,
@@ -7274,8 +7106,8 @@
       },
       {
         "path": "docs/project-learning/source-learning-index.md",
-        "bytes": 9427,
-        "sha256": "03f3e1076766393ec1731f9c99414a28d9651771cf456c64403cabadb8c72721",
+        "bytes": 9663,
+        "sha256": "dc51a7a003f9383a5446bdb027b77bb3cb9c3f511777fe753a2e2b87a455388c",
         "lf_normalized_sha256": "03f3e1076766393ec1731f9c99414a28d9651771cf456c64403cabadb8c72721",
         "text_lines": 236,
         "python": false,
@@ -7284,70 +7116,20 @@
       },
       {
         "path": "docs/project-learning/sources.md",
-        "bytes": 5984,
-        "sha256": "dc5ce804f8ca49d94395d1baa659f85f154cad63b35e27ba31ad1a1b6b264e21",
-        "lf_normalized_sha256": "dc5ce804f8ca49d94395d1baa659f85f154cad63b35e27ba31ad1a1b6b264e21",
-        "text_lines": 133,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
-        "path": "docs/project/agents.md",
-        "bytes": 2777,
-        "sha256": "709703a97ecbb3c3a1bdc850a63d7e51ff941ad082f666c4b6916668e4f311cf",
-        "lf_normalized_sha256": "25d92e14515d78960cf826d21b26c651419c4efb6d654d6b076c993f36104e49",
-        "text_lines": 71,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
-        "path": "docs/project/claude.md",
-        "bytes": 2777,
-        "sha256": "dc08854e6c3895b94d9d3fbac57c387d628c4732834c107598d5f1b471f4804a",
-        "lf_normalized_sha256": "60aac64eece84325df4e580075a9ba031884bdd1a96a203afe34beb053fc18aa",
-        "text_lines": 71,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
-        "path": "docs/project/project-review-and-improvements.md",
-        "bytes": 10131,
-        "sha256": "dbf893b1761e68d031078949c18babbd71d2d2d81ba8dec88fde21237ccd2e9f",
-        "lf_normalized_sha256": "dbf893b1761e68d031078949c18babbd71d2d2d81ba8dec88fde21237ccd2e9f",
-        "text_lines": 190,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
-        "path": "docs/public_opinion_agents.md",
-        "bytes": 2541,
-        "sha256": "f3b1658bba774383cc016cef19e9fc820caf8613edf414cb7dec536084294395",
-        "lf_normalized_sha256": "f3b1658bba774383cc016cef19e9fc820caf8613edf414cb7dec536084294395",
-        "text_lines": 72,
+        "bytes": 6658,
+        "sha256": "b7b591f892c248bc04f30cea00f386c6f1fdd2aa4987334cfbcc15adf30becf9",
+        "lf_normalized_sha256": "9f91b036818056de1b72dd04f84ac5a8fdaa430ad3e929e2adc70010746fec12",
+        "text_lines": 136,
         "python": false,
         "scope": "support",
         "artifact_category": null
       },
       {
         "path": "docs/research-graph-context-harness.md",
-        "bytes": 6022,
-        "sha256": "2133191ff67a574b8bc17510a6638d163bbb8103d6b26e71ae3c8b1f87dfda08",
+        "bytes": 6160,
+        "sha256": "0dae21f7bfaa2802a41662d39df18c06df785607df7ce8588d7172d44b371b7a",
         "lf_normalized_sha256": "2133191ff67a574b8bc17510a6638d163bbb8103d6b26e71ae3c8b1f87dfda08",
         "text_lines": 138,
-        "python": false,
-        "scope": "support",
-        "artifact_category": null
-      },
-      {
-        "path": "docs/social_media_skill_mcp.md",
-        "bytes": 5204,
-        "sha256": "1ed5c6b74051beacae16334f8e826c959382959c66680f09b5a727982843d3eb",
-        "lf_normalized_sha256": "1ed5c6b74051beacae16334f8e826c959382959c66680f09b5a727982843d3eb",
-        "text_lines": 169,
         "python": false,
         "scope": "support",
         "artifact_category": null
@@ -10206,7 +9988,26 @@
       "tests/test_social_media_adapter_contracts.py"
     ],
     "removed": [
+      ".trae/specs/integrate-plan-execute-into-deep-researcher/checklist.md",
+      ".trae/specs/integrate-plan-execute-into-deep-researcher/spec.md",
+      ".trae/specs/integrate-plan-execute-into-deep-researcher/tasks.md",
+      ".trae/specs/split-rag-config/checklist.md",
+      ".trae/specs/split-rag-config/spec.md",
+      ".trae/specs/split-rag-config/tasks.md",
+      "CHANGELOG_general_mode_removal.md",
+      "docs/ARCHITECTURE_OPTIMIZATION_LOG.md",
+      "docs/ARCHITECTURE_OPTIMIZATION_LOG_CN.md",
+      "docs/architecture/rag-notes.md",
+      "docs/architecture/technical-stack.md",
+      "docs/audits/langgraph-agent-server-overlap-audit.md",
+      "docs/graphrag_effectiveness.md",
+      "docs/guide/project-readme.md",
       "docs/project-learning/project-learning.pptx",
+      "docs/project/agents.md",
+      "docs/project/claude.md",
+      "docs/project/project-review-and-improvements.md",
+      "docs/public_opinion_agents.md",
+      "docs/social_media_skill_mcp.md",
       "evaluation/cost_profile/af_final.txt",
       "evaluation/cost_profile/after_final.txt",
       "evaluation/cost_profile/after_v4flash_launch.cmd",
@@ -10221,9 +10022,18 @@
       ".github/workflows/ci.yml",
       "AGENTS.md",
       "README.md",
+      "docs/.vitepress/config.mts",
+      "docs/architecture/agent-loop.md",
+      "docs/architecture/memory.md",
+      "docs/architecture/rag.md",
       "docs/architecture/tools.md",
-      "docs/audits/langgraph-agent-server-overlap-audit.md",
+      "docs/evaluation/rag-retrieval-test-records.md",
+      "docs/guide/social-media-skill.md",
+      "docs/index.md",
+      "docs/interview-architecture/interview-question-bank.md",
+      "docs/interview-architecture/risk-register.md",
       "docs/project-learning/README.md",
+      "docs/project-learning/sources.md",
       "evaluation/cost_profile/ROUND2_VERIFICATION_REPORT.md",
       "package.json",
       "pyproject.toml",

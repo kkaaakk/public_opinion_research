@@ -2,6 +2,8 @@
 
 基线：`origin/main @ 12e2f0e`。回答中的升级方案均为 `PROPOSED`，除非明确写为当前实现。
 
+这里的“当前实现”指上述学习基线；保留历史源码映射用于面试复盘。新运行时的实施边界见 [OpenAI Agents SDK 迁移计划](../architecture/openai-agents-sdk-migration-plan.md)。
+
 ## Q1 为什么不用微服务？
 
 ### 30 秒回答
@@ -121,7 +123,8 @@
 
 - `deep_researcher.py:research_review()`
 - `deep_researcher.py:route_after_research_review()`
-- `docs/ARCHITECTURE_OPTIMIZATION_LOG_CN.md`
+- [固定版本的中文成本回顾](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/docs/ARCHITECTURE_OPTIMIZATION_LOG_CN.md)
+- [保留的 Before/After 成本比较](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/evaluation/cost_profile/BEFORE_AFTER_COST_COMPARISON.md)
 
 ## Q9 为什么需要 Context Compression？
 

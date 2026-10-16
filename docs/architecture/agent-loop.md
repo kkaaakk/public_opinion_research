@@ -6,7 +6,7 @@
 | --- | --- |
 | 阅读目标 | 理解主图如何生成 research brief、执行 Public Opinion 多 Agent 子图并编译最终报告 |
 | 关键代码 | `src/open_deep_research/deep_researcher.py`、`state.py`、`utils.py`、`budget.py` |
-| 上游文档 | [当前技术栈说明](technical-stack.md) |
+| 上游文档 | [模块与迁移边界](openai-agents-sdk-migration-plan.md) |
 | 下游文档 | [Tools 模块说明](tools.md)、[RAG 模块说明](rag.md)、[Memory 模块说明](memory.md) |
 
 当前实现只有主图和一个 Public Opinion 子图。主图中的

@@ -186,7 +186,7 @@ flowchart TD
 | 研究任务 | 已校验 topic/images、受信 principal、领域 Configuration → research_session_id / run_id | API/Harness 创建，浏览器不得指定别人的 owner 或供应商密钥 |
 | 角色装配 | AgentSpec、任务、角色状态、工具权限、模型选择 → 本次可运行 SDK Agent | runtime 装配；Spec 不接收 SDK/LangGraph 内部对象 |
 | 模型上下文 | 工作消息 + role memory + protected evidence context → 实际下一次输入 | 证据上下文策略决定内容，runtime 适配 Responses items；预算估算必须用同一实际输入和 tool schemas |
-| 工具执行 | principal/role/run + 校验后的参数 + call_id → 业务结果 envelope | 工具实现授权资源，返回来源、状态、usage/receipt；完成但观察失败不能直接重放副作用 |
+| 工具执行 | principal/role/run + 校验后的参数 + call_id → 业务结果 envelope | 工具实现授权资源，返回来源、状态、usage/receipt；副作用使用由研究/任务派生的稳定 operation_id 幂等键，不能只依赖重试后重新生成的 tool_call_id；完成但观察失败不能直接重放副作用 |
 | 证据写入 | 已完成 tool batch → 来源/证据回执、上下文 delta | ResearchWorkspace；写入成功后才压缩相应原始结果 |
 | usage | SDK/provider 实际 usage + 独立本地工具 usage → 运行增量 | Harness 统一结算；SDK 嵌套 totals 与项目 capture 不能双计。缺少数据保留 unavailable，不捏造零/Token |
 | 业务状态 | 单个角色/步骤的结果 + 预期状态版本 → 原子提交及下一步 | workflow/Harness；保留按角色合并、完整章节和 followup 去重 |
@@ -195,6 +195,8 @@ flowchart TD
 | 档案 | 终态/已完成阶段事件 → 幂等 HistoryRecord 投影 | 业务 archive；不依赖 HTTP subscriber 完整消费，也不依赖 Trace 能随时查询 |
 
 标识至少区分 `research_session_id`（研究会话）、`run_id`（一次执行/恢复尝试的应用资源）、`agent_invocation_id`、`tool_call_id`、`trace_id`。SDK `RunResult` 不是应用数据库中 Run 资源的替代品；SDK Trace ID 也不能当业务 owner。正式实施需定义恢复使用原 run 还是新 attempt，并保持一个会话可对应多个执行尝试。
+
+切换与回滚只影响新研究接纳；已接纳任务持久绑定 backend、SDK/Agent 定义版本和业务 ID，禁止失败后自动切另一后端再次执行。待运行任务和待审批快照继续在原版本完成、排空或显式停止，不能搬回旧入口冒充恢复。数据 schema 先加字段/索引并兼容读取，保留旧 ID 映射；owner 无法判定的旧记录隔离而不默认公开。回滚仍保留安全修复、usage 对账和档案补偿，恢复备份不等于撤销外部副作用。
 
 ### 4.3 关键决策记录（Proposed，供正式迁移实现评审）
 
@@ -211,7 +213,7 @@ flowchart TD
 
 ## 5. 旧 LangGraph Agent Server 审计的迁移待办
 
-已阅读 [旧审计](../audits/langgraph-agent-server-overlap-audit.md) 的 F01–F24。其证据日期为 2026-10-14，含当时本地状态与环境；引用问题必须重新对照当前分支，不能把旧版本/历史测试数当本次结果。以下保留仍适用的工程问题，撤销平台专属的“换 Agent Server 即可获得”的实施方向。
+已阅读 [旧审计的固定 Git 历史版本](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/docs/audits/langgraph-agent-server-overlap-audit.md) 的 F01–F24。旧报告已从当前源码树删除，原始取证、离线探针和历史环境仍可从该提交追溯。其证据日期为 2026-10-14，含当时本地状态与环境；引用问题必须重新对照当前分支，不能把旧版本/历史测试数当本次结果。以下保留仍适用的工程问题，撤销平台专属的“换 Agent Server 即可获得”的实施方向。
 
 | 旧项 | 当前问题/优先级 | 转为 OpenAI SDK 的行动和验收 |
 | --- | --- | --- |
@@ -283,13 +285,18 @@ PR #12 的 RAG 配置整合作为独立参考保留，不因此提前整体合�
 | Vision | 用户图与知识图的 prompt/路径不同；大小/数量/MIME/失败降级；无图零调用 | `test_query_images.py`、`test_rag.py` |
 | 预算与报告 | 每次真实尝试计数，未知 usage 不猜；并发 delta 合并一次；工具/搜索限额；最终报告预留；完整章节保留 | `test_budget.py`、`test_token_accounting.py`、`test_report_section_budget.py`、`test_role_reports_propagation.py` |
 | MCP/API | list_tools/call_tool schema、分页、错误、权限、HTTP app import 与 mock transport；部署测试独立报告 | `test_social_media_skill.py`、`test_rag_mcp_server.py`、`test_web_research.py` |
-| 历史/记忆 | 完成/失败/取消保留阶段报告；旧 timestamps/档案兼容；原始对话与 memory 索引不丢 | `test_web_history.py`、`test_state_architecture.py`、`test_rag.py` |
+| 输入与展示安全 | 保留 constant-time Token 比较、validation 错误不回显敏感值和 DOMPurify fail-closed；实际 body 字节限制覆盖缺失/分块 Content-Length；本地路径、知识库/DB/MCP URL 只能来自受信配置 | 既有 Web/Vision 负向测试；需补分块超限、越界配置、净化器不可用和多用户路径权限测试 |
+| 历史/记忆 | 完成/失败/取消保留阶段报告；旧 timestamps/档案兼容；原文/摘要类型、稳定 memory_id、pending 索引批次和查询时补偿保留；临时图片上下文不写原始记忆/索引；明确 freshness、过期记忆和删除传播 | `test_web_history.py`、`test_state_architecture.py`、`test_rag.py`；需补退出时未索引批次的补偿 |
 | SDK adapter | tools/schema/stream/usage/timeout/provider errors、nested agent 与 handoff 的实际合同 | 现有模型测试作参照；需新增 SDK fake/in-memory 测试，不能用旧 fake 测试证明新 runtime |
 | 身份/审批 | 跨用户 create/read/stream/cancel/resume 拒绝；同一审批只消费一次；批准的计划不重算 | 需新增 API 认证/租户/并发审批测试；旧认证问题仍登记 P0 条件风险 |
+| 流与取消 | SSE 分块/跨行/空帧、事件去重和错误/暂停/终态正确；EOF 未收到终态不能报成功；重连不 create 新任务，游标/事件保留过期后读取状态/报告；覆盖 queued/running 取消、取消与完成竞争及不可取消工具迟到结算 | 需新增真实 ASGI/TCP 断线及 worker 测试；fake CancelledError 与完整消费响应不能替代 |
 | 耐久/副作用 | kill worker/重复投递/lease 过期后不重复不可逆操作；历史补偿；断线不重跑；取消终态一致 | 需真实进程/存储集成测试，SDK Session 测试不能替代 |
 | 观测/轨迹 | live/replay 相同、工具关系真实、错误类别完整、无 secret、无重复调用/usage | `test_langsmith_integration.py` + 保留分支轨迹 fixtures；需 SDK 事实 adapter 测试 |
 | sandbox（若启用） | host 越界、网络、mount/credential、并发空间、超时进程、快照恢复 | 需 Docker/选定 hosted provider 隔离测试；本次未启用 |
 | 工程质量 | Ruff/既有类型检查、关键入口 import、依赖解析和 package boundaries 全部明确；原有失败不被跳过掩盖 | `test_architecture_contract.py`、`test_package_boundaries.py`、CI 配置与准备审计 |
+| 成本与研究质量 | 分别测量搜索/逐页摘要扇出、同 URL 跨轮重复、最大上下文、压缩自身成本与后续节省、role report/章节重复输入；质量覆盖 gap 发现、无谓 followup、补证完成、冲突、引用与角色越界，不能只评价文笔或 Token 降幅 | 保留固定 case、rubric、cost baseline；正式迁移先同 fixture 离线对照，真实付费 benchmark 另行授权 |
+
+历史架构日志的仍适用结论是报告结构规划与动态证据补查分层，保留“研究→复核→缺口补查→再复核”；补查复用既有角色，不为纯路由另加 Supervisor/Followup Agent，按 gap 返回新增证据、引用、冲突和任务状态，避免无依据重复整轮研究，同时保全正式角色报告/证据合同。更窄的上下文和 Evidence Delta 属后续独立优化，不与 SDK 替换捆绑。本项目已存在 raw search 和写入回执后压缩路径，旧日志的单次调用数不能直接当当前故障或验收阈值。原设计与成本证据见 [固定历史日志](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/docs/ARCHITECTURE_OPTIMIZATION_LOG.md) 及 [保留的成本验证记录](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/evaluation/cost_profile/ROUND2_VERIFICATION_REPORT.md)。
 
 ### 6.3 可复现的离线基线入口
 

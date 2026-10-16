@@ -266,19 +266,19 @@ Error executing tool: ...
 
 ## 8. 工具提示词
 
-当前入口是 [`build_dynamic_tool_prompt(tools, configurable)`](../../src/open_deep_research/tools/registry.py#L258)，根据本次实际绑定的工具列表按领域生成名称与简短说明。
+当前入口是 [`build_dynamic_tool_prompt(tools, configurable)`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/tools/registry.py#L258)，根据本次实际绑定的工具列表按领域生成名称与简短说明。
 
 业务角色调用链：
 
-1. [`_business_agent_tools`](../../src/open_deep_research/runtime/business_agent.py#L194) 根据配置装配工具，再按角色的 `allowed_domains` 过滤，未知或未分类领域默认拒绝。
-2. [`_role_tool_prompt`](../../src/open_deep_research/runtime/business_agent.py#L173) 把过滤后的同一工具列表传给 `build_dynamic_tool_prompt`，补充角色领域及实际工具名称白名单。
-3. [`PublicOpinionAgentSpec.format_system_prompt`](../../src/open_deep_research/public_opinion_agents/base.py#L28) 将生成的 `retrieval_tool_prompt` 注入角色系统提示词。
+1. [`_business_agent_tools`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/runtime/business_agent.py#L194) 根据配置装配工具，再按角色的 `allowed_domains` 过滤，未知或未分类领域默认拒绝。
+2. [`_role_tool_prompt`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/runtime/business_agent.py#L173) 把过滤后的同一工具列表传给 `build_dynamic_tool_prompt`，补充角色领域及实际工具名称白名单。
+3. [`PublicOpinionAgentSpec.format_system_prompt`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/public_opinion_agents/base.py#L28) 将生成的 `retrieval_tool_prompt` 注入角色系统提示词。
 
 动态说明始终要求检索后单独调用 `think_tool` 反思；只有实际列表包含 `rag_search` 时，才加入基于 SOURCE 引用作出本地知识或记忆声明的约束。允许 RAG 的角色若没有取得 `rag_search`，`_role_tool_prompt` 会说明内部资料或审批依据缺失时应明确标记，避免编造。
 
-[`get_research_tool_prompt(configurable)`](../../src/open_deep_research/tools/registry.py#L213) 是已标记弃用的静态兼容 helper，仍经 `utils.py` 导出；当前四角色运行链使用上述动态入口。`retrieval_mode` 控制前置工具装配，提示词最终以角色过滤后的实际工具集合为准。
+[`get_research_tool_prompt(configurable)`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/tools/registry.py#L213) 是已标记弃用的静态兼容 helper，仍经 `utils.py` 导出；当前四角色运行链使用上述动态入口。`retrieval_mode` 控制前置工具装配，提示词最终以角色过滤后的实际工具集合为准。
 
-现有契约验证可参见 [角色工具隔离测试](../../tests/test_public_opinion_tool_permissions.py#L53)、[角色 prompt 契约测试](../../tests/test_public_opinion_agents.py#L59) 和 [无 RAG 图消费测试](../../tests/test_graph_consumer_without_rag.py#L27)；后者验证缺失 RAG 提示及实际工具白名单进入模型上下文。
+现有契约验证可参见 [角色工具隔离测试](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/test_public_opinion_tool_permissions.py#L53)、[角色 prompt 契约测试](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/test_public_opinion_agents.py#L59) 和 [无 RAG 图消费测试](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/test_graph_consumer_without_rag.py#L27)；后者验证缺失 RAG 提示及实际工具白名单进入模型上下文。
 
 ## 9. 扩展新工具
 

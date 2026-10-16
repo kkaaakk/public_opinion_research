@@ -120,7 +120,7 @@ RAG/DSH Worktree 的本地 tip 与 PR head 不同，没有重置它们。
 
 完整读取备份的 306 个 Git blob，对 158 个 Python 文件做 AST 清单、导入关系、兼容导出、
 大模块及运行时耦合分析；重点链路另逐函数核对。不是只审计近期 diff。
-可复现工具为 [`scripts/audit_repository.py`](../../scripts/audit_repository.py)，
+可复现工具为 [`scripts/audit_repository.py`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/scripts/audit_repository.py)，
 逐文件路径、原始/换行归一化 SHA、全部目录规模、大文件阈值清单、历史分类、
 静态候选及依赖环见 [机器清单](pre-openai-sdk-inventory.json)。
 
@@ -242,7 +242,7 @@ MCP→dict、LangChain tool→JSON 文本和 HTTP→Apify actor 三条边界都�
   全仓唯一引用就是该声明；保留实际VitePress的 `docs:dev/build/preview`，锁无需改动。
 - README 修正仓库 clone 地址、锁定安装与开发/notebook extras，说明当前迁移状态。
   AGENTS 改为恢复后的真实结构与职责规则；`CLAUDE.md` 未编辑。
-- 旧 Agent Server 重复能力审计保留原证据，顶部标明目标已被 SDK 方向取代。
+- 旧Agent Server审计的适用合同已承接到SDK计划，原始证据使用固定Git历史链接。
   `docs/architecture/tools.md` 修正当前动态工具提示入口；正式迁移计划有 SDK 固定版本
   来源、A–E 能力矩阵、接口/目录建议、F01–F24 转换和未来验收。
 
@@ -392,3 +392,5 @@ Docker构建缓存统计从25.8GB降至17.93GB；该回收量属于Docker虚拟�
 删除后用根`.venv`验证17个关键入口导入，并复跑68项社交/审计/安全守卫测试；
 验证关闭dotenv/tracing并阻断外部网络，不调用真实模型。生产代码、依赖锁及业务数据
 没有因这次物理清理改动。清理清单、空间读数与Docker日志在`.tmp/openai-preparation/`。
+
+后续文档整理：删除19份过时Markdown；必要的社交、GraphRAG与迁移合同并入现有指南，修复导航和失效链接，保留评测及独立学习资料。

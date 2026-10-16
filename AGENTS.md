@@ -13,8 +13,8 @@ request. The original opinion project backup and `v1-pre-deerflow` remain.
 
 Read [the preparation audit](docs/audits/pre-openai-sdk-cleanup.md) and
 [the migration plan](docs/architecture/openai-agents-sdk-migration-plan.md)
-before changing runtime boundaries. The historical Agent Server overlap audit
-is evidence of engineering issues, not the selected target architecture.
+before changing runtime boundaries. The applicable findings from the historical Agent Server audit are preserved
+in the migration plan, which links to the original Git evidence.
 
 ## Source ownership
 

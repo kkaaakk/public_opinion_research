@@ -2,6 +2,8 @@
 
 基线：`origin/main @ 12e2f0e`。风险等级描述潜在影响与触发条件，不代表线上事故已经发生。
 
+下表保留该学习基线的代码映射与当时建议。后续 SDK 迁移的职责、风险和验收以 [迁移计划](../architecture/openai-agents-sdk-migration-plan.md) 为准，不能将历史 LangGraph 升级方案直接作为当前实施指令。
+
 | Priority | Status | Risk | Code evidence | Trigger | Current protection | Recommended next step |
 |---|---|---|---|---|---|---|
 | P0 | OPEN | 网页逐条摘要放大模型调用 | `utils.py:tavily_search()` 内对所有 URL 创建 `summarization_tasks` 并 `asyncio.gather` | 多 query、多 URL、follow-up 重复检索 | URL 去重；单次摘要 60s timeout | URL+content hash 摘要缓存；批量摘要；Semaphore；低价值页面不进 LLM |
@@ -18,7 +20,7 @@
 
 ## Evidence from the recorded cost case
 
-来源：`docs/ARCHITECTURE_OPTIMIZATION_LOG_CN.md`
+来源：[固定版本的中文成本回顾](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/docs/ARCHITECTURE_OPTIMIZATION_LOG_CN.md)。原始统计可从 [Before/After 成本比较](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/evaluation/cost_profile/BEFORE_AFTER_COST_COMPARISON.md) 和 [After 单案例明细](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/evaluation/cost_profile/AFTER_SINGLE_CASE_COST_PROFILE.md) 复核。
 
 - Dynamic loop 版本：233 次模型调用、60 次 Tool 调用、642.46 秒。
 - 基线版本：135 次模型调用、46 次 Tool 调用、493.97 秒。
