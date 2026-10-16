@@ -7,7 +7,8 @@
 后续 Agent Runtime 选用 OpenAI Agents SDK，并按需自主组合 Harness 能力。
 当前 `codex/openai-agents-migration` 从 DeerFlow 改造前的完整备份恢复，
 仅完成仓库清理、业务边界审计和迁移准备，仍使用原 LangGraph 运行实现。
-DeerFlow Phase 0、RAG 配置整理和 DSH 轨迹观测成果保留在各自分支，尚未合并到本分支。
+DeerFlow 试验环境及其分支、标签已按要求清除；RAG 配置整理和 DSH 轨迹观测成果
+继续保留在各自分支，尚未合并到本分支。
 详见[清理与测试记录](docs/audits/pre-openai-sdk-cleanup.md)和
 [SDK 迁移计划](docs/architecture/openai-agents-sdk-migration-plan.md)。
 

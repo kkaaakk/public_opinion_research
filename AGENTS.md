@@ -7,7 +7,9 @@ The active preparation branch is `codex/openai-agents-migration`, based on
 The application still runs its existing LangGraph/LangChain implementation.
 OpenAI Agents SDK is the selected future runtime; it is **not installed or wired
 into this branch**. Do not start that migration as part of repository cleanup.
-DeerFlow Phase 0 remains on `codex/deerflow-phase0` and `phase0-deerflow`.
+DeerFlow is retired. Its local environments, Docker deployment, branch
+`codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's
+request. The original opinion project backup and `v1-pre-deerflow` remain.
 
 Read [the preparation audit](docs/audits/pre-openai-sdk-cleanup.md) and
 [the migration plan](docs/architecture/openai-agents-sdk-migration-plan.md)
@@ -40,7 +42,7 @@ baselines, reproducible runners and independent learning materials.
 
 ## Validation and local data
 
-Use the root dependency lock, not the preserved DeerFlow backend environment:
+Use the root dependency lock and root `.venv`:
 
 ```powershell
 uv sync --extra dev --locked --python 3.11
@@ -58,7 +60,8 @@ Features and fixes require regression tests. Do not call paid models during
 offline checks; disable dotenv/tracing and use the audit's socket guard.
 
 Do not commit `.env`, operator configuration, runtime databases, caches or
-local outputs. Switching branches preserves ignored local development assets;
-those leftover directories do not belong to the tracked source tree. Never
-use `git clean` against them. Preserve the Phase 0 stash and its safety ref;
-restoration instructions are in the audit. Do not edit `CLAUDE.md`.
+local outputs. Small configuration copies are retained under the ignored
+`.tmp/local-config-archive/`; the original opinion `.env` is restored.
+Never use `git clean` against local assets. Preserve the saved pre-cleanup
+changes and their safety ref; restoration instructions are in the audit.
+Do not edit `CLAUDE.md`.

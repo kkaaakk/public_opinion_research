@@ -3,6 +3,9 @@
 日期：2026-10-16（Asia/Shanghai）。仓库：`kkaaakk/public_opinion_research`。
 工作目录始终为 `C:\codex_workspace\Public Opinion Research`。
 
+**最新状态：用户随后要求释放 DeerFlow 占用并明确删除其分支、标签，已执行，见第8节。**
+第1–7节记录前一轮准备交付时的事实；其中当时保留的 DeerFlow 环境与引用现已退役。
+
 本次从指定备份恢复原舆情项目，完成 Git 清理、全仓审计、安全代码整理、历史资料归档和迁移边界准备。**未接入 OpenAI Agents SDK，未重写 Agent Runtime，未替换 LangGraph 工作流，未修改或合并到 main。**
 
 ## 1. Git 起点、本地成果与恢复
@@ -30,15 +33,17 @@
 `.tmp/openai-preparation/info-exclude-before.txt`。因此磁盘上仍存在的 `backend/`、
 `frontend/` 等本地残留不代表本分支包含 DeerFlow 源码。源码统计以 Git 路径为准。
 
-原本机 `.env` 保存于 `.tmp/deerflow-phase0/pre-deerflow.env`，本次不覆盖现有配置。
+原本机 `.env` 当时保存于 `.tmp/deerflow-phase0/pre-deerflow.env`；后续删除DeerFlow时
+已另存 `.tmp/local-config-archive/pre-deerflow.env` 并恢复到根 `.env`，见第8节。
 独立备份继续位于 `C:\codex_workspace\Public-Opinion-Research-pre-deerflow-backup`；
 当前源码和启动不依赖该绝对路径。
 
 如需恢复 Phase 0 未保存成果，应先保存当时新工作区修改，再在原目录切回
-`codex/deerflow-phase0`，执行以下命令。`apply` 不删除安全引用，不应在本迁移分支直接应用。
+旧Phase0快照，执行以下命令重建一个本地分支。原分支/标签后续已删除；
+`apply` 不删除安全引用，不应在本迁移分支直接应用。
 
 ```powershell
-git switch codex/deerflow-phase0
+git switch -c codex/deerflow-phase0 'refs/safety/pre-openai-preparation-20261016^1'
 git stash apply refs/safety/pre-openai-preparation-20261016
 ```
 
@@ -339,3 +344,51 @@ rebase main、修改标签或合并旧PR。提交链首个父提交仍为指定�
 避免在被描述的提交中写入自引用SHA。
 
 本次到迁移准备为止。正式接入、供应商适配与持久Run/Harness建设须遵守迁移计划的新验收条件。
+
+## 8. 后续按用户要求删除 DeerFlow 与释放空间
+
+同日，用户明确要求删除已不用的 DeerFlow 部分，并进一步确认删除 GitHub 分支和标签。
+本节更新最新状态，前文分支/配置保留记录属于此前审计快照。
+
+删除前确认这些目录没有当前Git tracked文件，环境metadata确认`backend/.venv`属于
+DeerFlow Python3.12，而当前根`.venv`属于原舆情项目Python3.11；
+`frontend/node_modules`的pnpm store引用本仓`.pnpm-store`。所有递归删除的绝对路径先
+验证在本工作区内，根路径不是reparse point；使用PowerShell7原生删除，不跟随目录链接
+到其他工作区。没有使用`git clean`、全局Docker prune或清空共享uv cache。
+
+### 删除范围
+
+- 本地目录：`backend/`、`frontend/`、`opinion_business/`、`deerflow_extension/`、
+  `.phase0/`、`.deer-flow/`、`.pnpm-store/`、`.tmp/deerflow-phase0/`、
+  `.tmp/deerflow-phase0-closeout/`、`.tmp/phase0-closeout/`。
+- 根`config.yaml`和`extensions_config.json`是该试验的配置，当前舆情源码无消费者；
+  先保存小型配置副本再删除根位置文件。
+- Docker项目`opinion-phase0-closeout`的4个容器（nginx/gateway/redis/frontend）、
+  专属`redis-data`卷及`deer-flow`网络；删除gateway/frontend两个专属镜像。
+- 核对构建时间、命令和确切ID，定向删除8个DeerFlow构建缓存记录，共回收约
+  **7.872 GB**；其他项目及共享基础缓存不做全局清理。筛选语义依据
+  [Docker官方buildx prune文档](https://docs.docker.com/reference/cli/docker/buildx/prune/)。
+- 本地和origin的`codex/deerflow-phase0`分支，以及本地和origin的`phase0-deerflow`
+  标签均实际删除；远程查询确认不存在。origin现保留6条分支。
+
+### 数据保护与占用结果
+
+原舆情`.env`保存件与独立原项目备份的`.env`逐字节hash一致，先复制到
+`.tmp/local-config-archive/pre-deerflow.env`再恢复为根`.env`。原试验的根`.env`、
+两个operator配置、frontend`.env`也各存一份小副本，共5个配置文件，均hash复核。
+未输出秘密值，未提交这些配置。
+
+当前业务`src/`、`data/`、根`.venv`、`.langgraph_api`、研究transcripts、DSH/query-image
+资料、共享`.tmp/uv-cache`、其他Worktree及独立原项目备份完整保留。
+`public-opinion-neo4j`继续运行且healthy，未改变其他项目容器。
+任务前未提交修改的stash及安全ref按开发规则保留；没有清空reflog或改写Git历史。
+
+C盘可用空间从 **27,133,726,720** 增至 **30,016,151,552** 字节，
+实测净增加 **2,882,424,832字节（约2.9 GB / 2.68 GiB）**。
+文件逻辑大小包含缓存硬链接，不能按目录大小简单相加推算实际释放量。
+Docker构建缓存统计从25.8GB降至17.93GB；该回收量属于Docker虚拟盘内部，
+没有为压缩VHDX而停机或关闭其他项目服务，不与C盘净增量相加。
+
+删除后用根`.venv`验证17个关键入口导入，并复跑68项社交/审计/安全守卫测试；
+验证关闭dotenv/tracing并阻断外部网络，不调用真实模型。生产代码、依赖锁及业务数据
+没有因这次物理清理改动。清理清单、空间读数与Docker日志在`.tmp/openai-preparation/`。

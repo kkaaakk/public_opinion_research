@@ -5023,7 +5023,7 @@
   "after": {
     "summary": {
       "files": 316,
-      "bytes": 27911358,
+      "bytes": 27915350,
       "python_files": 162,
       "python_physical_lines": 45731,
       "python_lines_by_scope": {
@@ -5049,8 +5049,8 @@
     "directories": {
       ".": {
         "files": 316,
-        "bytes": 27911358,
-        "text_lines": 249306,
+        "bytes": 27915350,
+        "text_lines": 249364,
         "python_files": 162,
         "python_lines": 45731
       },
@@ -5151,8 +5151,8 @@
       },
       "docs": {
         "files": 66,
-        "bytes": 5297453,
-        "text_lines": 32257
+        "bytes": 5301258,
+        "text_lines": 32311
       },
       "docs/.vitepress": {
         "files": 1,
@@ -5181,8 +5181,8 @@
       },
       "docs/audits": {
         "files": 3,
-        "bytes": 522624,
-        "text_lines": 11594
+        "bytes": 526429,
+        "text_lines": 11648
       },
       "docs/evaluation": {
         "files": 1,
@@ -6514,10 +6514,10 @@
       },
       {
         "path": "AGENTS.md",
-        "bytes": 3598,
-        "sha256": "cdeef94d08e0fc8566a003f1636ed7da71644711becef211dd4bbca23e608ee3",
-        "lf_normalized_sha256": "1e181779b83705876b9b96ac345071912b94735150ee051a9ef4307efccf70b3",
-        "text_lines": 64,
+        "bytes": 3733,
+        "sha256": "4dffc39bf6f274e5591de0c8142bd75d12795b4a9e11ec35b8ab3a1b5a031ec3",
+        "lf_normalized_sha256": "4dffc39bf6f274e5591de0c8142bd75d12795b4a9e11ec35b8ab3a1b5a031ec3",
+        "text_lines": 67,
         "python": false,
         "scope": "support",
         "artifact_category": null
@@ -6554,10 +6554,10 @@
       },
       {
         "path": "README.md",
-        "bytes": 17254,
-        "sha256": "85d3de9c6c3d862a1a331e0e59ec168a7f3eccb10eb8e9a85fe6edccbae1d54a",
-        "lf_normalized_sha256": "55f3a4ebe16281ce723928b103febe51ed548b354fff6d36a9a441849936cef6",
-        "text_lines": 385,
+        "bytes": 17306,
+        "sha256": "ddfd2ca03da65100454fce8b457e033e9c72b64f3eadf49b6d0a570ee0a7f63f",
+        "lf_normalized_sha256": "4fc290a5661ac75a4984728d973e049ae1f52ed8047fb25eac3fbc3421088130",
+        "text_lines": 386,
         "python": false,
         "scope": "support",
         "artifact_category": null
@@ -6864,20 +6864,20 @@
       },
       {
         "path": "docs/audits/pre-openai-sdk-cleanup.md",
-        "bytes": 25431,
-        "sha256": "14128747481e273961a7ba1f937c8e5628428d60e54bcce545d2c9f0f6fbd248",
-        "lf_normalized_sha256": "86cf9e7899e44dc35cd1b03227323caaead5a22b4f99b81850dc00508c64c952",
-        "text_lines": 341,
+        "bytes": 29213,
+        "sha256": "f3be3ac7800529e9b2f3ad3aef83f605e159e78b4bce84de21f8c3811d07e697",
+        "lf_normalized_sha256": "d6507ecb1aa0c8ca6fb7e0f56d6e0754dc6b3320890b9a11ab6800e3e65f0360",
+        "text_lines": 394,
         "python": false,
         "scope": "support",
         "artifact_category": null
       },
       {
         "path": "docs/audits/pre-openai-sdk-inventory.json",
-        "bytes": 382265,
-        "sha256": "624b2b0045ad2c9f6eac861c16049aa0c0e4cff1d9957fdf14a2d88c0b15bc2a",
-        "lf_normalized_sha256": "0aff6dbd79e8a933c74cafa5add5b1aa6c6b4afcbd74d614b1bc861aaff1a8e0",
-        "text_lines": 10235,
+        "bytes": 382288,
+        "sha256": "107c20ca2816075e485b9f100461bddee65990eb9e9788b757f8af377eec065c",
+        "lf_normalized_sha256": "c10cfbc3b11b47228f1ce0e6ede30b66341f6cf0e61862fe79510455127c8674",
+        "text_lines": 10236,
         "python": false,
         "scope": "support",
         "artifact_category": null
