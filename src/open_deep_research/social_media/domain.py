@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 DEFAULT_RISK_RULES = {
     "critical": {"min_negative_ratio": 0.6, "min_negative_engagement": 10000, "min_complaints": 10},
@@ -107,3 +107,21 @@ __all__ = [
     "NEGATIVE_TERMS", "POSITIVE_TERMS", "contains_any", "heat_level",
     "matched_signal_terms", "negative_query_variants", "ratio", "risk_score",
 ]
+
+
+def risk_level(
+    negative_ratio: float,
+    complaint_count: int,
+    negative_engagement: int,
+    rules: Mapping[str, Mapping[str, Any]],
+) -> str:
+    """Select the highest matching risk tier from adapter-provided rules."""
+    for candidate_level in ("critical", "high", "medium"):
+        rule = rules[candidate_level]
+        if (
+            negative_ratio >= float(rule["min_negative_ratio"])
+            or complaint_count >= int(rule["min_complaints"])
+            or negative_engagement >= int(rule["min_negative_engagement"])
+        ):
+            return candidate_level
+    return "low"

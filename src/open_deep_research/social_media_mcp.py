@@ -21,13 +21,16 @@ from open_deep_research.social_media.domain import (
     DEFAULT_RISK_RULES,
     NEGATIVE_TERMS,
     POSITIVE_TERMS,
-    contains_any,
-    heat_level,
     matched_signal_terms,
     negative_query_variants,
-    ratio,
+    risk_level,
     risk_score,
 )
+from open_deep_research.social_media.domain import contains_any as _contains_any
+from open_deep_research.social_media.domain import heat_level as _heat_level
+from open_deep_research.social_media.domain import ratio as _ratio
+from open_deep_research.social_media.records import parse_date as _parse_date
+from open_deep_research.social_media.records import parse_datetime
 
 load_dotenv()
 
@@ -1125,28 +1128,10 @@ def _platforms_csv(platforms: list[str] | str | None) -> str | None:
     return ",".join(str(platform) for platform in platforms)
 
 
-# 解析日期边界参数，供帖子筛选使用。
-def _parse_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
-    except ValueError:
-        try:
-            return datetime.strptime(str(value), "%Y-%m-%d").date()
-        except ValueError:
-            return None
-
-
 # 从记录解析发布时间对象。
 def _record_datetime(record: Mapping[str, Any]) -> datetime | None:
     value = str(record.get("published_at") or record.get("created_at") or "")
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return None
+    return parse_datetime(value)
 
 
 # 取得记录所属日期，用于时间筛选与聚合。
@@ -1202,11 +1187,6 @@ def _signal_text(record: Mapping[str, Any]) -> str:
             json.dumps(record.get("metadata") or {}, ensure_ascii=False),
         ]
     ).lower()
-
-
-# 复用共享的词语包含判断。
-def _contains_any(text: str, terms: list[str]) -> bool:
-    return contains_any(text, terms)
 
 
 # 复用共享规则提取负面与投诉信号词。
@@ -1375,17 +1355,8 @@ def _risk_metrics(
         negative_ratio, complaint_count, negative_engagement, total_engagement
     )
     rules = _risk_rules(config)
-    level = "low"
+    level = risk_level(negative_ratio, complaint_count, negative_engagement, rules)
     reasons = []
-    for candidate_level in ("critical", "high", "medium"):
-        rule = rules[candidate_level]
-        if (
-            negative_ratio >= float(rule["min_negative_ratio"])
-            or complaint_count >= int(rule["min_complaints"])
-            or negative_engagement >= int(rule["min_negative_engagement"])
-        ):
-            level = candidate_level
-            break
 
     if negative_ratio:
         reasons.append(f"negative_ratio={negative_ratio}")
@@ -1408,11 +1379,6 @@ def _risk_metrics(
         "rules": rules,
         "reasons": reasons,
     }
-
-
-# 将互动量映射到共享热度阈值。
-def _heat_level(total_engagement: int) -> str:
-    return heat_level(total_engagement)
 
 
 # 合并默认风险规则与已知等级的自定义覆盖，格式错误时使用默认规则。
@@ -1440,11 +1406,6 @@ def _risk_rules(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 # 将请求结果数量约束到允许范围。
 def _bounded_limit(limit: int) -> int:
     return max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
-
-
-# 返回共享四位小数比例表示。
-def _ratio(numerator: int, denominator: int) -> float:
-    return ratio(numerator, denominator)
 
 
 # 说明当前使用 HTTP API 还是本地文件，并列出来源路径或根地址。

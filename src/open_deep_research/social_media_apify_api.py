@@ -21,13 +21,16 @@ from open_deep_research.social_media.domain import (
     DEFAULT_RISK_RULES,
     NEGATIVE_TERMS,
     POSITIVE_TERMS,
-    contains_any,
-    heat_level,
     matched_signal_terms,
     negative_query_variants,
-    ratio,
+    risk_level,
     risk_score,
 )
+from open_deep_research.social_media.domain import contains_any as _contains_any
+from open_deep_research.social_media.domain import heat_level as _heat_level
+from open_deep_research.social_media.domain import ratio as _ratio
+from open_deep_research.social_media.records import parse_date as _parse_date
+from open_deep_research.social_media.records import parse_datetime
 
 load_dotenv()
 
@@ -738,28 +741,10 @@ def _normalize_datetime(value: str) -> str:
     return value
 
 
-# 解析可选日期参数，供时间范围筛选使用。
-def _parse_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
-    except ValueError:
-        try:
-            return datetime.strptime(str(value), "%Y-%m-%d").date()
-        except ValueError:
-            return None
-
-
 # 读取标准帖子的发布时间对象。
 def _post_datetime(post: Mapping[str, Any]) -> datetime | None:
     value = str(post.get("published_at") or "")
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return None
+    return parse_datetime(value)
 
 
 # 从帖子时间取得日期，用于按日统计。
@@ -800,11 +785,6 @@ def _signal_text(post: Mapping[str, Any]) -> str:
             " ".join(str(tag) for tag in post.get("tags") or []),
         ]
     ).lower()
-
-
-# 委托共享规则判断是否包含任一信号词。
-def _contains_any(text: str, terms: list[str]) -> bool:
-    return contains_any(text, terms)
 
 
 # 委托共享规则提取已命中的风险词。
@@ -873,17 +853,8 @@ def _risk_metrics(
     score = risk_score(
         negative_ratio, complaint_count, negative_engagement, total_engagement
     )
-    level = "low"
+    level = risk_level(negative_ratio, complaint_count, negative_engagement, DEFAULT_RISK_RULES)
     reasons = []
-    for candidate_level in ("critical", "high", "medium"):
-        rule = DEFAULT_RISK_RULES[candidate_level]
-        if (
-            negative_ratio >= float(rule["min_negative_ratio"])
-            or complaint_count >= int(rule["min_complaints"])
-            or negative_engagement >= int(rule["min_negative_engagement"])
-        ):
-            level = candidate_level
-            break
     if negative_ratio:
         reasons.append(f"negative_ratio={negative_ratio}")
     if complaint_count:
@@ -902,16 +873,6 @@ def _risk_metrics(
         "rules": DEFAULT_RISK_RULES,
         "reasons": reasons,
     }
-
-
-# 用共享阈值将互动规模转换为热度等级。
-def _heat_level(total_engagement: int) -> str:
-    return heat_level(total_engagement)
-
-
-# 调用共享比例格式化规则。
-def _ratio(numerator: int, denominator: int) -> float:
-    return ratio(numerator, denominator)
 
 
 # 将请求数量限制在服务允许的区间内。
