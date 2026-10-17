@@ -379,6 +379,14 @@ class AgentRuntime:
             if not allowed:
                 break
 
+        return await self._finish(task, messages, budget_update)
+
+    async def _finish(
+        self, task: str, messages: list[Any], budget_update: dict[str, Any]
+    ) -> AgentRuntimeResult:
+        """Preserve the shared report and private-memory contract for both runtimes."""
+        research_round = self.workspace.scope.research_round
+        mode = "followup" if research_round > 1 else "initial"
         # 图模式直接用有界证据生成报告；标准模式使用研究历史压缩入口收尾。
         graph_final = await self.workspace.finalize(messages, self.spec.expected_output)
         if graph_final is not None:

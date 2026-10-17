@@ -1,10 +1,10 @@
 # OpenAI Agents SDK 迁移边界与实施准备
 
-准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-17 更新：**Phase 0 独立接入与可行性验证已实施，生产主链路仍未迁移**。当前实现、离线测试及限制见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)。
+准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-17 更新：**Phase 0 已完成；Phase 1 已完成四角色可选择的 SDK Runtime，LangGraph 编排与 Web/API 默认保持兼容**。实现、离线测试及限制分别见 [Phase 0 验证记录](../audits/openai-agents-phase0.md) 和 [Phase 1 审计](../audits/openai-agents-phase1.md)。
 
 后续同日已补做真实 DeepSeek 基础调用、非思考/思考模式 SDK 并行工具与 Producer/Consumer 验证，发现并修正窄边界问题；实测范围、用量和 557 项离线回归见验证记录第10节。该补验没有进入 Phase 1。
 
-准备分支以 `backup/pre-deerflow` 的 `41cbc134f748750ffbfc7c7dde65c7552ace6296` 为源码起点；Phase 0 从准备分支最新提交 `2c876398` 创建 `codex/openai-agents-phase0`。生产运行方式仍是 LangGraph 工作流、LangChain 模型/工具和项目自有 ReAct 循环。Phase 0 新增的 SDK Runner / Context Harness 仅显式调用，不替换原主链路。源码清理和当时未安装 SDK 的基线另见 [准备审计](../audits/pre-openai-sdk-cleanup.md)。
+准备分支以 `backup/pre-deerflow` 的 `41cbc134f748750ffbfc7c7dde65c7552ace6296` 为源码起点；Phase 0 从准备分支最新提交 `2c876398` 创建 `codex/openai-agents-phase0`，合并后 Phase 1 起点为 `7a72aadc`。默认仍执行旧 Runtime；显式配置 `business_agent_runtime=openai_agents` 时，现有业务装配层把四角色 Spec、Prompt 和工具转换为 SDK Agent，由 Runner 执行循环，再返回原 State patch。源码清理和当时未安装 SDK 的基线另见 [准备审计](../audits/pre-openai-sdk-cleanup.md)。
 
 ## 1. 迁移目标与证据基线
 
@@ -140,6 +140,23 @@ RAG Graph 维护**知识库文档/chunk 关系与检索扩展**；Research Graph
 
 ### 4.1 建议结构
 
+Phase 1 当前可执行调用链为：
+
+```text
+LangGraph Workflow
+  -> runtime/business_agent.py (AgentSpec / assignment / tools / private memory)
+  -> business_agent_runtime
+       legacy:        AgentRuntime -> existing ReAct loop
+       openai_agents: SDKAgentRuntime -> SDK Agent / Runner / FunctionTool
+  -> existing business tools / MCP
+  -> shared report services -> AgentRuntimeResult -> original State reducers
+```
+
+SDK 分支复用 `models/sdk.py` 和 `SDKContextHarness`，没有改写 `workflow/`。
+Graph 模式只使用 Phase 0 已验证的单调用接缝；完整四角色证据交接、Working
+Context 和 rolling compaction 的生产全链路仍属于 Phase 2。预算、失败/取消及
+未验证功能的显式限制见 Phase 1 审计。以下蓝图继续表示最终目标，并非当前部署。
+
 延续 `src/open_deep_research/` 包名，优先在已有目录内明确边界。下列是正式迁移时的职责建议；Phase 0 仅新增少量 SDK 适配文件，未按蓝图批量创建模块或空目录。
 
 ```text
@@ -213,7 +230,7 @@ flowchart TD
 | ADR-P05 模型供应商 | 保留本项目模型名称/端点策略；在单一 adapter seam 迁移 | 直接套 LangChain wrapper 或为所有 provider 增加一层万能代理会掩盖差异 | 每条实际 provider 路径通过 tools/vision/schema/usage/error smoke |
 | ADR-P06 业务/轨迹 | 保留 DSH 的协议/投影成果，重写其采集适配；原生 SDK tracing 与轨迹分工 | 整分支合并会带 LangChain callback/执行管理；只靠 tracing 无持久会话 UI | live/replay fixture 等价，记录故障不重跑研究，观测无额外模型调用 |
 
-这些决策记录保持 Proposed，既不改变当前 runtime，也不把未执行的部署选择写为已接受事实。正式迁移评审可直接使用本文合同，无需先落地所有目录。
+ADR-P01 的单角色 SDK loop 在 Phase 1 以显式 Runtime 配置落地，其业务合同验证见 Phase 1 审计；工作流替换仍未实施。其他未实施部分保持 Proposed，不把耐久组件等部署备选写成已接受选型，也不提前引入新框架。正式迁移评审可直接使用本文合同，无需先落地所有目录。
 
 ## 5. 旧 LangGraph Agent Server 审计的迁移待办
 
@@ -267,16 +284,18 @@ PR #12 的 RAG 配置整合作为独立参考保留，不因此提前整体合�
 
 ## 6. 正式迁移风险与验收门槛
 
-### 6.1 按依赖推进的实施顺序
+### 6.1 已确定的六阶段路线
 
-1. **冻结本次业务基线**：保存下节测试、依赖执行器、fixture 和输出；列出所有公开 Python/CLI/MCP/Web 入口。保持备份、Phase 0、RAG、DSH 分支可追溯。
-2. **设计并测试窄 adapter**：provider:model、消息/tool schemas、结构化结果、usage、工具权限。先 fake model 等价测试，再经授权独立跑真实 provider smoke；不要同时改变模型和业务策略。
-3. **替换单个角色 loop**：SDK Runner 接管循环，保持 AgentSpec、ResearchWorkspace、预算、结果 envelope。新旧实现可对同一 fixture 对照；不双运行付费工作。
-4. **替换 workflow 框架绑定**：显式保留 producer 并行/汇合、复核补充、报告与领域 state；再去除 StateGraph/Send/Command/RunnableConfig。保留模型/工具异常语义和公共入口兼容期。
-5. **上线前完成 Harness**：Run store/worker、owner、审批、取消/恢复、事件/归档补偿、数据库生命周期。选择耐久组件后验证真实故障，不仅测试 await 完成的 happy path。
-6. **迁移观测与退役依赖**：采纳 DSH 可用成果，观测没有业务副作用；在导入/入口/lock/服务契约全验证后才删除不再使用的 LangGraph/LangChain 运行依赖。
+| 阶段 | 范围与边界 | 当前状态 |
+| --- | --- | --- |
+| Phase 0 | SDK 安装、provider:model 适配、Hook、Producer/Consumer 可行性；生产入口不切换 | 已完成，见 Phase 0 审计 |
+| Phase 1 | 四业务 Agent Runtime 全部使用可选择的 SDK Agent/Runner；保留旧 Runtime、LangGraph Workflow 和 Web/API 默认 | 已完成，见 Phase 1 审计 |
+| Phase 2 | 完整 Research Graph Context Harness：工具批次、四角色证据交接、Working Context 更新、压缩和终止清算全链路 | 待执行；Phase 0 接缝复用不等于完成 |
+| Phase 3 | 确定性 Python Workflow 接替 LangGraph；保留双研究并行、汇合、Review/Gap 循环和 State 业务合同 | 待执行 |
+| Phase 4 | Web/SSE/Session、Run 生命周期、身份/审批、取消/恢复、事件与档案补偿的生产集成和故障验证 | 待执行 |
+| Phase 5 | 旧 Runtime 退役及依赖清理，完成必要观测适配和兼容入口验收 | 待执行；不整分支合并 DSH |
 
-各步均属于未来正式迁移，不在本次执行。LangChain 在 RAG loaders/vector/document 等非 runtime 的使用可能继续保留一段时间；目标是清晰边界，不是以零依赖为 KPI。
+不引入 DBOS、Temporal 或新的工作流框架，不把跨仓调用链简化或独立分支开发混入 Runtime 迁移。LangChain 在工具、报告服务、RAG loaders/vector/document 等非 Agent loop 的使用在本阶段保留。
 
 ### 6.2 业务与工程验收
 
@@ -319,4 +338,4 @@ python -m mypy src
 
 ## 7. 准备工作的停止边界（历史基线）
 
-准备阶段交付到源码恢复、安全整理、审计、明确旧问题与可复现测试基线，以及上述目标合同为止。后续按用户要求实施的 SDK Phase 0 独立接入与实测见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)，仍保留现有生产 runtime/workflow 和所有必要业务/兼容入口。无论 SDK 当前已经提供多少 primitive，都须以本项目业务合同和选定版本的实测结果决定复用与替换范围。
+准备阶段交付到源码恢复、安全整理、审计、明确旧问题与可复现测试基线，以及上述目标合同为止。后续 Phase 0 见 [验证记录](../audits/openai-agents-phase0.md)，四角色 Runtime 的 Phase 1 实施见 [审计](../audits/openai-agents-phase1.md)。旧 Runtime、LangGraph Workflow 和必要业务/兼容入口仍保留。无论 SDK 当前已经提供多少 primitive，都须以本项目业务合同和选定版本的实测结果决定复用与替换范围。

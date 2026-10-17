@@ -22,6 +22,7 @@ from open_deep_research.llm.context import remove_up_to_last_ai_message
 from open_deep_research.llm.errors import is_token_limit_exceeded
 from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
 from open_deep_research.models import configurable_chat_model, get_api_key_for_model
+from open_deep_research.models.sdk import sdk_model
 from open_deep_research.observability import agent_metadata
 from open_deep_research.prompts import (
     compress_research_simple_human_message,
@@ -35,6 +36,7 @@ from open_deep_research.research_graph import (
 )
 from open_deep_research.research_graph.schema import stable_id
 from open_deep_research.runtime.agent_runtime import AgentRuntime, AgentRuntimeResult
+from open_deep_research.runtime.sdk_runtime import SDKAgentRuntime
 from open_deep_research.social_media.tools import get_social_media_tools
 from open_deep_research.state import DeepResearchState
 from open_deep_research.time_utils import get_today_str
@@ -300,6 +302,7 @@ async def _compress_research(
         # try/finally guarantees the ContextVar is reset on every exit path.
         attempt_token = start_budget_capture()
         token_limit_hit = False
+        failure: BaseException | None = None
         try:
             try:
                 response, _response_budget = await ainvoke_model_with_budget(
@@ -317,10 +320,16 @@ async def _compress_research(
                     LOGGER.exception("Unexpected research compression failure.")
                     raise
                 token_limit_hit = True
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
             attempt_budget = merge_budget_usage(
                 attempt_budget, stop_budget_capture(attempt_token)
             )
+            if failure is not None:
+                # Preserve failed report attempts without recounting successes.
+                setattr(failure, "budget_usage", attempt_budget)
         if token_limit_hit:
             researcher_messages = remove_up_to_last_ai_message(researcher_messages)
             continue
@@ -426,22 +435,6 @@ async def run_business_agent(
             "(search_api=tavily)."
         )
 
-    model_config = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
-        "tags": ["langsmith:nostream"],
-        "metadata": {
-            **agent_metadata(getattr(spec, "node_name", f"{role}_agent"), role),
-            "research_round": research_round,
-        },
-    }
-    model = (
-        _CONFIGURABLE_MODEL.bind_tools(tools)
-        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(model_config)
-    )
-
     # 按本次调用配置创建并绑定角色实际可用的模型与工具。
     def model_factory(model_name: str, max_tokens: int | None) -> Any:
         nested_model_config: dict[str, Any] = {
@@ -486,21 +479,41 @@ async def run_business_agent(
             config=config,
         )
 
-    runtime = AgentRuntime(
+    runtime_args: dict[str, Any] = dict(
         role=role,
         spec=spec,
         agent_state=agents_state(state).get(role, {}),
         workspace=workspace,
         config=configurable,
         runtime_config=config,
-        model=model,
         system_prompt=system_prompt,
         tools=tools,
         initial_budget=runtime_state(state).get("budget", {}),
         execute_tool=_execute_tool_safely,
         compress_report=compress_report,
     )
-    result = await runtime.run(assignment)
+    if configurable.business_agent_runtime == "openai_agents":
+        # Disable opaque HTTP retries: one SDK start is one provider attempt.
+        # No failure falls back to legacy and repeats a business tool.
+        async with sdk_model(configurable.research_model, config=config, max_retries=0) as model:
+            result = await SDKAgentRuntime(model=model, **runtime_args).run(assignment)
+    else:
+        model_config = {
+            "model": configurable.research_model,
+            "max_tokens": configurable.research_model_max_tokens,
+            "api_key": get_api_key_for_model(configurable.research_model, config),
+            "tags": ["langsmith:nostream"],
+            "metadata": {
+                **agent_metadata(getattr(spec, "node_name", f"{role}_agent"), role),
+                "research_round": research_round,
+            },
+        }
+        model = (
+            _CONFIGURABLE_MODEL.bind_tools(tools)
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+            .with_config(model_config)
+        )
+        result = await AgentRuntime(model=model, **runtime_args).run(assignment)
     return _build_state_patch(
         role=role,
         state=state,
