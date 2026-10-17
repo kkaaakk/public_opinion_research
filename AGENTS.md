@@ -2,18 +2,25 @@
 
 ## Current architecture and migration boundary
 
-The active preparation branch is `codex/openai-agents-migration`, based on
-`backup/pre-deerflow` / `41cbc134f748750ffbfc7c7dde65c7552ace6296`.
-The application still runs its existing LangGraph/LangChain implementation.
-OpenAI Agents SDK is the selected future runtime; it is **not installed or wired
-into this branch**. Do not start that migration as part of repository cleanup.
+The preparation baseline is `codex/openai-agents-migration` at
+`2c876398639a11c9b2a66232419da8374e187e83`, descended from `backup/pre-deerflow`
+/ `41cbc134f748750ffbfc7c7dde65c7552ace6296`.
+The independent `codex/openai-agents-phase0` branch installs `openai-agents==0.24.0`
+and validates an opt-in adapter in `runtime/sdk_context.py` and `models/sdk.py`.
+The application still runs its existing LangGraph/LangChain implementation;
+production Web/API defaults and the four business agents have not been migrated.
+The selected target is OpenAI Agents SDK + deterministic Python workflow + the
+custom Research Graph Context Harness, without DBOS or LangGraph orchestration.
+Do not enter Phase 1 or replace production entrypoints as part of Phase 0.
 DeerFlow is retired. Its local environments, Docker deployment, branch
 `codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's
 request. The original opinion project backup and `v1-pre-deerflow` remain.
 
 Read [the preparation audit](docs/audits/pre-openai-sdk-cleanup.md) and
 [the migration plan](docs/architecture/openai-agents-sdk-migration-plan.md)
-before changing runtime boundaries. The applicable findings from the historical Agent Server audit are preserved
+before changing runtime boundaries. Read [the Phase 0 results](docs/audits/openai-agents-phase0.md)
+for tested SDK interfaces, tool coverage and remaining limitations.
+The applicable findings from the historical Agent Server audit are preserved
 in the migration plan, which links to the original Git evidence.
 
 ## Source ownership

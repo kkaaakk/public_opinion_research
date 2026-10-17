@@ -1,12 +1,14 @@
 # OpenAI Agents SDK 迁移边界与实施准备
 
-日期：2026-10-16（Asia/Shanghai）。状态：**准备完成后的目标方案，正式迁移尚未实施**。
+准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-17 更新：**Phase 0 独立接入与可行性验证已实施，生产主链路仍未迁移**。当前实现、离线测试及限制见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)。
 
-本分支以 `backup/pre-deerflow` 的 `41cbc134f748750ffbfc7c7dde65c7552ace6296` 为唯一源码起点。当前运行方式仍是 LangGraph 工作流、LangChain 模型/工具和项目自有 ReAct 循环；本次没有安装 `openai-agents`、接入新 Runner、替换工作流或生成占位模块。源码清理和实测结果另见 [准备审计](../audits/pre-openai-sdk-cleanup.md)。
+准备分支以 `backup/pre-deerflow` 的 `41cbc134f748750ffbfc7c7dde65c7552ace6296` 为源码起点；Phase 0 从准备分支最新提交 `2c876398` 创建 `codex/openai-agents-phase0`。生产运行方式仍是 LangGraph 工作流、LangChain 模型/工具和项目自有 ReAct 循环。Phase 0 新增的 SDK Runner / Context Harness 仅显式调用，不替换原主链路。源码清理和当时未安装 SDK 的基线另见 [准备审计](../audits/pre-openai-sdk-cleanup.md)。
 
 ## 1. 迁移目标与证据基线
 
 目标是由 OpenAI Agents Python SDK 管理模型与工具循环，由项目掌握运行授权、预算、证据上下文、任务生命周期和部署。四个舆情角色、证据复核及补充研究、RAG、Research Graph、记忆和报告保持业务所有权。保留现有单仓 Python 包与 FastAPI/Web 入口，不为迁移另建微服务体系。
+
+正式确定的目标组合是 **OpenAI Agents SDK + Python 确定性工作流 + 自定义 Research Graph Context Harness**。迁移后的主链路不采用 LangGraph，不引入 DBOS 或另一套通用工作流引擎；下文对 SDK 外部耐久集成能力的介绍不代表项目选型。
 
 非功能要求包括：默认拒绝未授权工具和跨用户访问；断开浏览器不会隐式重放研究；模型/工具失败及重试不漏计、不重复累计 usage；研究证据可追溯；离线测试不需要真实付费模型；资源可关闭；运行状态和观测数据分别持久化；旧数据与接口可有界回滚。当前离线通过并不代表数据库、模型供应商或生产故障恢复已获验收。
 
@@ -14,9 +16,9 @@
 
 2026-10-16 实际检索、打开官方文档，并读取官方 GitHub 源码与 release/tag API。`releases/latest` 当时指向 **v0.24.0**，发布时间 `2026-10-15T02:20:12Z`（北京时间 10:20:12），tag 对应 commit **`17d994bd3045dae71acda676a4ef4762ed8ecd94`**。下文源码依据固定到该 commit；在线文档是滚动版本，未来实施应重新比对选定版本，不能仅凭网页示例升级依赖。[官方 Release](https://github.com/openai/openai-agents-python/releases/tag/v0.24.0)、[Tag 指向](https://api.github.com/repos/openai/openai-agents-python/git/ref/tags/v0.24.0)
 
-该版本要求 Python `>=3.10`、`openai>=3.0.0,<4`、`pydantic>=2.12.2,<3`、`mcp>=1.19.0,<3`。当前项目 `uv.lock` 的 `openai==2.20.0`、`pydantic==2.11.5` 明确不满足前两项版本下限；正式接入前必须单独验证解析结果，尤其 OpenAI/MCP、FastAPI/Starlette 与供应商适配依赖。本次不为 SDK 接入升级这些包或重解运行依赖。[固定版本 pyproject.toml](https://github.com/openai/openai-agents-python/blob/17d994bd3045dae71acda676a4ef4762ed8ecd94/pyproject.toml)
+该版本要求 Python `>=3.10`、`openai>=3.0.0,<4`、`pydantic>=2.12.2,<3`、`mcp>=1.19.0,<3`。**准备基线**的 `uv.lock` 锁定 `openai==2.20.0`、`pydantic==2.11.5`，不满足前两项下限；准备阶段未升级。后续 Phase 0 已更新根锁文件并回归旧链路，实际依赖版本与结果以 [Phase 0 验证记录](../audits/openai-agents-phase0.md) 为准。[固定版本 pyproject.toml](https://github.com/openai/openai-agents-python/blob/17d994bd3045dae71acda676a4ef4762ed8ecd94/pyproject.toml)
 
-本次依赖整理仅调整现有工具的归属：`pytest` 从生产依赖移至 `dev` extra，`ipykernel` 移至 `notebooks` extra；开发/离线测试使用 `uv sync --extra dev --locked`，笔记本另加 `--extra notebooks`。CI 对应安装 dev extra。这不是 SDK 迁移，也不删除可复现评测和学习环境所需的可选安装路径；锁文件验证结果见准备审计。
+准备阶段的依赖整理仅调整现有工具的归属：`pytest` 从生产依赖移至 `dev` extra，`ipykernel` 移至 `notebooks` extra；开发/离线测试使用 `uv sync --extra dev --locked`，笔记本另加 `--extra notebooks`。CI 对应安装 dev extra。该准备工作不是 SDK 迁移，也不删除可复现评测和学习环境所需的可选安装路径；当时的锁文件验证结果见准备审计。
 
 另保留既有依赖例外：`markitdown-mcp` 声明 `mcp~=1.8.0`，项目为 MCP adapter 设置 `mcp>=1.9.4` override，当前锁定 `mcp==1.23.0`。原 `pyproject.toml` 注释说明 markitdown 仅按子进程调用且默认禁用；本次依赖检查仍会报告该冲突，不能称整套依赖完全无冲突。正式迁移需评估隔离其安装环境或升级可兼容版本，不能为消除告警将主链 MCP 降回 1.8。
 
@@ -136,7 +138,7 @@ RAG Graph 维护**知识库文档/chunk 关系与检索扩展**；Research Graph
 
 ### 4.1 建议结构
 
-延续 `src/open_deep_research/` 包名，优先在已有目录内明确边界。下列是正式迁移时的职责建议，**当前没有创建这些新文件或目录**。
+延续 `src/open_deep_research/` 包名，优先在已有目录内明确边界。下列是正式迁移时的职责建议；Phase 0 仅新增少量 SDK 适配文件，未按蓝图批量创建模块或空目录。
 
 ```text
 src/open_deep_research/
@@ -179,7 +181,7 @@ flowchart TD
 
 ### 4.2 数据/控制接口
 
-以下只定义合同，不提前实现抽象基类或 SDK 代码。
+以下是正式迁移的完整业务合同；Phase 0 仅验证 SDK 和模型上下文窄边界，未提前实现全部服务或抽象基类。
 
 | 接缝 | 输入 → 输出/副作用 | 所有者与禁止越界 |
 | --- | --- | --- |
@@ -313,6 +315,6 @@ python -m mypy src
 
 最后两条用于完整记录仓库当前质量基线；若仓库已有类型/格式/第三方 stub 问题，应保留错误数量与分类。不能通过删除测试、放宽断言、降低检查范围或新增 blanket ignore 制造通过。真实 Neo4j/MySQL/Milvus/ES、MCP transport、sandbox provider 和付费模型能力需另做服务验收，本次未验证的内容不得写为通过。
 
-## 7. 准备工作的停止边界
+## 7. 准备工作的停止边界（历史基线）
 
-本次交付到源码恢复、安全整理、审计、明确旧问题与可复现测试基线，以及上述目标合同为止。正式 SDK 迁移需要新的实现变更；在此之前，保留现有 runtime/workflow 和所有必要业务/兼容入口。无论 SDK 当前已经提供多少 primitive，都须以本项目业务合同和选定版本的实测结果决定复用与替换范围。
+准备阶段交付到源码恢复、安全整理、审计、明确旧问题与可复现测试基线，以及上述目标合同为止。后续按用户要求实施的 SDK Phase 0 独立接入与实测见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)，仍保留现有生产 runtime/workflow 和所有必要业务/兼容入口。无论 SDK 当前已经提供多少 primitive，都须以本项目业务合同和选定版本的实测结果决定复用与替换范围。

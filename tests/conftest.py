@@ -22,4 +22,5 @@ def _disabled_load_dotenv(*_args: Any, **_kwargs: Any) -> bool:
 os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 dotenv.load_dotenv = _disabled_load_dotenv
 os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
 os.environ.setdefault("LANGSMITH_PROJECT", "public-opinion-research")
