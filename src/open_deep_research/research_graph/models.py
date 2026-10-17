@@ -260,10 +260,14 @@ class ResearchDeltaGraph(BaseModel):
         """Reject accidental cross-run nodes before they reach a store."""
         for node in self.nodes:
             if node.run_id != self.scope.run_id:
-                raise ValueError("ResearchDeltaGraph contains a node outside its scope.")
+                raise ValueError(
+                    "ResearchDeltaGraph contains a node outside its scope."
+                )
         for edge in self.edges:
             if edge.run_id != self.scope.run_id:
-                raise ValueError("ResearchDeltaGraph contains an edge outside its scope.")
+                raise ValueError(
+                    "ResearchDeltaGraph contains an edge outside its scope."
+                )
         return self
 
     # 把类型化图增量转换为可存储节点及溯源关系。
@@ -275,7 +279,9 @@ class ResearchDeltaGraph(BaseModel):
         node_ids = {node.node_id for node in nodes}
 
         # 将类型化对象加入节点集合，并保留标签与属性。
-        def add_node(node_id: str, node_type: ResearchNodeType, value: BaseModel, **meta: Any) -> None:
+        def add_node(
+            node_id: str, node_type: ResearchNodeType, value: BaseModel, **meta: Any
+        ) -> None:
             if node_id in node_ids:
                 return
             payload = value.model_dump(mode="json")
@@ -290,7 +296,9 @@ class ResearchDeltaGraph(BaseModel):
                     properties=payload,
                     run_id=self.scope.run_id,
                     role=str(meta.get("role") or self.scope.role),
-                    research_round=int(meta.get("research_round") or self.scope.research_round),
+                    research_round=int(
+                        meta.get("research_round") or self.scope.research_round
+                    ),
                     task_id=str(meta.get("task_id") or self.scope.task_id),
                 )
             )
@@ -316,8 +324,19 @@ class ResearchDeltaGraph(BaseModel):
             add_node(coverage.coverage_id, "Coverage", coverage)
 
         # 按关系类型连接节点，并构造稳定关系标识。
-        def add_edge(edge_id: str, relation: ResearchRelationType, source_id: str, target_id: str, **props: Any) -> None:
-            if not source_id or not target_id or source_id not in node_ids or target_id not in node_ids:
+        def add_edge(
+            edge_id: str,
+            relation: ResearchRelationType,
+            source_id: str,
+            target_id: str,
+            **props: Any,
+        ) -> None:
+            if (
+                not source_id
+                or not target_id
+                or source_id not in node_ids
+                or target_id not in node_ids
+            ):
                 return
             if any(edge.edge_id == edge_id for edge in edges):
                 return
@@ -337,42 +356,122 @@ class ResearchDeltaGraph(BaseModel):
             return f"edge:{relation}:{source_id}:{target_id}"
 
         for evidence in self.evidences:
-            add_edge(edge_key("EXTRACTED_FROM", evidence.evidence_id, evidence.source_id), "EXTRACTED_FROM", evidence.evidence_id, evidence.source_id)
+            add_edge(
+                edge_key("EXTRACTED_FROM", evidence.evidence_id, evidence.source_id),
+                "EXTRACTED_FROM",
+                evidence.evidence_id,
+                evidence.source_id,
+            )
         for item in self.source_findings:
-            add_edge(edge_key("FROM_SOURCE", item.source_finding_id, item.source_id), "FROM_SOURCE", item.source_finding_id, item.source_id)
+            add_edge(
+                edge_key("FROM_SOURCE", item.source_finding_id, item.source_id),
+                "FROM_SOURCE",
+                item.source_finding_id,
+                item.source_id,
+            )
             for evidence_id in item.evidence_ids:
-                add_edge(edge_key("DERIVED_FROM", item.source_finding_id, evidence_id), "DERIVED_FROM", item.source_finding_id, evidence_id)
+                add_edge(
+                    edge_key("DERIVED_FROM", item.source_finding_id, evidence_id),
+                    "DERIVED_FROM",
+                    item.source_finding_id,
+                    evidence_id,
+                )
             for claim_id in item.claim_ids:
-                add_edge(edge_key("ABOUT_CLAIM", item.source_finding_id, claim_id), "ABOUT_CLAIM", item.source_finding_id, claim_id)
+                add_edge(
+                    edge_key("ABOUT_CLAIM", item.source_finding_id, claim_id),
+                    "ABOUT_CLAIM",
+                    item.source_finding_id,
+                    claim_id,
+                )
         for evidence in self.evidences:
             for claim_id in evidence.supports_claim_ids:
-                add_edge(edge_key("SUPPORTS", evidence.evidence_id, claim_id), "SUPPORTS", evidence.evidence_id, claim_id)
+                add_edge(
+                    edge_key("SUPPORTS", evidence.evidence_id, claim_id),
+                    "SUPPORTS",
+                    evidence.evidence_id,
+                    claim_id,
+                )
             for claim_id in evidence.contradicts_claim_ids:
-                add_edge(edge_key("CONTRADICTS", evidence.evidence_id, claim_id), "CONTRADICTS", evidence.evidence_id, claim_id)
+                add_edge(
+                    edge_key("CONTRADICTS", evidence.evidence_id, claim_id),
+                    "CONTRADICTS",
+                    evidence.evidence_id,
+                    claim_id,
+                )
             for claim_id in evidence.contextualizes_claim_ids:
-                add_edge(edge_key("CONTEXTUALIZES", evidence.evidence_id, claim_id), "CONTEXTUALIZES", evidence.evidence_id, claim_id)
+                add_edge(
+                    edge_key("CONTEXTUALIZES", evidence.evidence_id, claim_id),
+                    "CONTEXTUALIZES",
+                    evidence.evidence_id,
+                    claim_id,
+                )
         for claim in self.claims:
             for event_id in claim.event_ids:
-                add_edge(edge_key("RELATES_TO", claim.claim_id, event_id), "RELATES_TO", claim.claim_id, event_id)
+                add_edge(
+                    edge_key("RELATES_TO", claim.claim_id, event_id),
+                    "RELATES_TO",
+                    claim.claim_id,
+                    event_id,
+                )
             for entity_id in claim.entity_ids:
-                add_edge(edge_key("INVOLVES", claim.claim_id, entity_id), "INVOLVES", claim.claim_id, entity_id)
+                add_edge(
+                    edge_key("INVOLVES", claim.claim_id, entity_id),
+                    "INVOLVES",
+                    claim.claim_id,
+                    entity_id,
+                )
         for uncertainty in self.uncertainties:
             for claim_id in uncertainty.claim_ids:
-                add_edge(edge_key("APPLIES_TO", uncertainty.uncertainty_id, claim_id), "APPLIES_TO", uncertainty.uncertainty_id, claim_id)
+                add_edge(
+                    edge_key("APPLIES_TO", uncertainty.uncertainty_id, claim_id),
+                    "APPLIES_TO",
+                    uncertainty.uncertainty_id,
+                    claim_id,
+                )
             for evidence_id in uncertainty.evidence_ids:
-                add_edge(edge_key("BASED_ON", uncertainty.uncertainty_id, evidence_id), "BASED_ON", uncertainty.uncertainty_id, evidence_id)
+                add_edge(
+                    edge_key("BASED_ON", uncertainty.uncertainty_id, evidence_id),
+                    "BASED_ON",
+                    uncertainty.uncertainty_id,
+                    evidence_id,
+                )
         for finding in self.findings:
             for claim_id in finding.claim_ids:
-                add_edge(edge_key("DERIVED_FROM", finding.finding_id, claim_id), "DERIVED_FROM", finding.finding_id, claim_id)
+                add_edge(
+                    edge_key("DERIVED_FROM", finding.finding_id, claim_id),
+                    "DERIVED_FROM",
+                    finding.finding_id,
+                    claim_id,
+                )
             for evidence_id in finding.evidence_ids:
-                add_edge(edge_key("SUPPORTED_BY", finding.finding_id, evidence_id), "SUPPORTED_BY", finding.finding_id, evidence_id)
+                add_edge(
+                    edge_key("SUPPORTED_BY", finding.finding_id, evidence_id),
+                    "SUPPORTED_BY",
+                    finding.finding_id,
+                    evidence_id,
+                )
             for uncertainty_id in finding.uncertainty_ids:
-                add_edge(edge_key("CONTEXTUALIZES", finding.finding_id, uncertainty_id), "CONTEXTUALIZES", finding.finding_id, uncertainty_id)
+                add_edge(
+                    edge_key("CONTEXTUALIZES", finding.finding_id, uncertainty_id),
+                    "CONTEXTUALIZES",
+                    finding.finding_id,
+                    uncertainty_id,
+                )
         for coverage in self.coverages:
             for finding_id in coverage.finding_ids:
-                add_edge(edge_key("SUPPORTED_BY", coverage.coverage_id, finding_id), "SUPPORTED_BY", coverage.coverage_id, finding_id)
+                add_edge(
+                    edge_key("SUPPORTED_BY", coverage.coverage_id, finding_id),
+                    "SUPPORTED_BY",
+                    coverage.coverage_id,
+                    finding_id,
+                )
             for claim_id in coverage.claim_ids:
-                add_edge(edge_key("SUPPORTED_BY", coverage.coverage_id, claim_id), "SUPPORTED_BY", coverage.coverage_id, claim_id)
+                add_edge(
+                    edge_key("SUPPORTED_BY", coverage.coverage_id, claim_id),
+                    "SUPPORTED_BY",
+                    coverage.coverage_id,
+                    claim_id,
+                )
         return nodes, edges
 
 
@@ -456,6 +555,24 @@ class WriteReceipt(BaseModel):
     node_ids: list[str] = Field(default_factory=list)
     edge_ids: list[str] = Field(default_factory=list)
     duplicate_source_ids: list[str] = Field(default_factory=list)
+
+    @property
+    def has_complete_node_references(self) -> bool:
+        """Check reference coverage; the Store remains responsible for persistence proof."""
+        referenced = {
+            *self.source_ids,
+            *self.evidence_ids,
+            *self.claim_ids,
+            *self.finding_ids,
+            *self.duplicate_source_ids,
+        }
+        return bool(
+            self.source_ids
+            and self.node_ids
+            and all(value.strip() for value in referenced)
+            and referenced.issubset(self.node_ids)
+            and set(self.duplicate_source_ids).issubset(self.source_ids)
+        )
 
     # 把写入回执渲染为保留溯源信息的短文本。
     def as_text(self) -> str:
