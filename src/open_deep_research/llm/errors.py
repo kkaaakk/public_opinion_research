@@ -1,5 +1,7 @@
+# 统一识别不同模型供应商返回的令牌或上下文超限异常。
 """Provider-specific context limit detection."""
 
+# 结合模型名称和异常信息判断是否超出上下文限制。
 def is_token_limit_exceeded(exception: Exception, model_name: str = None) -> bool:
     """Determine if an exception indicates a token/context limit was exceeded.
 
@@ -38,6 +40,7 @@ def is_token_limit_exceeded(exception: Exception, model_name: str = None) -> boo
         _check_gemini_token_limit(exception, error_str)
     )
 
+# 识别 OpenAI 异常类型及错误文本中的上下文超限信号。
 def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
     """Check if exception indicates OpenAI token limit exceeded."""
     # Analyze exception metadata
@@ -71,6 +74,7 @@ def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
 
     return False
 
+# 识别 Anthropic 返回的输入过长和令牌上限错误。
 def _check_anthropic_token_limit(exception: Exception, error_str: str) -> bool:
     """Check if exception indicates Anthropic token limit exceeded."""
     # Analyze exception metadata
@@ -94,6 +98,7 @@ def _check_anthropic_token_limit(exception: Exception, error_str: str) -> bool:
 
     return False
 
+# 识别 Google/Gemini 返回的上下文长度或令牌限制错误。
 def _check_gemini_token_limit(exception: Exception, error_str: str) -> bool:
     """Check if exception indicates Google/Gemini token limit exceeded."""
     # Analyze exception metadata

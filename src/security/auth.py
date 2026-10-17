@@ -1,3 +1,4 @@
+# 使用 Supabase 验证身份，并按所有者限制线程、助手和存储的访问范围。
 import asyncio
 import logging
 import os
@@ -21,6 +22,7 @@ auth = Auth()
 
 # The `authenticate` decorator tells LangGraph to call this function as middleware
 # for every request. This will determine whether the request is allowed or not
+# 验证 Authorization 中的 Supabase JWT，并返回 LangGraph 所需用户身份。
 @auth.authenticate
 async def get_current_user(authorization: str | None) -> Auth.types.MinimalUserDict:
     """Check if the user's JWT token is valid using Supabase."""
@@ -50,6 +52,7 @@ async def get_current_user(authorization: str | None) -> Auth.types.MinimalUserD
     try:
         # Verify the JWT token with Supabase using asyncio.to_thread to avoid blocking
         # This will decode and verify the JWT token in a separate thread
+        # 请求 Supabase 用户接口验证令牌，返回已验证的用户信息。
         async def verify_token() -> dict[str, Any]:
             response = await asyncio.to_thread(supabase.auth.get_user, token)
             return response
@@ -75,6 +78,7 @@ async def get_current_user(authorization: str | None) -> Auth.types.MinimalUserD
         )
 
 
+# 创建线程时写入 owner 元数据，并返回所有者访问过滤条件。
 @auth.on.threads.create
 @auth.on.threads.create_run
 async def on_thread_create(
@@ -97,6 +101,7 @@ async def on_thread_create(
     metadata["owner"] = ctx.user.identity
 
 
+# 为线程读写、删除和搜索返回当前用户的所有者过滤条件。
 @auth.on.threads.read
 @auth.on.threads.delete
 @auth.on.threads.update
@@ -117,6 +122,7 @@ async def on_thread_read(
     return {"owner": ctx.user.identity}
 
 
+# 创建助手时写入 owner 元数据，Studio 用户按既有规则放行。
 @auth.on.assistants.create
 async def on_assistants_create(
     ctx: Auth.types.AuthContext,
@@ -131,6 +137,7 @@ async def on_assistants_create(
     metadata["owner"] = ctx.user.identity
 
 
+# 按助手所有者过滤读取、更新、删除与搜索操作。
 @auth.on.assistants.read
 @auth.on.assistants.delete
 @auth.on.assistants.update
@@ -152,6 +159,7 @@ async def on_assistants_read(
     return {"owner": ctx.user.identity}
 
 
+# 检查存储命名空间首项是否为当前用户身份，不匹配时拒绝访问。
 @auth.on.store()
 async def authorize_store(ctx: Auth.types.AuthContext, value: dict):
     if isinstance(ctx.user, StudioUser):

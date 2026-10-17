@@ -1,3 +1,4 @@
+# 将单角色图存储、检索、来源校验和有限工作上下文封装为研究工作区。
 """Per-run Research Graph workspace and role-scoped Working Context."""
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from open_deep_research.research_graph.store import (
 from open_deep_research.research_graph.transcript import ResearchTranscript
 
 
+# 提供不依赖具体业务角色的研究任务描述。
 @dataclass
 class TaskDescriptor:
     """Role-neutral task view used by graph strategies."""
@@ -41,6 +43,7 @@ class TaskDescriptor:
     reason: str = ""
 
 
+# 保存一次工具调用参数、结果及执行状态。
 @dataclass
 class ToolBatchItem:
     """One tool call and its observed result."""
@@ -52,9 +55,11 @@ class ToolBatchItem:
     success: bool
 
 
+# 管理单角色的研究图资源、上下文策略及可序列化状态更新。
 class ResearchWorkspace:
     """Own Graph storage, retrieval, provenance, and Working Context for a role."""
 
+    # 根据配置和状态恢复工作上下文，初始化图与策略资源。
     def __init__(
         self,
         *,
@@ -118,6 +123,7 @@ class ResearchWorkspace:
             else None
         )
 
+    # 从序列化状态恢复工作上下文，必要时创建初始值。
     def _load_working_context(self) -> WorkingContext:
         values = self.research_state.get("working_contexts", {}) or {}
         value = values.get(self.role) if isinstance(values, dict) else None
@@ -130,18 +136,22 @@ class ResearchWorkspace:
                 pass
         return initial_working_context(self.task)
 
+    # 委托当前策略生成动态模型上下文。
     async def before_model(self, messages: list[Any]) -> list[Any]:
         """Ask the configured context strategy for dynamic model context."""
         return await self.strategy.before_model(self, messages)
 
+    # 将工具批次交给生产或消费策略处理。
     async def ingest(self, messages: list[Any], batch: list[ToolBatchItem]) -> Any:
         """Ingest a tool batch through the producer/consumer context strategy."""
         return await self.strategy.after_tool_batch(self, messages, batch)
 
+    # 在图模式负责报告生成时产出基于图证据的角色报告。
     async def finalize(self, messages: list[Any], expected_output: str) -> Any:
         """Produce a graph-grounded role report when graph mode owns it."""
         return await self.strategy.finalize(self, messages, expected_output)
 
+    # 渲染运行时压缩历史时必须保留的任务与工作上下文。
     def protected_context(self) -> str:
         """Render context that AgentRuntime must preserve during compaction."""
         return render_protected_context(
@@ -151,6 +161,7 @@ class ResearchWorkspace:
             rolling_summary=self.rolling_summary,
         )
 
+    # 按当前任务检索受运行范围限制的相关子图，可随时重新计算。
     def context_for(self, *, query_suffix: str = "") -> RelevantSubgraph:
         """Retrieve a scoped, recomputable RelevantSubgraph for the current task."""
         if self.retriever is None:
@@ -172,6 +183,7 @@ class ResearchWorkspace:
         self.metrics.add("retrieved_edges", len(self.relevant_subgraph.edges))
         return self.relevant_subgraph
 
+    # 为复核和报告等消费方提供范围受限的图查询。
     @staticmethod
     def retrieve(
         configurable: Any,
@@ -188,6 +200,7 @@ class ResearchWorkspace:
             max_edges=configurable.research_graph_max_retrieved_edges,
         )
 
+    # 只导出可序列化的研究和运行指标状态，不泄露运行时连接对象。
     def state_update(self) -> dict[str, Any]:
         """Return only serializable Research and Runtime domain updates."""
         return {
@@ -201,6 +214,7 @@ class ResearchWorkspace:
         }
 
 
+# 提供直接图检索入口，隐藏工作区装配细节。
 def retrieve_research_context(
     configurable: Any,
     *,

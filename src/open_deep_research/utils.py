@@ -1,3 +1,4 @@
+# 保留旧工具函数导入路径，具体实现已拆分到对应职责模块。
 """Compatibility exports only. New code should import from the owning module."""
 
 # ruff: noqa: F401

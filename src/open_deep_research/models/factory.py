@@ -1,3 +1,4 @@
+# 解析供应商与模型标识，集中构建模型实例并适配结构化输出差异。
 """The single authoritative factory for LangChain chat models."""
 
 from __future__ import annotations
@@ -40,10 +41,12 @@ _LANGCHAIN_PROVIDERS = {
 }
 
 
+# 表示模型引用或供应商配置不合法的错误。
 class ModelConfigurationError(ValueError):
     """Raised when a model reference or provider configuration is invalid."""
 
 
+# 保存归一化后的供应商、模型 ID 及原始模型引用。
 @dataclass(frozen=True)
 class ModelRef:
     """A normalized ``provider:model`` reference."""
@@ -53,6 +56,7 @@ class ModelRef:
     original: str
 
 
+# 解析 provider:model 格式，同时保留供应商自定义模型和端点 ID。
 def parse_model_ref(value: str) -> ModelRef:
     """Parse a ``provider:model`` reference without constraining provider model IDs.
 
@@ -79,6 +83,7 @@ def parse_model_ref(value: str) -> ModelRef:
     return ModelRef(provider=provider, model=model, original=f"{provider}:{model}")
 
 
+# 从运行配置安全取得供应商可配置项。
 def _configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     if not isinstance(config, Mapping):
         return {}
@@ -86,6 +91,7 @@ def _configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return nested if isinstance(nested, Mapping) else config
 
 
+# 按供应商从运行时配置或环境变量解析 API 凭据。
 def resolve_api_key(
     model_ref: str | ModelRef,
     config: Mapping[str, Any] | None = None,
@@ -105,6 +111,7 @@ def resolve_api_key(
     return os.getenv(env_name) or None
 
 
+# 取得并校验火山方舟的 OpenAI 兼容接口地址。
 def resolve_ark_base_url(
     config: Mapping[str, Any] | None = None,
     explicit: str | None = None,
@@ -127,22 +134,26 @@ def resolve_ark_base_url(
     return endpoint
 
 
+# 为方舟模型提供基于工具调用的结构化输出适配。
 class VolcengineChatOpenAI(ChatOpenAI):
     """Ark adapter that uses tool calling for portable structured output."""
 
     logical_model_ref: str
 
+    # 使用方舟兼容的函数调用方式创建结构化响应链。
     def with_structured_output(self, schema: Any = None, **kwargs: Any) -> Any:
         """Build structured output using Ark-compatible function calling."""
         kwargs.setdefault("method", "function_calling")
         return super().with_structured_output(schema, **kwargs)
 
 
+# 适配 DeepSeek Flash，在结构化输出时处理思考模式与工具选择的兼容性。
 class DeepSeekFlashChat(ChatDeepSeek):
     """DeepSeek Flash adapter that disables thinking only for structured output."""
 
     logical_model_ref: str
 
+    # 构建结构化输出时关闭不兼容的思考配置。
     def with_structured_output(
         self,
         schema: Any = None,
@@ -168,6 +179,7 @@ class DeepSeekFlashChat(ChatDeepSeek):
         )
 
 
+# 根据逻辑模型引用、凭据和供应商参数构造对应 LangChain 聊天模型。
 def create_chat_model(
     model_ref: str | None = None,
     *,
@@ -220,9 +232,11 @@ def create_chat_model(
     return init_chat_model(model=ref.original, **init_kwargs)
 
 
+# 延迟构建模型的兼容代理，在最终配置阶段统一创建真实实例。
 class _ConfigurableChatModel:
     """Lazy compatibility proxy for LangChain's configurable-model pattern."""
 
+    # 保存待绑定工具和重试参数，此时不创建模型或发送请求。
     def __init__(
         self,
         *,
@@ -232,16 +246,19 @@ class _ConfigurableChatModel:
         self._bound_tools = bound_tools
         self._retry_kwargs = retry_kwargs
 
+    # 返回带新工具绑定信息的代理，保留现有重试配置。
     def bind_tools(self, tools: Any, **kwargs: Any) -> _ConfigurableChatModel:
         return _ConfigurableChatModel(
             bound_tools=((tools,), kwargs), retry_kwargs=self._retry_kwargs
         )
 
+    # 返回带重试设置的代理，保留已有工具绑定。
     def with_retry(self, **kwargs: Any) -> _ConfigurableChatModel:
         return _ConfigurableChatModel(
             bound_tools=self._bound_tools, retry_kwargs=dict(kwargs)
         )
 
+    # 合并配置后创建真实模型，再依次应用工具绑定和重试。
     def with_config(
         self, config: Mapping[str, Any] | None = None, **kwargs: Any
     ) -> Any:
@@ -266,6 +283,7 @@ class _ConfigurableChatModel:
         return instance
 
 
+# 返回可延迟选择模型和供应商的配置代理。
 def configurable_chat_model() -> _ConfigurableChatModel:
     """Return a lazy model whose final construction uses :func:`create_chat_model`."""
     return _ConfigurableChatModel()

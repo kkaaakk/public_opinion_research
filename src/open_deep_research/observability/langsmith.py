@@ -1,3 +1,4 @@
+# 规范化追踪配置并提供失败可降级的追踪区间，不让观测故障中断业务。
 """Thin LangSmith integration for execution observability.
 
 LangSmith is the project's tracing system: it owns Trace/Span hierarchy, graph
@@ -43,6 +44,7 @@ except Exception:  # pragma: no cover - optional dependency guard
     _get_current_run_tree = None  # type: ignore[assignment,misc]
 
 
+# 将环境变量文本解析为布尔开关。
 def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -51,6 +53,7 @@ def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in _TRUE_VALUES
 
 
+# 从配置对象中读取指定追踪设置。
 def _config_value(config: Mapping[str, Any] | None, key: str) -> Any:
     if not isinstance(config, Mapping):
         return None
@@ -63,6 +66,7 @@ def _config_value(config: Mapping[str, Any] | None, key: str) -> Any:
     return None
 
 
+# 清理 SDK 的环境配置缓存，使归一化后的值立即生效。
 def _clear_langsmith_env_cache() -> None:
     """Clear LangSmith's env cache so normalized values take effect."""
     try:
@@ -75,6 +79,7 @@ def _clear_langsmith_env_cache() -> None:
         pass
 
 
+# 规范化项目名和追踪环境变量，缺少凭据时避免追踪成为强制依赖。
 def ensure_langsmith_configuration() -> None:
     """Normalize LangSmith env vars without making tracing a hard dependency.
 
@@ -112,6 +117,7 @@ def ensure_langsmith_configuration() -> None:
         _clear_langsmith_env_cache()
 
 
+# 返回当前进程是否具备启用 LangSmith 追踪的条件。
 def langsmith_enabled() -> bool:
     """Return whether LangSmith tracing should be active for this process."""
     if not _truthy(os.environ.get("LANGSMITH_TRACING") or os.environ.get("LANGCHAIN_TRACING")):
@@ -121,12 +127,14 @@ def langsmith_enabled() -> bool:
     )
 
 
+# 返回当前追踪项目名称。
 def langsmith_project() -> str:
     """Return the configured LangSmith project name."""
     value = (os.environ.get("LANGSMITH_PROJECT") or "").strip()
     return value or DEFAULT_PROJECT
 
 
+# 限制元数据文本长度，避免追踪字段无限增长。
 def _bounded(value: Any, *, limit: int = 160) -> str | None:
     if value is None or isinstance(value, bool):
         return None
@@ -136,6 +144,7 @@ def _bounded(value: Any, *, limit: int = 160) -> str | None:
     return text[:limit]
 
 
+# 从显式 ID 或线程 ID 推导稳定运行标识，使中断恢复仍可关联。
 def logical_run_id(config: Mapping[str, Any] | None = None) -> str:
     """Derive a stable, serializable logical run id without persisting state.
 
@@ -156,6 +165,7 @@ def logical_run_id(config: Mapping[str, Any] | None = None) -> str:
     return f"workflow_{uuid.uuid4().hex}"
 
 
+# 只复制有限的稳定关联标识，排除状态正文、提示词和凭据。
 def correlation_metadata(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Build bounded, serializable correlation facts for LangSmith runs.
 
@@ -177,6 +187,7 @@ def correlation_metadata(config: Mapping[str, Any] | None = None) -> dict[str, A
     return metadata
 
 
+# 生成一次研究图调用的关联元数据。
 def invocation_metadata(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Return metadata to attach to one graph invocation's LangSmith run."""
     metadata = correlation_metadata(config)
@@ -184,6 +195,7 @@ def invocation_metadata(config: Mapping[str, Any] | None = None) -> dict[str, An
     return metadata
 
 
+# 生成 LangGraph 节点级追踪标记。
 def node_metadata(node_name: str, *, kind: str = "graph_node") -> dict[str, Any]:
     """Return bounded metadata for one LangGraph node run."""
     metadata: dict[str, Any] = {
@@ -197,6 +209,7 @@ def node_metadata(node_name: str, *, kind: str = "graph_node") -> dict[str, Any]
     return metadata
 
 
+# 生成业务角色智能体的追踪元数据。
 def agent_metadata(agent_name: str, agent_role: str | None = None) -> dict[str, Any]:
     """Return bounded metadata for one public-opinion business agent."""
     return {
@@ -206,6 +219,7 @@ def agent_metadata(agent_name: str, agent_role: str | None = None) -> dict[str, 
     }
 
 
+# 生成 LangChain 自动追踪模型调用所需的元数据。
 def model_metadata(
     *,
     component: str | None = None,
@@ -220,6 +234,7 @@ def model_metadata(
     return metadata
 
 
+# 向当前运行树追加有限元数据；追踪失败不向业务层抛错。
 def record_current_metadata(metadata: Mapping[str, Any]) -> None:
     """Attach bounded metadata to the current run tree; never raises."""
     if not metadata or _get_current_run_tree is None:
@@ -233,22 +248,28 @@ def record_current_metadata(metadata: Mapping[str, Any]) -> None:
         LOGGER.debug("LangSmith metadata update failed", exc_info=True)
 
 
+# 在关闭追踪或初始化失败时提供无操作的同步与异步上下文。
 class _NoOpSpan:
     """A context manager used when tracing is disabled or setup failed."""
 
+    # 进入无操作同步上下文。
     def __enter__(self) -> None:
         return None
 
+    # 退出无操作同步上下文，保留业务异常的传播。
     def __exit__(self, *_exc: Any) -> None:
         return None
 
+    # 进入无操作异步上下文。
     async def __aenter__(self) -> None:
         return None
 
+    # 退出无操作异步上下文。
     async def __aexit__(self, *_exc: Any) -> None:
         return None
 
 
+# 为 RAG 等无法自动追踪的逻辑阶段提供同步及异步追踪区间。
 class trace_span:
     """Fail-open LangSmith span for a high-value logical stage.
 
@@ -258,6 +279,7 @@ class trace_span:
     so observability can never fail a research run.
     """
 
+    # 保存阶段名称及有限元数据，准备创建追踪上下文。
     def __init__(
         self,
         name: str,
@@ -275,6 +297,7 @@ class trace_span:
         self.tags = tags
         self._cm: Any = None
 
+    # 初始化实际追踪上下文；不可用时回退到无操作上下文。
     def _start(self) -> Any:
         if not langsmith_enabled() or _ls_trace is None:
             return _NoOpSpan()
@@ -294,6 +317,7 @@ class trace_span:
             LOGGER.debug("LangSmith span setup failed", exc_info=True)
             return _NoOpSpan()
 
+    # 同步启动追踪区间，失败时降级继续业务执行。
     def __enter__(self) -> Any:
         """Start the span synchronously; degrade to a no-op on failure."""
         self._cm = self._start()
@@ -304,6 +328,7 @@ class trace_span:
             self._cm = _NoOpSpan()
             return None
 
+    # 结束同步追踪，避免追踪清理错误覆盖业务结果。
     def __exit__(self, *exc: Any) -> bool:
         """End the span without ever raising."""
         try:
@@ -312,6 +337,7 @@ class trace_span:
             LOGGER.debug("LangSmith span exit failed", exc_info=True)
             return False
 
+    # 异步启动追踪区间，失败时使用无操作实现。
     async def __aenter__(self) -> Any:
         """Start the span asynchronously; degrade to a no-op on failure."""
         self._cm = self._start()
@@ -322,6 +348,7 @@ class trace_span:
             self._cm = _NoOpSpan()
             return None
 
+    # 结束异步追踪，隔离追踪侧退出异常。
     async def __aexit__(self, *exc: Any) -> bool:
         """End the span without ever raising."""
         try:

@@ -1,3 +1,4 @@
+# 根据同源、相邻分块和共享元数据生成结构关系，补充术语共现图。
 """Structured edge builders for GraphRAG.
 
 This module adds document-structure edges to the term-co-occurrence graph.
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from open_deep_research.rag.types import RAGChunk
 
 
+# 描述两个分块之间的结构关系类型及权重。
 @dataclass(frozen=True)
 class StructuredEdge:
     """A single structural relationship between two chunks."""
@@ -23,6 +25,7 @@ class StructuredEdge:
     weight: float = 1.0
 
 
+# 连接同一文档的分块，并随分块距离增加衰减权重。
 def build_source_edges(chunks: list[RAGChunk]) -> list[StructuredEdge]:
     """Return SAME_SOURCE edges between chunks that come from the same document.
 
@@ -52,6 +55,7 @@ def build_source_edges(chunks: list[RAGChunk]) -> list[StructuredEdge]:
     return edges
 
 
+# 为连续分块生成前后邻接关系，只连接序号相差一的分块。
 def build_adjacent_edges(chunks: list[RAGChunk]) -> list[StructuredEdge]:
     """Return NEXT_CHUNK / PREV_CHUNK edges for sequentially adjacent chunks.
 
@@ -75,6 +79,7 @@ def build_adjacent_edges(chunks: list[RAGChunk]) -> list[StructuredEdge]:
     return edges
 
 
+# 为共享标题或 JSON 路径等关键元数据的分块建立关系。
 def build_metadata_edges(chunks: list[RAGChunk]) -> list[StructuredEdge]:
     """Return SHARED_METADATA edges when chunks share key metadata fields.
 
@@ -125,6 +130,7 @@ def build_metadata_edges(chunks: list[RAGChunk]) -> list[StructuredEdge]:
     return edges
 
 
+# 从标准分块 ID 推导后继 ID；格式不匹配时返回 None。
 def _next_chunk_id(chunk_id: str) -> str | None:
     """Infer the next sequential chunk id, e.g. ``doc-1-chunk-3`` -> ``doc-1-chunk-4``.
 
@@ -140,9 +146,11 @@ def _next_chunk_id(chunk_id: str) -> str | None:
     return f"{prefix}chunk-{next_num}"
 
 
+# 以邻接表保存结构边，便于快速查询分块邻居。
 class StructuralIndex:
     """In-memory index of structural edges for fast lookup."""
 
+    # 初始化结构边索引并装入提供的关系。
     def __init__(self, edges: list[StructuredEdge] | None = None):
         self._outgoing: dict[str, list[StructuredEdge]] = {}
         self._incoming: dict[str, list[StructuredEdge]] = {}
@@ -150,10 +158,12 @@ class StructuralIndex:
             for edge in edges:
                 self.add_edge(edge)
 
+    # 把一条结构关系加入邻接索引。
     def add_edge(self, edge: StructuredEdge) -> None:
         self._outgoing.setdefault(edge.from_chunk_id, []).append(edge)
         self._incoming.setdefault(edge.to_chunk_id, []).append(edge)
 
+    # 返回指定分块相连的邻居 ID、权重及关系类型。
     def neighbors(
         self, chunk_id: str
     ) -> list[tuple[str, float, str]]:

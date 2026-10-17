@@ -1,3 +1,4 @@
+# 在报告完成后保存对话记忆，并触发后台向量索引同步。
 """Conversation memory write workflow.
 
 This path owns raw MySQL writes. When configured, it also triggers a background
@@ -23,6 +24,7 @@ from open_deep_research.time_utils import get_today_str
 LOGGER = logging.getLogger(__name__)
 
 
+# 将提取的记忆写入 MySQL，设置为等待索引的状态。
 def persist_conversation_memory(
     *,
     configurable: Configuration,
@@ -65,6 +67,7 @@ def persist_conversation_memory(
     return written_count
 
 
+# 启动非阻塞后台刷新任务，同步新写入的可索引记忆。
 def trigger_memory_index_refresh(
     *,
     configurable: Configuration,
@@ -85,6 +88,7 @@ def trigger_memory_index_refresh(
     thread.start()
 
 
+# 执行后台索引刷新，并处理刷新过程中的异常。
 def _refresh_memory_index(
     *,
     configurable: Configuration,
@@ -110,6 +114,7 @@ def _refresh_memory_index(
         LOGGER.exception("Failed to refresh memory RAG index; continuing in background.")
 
 
+# 移除临时图片解析消息，避免把派生上下文保存为原始对话。
 def _messages_without_query_image_context(messages):
     return [
         message
@@ -118,6 +123,7 @@ def _messages_without_query_image_context(messages):
     ]
 
 
+# 按开关与会话范围保存聊天原文、生成摘要及长期记忆。
 async def maybe_persist_chat_memory(
     state: AgentState,
     config: RunnableConfig,

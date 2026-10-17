@@ -1,3 +1,4 @@
+# 压缩历史工具正文与旧推理步骤，同时保留工具配对和证据溯源标识。
 """Message lifecycle utilities for Micro and Rolling Compaction."""
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from open_deep_research.research_graph.models import (
 )
 
 
+# 保存确定性微压缩后的消息与相关统计。
 @dataclass
 class CompactionResult:
     """Result of deterministic Micro Compact."""
@@ -29,6 +31,7 @@ class CompactionResult:
     tokens_removed: int = 0
 
 
+# 保存一次增量滚动摘要及压缩后的消息历史。
 @dataclass
 class RollingCompactionResult:
     """Result of one incremental Rolling Compact."""
@@ -39,6 +42,7 @@ class RollingCompactionResult:
     tokens_removed: int = 0
 
 
+# 把已持久化的旧工具正文替换成短回执，保留 AI 调用及 tool_call_id 配对。
 def micro_compact_messages(
     messages: Iterable[Any],
     receipts: dict[str, WriteReceipt | str],
@@ -64,7 +68,15 @@ def micro_compact_messages(
             and tool_call_id not in keep_ids
         ):
             receipt = receipts[tool_call_id]
-            receipt_text = receipt.as_text() if isinstance(receipt, WriteReceipt) else str(receipt)
+            if (
+                isinstance(receipt, WriteReceipt)
+                and not receipt.has_complete_node_references
+            ):
+                compacted.append(message)
+                continue
+            receipt_text = (
+                receipt.as_text() if isinstance(receipt, WriteReceipt) else str(receipt)
+            )
             old_text = str(getattr(message, "content", "") or "")
             replacement = _replace_message_content(message, receipt_text)
             compacted.append(replacement)
@@ -82,6 +94,7 @@ def micro_compact_messages(
     )
 
 
+# 仅汇总新达到压缩条件的历史，以完整 AI/工具单元替换旧步骤。
 async def rolling_compact(
     messages: Iterable[Any],
     *,
@@ -150,6 +163,7 @@ async def rolling_compact(
     )
 
 
+# 生成当前任务、工作上下文等压缩过程中必须保留的输入块。
 def render_protected_context(
     *,
     current_task: str,
@@ -169,6 +183,7 @@ def render_protected_context(
     )
 
 
+# 复制消息并替换正文，保留原消息的工具配对等字段。
 def _replace_message_content(message: Any, content: str) -> Any:
     model_copy = getattr(message, "model_copy", None)
     if callable(model_copy):
@@ -180,6 +195,7 @@ def _replace_message_content(message: Any, content: str) -> Any:
     return message
 
 
+# 提取近期需保留正文的工具调用 ID。
 def _recent_tool_call_ids(messages: list[Any], recent_raw_steps: int) -> set[str]:
     ai_indices = [
         index
@@ -196,6 +212,7 @@ def _recent_tool_call_ids(messages: list[Any], recent_raw_steps: int) -> set[str
     return keep_ids
 
 
+# 寻找近期完整推理步骤的起始位置，避免截断工具调用单元。
 def _recent_step_start(messages: list[Any], recent_raw_steps: int) -> int | None:
     starts = [
         index
@@ -210,7 +227,10 @@ def _recent_step_start(messages: list[Any], recent_raw_steps: int) -> int | None
     return kept_starts[0]
 
 
-def _render_messages(messages: Iterable[Any], *, max_each: int = 5000, max_total: int = 30_000) -> str:
+# 将待摘要的历史消息整理为文本。
+def _render_messages(
+    messages: Iterable[Any], *, max_each: int = 5000, max_total: int = 30_000
+) -> str:
     parts: list[str] = []
     total = 0
     for index, message in enumerate(messages, start=1):
@@ -225,6 +245,7 @@ def _render_messages(messages: Iterable[Any], *, max_each: int = 5000, max_total
     return "\n".join(parts) or "None"
 
 
+# 兼容模型、字典和普通消息响应，统一为滚动压缩输出模型。
 def _coerce_rolling_output(response: Any) -> RollingCompactOutput:
     if isinstance(response, RollingCompactOutput):
         return response

@@ -1,3 +1,4 @@
+# 为旧工具导入路径保留兼容导出，实际工具实现位于 tools/rag_tool.py。
 """Compatibility exports for the RAG agent tool.
 
 New code should import `rag_search` from `open_deep_research.tools.rag_tool`.

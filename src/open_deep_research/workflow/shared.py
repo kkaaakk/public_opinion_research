@@ -1,3 +1,4 @@
+# 为工作流节点提供共享模型及运行关联配置。
 """Shared model binding and correlation metadata for workflow stages."""
 
 from collections.abc import Mapping
@@ -10,6 +11,7 @@ from open_deep_research.observability import invocation_metadata
 
 configurable_model = configurable_chat_model()
 
+# 复制调用配置并追加有限关联标识，不修改原配置或复制用户正文。
 def _with_correlation_metadata(
     config: RunnableConfig | None,
     extra: Mapping[str, Any] | None = None,

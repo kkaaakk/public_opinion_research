@@ -1,3 +1,4 @@
+# 执行共享 ReAct 循环，管理消息、模型工具调用、压缩和角色私有记忆。
 """Shared ReAct runtime used by all four public-opinion AgentSpecs."""
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ CompressionCallback = Callable[
 ]
 
 
+# 保存一次角色执行的可序列化输出及资源消耗。
 @dataclass
 class AgentRuntimeResult:
     """Serializable output produced by one AgentRuntime invocation."""
@@ -51,9 +53,11 @@ class AgentRuntimeResult:
     replace_report: bool = False
 
 
+# 统一管理智能体生命周期，将模型推理、工具执行和研究工作区衔接起来。
 class AgentRuntime:
     """Own ReAct history, model/tool lifecycle, compaction, and role output."""
 
+    # 绑定角色规范、模型工厂、工具和工作区，以及运行所需的回调。
     def __init__(
         self,
         *,
@@ -88,10 +92,12 @@ class AgentRuntime:
         self.rolling_summary = str(self.agent_state.get("rolling_summary") or "")
         self.workspace.rolling_summary = self.rolling_summary
 
+    # 兼容工具对象和原生工具声明，提取稳定工具名。
     @staticmethod
     def _tool_name(tool: Any) -> str:
         return str(getattr(tool, "name", None) or getattr(tool, "__name__", ""))
 
+    # 为预算或策略跳过的工具调用生成配对结果，保持消息链完整。
     @staticmethod
     def _skipped_tool_message(tool_call: dict[str, Any], reason: str) -> ToolMessage:
         return ToolMessage(
@@ -100,6 +106,7 @@ class AgentRuntime:
             tool_call_id=tool_call["id"],
         )
 
+    # 只渲染当前角色私有记忆，用于动态模型上下文。
     @staticmethod
     def format_private_memory(agent_state: Mapping[str, Any]) -> str:
         """Render only this role's private memory for dynamic model context."""
@@ -117,6 +124,7 @@ class AgentRuntime:
                 entries.append(f"{index}. {memory}")
         return "\n\n".join(entries)
 
+    # 生成受大小限制的角色私有记忆记录。
     @staticmethod
     def build_private_memory(role: str, report: str, raw_notes: list[str]) -> dict[str, Any]:
         """Create the bounded private-memory record owned by one role."""
@@ -130,6 +138,7 @@ class AgentRuntime:
             "raw_note_count": len(raw_notes or []),
         }
 
+    # 以实际下一次请求的消息与工具结构估算压力，必要时压缩 ReAct 历史。
     async def _compact_history(
         self, messages: list[Any], model_messages: list[Any]
     ) -> tuple[list[Any], dict[str, Any]]:
@@ -201,6 +210,7 @@ class AgentRuntime:
             )
         return result.messages, result.budget_usage
 
+    # 执行角色的模型推理与工具循环，处理预算、上下文压缩及最终角色输出。
     async def run(self, task: str) -> AgentRuntimeResult:
         """Execute the shared ReAct lifecycle for this role assignment."""
         messages: list[Any] = [HumanMessage(content=task)]
@@ -222,6 +232,7 @@ class AgentRuntime:
         mode = "followup" if research_round > 1 else "initial"
 
         for step in range(self.config.max_react_tool_calls):
+            # 用“已有消耗 + 本角色增量”判断额度，避免把累计值再次提交给 reducer。
             projected = merge_budget_usage(self.initial_budget, budget_update)
             if not can_spend_model_call(
                 self.config, projected, reserve_final_report_call=True
@@ -243,7 +254,7 @@ class AgentRuntime:
             )
             if compaction_budget:
                 budget_update = merge_budget_usage(budget_update, compaction_budget)
-                # History changed: rebuild the actual request structure for the call.
+                # 压缩已改变历史，重新构建实际请求，使估算结构与发送结构保持一致。
                 model_messages = [
                     SystemMessage(content=self.system_prompt),
                     *await self.workspace.before_model(messages),
@@ -293,6 +304,7 @@ class AgentRuntime:
 
             known = [call for call in allowed if call["name"] in tools_by_name]
             unknown = [call for call in allowed if call["name"] not in tools_by_name]
+            # 未注册工具也要返回配对 ToolMessage，避免下一次请求的工具调用链不完整。
             for call in unknown:
                 observation = (
                     f"Tool '{call['name']}' is not available in the current configuration. "
@@ -310,6 +322,7 @@ class AgentRuntime:
                 )
 
             if known:
+                # 同一轮工具并发执行；返回后逐项合并其内部模型请求捕获的消耗。
                 results = await asyncio.gather(
                     *[
                         self.execute_tool(
@@ -357,6 +370,7 @@ class AgentRuntime:
                     )
                 )
 
+            # 图生产策略在此抽取并持久化证据，标准策略则保留原工具消息。
             hook = await self.workspace.ingest(messages, batch)
             messages = hook.messages
             budget_update = merge_budget_usage(budget_update, hook.budget_usage)
@@ -365,6 +379,7 @@ class AgentRuntime:
             if not allowed:
                 break
 
+        # 图模式直接用有界证据生成报告；标准模式使用研究历史压缩入口收尾。
         graph_final = await self.workspace.finalize(messages, self.spec.expected_output)
         if graph_final is not None:
             budget_update = merge_budget_usage(budget_update, graph_final.budget_usage)
@@ -400,6 +415,7 @@ class AgentRuntime:
         )
 
 
+# 提供私有记忆格式化的兼容入口，避免调用方依赖运行时类。
 def format_private_memory(agent_state: Mapping[str, Any]) -> str:
     """Format private agent memory without exposing AgentRuntime to callers."""
     return AgentRuntime.format_private_memory(agent_state)

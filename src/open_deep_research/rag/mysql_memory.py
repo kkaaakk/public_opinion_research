@@ -1,3 +1,4 @@
+# 兼容旧 MySQL 记忆导入路径，重新导出存储与加载接口。
 """Compatibility exports for MySQL-backed memory.
 
 New code should import from `open_deep_research.memory.*`. This module remains

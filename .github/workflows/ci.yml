@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - codex/openai-agents-migration
 
 permissions:
   contents: read
@@ -64,7 +65,7 @@ jobs:
           enable-cache: true
 
       - name: Install locked project
-        run: uv sync --locked
+        run: uv sync --extra dev --locked
 
       - name: Run deterministic offline tests
         run: uv run python -m pytest

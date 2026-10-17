@@ -1,3 +1,4 @@
+# 配置公众信号角色：收集新闻、社交讨论、投诉及传播迹象。
 """Public signal agent specification."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec

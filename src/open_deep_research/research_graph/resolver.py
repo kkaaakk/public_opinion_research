@@ -1,3 +1,4 @@
+# 先进行低成本主张候选匹配，再可选调用语义判定，避免全量两两比较。
 """Thin claim/entity resolution boundary for future graph deployments.
 
 Exact deterministic IDs handle identical claims in the current batch adapter.
@@ -16,6 +17,7 @@ from open_deep_research.research_graph.models import Claim
 from open_deep_research.research_graph.schema import normalize_text
 
 
+# 记录主张相同、不同或未知的判定及匹配依据。
 class ClaimResolutionDecision(BaseModel):
     """Decision returned by the thin candidate/judge resolver."""
 
@@ -28,9 +30,11 @@ class ClaimResolutionDecision(BaseModel):
 ClaimJudge = Callable[[Claim, Claim], Awaitable[ClaimResolutionDecision | dict[str, Any]]]
 
 
+# 只对高相似候选尝试主张归并。
 class ClaimResolver:
     """Resolve only high-similarity candidates, never every claim pair."""
 
+    # 配置候选获取方式、相似度要求及可选语义判定器。
     def __init__(
         self,
         *,
@@ -43,6 +47,7 @@ class ClaimResolver:
         self.max_candidates = max(1, int(max_candidates))
         self.judge = judge
 
+    # 对最相关候选返回 SAME、DIFFERENT 或 UNKNOWN 判定。
     async def resolve(
         self,
         claim: Claim,
@@ -81,6 +86,7 @@ class ClaimResolver:
         return ClaimResolutionDecision.model_validate(decision)
 
 
+# 计算主张文本之间的低成本相似度，供候选筛选使用。
 def _similarity(left: str, right: str) -> float:
     left_terms = set(normalize_text(left).split())
     right_terms = set(normalize_text(right).split())

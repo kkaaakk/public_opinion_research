@@ -1,3 +1,4 @@
+# 依据角色证据或研究图生成章节，并按计划顺序汇编最终报告。
 """Reporting stage of the public-opinion workflow."""
 
 import asyncio
@@ -20,6 +21,7 @@ from open_deep_research.budget import (
     estimate_text_tokens,
     merge_budget_usage,
     remaining_input_tokens,
+    remaining_model_calls,
     remaining_output_tokens,
     start_budget_capture,
     stop_budget_capture,
@@ -66,6 +68,7 @@ from open_deep_research.workflow.state_utils import (
 
 LOGGER = logging.getLogger("open_deep_research.deep_researcher")
 
+# 只格式化指定角色的私有短期记忆，供缺失正式输出时补充上下文。
 def _agent_private_memory_context(agent_memories: dict[str, list[dict[str, Any]]], role: str) -> str:
     """Format one agent's private short-term memory for prompt injection."""
     return format_private_memory(
@@ -78,6 +81,7 @@ _PUBLIC_OPINION_ROLE_NAMES = frozenset({
 })
 
 
+# 解析章节的角色列表并提取相应证据，校验未知角色。
 def _extract_section_evidence(section, role_report_content: dict[str, str]) -> str:
     """Extract role evidence for a section based on its agent_role field.
 
@@ -122,6 +126,7 @@ def _extract_section_evidence(section, role_report_content: dict[str, str]) -> s
     return "\n\n".join(evidence_parts)
 
 
+# 优先使用完整角色报告；仅在报告缺失时回退到对应私有记忆。
 def _section_role_report_content(
     role_reports: dict[str, str],
     agent_memories: dict[str, list[dict[str, Any]]],
@@ -149,6 +154,7 @@ def _section_role_report_content(
     return content
 
 
+# 按章节主题检索限定运行范围的图证据，避免注入完整角色报告。
 def _graph_section_evidence(
     section: Section,
     state: AgentState,
@@ -172,6 +178,7 @@ def _graph_section_evidence(
     return format_relevant_subgraph(subgraph)
 
 
+# 将研究图及工作上下文整理为受大小限制的报告输入。
 def _graph_report_context(
     state: AgentState,
     config: RunnableConfig,
@@ -203,6 +210,7 @@ def _graph_report_context(
     )
 
 
+# 并发执行共享章节写作流程，汇总已完成章节和模型消耗。
 async def _write_sections_parallel(
     sections: list[Section],
     *,
@@ -215,6 +223,7 @@ async def _write_sections_parallel(
 ) -> tuple[list[Section], dict[str, Any]]:
     """Run the execution-only protocol shared by both section writers."""
 
+    # 生成单个章节并记录用量；失败时返回对应的降级结果。
     async def _write_one(section: Section) -> tuple[Section, dict[str, Any]]:
         failure_reason = ""
         with budget_capture() as response_budget:
@@ -260,6 +269,7 @@ async def _write_sections_parallel(
     return completed, budget_update
 
 
+# 为需要研究的章节提取角色或图证据，并行生成正文。
 async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     """Write report sections from role evidence in public-opinion mode.
 
@@ -292,21 +302,26 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         for section in research_sections
     }
 
-    # Budget guard: if no budget, copy role reports directly as content
+    # 每个章节写作需要一次调用；并行启动前分配额度，避免只检查一次就整批超支。
     budget_usage = runtime_state(state).get("budget", {})
-    if not can_spend_model_call(configurable, budget_usage, reserve_final_report_call=True):
-        budget_update = budget_usage_with_reason(
-            "Skipped section_writer model calls due to budget constraints; using role reports as section content."
+    call_allowance = remaining_model_calls(
+        configurable, budget_usage, reserve_final_report_call=True
+    )
+    sections_to_write = research_sections[:call_allowance]
+    fallback_sections = research_sections[len(sections_to_write):]
+    fallback_budget: dict[str, Any] = {}
+    if fallback_sections:
+        fallback_budget = budget_usage_with_reason(
+            f"Skipped section_writer model calls for {len(fallback_sections)} sections "
+            "due to budget constraints; using role reports as section content."
         )
-        completed = []
-        for section in research_sections:
-            evidence = section_evidence[section.name]
-            section.content = evidence
+        for section in fallback_sections:
+            section.content = section_evidence[section.name]
             section.status = "done"
-            completed.append(section)
+    if not sections_to_write:
         return {
-            "report": {"completed_sections": completed},
-            "runtime": {"budget": budget_update},
+            "report": {"completed_sections": fallback_sections},
+            "runtime": {"budget": fallback_budget},
         }
 
     # Write sections in parallel using section_writer_model
@@ -322,7 +337,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         writer_model_config["max_tokens"] = writer_max_tokens
 
     completed, budget_update = await _write_sections_parallel(
-        research_sections,
+        sections_to_write,
         model_name=writer_model_name,
         model_config=writer_model_config,
         prompt_for=lambda section: section_writer_from_role_reports_prompt.format(
@@ -339,11 +354,12 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         ),
     )
     return {
-        "report": {"completed_sections": completed},
-        "runtime": {"budget": budget_update},
+        "report": {"completed_sections": completed + fallback_sections},
+        "runtime": {"budget": merge_budget_usage(budget_update, fallback_budget)},
     }
 
 
+# 以已完成研究章节为上下文，并行撰写引言、结论等非研究章节。
 async def write_final_sections(state: AgentState, config: RunnableConfig) -> dict:
     """Write non-research sections (intro, conclusion) in parallel.
 
@@ -380,12 +396,19 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
 
     budget_usage = runtime_state(state).get("budget", {})
 
-    # Budget guard
-    if not can_spend_model_call(configurable, budget_usage, reserve_final_report_call=True):
-        budget_update = budget_usage_with_reason(
-            "Skipped final section writing due to budget constraints."
+    # 引言、结论等非研究章节同样各需一次调用，并保留最终报告的兜底额度。
+    call_allowance = remaining_model_calls(
+        configurable, budget_usage, reserve_final_report_call=True
+    )
+    sections_to_write = final_sections[:call_allowance]
+    skipped_count = len(final_sections) - len(sections_to_write)
+    skipped_budget: dict[str, Any] = {}
+    if skipped_count:
+        skipped_budget = budget_usage_with_reason(
+            f"Skipped final section writing for {skipped_count} sections due to budget constraints."
         )
-        return {"runtime": {"budget": budget_update}}
+    if not sections_to_write:
+        return {"runtime": {"budget": skipped_budget}}
 
     writer_model_config: dict[str, Any] = {
         "model": configurable.final_report_model,
@@ -394,7 +417,7 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     }
 
     completed, budget_update = await _write_sections_parallel(
-        final_sections,
+        sections_to_write,
         model_name=configurable.final_report_model,
         model_config=writer_model_config,
         prompt_for=lambda section: final_section_writer_instructions.format(
@@ -410,10 +433,11 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
     )
     return {
         "report": {"completed_sections": completed},
-        "runtime": {"budget": budget_update},
+        "runtime": {"budget": merge_budget_usage(budget_update, skipped_budget)},
     }
 
 
+# 按原章节计划组装报告；全部章节缺失时启用综合生成回退。
 async def compile_final_report(state: AgentState, config: RunnableConfig):
     """Compile the final report by assembling sections in planned order.
 
@@ -426,13 +450,13 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
     completed_sections = report_state(state).get("completed_sections", [])
     budget_usage = runtime_state(state).get("budget", {})
 
-    # Build deduped content map: take the latest content for each section name
+    # 以章节名去重，后到的有效内容覆盖先前版本。
     content_map: dict[str, str] = {}
     for cs in completed_sections:
         if cs.name and cs.content:
             content_map[cs.name] = cs.content
 
-    # Assemble in planned order
+    # 按计划顺序组装，避免并发完成顺序改变报告结构。
     parts = []
     missing_names = []
     for section in sections:
@@ -446,10 +470,10 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
         report = "\n\n".join(parts)
         fill_budget_update: dict[str, Any] = {}
 
-        # Handle missing sections
+        # 局部缺失时尝试用最终报告模型补齐，预算不足则保留已完成部分。
         if missing_names:
             if can_spend_model_call(configurable, budget_usage):
-                # Try to fill missing sections with final_report_model
+                # 使用当前图证据或完整角色报告补齐缺失内容。
                 findings = (
                     _graph_report_context(state, config, query_suffix="missing sections")
                     if configurable.research_graph_enabled
@@ -518,11 +542,12 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
             "runtime": {"budget": fill_budget_update},
         }
 
-    # All sections missing: degrade from role reports (or scoped graph context).
+    # 全部章节缺失时，基于角色报告或限定运行范围的图上下文综合生成兜底报告。
     LOGGER.warning("No sections completed; falling back to role-report synthesis.")
     return await _fallback_report_generation(state, config)
 
 
+# 使用图上下文或正式角色报告生成兜底报告，并遵守剩余预算。
 async def _fallback_report_generation(state: AgentState, config: RunnableConfig):
     """Generate a fallback report from graph context or formal role reports."""
     configurable = Configuration.from_runnable_config(config)

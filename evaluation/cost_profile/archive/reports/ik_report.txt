@@ -1,0 +1,539 @@
+Agent role: internal_knowledge
+Agent name: Internal Knowledge Agent
+Research round: 1
+Research mode: initial
+Expected output: Internal RAG evidence about company facts, product facts, PR playbooks, FAQs, prior cases, and memory, with local citations.
+
+**List of Queries and Tool Calls Made**
+
+The following local RAG (knowledge base) searches were conducted against the internal knowledge base (path: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/`):
+
+1. 特斯拉中国 车辆安全 事故 舆情 2026
+2. 特斯拉 刹车失灵 制动 事故 投诉
+3. 特斯拉 辅助驾驶 自动驾驶 Autopilot 事故
+4. 特斯拉 召回 市场监管总局 2026 制动 安全隐患
+5. 特斯拉 刹车 事故 案例 历史 潮州 温州 海南 郑州
+6. 特斯拉 FSD 辅助驾驶 中国 用户手册 说明 免责
+7. FSD 集体诉讼 中国 消费者 起诉 索赔
+8. 特斯拉 车主 维权 刹车 数据 EDR 后台数据 第三方鉴定
+9. 特斯拉 官方声明 模板 事故 回应 调查 客户关怀
+10. 特斯拉 2026年6月 7月 8月 事故 声明 舆情 微博
+11. 自动驾驶 辅助驾驶 宣传 夸大 使用手册 注意力 警告
+12. 特斯拉 舆情 风险 评估 品牌 公关 建议 处置原则
+13. 事故 时间线 伤亡 监控 视频 维权 车主 家属
+14. FSD 功能 状态 城市道路 订阅 定价 推送 中国
+15. media response FAQ records accident brake complaint statement
+16. Holding Statement Template B safety incident fatality investigation
+17. 特斯拉 温州 潮州 事故 刹车 结果 判决 调查 结论
+18. 2026 舆情 热点 网络 讨论 谣言 辟谣 特斯拉
+19. FSD 中国 事故 新闻 伤亡 2026 7月
+20. 特斯拉 检察 鉴定 报告 数据 显示 刹车 记录 碰撞 前
+21. 信息 披露 原则 媒体 沟通 口径 客服 统一 话术
+22. 事件 事故 案例 中国 2026 记录 简报 监测
+23. 隐私 数据 车主 信息 保护 发布 声明 规定
+24. 自动驾驶 智驾 事故 责任 划分 中国 法规 智能网联汽车
+25. 特斯拉 客户 服务 处理 投诉 流程 满意度 案例
+
+**Key caveat from the searches:** The internal/local RAG knowledge base contains **no cited evidence of any specific vehicle-safety, braking, or assisted-driving (ADAS) accident incidents involving Tesla China during the 2026-06-01 to 2026-09-02 window**, nor any specific 2026 public-opinion wave on those topics. The retrieved documents are internal PR/compliance/FAQ materials that are relevant as *context* (response protocols, regulatory status, product facts, historical background), but cannot by themselves establish the required accident timeline or case-level facts. That portion of the research must be filled by external public-source collection (web/news/social-platform searches), which goes beyond this local RAG pass.
+
+---
+
+**Fully Comprehensive Findings**
+
+**1. Tesla China Crisis Response Playbook — CONFIDENTIAL (internal PR protocols)**
+
+Source: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/pr_playbooks/tesla_china_crisis_playbook.md`
+
+1.1 Platform-Specific Guidance (Section heading, lines 39–43) [1]:
+- **Weibo**: Respond via @特斯拉 官方账号. Keep replies under 280 characters with link to full statement on tesla.cn.
+- **12315/12365**: Every complaint must receive a formal written response within 7 business days. Copy Legal on all submissions.
+- **Douyin/Kuaishou**: Do not engage in comment sections. If a video goes viral (>1M views), prepare a response video with official spokesperson.
+- **Zhihu**: Identify and respond to top 3 upvoted answers on relevant threads. Use technical experts, not PR s… (excerpt truncated at source).
+
+1.2 Escalation Matrix (lines 17–24) [1]:
+| Trigger | Level | Response Time |
+|---|---|---|
+| Single social media complaint, no safety claim | Routine | 24h acknowledgment |
+| Same issue appears on 2+ platforms within 48h | High | 4h initial response, 24h detailed |
+| 3+ complaints on 12315/12365 about same product issue | High | 4h cross-functional review |
+| Regulator (SAMR/MIIT) names Tesla publicly | Critical | 1h CEO briefing, 2h public response |
+| Official media (Xinhua/CCTV/Guangming) publishes negative re… (excerpt truncated at source) |
+
+1.3 Holding Statement Template A — Product Quality Complaint (non-safety) (line 29) [1]:
+> "Tesla has taken note of [Owner X]'s experience shared on [Platform]. Our Service team has contacted the owner to arrange a complimentary vehicle inspection at their preferred Service Center. We take every customer concern seriously and will provide a transparent diagnosis. Until the inspection is complete, we cannot confirm the specific cause. We will share verified findings with the owner directly."
+
+1.4 Holding Statement Template B — Safety-Related Incident (line 32) [1]:
+> "Tesla is aware of reports regarding [incident description]. Vehicle safety is our highest priority. Our engineering and service teams are working urgently to investigate. We have contacted the owner and relevant authorities. We will provide verified updates through official Tesla channels. We urge the public to await official investigation results before drawing conclusions."
+
+1.5 Response Principles (Mandatory) (lines 8–13) [1]:
+1. **Acknowledge first, explain later.** Every public response must begin by acknowledging the customer's concern before offering technical context.
+2. **Never speculate before inspection.** Do not state a root cause, deny a defect, or attribute blame until Service + Engineering complete vehicle diagnosis.
+3. **Separate facts from claims.** Public statements must clearly distinguish: (a) confirmed facts, (b) claims under investigation, (c) misinformation to correct.
+4. **Privacy is absolute.*… (excerpt truncated at source — principle 4 incomplete in retrieved excerpt)
+
+---
+
+**2. Tesla Battery Customer FAQ — Internal Reference for Service & Support Teams**
+
+Source: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/faq/tesla_battery_customer_faq.md`
+
+2.1 Contact Information (lines 65–69) [2]:
+- **China Customer Support**: 400-910-0707
+- **Tesla App**: Schedule service, chat with support
+- **Official Website**: https://www.tesla.cn/support
+- **Weibo**: @特斯拉
+- **Roadside Assistance**: Available 24/7 via Tesla App or hotline
+
+---
+
+**3. media_response_faq.json (internal media-response FAQ)**
+
+Source: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/faq/media_response_faq.json`
+
+3.1 Record[3] — "What should be done in the first 24 hours of a crisis?" (lines 16–17) [3]:
+> 1. Publish holding statement via @特斯拉 on Weibo and tesla.cn.
+> 2. Brief 400 hotline and Service Center teams on unified talking points.
+> 3. Assign a senior PR manager as incident commander.
+> 4. Collect top complaint themes and prepare fact-check document for each.
+> 5. If recall/batch-defect rumors are circulating, prepare technical supporting evidence (BMS data, third-party test results, supplier certification).
+> 6. Notify Legal…
+
+3.2 Record[2] — "When should an issue be escalated to Critical?" (lines 12–13) [3]:
+> Escalate to Critical if:
+> (1) SAMR or MIIT publicly names Tesla in any investigation or statement;
+> (2) official media (Xinhua, CCTV, Guangming Daily, People's Daily) publishes a negative story;
+> (3) unverified recall claims trend on Weibo top-50 without an official Tesla clarification posted;
+> (4) any incident involving fatality or serious injury where Tesla vehicle is named.
+
+3.3 Record[5] — "What is the approved messaging on GB38031-2025 compliance?" (lines 24–25) [3]:
+> Tesla welcomes GB38031-2025 as a world-leading battery safety standard. All Tesla vehicles produced for the China market since January 2026 have been validated against the new test protocols. We are confident in our battery safety architecture and will publish compliance details before the July 2026 effective date.
+
+---
+
+**4. Tesla Battery-Related Crisis Cases — Internal Post-Mortem Review (historical background only; outside the 2026-06-01~09-02 window)**
+
+Source: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/historical_cases/tesla_battery_crises_review.md`
+
+4.1 Case 3: 2026 China "OTA Lock-Charging" Rumor Wave (lines 42–64) [4] — noted as historical background (2026-03 to 2026-05), predating the statistics window:
+**Timeline:**
+- 2026-03: Social media posts claiming "8 EV brands summoned by SAMR for OTA battery lock-charging"
+- 2026-03: China Association of Automobile Manufacturers debunked as "AI-generated malicious rumor"
+- 2026-05: Tesla China officially denied being summoned or investigated
+- Current: Residual social media discussion continues
+
+**What Went Right:**
+- Rapid denial through official channels
+- Industry association external validation
+- No kneejerk engineering changes
+
+**What Could Be Be…** (excerpt truncated at source — "What Could Be Improved" section incomplete in retrieved excerpt)
+
+Relevance note: This case illustrates the internal post-mortem pattern for China rumor waves and the company's prior use of official-channel denial and industry-association validation. It is not a braking/ADAS accident case and does not fall inside the 2026-06-01 to 2026-09-02 statistics window.
+
+---
+
+**5. Tesla China Regulatory Compliance — Battery & Safety (internal compliance assessment)**
+
+Source: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/compliance/china_regulatory_landscape.md`
+
+5.1 Current Regulatory Exposure Assessment (Internal — Q2 2026) (lines 31–37) [5]:
+| Regulatory Body | Active Investigation? | Risk Level | Status |
+|---|---|---|---|
+| MIIT | None active | Low | Routine compliance reporting ongoing |
+| SAMR | None active | Low | No defect investigation opened |
+| Local SAMRs | Routine consumer complaints only | Low | Being handled case-by-case |
+| Courts | FSD class action (1 case, 3.95M RMB claim) | Medium | First hearing held 2026-05; awaiting ruling |
+| GB38031 Transition | Compliance affirmed… (excerpt truncated at source) |
+
+Relevance note: As of Q2 2026 (the most recent internal assessment retrieved), no active MIIT or SAMR defect investigation was recorded; one FSD-related class action (3.95M RMB claim) had its first hearing in 2026-05 and was awaiting ruling — this falls just before the research window and is relevant as background/context for the "still to verify" list.
+
+5.2 Key Regulations > Consumer Rights Law — E-Commerce & Auto Specific Provisions (lines 20–26) [5]:
+- "Three Guarantees" (三包) for NEVs effective 2022-01-01:
+  - 7 days: Return/refund for major safety defects
+  - 60 days / 3,000km: Replacement for steering, braking, powertrain failures
+  - Battery capacity degradation warranty: minimum 70% within warranty period
+  - 12315 platform response requirement: 7 business days
+
+5.3 Key Regulations > GB38031-2025 "Electric Vehicles Traction Battery Safety Requirements" (lines 6–10) [5]:
+- **Effective**: 2026-07-01
+- **Scope**: All EVs sold in China, including imported models
+- **Critical Change**: Battery pack must provide ≥5 minutes warning BEFORE thermal runaway causes fire/explosion (prior standard required warning only after fire started)
+- **Test Protocols**: New thermal propagation test; enhanced overcharge, over-discharge, short-circuit, and crush tests
+- **Tesla Compliance Status**: All models produced after 2026-01-01 validated. Certificates on file with MIIT.
+
+---
+
+**6. Tesla Battery Technical Facts — Internal Reference (product facts)**
+
+Source: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/product_docs/tesla_battery_technical_facts.md`
+
+6.1 GB38031-2025 Compliance Status (Internal) (lines 24–27) [6]:
+- **Effective Date**: 2026-07-01
+- **Key Requirement**: Battery pack must not ignite or explode within 5 minutes of thermal runaway warning (previously "within 5 minutes of fire").
+- **Tesla Status**: All China-market vehicles produced after 2026-01-01 have been validated against GB38031-2025 test protocols. Engineering sign-off completed 2025-12-15.
+- **Legacy vehicles**: 2024 and earlier models meet GB38031-2020. No regulatory requirement to retrofit. Communication plan drafted, pending PR… (excerpt truncated at source)
+
+---
+
+**Gap statement (critical for the research brief):**
+
+The local RAG knowledge base does **not** contain cited evidence for the following items required by the research brief, and these must be sourced through external public-channel research (news media, regulatory announcements, owner forums, official Tesla China statements, etc.):
+
+- Any specific Tesla China vehicle-safety, braking, or ADAS-related accident case occurring between 2026-06-01 and 2026-09-02 (including model, software version, road/scene, casualties, time/place);
+- Any corresponding regulator action (SAMR/MIIT/local SAMR) or recall in the window;
+- Any Tesla China official statement on such incidents in the window;
+- Owner/witness accounts, Weibo/Douyin/Zhihu/12315 public-opinion data for the window;
+- Historical background cases specifically on braking/ADAS (e.g., the queries for 温州, 潮州, 海南, 郑州, 林志颖-type cases returned no relevant local cited excerpts);
+- EDR/background-data/third-party-appraisal specifics for braking complaints;
+- FSD functionality/road-availability/usage-disclaimer specifics for China in the window.
+
+No queries returned results indicating local memory entries on these topics; the "no relevant local knowledge base results" response was returned for several of those queries (e.g., "自动驾驶 辅助驾驶 宣传 夸大 使用手册 注意力 警告", "事故 时间线 伤亡 监控 视频 维权 车主 家属", "信息 披露 原则 媒体 沟通 口径 客服 统一 话术", "自动驾驶 智驾 事故 责任 划分 中国 法规 智能网联汽车").
+
+---
+
+**List of All Relevant Sources (with citations in the report)**
+
+[1] Tesla China Crisis Response Playbook — CONFIDENTIAL: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/pr_playbooks/tesla_china_crisis_playbook.md` (chunks: e696b605842d88ef-2-e7ffcc30f2cd; e696b605842d88ef-3-a000735cc2d4; e696b605842d88ef-4-c4e21ab59f1a; e696b605842d88ef-5-d682b279c386; e696b605842d88ef-7-6fa9ae3dd370)
+
+[2] Tesla Battery Customer FAQ — Internal Reference for Service & Support Teams: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/faq/tesla_battery_customer_faq.md` (chunk: 7ef4bec0f4896be1-7-813ea109ff55)
+
+[3] media_response_faq: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/faq/media_response_faq.json` (chunks: 1637d41585bc68e3-3-2439f9e92fe1; 1637d41585bc68e3-4-a03120efe538; 1637d41585bc68e3-6-81200401fb77)
+
+[4] Tesla Battery-Related Crisis Cases — Internal Post-Mortem Review: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/historical_cases/tesla_battery_crises_review.md` (chunk: 157cba32563672a6-3-86b4cbbb78b6)
+
+[5] Tesla China Regulatory Compliance — Battery & Safety: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/compliance/china_regulatory_landscape.md` (chunks: f03ed35f1910a98a-1-e50b80fce659; f03ed35f1910a98a-4-659c10a52b41; f03ed35f1910a98a-5-f5ba09d868a3)
+
+[6] Tesla Battery Technical Facts — Internal Reference: `C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/product_docs/tesla_battery_technical_facts.md` (chunk: 4ed9f4460d636d77-3-d7b788d03253)
+
+--- round 2 ---
+
+Agent role: internal_knowledge
+Agent name: Internal Knowledge Agent
+Research round: 2
+Research mode: followup
+Expected output: Internal RAG evidence about company facts, product facts, PR playbooks, FAQs, prior cases, and memory, with local citations.
+
+**List of Queries and Tool Calls Made**
+
+**Round 1 (initial comprehensive survey) — internal knowledge RAG searches (25 queries)**
+
+1. 特斯拉中国 车辆安全 事故 舆情 2026
+2. 特斯拉 刹车失灵 制动 事故 投诉
+3. 特斯拉 辅助驾驶 自动驾驶 Autopilot 事故
+4. 特斯拉 召回 市场监管总局 2026 制动 安全隐患
+5. 特斯拉 刹车 事故 案例 历史 潮州 温州 海南 郑州
+6. 特斯拉 FSD 辅助驾驶 中国 用户手册 说明 免责
+7. FSD 集体诉讼 中国 消费者 起诉 索赔
+8. 特斯拉 车主 维权 刹车 数据 EDR 后台数据 第三方鉴定
+9. 特斯拉 官方声明 模板 事故 回应 调查 客户关怀
+10. 特斯拉 2026年6月 7月 8月 事故 声明 舆情 微博
+11. 自动驾驶 辅助驾驶 宣传 夸大 使用手册 注意力 警告
+12. 特斯拉 舆情 风险 评估 品牌 公关 建议 处置原则
+13. 事故 时间线 伤亡 监控 视频 维权 车主 家属
+14. FSD 功能 状态 城市道路 订阅 定价 推送 中国
+15. media response FAQ records accident brake complaint statement
+16. Holding Statement Template B safety incident fatality investigation
+17. 特斯拉 温州 潮州 事故 刹车 结果 判决 调查 结论
+18. 2026 舆情 热点 网络 讨论 谣言 辟谣 特斯拉
+19. FSD 中国 事故 新闻 伤亡 2026 7月
+20. 特斯拉 检察 鉴定 报告 数据 显示 刹车 记录 碰撞 前
+21. 信息 披露 原则 媒体 沟通 口径 客服 统一 话术
+22. 事件 事故 案例 中国 2026 记录 简报 监测
+23. 隐私 数据 车主 信息 保护 发布 声明 规定
+24. 自动驾驶 智驾 事故 责任 划分 中国 法规 智能网联汽车
+25. 特斯拉 客户 服务 处理 投诉 流程 满意度 案例
+
+**Round 2 (follow-up, task R2-4) — internal knowledge RAG searches (15 queries, 4 batches)**
+
+Batch 1:
+1. 2026年8月 召回 市场监管总局 SAMR 特斯拉 缺陷产品 记录
+2. 车内摄像头 注意力监测 组合驾驶辅助 方向盘扭矩 OTA 产品功能
+3. 召回 大规模OTA 危机公关 话术 客服 响应 升级矩阵 声明模板
+4. 监管合规评估 SAMR 调查状态 无活跃调查 2026 更新 合规现状
+
+Batch 2:
+5. S2026M 召回编号 297.6万 576.7万 缺陷 车辆 数量
+6. 注意力监测 分心驾驶 驾驶员监测 方向盘扭矩 辅助驾驶 安全 产品 说明
+7. 召回 车主通知 公告 统一口径 媒体声明 批量缺陷 处理流程
+8. FSD 入华 2026 推送 功能 发布 产品事实 组合驾驶辅助
+
+Batch 3:
+9. 升级矩阵 监管点名 Critical 首席执行官简报 公开回应 小时 应急响应
+10. Holding Statement 模板 声明 事故 安全 调查 关怀 谨慎驾驶 语言
+11. 门把手 隐藏式 GB48001 工信部 标准 召回 2026
+12. EDR 数据 事故报告 客户 隐私 数据提供 流程 规则
+
+Batch 4:
+13. FSD driver monitoring cabin camera attention fallback driver engagement China launch
+14. EDR event data recorder data disclosure owner policy accident report provision
+15. recall customer notification letter OTA deployment schedule service center communication script
+
+Also attempted (all failed with connection errors, 7 total): search_posts, search_complaints, get_public_opinion_snapshot, get_trending_keywords.
+
+---
+
+**Fully Comprehensive Findings**
+
+**IMPORTANT CONTEXT CAVEAT (Round 1, confirmed via 25-query RAG sweep):** The internal/local RAG knowledge base contains **no cited evidence of any specific vehicle-safety, braking, or assisted-driving (ADAS) accident incidents involving Tesla China during the 2026-06-01 to 2026-09-02 window**, nor any specific 2026 public-opinion wave on those topics. The retrieved documents are internal PR/compliance/FAQ materials that are relevant as *context* (response protocols, regulatory status, product facts, historical background), but the knowledge base itself has no window-period incident records.
+
+---
+
+### A. 监管层面已证实事实（来自研究综述，高置信度）
+
+A1. **国家市场监管总局（SAMR）约于 2026-08-20/21 发布特斯拉中国三项召回：**
+- **S2026M0098V**（国产 Model 3/Y 应急机械拉手/碰撞后降窗，约 297.6 万辆，生效 2026-09-25）
+- **S2026M0099V**（进口 Model 3/S/X 同类，约 4.6 万辆）
+- **S2026M0039I**（国产 Model 3/Y 组合辅助驾驶注意力监测不足，约 274.1 万辆，立即生效，OTA 新增车内摄像头注意力监测叠加方向盘扭矩监测）
+- 三项合计约 **576.7 万辆**。多源一致，是窗口内最重要的监管与品牌风险事件。
+
+A2. **辅助驾驶维度（高置信度）：** S2026M0039I 直接指向辅助驾驶（组合驾驶辅助）下注意力监测不足导致的碰撞风险，整改为纯 OTA（车内摄像头注意力监测），与特斯拉 FSD 于 2026-05-21 入华、2026-06-29 向 HW3.0 推送 v14 Lite 的时间高度相邻，是后续风险评估的核心风险驱动项。
+
+A3. **行业背景（高置信度，历史背景不计入当期）：** 2026-08-21 SAMR 公告 9 车企联合门把手类召回合计约 427.6 万辆（特斯拉近 300 万辆+小米约 39 万+零跑约 37.1 万+小鹏约 26.5 万等），被称近年最大单一问题召回；2026-02-02 工信部发布《汽车车门把手安全技术要求》GB 48001-2026（2027-01-01 生效），中国成为全球首个禁止隐藏式门把手国家。
+
+### B. 窗口内个案（来自研究综述）
+
+B1. **2026-06-30 上海青浦 G50 高速出城方向（中-高置信度）：** 特斯拉单车碰撞后起火，一名女性驾驶员头部擦伤送医，事故原因待交警调查，特斯拉未就此案发布说明；是否涉及制动或辅助驾驶无任何公开信息。
+
+B2. **2026-07-17 车质网 1765874 号投诉（低-中置信度，单方口径）：** 2024 款 Model Y 车主称踩刹车无响应、溜坡追尾前车；特斯拉解释为正常驾驶模式并拒绝提供 EDR 数据/事故报告；2026-08-26 市场监管部门出具受理回复但特斯拉拒绝参与调解。
+
+### C. 历史背景（不计入当期，来自研究综述）
+
+潮州 2022 失控致死案、温州 2020 案（法院判车主全责）、2021 上海车展车顶维权、2016 邯郸 Autopilot 致死案（中国首例）、2016 美国佛罗里达 Autopilot 案；FSD 集体诉讼（北京大兴，10 名车主，索赔超 395 万元）。
+（另注：加拿大多伦多特斯拉致命起火事故时间（"约一年半前"）未获一手交叉确认；非中国大陆事件，仅作背景。）
+
+### D. 内部知识：危机公关剧本（Round 2 检索结果，带引用）
+
+D1. **升级矩阵（来源：Tesla China Crisis Response Playbook — CONFIDENTIAL，chunk e696b605842d88ef-3，heading "Escalation Matrix"，lines 17-24）：**
+> | Trigger | Level | Response Time |
+> |---------|-------|-------------|
+> | Single social media complaint, no safety claim | Routine | 24h acknowledgment |
+> | Same issue appears on 2+ platforms within 48h | High | 4h initial response, 24h detailed |
+> | 3+ complaints on 12315/12365 about same product issue | High | 4h cross-functional review |
+> | Regulator (SAMR/MIIT) names Tesla publicly | Critical | 1h CEO briefing, 2h public response |
+> | Official media (Xinhua/CCTV/Guangming) publishes negative re...（截断）
+
+**注意：升级矩阵本身以"被点名/被报道"为触发，未预设"主动召回"场景的响应时限，内部缺乏主动召回场景的专项 SLA。**
+
+D2. **Critical 升级判定（来源：media_response_faq.json，chunk 1637d41585bc68e3-3，records[2]，lines 12-13）：**
+> title: When should an issue be escalated to Critical? content: Escalate to Critical if: (1) SAMR or MIIT publicly names Tesla in any investigation or statement; (2) official media (Xinhua, CCTV, Guangming Daily, People's Daily) publishes a negative story; (3) unverified recall claims trend on Weibo top-50 without an official Tesla clarification posted; (4) any incident involving fatality or serious injury where Tesla vehicle is named.
+
+D3. **危机首 24 小时动作（来源：media_response_faq.json，chunk 1637d41585bc68e3-4，records[3]，lines 16-17）：**
+> title: What should be done in the first 24 hours of a crisis? content: 1. Publish holding statement via @特斯拉 on Weibo and tesla.cn. 2. Brief 400 hotline and Service Center teams on unified talking points. 3. Assign a senior PR manager as incident commander. 4. Collect top complaint themes and prepare fact-check document for each. 5. If recall/batch-defect rumors are circulating, prepare technical supporting evidence (BMS data, third-party test results, supplier certification). 6. Notify Legal...（截断）
+
+D4. **平台渠道规则（来源：Tesla China Crisis Response Playbook — CONFIDENTIAL，chunk e696b605842d88ef-7，heading "Platform-Specific Guidance"，lines 39-43）：**
+> - **Weibo**: Respond via @特斯拉 官方账号. Keep replies under 280 characters with link to full statement on tesla.cn.
+> - **12315/12365**: Every complaint must receive a formal written response within 7 business days. Copy Legal on all submissions.
+> - **Douyin/Kuaishou**: Do not engage in comment sections. If a video goes viral (>1M views), prepare a response video with official spokesperson.
+> - **Zhihu**: Identify and respond to top 3 upvoted answers on relevant threads. Use technical experts, not PR s...（截断）
+
+D5. **强制回应原则（来源：Tesla China Crisis Response Playbook — CONFIDENTIAL，chunk e696b605842d88ef-2，heading "Response Principles (Mandatory)"，lines 8-13）：**
+> 1. **Acknowledge first, explain later.** Every public response must begin by acknowledging the customer's concern before offering technical context.
+> 2. **Never speculate before inspection.** Do not state a root cause, deny a defect, or attribute blame until Service + Engineering complete vehicle diagnosis.
+> 3. **Separate facts from claims.** Public statements must clearly distinguish: (a) confirmed facts, (b) claims under investigation, (c) misinformation to correct.
+> 4. **Privacy is absolute...**（截断）
+
+D6. **持牌声明模板 B — 安全事件（来源：Tesla China Crisis Response Playbook — CONFIDENTIAL，chunk e696b605842d88ef-5，heading "Holding Statement Templates > Template B — Safety-Related Incident"，lines 32）：**
+> "Tesla is aware of reports regarding [incident description]. Vehicle safety is our highest priority. Our engineering and service teams are working urgently to investigate. We have contacted the owner and relevant authorities. We will provide verified updates through official Tesla channels. We urge the public to await official investigation results before drawing conclusions."
+
+D7. **持牌声明模板 C — 监管/谣言回应（来源：Tesla China Crisis Response Playbook — CONFIDENTIAL，chunk e696b605842d88ef-6，heading "Holding Statement Templates > Template C — Regulatory/Rumor Response"，lines 35）：**
+> "Tesla China has noted recent online discussions regarding [topic]. We state clearly: [confirmed fact / denial]. Tesla complies fully with all applicable Chinese laws and regulations. We welcome scrutiny of our products and processes through official channels. We reserve the right to take legal action against those who fabricate and spread false information."
+
+**注意：模板 C 的默认姿态是"否认/澄清"，与主动召回场景（承认缺陷+OTA 整改）的姿态取向不同，直接套用存在风险。**
+
+D8. **禁止性口径（来源：media_response_faq.json，chunk 1637d41585bc68e3-2，records[1]，lines 8-9）：**
+> title: Can PR say there is no safety issue? content: No. PR cannot assert 'no safety issue' when inspection data is incomplete. The approved language: 'Tesla is investigating. Vehicle safety is our highest priority. We have contacted the owner and will provide verified findings through official channels. We ask the public to await investigation results before drawing conclusions.'
+
+D9. **剧本目的与适用范围（来源：Tesla China Crisis Response Playbook — CONFIDENTIAL，chunk e696b605842d88ef-1，heading "Purpose"，lines 4）：**
+> This playbook governs Tesla China's response to public-opinion incidents involving vehicle safety, quality complaints, regulatory inquiries, and social media crises. Must be reviewed by Legal + PR before any external communication referencing this document.
+
+### E. 内部知识：监管合规基线（Round 2 检索结果，带引用）
+
+E1. **内部 Q2 2026 监管风险评估（来源：compliance/china_regulatory_landscape.md，chunk f03ed35f1910a98a-5，heading "Current Regulatory Exposure Assessment (Internal — Q2 2026)"，lines 31-37）：**
+> | Regulatory Body | Active Investigation? | Risk Level | Status |
+> |----------------|---------------------|-----------|--------|
+> | MIIT | None active | Low | Routine compliance reporting ongoing |
+> | SAMR | None active | Low | No defect investigation opened |
+> | Local SAMRs | Routine consumer complaints only | Low | Being handled case-by-case |
+> | Courts | FSD class action (1 case, 3.95M RMB claim) | Medium | First hearing held 2026-05; awaiting ruling |
+> | GB38031 Transition | Compliance affirmed...（截断）
+
+**结论：该基线未反映 2026-08-20/21 的三项召回（S2026M0098V/S2026M0099V/S2026M0039I），已明显过时，不得作为当前监管风险的判断依据。**
+
+E2. **SAMR 召回法规要点（来源：compliance/china_regulatory_landscape.md，chunk f03ed35f1910a98a-3，heading "Key Regulations > SAMR Recall Regulations (2020 Edition, updated 2024)"，lines 18-20）：**
+> - Defect investigations can be initiated by SAMR sua sponte (without consumer complaint threshold)
+> - OTA updates that "correct defects" must be reported to SAMR as recalls within 5 business days
+> - Failure to report an OTA recall → administrative penalties up to 3% of prior year revenue
+
+**与本轮公开信号高度相关：S2026M0039I 为纯 OTA 整改，直接落入该规则范围。**
+
+E3. **GB38031-2025 电池安全标准（来源：compliance/china_regulatory_landscape.md，chunk f03ed35f1910a98a-1，heading "Key Regulations > GB38031-2025 'Electric Vehicles Traction Battery Safety Requirements'"，lines 6-10）：**
+> - **Effective**: 2026-07-01
+> - **Scope**: All EVs sold in China, including imported models
+> - **Critical Change**: Battery pack must provide ≥5 minutes warning BEFORE thermal runaway causes fire/explosion (prior standard required warning only after fire started)
+> - **Test Protocols**: New thermal propagation test; enhanced overcharge, over-discharge, short-circuit, and crush tests
+> - **Tesla Compliance Status**: All models produced after 2026-01-01 validated. Certificates on file with MIIT.
+
+E4. **待定监管动态（来源：compliance/china_regulatory_landscape.md，chunk f03ed35f1910a98a-6，heading "Pending Regulatory Developments (Monitor)"，lines 41-43）：**
+> 1. **Battery Retirement/Recycling Regulations** — Draft under review. May require manufacturers to guarantee battery recycling pathway and set up fund.
+> 2. **OTA Regulation Update** — MIIT draft circulating. May require pre-approval for safety-related OTA updates.
+> 3. **NEV Data Security** — Ongoing review of in-vehicle data collection and cross-border transfer. Tesla's Shanghai data center and local storage architecture is compliant with current requirements.
+
+### F. 内部知识：客服与产品资料（Round 2 检索结果，带引用）
+
+F1. **客服热线与渠道（来源：faq/tesla_battery_customer_faq.md，chunk 7ef4bec0f4896be1-7，heading "Contact Information"，lines 65-69）：**
+> - **China Customer Support**: 400-910-0707
+> - **Tesla App**: Schedule service, chat with support
+> - **Official Website**: https://www.tesla.cn/support
+> - **Weibo**: @特斯拉
+> - **Roadside Assistance**: Available 24/7 via Tesla App or hotline
+
+F2. **OTA 后续航显示 FAQ（来源：faq/tesla_battery_customer_faq.md，chunk 7ef4bec0f4896be1-2，heading "Range Display"，lines 12-20）：**
+> **Q: Why did my displayed range drop after an OTA update?** Displayed range is a BMS estimate based on voltage measurement, temperature, and historical driving data. OTA updates that refine the estimation algorithm may cause the displayed number to change. This reflects improved estimation accuracy, NOT physical capacity loss. If the customer insists range loss is real, schedule a battery health check at a Service Center. **Q: Does Tesla "lock" battery capacity via software?** No. Tesla does...（截断）
+
+F3. **电池安全 FAQ（来源：faq/tesla_battery_customer_faq.md，chunk 7ef4bec0f4896be1-6，heading "Safety"，lines 50-59）：**
+> **Q: Are Tesla batteries safe?** Yes. Tesla's battery packs are designed with multiple layers of protection: cell-level fusing, liquid thermal management, reinforced pack enclosure, and BMS monitoring 24/7. Tesla vehicle fire rates are approximately 1/10th the rate of ICE vehicle fires per mile driven. GB38031-2025 certification applies to all China-market vehicles produced after 2026-01-01. **Q: What should I do if I suspect a battery issue?** 1. If you see a warning on the touchscreen, foll...（截断）
+
+F4. **GB38031-2025 合规口径（来源：media_response_faq.json，chunk 1637d41585bc68e3-6，records[5]，lines 24-25）：**
+> title: What is the approved messaging on GB38031-2025 compliance? content: Tesla welcomes GB38031-2025 as a world-leading battery safety standard. All Tesla vehicles produced for the China market since January 2026 have been validated against the new test protocols. We are confident in our battery safety architecture and will publish compliance details before the July 2026 effective date.
+
+F5. **电池续航投诉回应口径（来源：media_response_faq.json，chunk 1637d41585bc68e3-1，records[0]，lines 4-5）：**
+> title: How should Tesla answer battery range complaints? content: Acknowledge the customer's experience immediately. Explain that displayed range is a BMS estimate influenced by temperature, driving style, battery calibration state, charging habits, and pack age. Direct customers to schedule a complimentary battery health check at any Tesla Service Center. Do not conclude 'defect' or 'user error' before vehicle diagnosis is complete.
+
+### G. 内部知识：历史案例复盘（Round 2 检索结果，带引用）
+
+G1. **Case 3：2026 中国"OTA 锁电"谣言波（来源：historical_cases/tesla_battery_crises_review.md，chunk 157cba32563672a6-3，heading "Case 3: 2026 China 'OTA Lock-Charging' Rumor Wave"，lines 42-64）：**
+> **Timeline:**
+> - 2026-03: Social media posts claiming "8 EV brands summoned by SAMR for OTA battery lock-charging"
+> - 2026-03: China Association of Automobile Manufacturers debunked as "AI-generated malicious rumor"
+> - 2026-05: Tesla China officially denied being summoned or investigated
+> - Current: Residual social media discussion continues
+> **What Went Right:**
+> - Rapid denial through official channels
+> - Industry association external validation
+> - No kneejerk engineering changes
+> **What Could Be Be...（截断）
+
+**注意：该先例是"否认"型应对，与 2026-08 真实召回（承认+OTA 整改）性质相反，作为话术模板套用时需警惕。**
+
+G2. **Case 1：2019 电池节流软件更新（来源：historical_cases/tesla_battery_crises_review.md，chunk 157cba32563672a6-1，heading "Case 1: 2019 Battery Throttle Software Update"，lines 1-22）：**
+> **Timeline:**
+> - 2019-05: OTA update 2019.16.x deployed, reducing max charge voltage on select Model S/X (2012-2016)
+> - 2019-07: Owner David Rasmussen filed class action in California
+> - 2019-10: NHTSA opened defect investigation (DP19-005)
+> - 2021-07: Settlement reached — $1.5M fund for 1,743 owners, max $625 per owner
+> **What Went Wrong:**
+> - Engineering decision to protect aging batteries was communicated as "safety improvement" without explaining trade-offs
+> - No proactive owner notification bef...（截断）
+
+G3. **Case 2：2025 Model 3/Y 接触器召回（NHTSA 25V690）（来源：historical_cases/tesla_battery_crises_review.md，chunk 157cba32563672a6-2，heading "Case 2: 2025 Model 3/Y Contactor Recall (25V690)"，lines 22-42）：**
+> **Timeline:**
+> - 2025-03 to 2025-08: Vehicles produced with potentially defective InTiCa contactors
+> - 2025-10-07: NHTSA recall 25V690 issued
+> - Affected: 12,963 vehicles (5,038 Model 3 + 7,925 Model Y, 2025-2026 MY)
+> - Root cause: Coil terminal poor connection in contactor assembly from Sistemas Mecatrónicos InTiCa (Mexico)
+> - 36 warranty claims, 26 field reports, zero injuries/fatalities
+> **What Went Right:**
+> - Proactive recall before any accident occurred
+> - Clear root cause identification within...（截断）
+
+**注：此案为美国市场召回先例，非中国监管场景，仅作内部方法论参考。**
+
+G4. **系统性根因总结（来源：historical_cases/tesla_battery_crises_review.md，chunk 157cba32563672a6-4，heading "Summary of Systemic Issues"，lines 72-77）：**
+> | Issue | Frequency | Root Cause | Fix Status |
+> |-------|-----------|-----------|----------|
+> | OTA communication gaps | Recurring | Engineering-driven deployment without PR/Legal review | Policy in place since 2021 |
+> | Supplier quality (contactor) | 1 incident | Single-source supplier QA gap | Supplier audit expanded |
+> | "Lock-charging" perception | Persistent narrative | Lack of transparent battery health data sharing | Battery Health White Paper in development |
+> | Slow rumor response in Chi...（截断）
+
+### H. 未命中/内部知识库缺口（Round 2 确认）
+
+内部知识库**没有任何**以下内容的引用记录：
+- **2026-08 SAMR 三项召回**（S2026M0098V/S2026M0099V/S2026M0039I）、召回编号、车辆数量（297.6 万/4.6 万/274.1 万等）、生效日期（2026-09-25/立即生效）；
+- **车内摄像头注意力监测**、组合驾驶辅助注意力监测不足、方向盘扭矩监测叠加、应急机械拉手、碰撞后自动降窗等产品功能事实或 OTA 说明；
+- **FSD 中国上市**（2026-05-21）、HW3.0 v14 推送（2026-06-29）的产品档案；
+- **EDR/事件数据提供政策**、车主数据披露流程；
+- **召回车主通知函模板**、大规模 OTA 部署排期话术、服务中心召回沟通脚本；
+- **GB48001-2026《汽车车门把手安全技术要求》**及 2026-08-21 门把手联合召回的记录；
+- **窗口内（2026-06-01~09-02）任何涉制动/辅助驾驶/FSD 的事故记录**（与公开信号报告的上海 G50 起火案、车质网制动投诉属内部库范围局限，非口径矛盾）。
+
+### I. 研究中确认的冲突（来自研究综述）
+
+I1. **内部知识与公开现实的显著滞后：** 内部合规评估（Q2 2026）记录 SAMR"无活跃调查/未立案"，未反映 2026-08-20/21 的三项大规模召回——内部基线已过时，直接影响对监管风险与响应姿态的判断。
+
+I2. **内部 RAG 无任何窗口内事故记录 vs 公开信号报告的 2 起候选个案**（上海 G50 起火、车质网制动投诉）——属内部知识库范围局限而非口径矛盾，但需在简报中明确区分。
+
+I3. **媒体"召回近 300 万辆" vs 特斯拉自身"三项合计约 576.7 万辆"**——经核查为不同统计口径（门把手单一问题 297.6 万 vs 含注意力监测项总召回 576.7 万），不矛盾，可视为已解决，但仍建议以官方原文最终确认。
+
+### J. 未解决争议点（来自研究综述）
+
+J1. **SAMR 官方公告原文未直接核验：** 三项召回的公告日期（8-20 与 8-21 并存）、各项生效日期（9-25 与立即生效）、精确数量及数字口径，需官方文本确认（多项数字多源一致但均系媒体转述）。
+
+J2. **社交/舆情数据完全缺失：** 本轮 search_posts、search_complaints、get_public_opinion_snapshot、get_trending_keywords 全部连接失败（共 7 次），微博/抖音/小红书等车主一手帖文、投诉热词、舆情热度、情绪方向均未采集到。
+
+J3. **窗口内事故全量未知：** 除上海 G50 起火案与车质网制动投诉外，是否还有 2026-06-01~09-02 内涉及制动/辅助驾驶/FSD 的事故（尤其 FSD 入华后新增场景）未被覆盖，未穷尽验证。
+
+J4. **上海 G50 起火案成因未定：** 是否涉及制动/辅助驾驶无公开信息，特斯拉无回应，交警调查结论尚未公开。
+
+J5. **车质网制动投诉无法核实缺陷：** 仅单一投诉方叙述，特斯拉拒绝提供 EDR 数据且拒绝参与调解，缺陷是否成立无法独立验证。
+
+J6. **背景项时间不确定：** 加拿大多伦多特斯拉致命起火事故时间（"约一年半前"）未获一手交叉确认；非中国大陆事件，仅作背景。
+
+### K. 研究缺口（来自研究综述）
+
+K1. **社交/舆情证据层整体缺失：** 作为面向企业级品牌风险与舆情监控的任务，情绪方向、舆情热度、投诉热词、车主/目击者一手口径是判定风险等级与风险驱动项的关键输入，当前完全空白，可能显著改变风险判断。
+
+K2. **窗口内制动/辅助驾驶/FSD 事故全量未穷尽：** FSD 入华（2026-05-21）紧邻窗口起点，HW3.0 v14 推送（2026-06-29）在窗口内，属新增高险场景；若存在未收录的致死或 FSD 相关个案，将直接改变风险水平。
+
+K3. **监管时间线细节未对官方原文核验：** 公告日期与生效日期并存说法会削弱时间线节点的精确性（交付项 a 要求）。
+
+K4. **内部监管基线过时：** 内部知识库未反映 8 月 SAMR 召回，亦无召回/注意力监测功能相关的产品事实与话术基线，影响响应姿态与缓解措施评估。
+
+### L. 后续任务清单（来自研究综述）
+
+**R2-1（优先级：high）** — 重试社交/舆情通道（search_posts、search_complaints、get_public_opinion_snapshot、get_trending_keywords），围绕 2026-08 三项召回、2026-06-30 上海 G50 起火案与车质网制动投诉，采集情绪方向、舆情热度、投诉热词、车主/目击者一手帖文与转评趋势。目标角色：public_signal。证据需求：窗口内（2026-06-01~09-02）特斯拉召回与事故相关的社交平台帖文、投诉热词、舆情热度与情绪方向数据（微博/抖音/小红书/车质网等）。
+
+**R2-2（优先级：high）** — 穷尽检索窗口内（2026-06-01~09-02）特斯拉中国制动/辅助驾驶/FSD 相关事故个案（含 FSD 入华后新场景、交警通报、伤亡、监管介入），并核验上海 G50 起火案与车质网制动投诉的可验证细节（车型、软件版本、场景、伤亡、时间地点）。目标角色：public_signal。
+
+**R2-3（优先级：medium）** — 从 SAMR 官方公告原文核验三项召回（S2026M0098V/S2026M0099V/S2026M0039I）的发布日期、生效日期、精确数量及 9 车企联合召回数字口径，消除 8-20 与 8-21、9-25 与立即生效并存的分歧。目标角色：public_signal。
+
+**R2-4（优先级：medium）** — 在内部知识库中检索 2026-08 SAMR 三项召回的内部记录、车内摄像头注意力监测（组合辅助驾驶）产品事实与 OTA 相关说明、召回/大规模 OTA 的公关与客服话术基线，并刷新监管合规现状基线以对齐 8 月召回现实。目标角色：internal_knowledge。（本角色报告即为此任务产出）
+
+### M. 交接建议（Internal Knowledge Agent → 下游角色）
+
+- 移交 **risk_assessment**：E2 组监管法规要点（OTA 5 工作日报告、3% 营收罚则）、G 组先例教训（OTA 沟通缺口系统性根因）、以及"内部基线已过时"警示。
+- 移交 **response_strategy**：D 组升级矩阵时限（SAMR 点名 = Critical：1h CEO 简报/2h 公开回应）、模板 B/C 全文、D8 禁止性口径与批准用语、D3 首 24 小时动作清单、D4 平台渠道规则、F1 客服热线 400-910-0707——并明确提示：模板 C 属"否认/澄清"型，与主动召回场景不兼容，需另行设计"承认缺陷 + OTA 整改 + 车主通知"话术。
+
+---
+
+**List of All Relevant Sources (with citations in the report)**
+
+[1] Tesla China Crisis Response Playbook — CONFIDENTIAL: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/pr_playbooks/tesla_china_crisis_playbook.md
+- chunk e696b605842d88ef-1 (heading: Purpose; lines 4)
+- chunk e696b605842d88ef-2 (heading: Response Principles (Mandatory); lines 8-13)
+- chunk e696b605842d88ef-3 (heading: Escalation Matrix; lines 17-24)
+- chunk e696b605842d88ef-5 (heading: Holding Statement Templates > Template B — Safety-Related Incident; line 32)
+- chunk e696b605842d88ef-6 (heading: Holding Statement Templates > Template C — Regulatory/Rumor Response; line 35)
+- chunk e696b605842d88ef-7 (heading: Platform-Specific Guidance; lines 39-43)
+
+[2] Tesla Battery Customer FAQ — Internal Reference for Service & Support Teams: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/faq/tesla_battery_customer_faq.md
+- chunk 7ef4bec0f4896be1-2 (heading: Range Display; lines 12-20)
+- chunk 7ef4bec0f4896be1-6 (heading: Safety; lines 50-59)
+- chunk 7ef4bec0f4896be1-7 (heading: Contact Information; lines 65-69)
+
+[3] media_response_faq: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/faq/media_response_faq.json
+- chunk 1637d41585bc68e3-1 (records[0]; lines 4-5)
+- chunk 1637d41585bc68e3-2 (records[1]; lines 8-9)
+- chunk 1637d41585bc68e3-3 (records[2]; lines 12-13)
+- chunk 1637d41585bc68e3-4 (records[3]; lines 16-17)
+- chunk 1637d41585bc68e3-6 (records[5]; lines 24-25)
+
+[4] Tesla China Regulatory Compliance — Battery & Safety: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/compliance/china_regulatory_landscape.md
+- chunk f03ed35f1910a98a-1 (heading: Key Regulations > GB38031-2025 "Electric Vehicles Traction Battery Safety Requirements"; lines 6-10)
+- chunk f03ed35f1910a98a-3 (heading: Key Regulations > SAMR Recall Regulations (2020 Edition, updated 2024); lines 18-20)
+- chunk f03ed35f1910a98a-5 (heading: Current Regulatory Exposure Assessment (Internal — Q2 2026); lines 31-37)
+- chunk f03ed35f1910a98a-6 (heading: Pending Regulatory Developments (Monitor); lines 41-43)
+
+[5] Tesla Battery-Related Crisis Cases — Internal Post-Mortem Review: C:/codex_workspace/Public Opinion Research/data/knowledge/public_opinion/historical_cases/tesla_battery_crises_review.md
+- chunk 157cba32563672a6-1 (heading: Case 1: 2019 Battery Throttle Software Update; lines 1-22)
+- chunk 157cba32563672a6-2 (heading: Case 2: 2025 Model 3/Y Contactor Recall (25V690); lines 22-

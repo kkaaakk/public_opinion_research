@@ -1,6 +1,5 @@
 {
   "scripts": {
-    "dev": "next dev",
     "md:format": "prettier --write \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
     "md:lint": "markdownlint-cli2 \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
     "md:fix": "markdownlint-cli2 --fix \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",

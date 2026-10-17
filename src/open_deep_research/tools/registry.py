@@ -1,3 +1,4 @@
+# 根据检索模式与实际可用服务装配研究工具，并生成一致的动态工具说明。
 """Assemble the tools visible to a research agent and describe them."""
 
 from typing import Any
@@ -17,6 +18,7 @@ from open_deep_research.state import ResearchComplete
 rag_search = None
 
 
+# 仅在需要本地检索时延迟导入 RAG 工具，降低可选依赖耦合。
 def _get_rag_search_tool():
     """Load the local RAG tool only when a RAG retrieval mode needs it."""
     global rag_search
@@ -29,6 +31,7 @@ def _get_rag_search_tool():
 ##########################
 # Reflection Tool
 ##########################
+# 记录研究反思和下一步计划，作为 ReAct 循环中的显式思考工具。
 @tool(description="Strategic reflection tool for research planning")
 def think_tool(reflection: str) -> str:
     """Tool for strategic reflection on research progress and decision-making.
@@ -61,6 +64,7 @@ def think_tool(reflection: str) -> str:
 # Tool Utils
 ##########################
 
+# 按搜索供应商选择原生搜索声明或项目搜索工具。
 async def get_search_tool(search_api: SearchAPI):
     """Configure and return search tools based on the specified API provider.
 
@@ -101,6 +105,7 @@ async def get_search_tool(search_api: SearchAPI):
     return []
 
 
+# 为证据生产流程选择保留原始结果的搜索工具。
 async def get_raw_search_tool(search_api: SearchAPI):
     """Return the Producer-specific raw/batch-friendly search tool.
 
@@ -120,6 +125,7 @@ async def get_raw_search_tool(search_api: SearchAPI):
         return [raw_tool]
     return await get_search_tool(search_api)
 
+# 判断当前检索模式是否要求启用本地 RAG。
 def rag_requested(configurable: Configuration) -> bool:
     """Determine whether the current configuration wants local RAG retrieval enabled."""
     retrieval_mode = RetrievalMode(get_config_value(configurable.retrieval_mode))
@@ -128,6 +134,7 @@ def rag_requested(configurable: Configuration) -> bool:
         RetrievalMode.HYBRID,
     }
 
+# 按联网、本地或混合检索模式组合检索工具。
 async def get_retrieval_tools(config: RunnableConfig):
     """Configure retrieval tools based on web/RAG retrieval mode settings."""
     configurable = Configuration.from_runnable_config(config)
@@ -149,6 +156,7 @@ async def get_retrieval_tools(config: RunnableConfig):
 
     return retrieval_tools
 
+# 汇总研究控制、搜索和 MCP 工具，形成当前运行的基础工具集合。
 async def get_all_tools(config: RunnableConfig):
     """Assemble complete toolkit including research, search, and MCP tools.
 
@@ -190,6 +198,7 @@ async def get_all_tools(config: RunnableConfig):
             tag_tools_with_domain([available_tool], domain)
     return tools
 
+# 判断工具集合是否包含控制工具之外的实际外部研究能力。
 def has_external_research_tool(tools: list[Any]) -> bool:
     """Determine whether the tool collection includes anything beyond core control tools."""
     core_tool_names = {"ResearchComplete", "think_tool"}
@@ -200,6 +209,7 @@ def has_external_research_tool(tools: list[Any]) -> bool:
             return True
     return False
 
+# 生成旧版静态工具说明，保留兼容入口。
 def get_research_tool_prompt(configurable: Configuration) -> str:
     """Create a short, mode-aware tool summary for the researcher prompt.
 
@@ -244,6 +254,7 @@ def get_research_tool_prompt(configurable: Configuration) -> str:
     return "\n".join(prompt_lines)
 
 
+# 检查实际绑定的工具并按领域生成说明，反映当前权限与可用能力。
 def build_dynamic_tool_prompt(
     tools: list,
     configurable: Configuration | None = None,
@@ -341,6 +352,7 @@ def build_dynamic_tool_prompt(
 
     return "\n".join(lines)
 
+# 从工具调用消息中提取研究笔记。
 def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):
     """Extract notes from tool call messages."""
     return [tool_msg.content for tool_msg in filter_messages(messages, include_types="tool")]

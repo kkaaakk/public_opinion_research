@@ -1,3 +1,4 @@
+# 提供直接执行研究图的调试脚本，便于查看流程输出。
 import asyncio, uuid
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import MemorySaver

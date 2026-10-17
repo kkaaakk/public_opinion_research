@@ -1,3 +1,4 @@
+# 为检索片段生成稳定引用编号，并组装可直接提供给模型的证据上下文。
 """本地 RAG 引用格式化工具。
 
 检索和 rerank 得到的是结构化 `RetrievalResult`，但 researcher LLM 接收到的是

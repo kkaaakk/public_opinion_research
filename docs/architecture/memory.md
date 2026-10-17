@@ -7,7 +7,7 @@
 | 阅读目标 | 理解原始聊天记忆如何写入 MySQL，以及哪些 memory 会进入 RAG 索引。                      |
 | 关键代码 | `src/open_deep_research/memory/`、`src/open_deep_research/rag/loaders/mysql_memory.py` |
 | 上游文档 | [Agent Loop 模块说明](agent-loop.md)                                                   |
-| 下游文档 | [RAG 模块说明](rag.md)、[RAG / Memory 笔记](rag-notes.md)                              |
+| 下游文档 | [RAG 模块说明](rag.md)                              |
 
 本文重点是 memory 自身的事实源、类型和写入流程；检索、切分、引用格式化等内容放在 RAG 文档中。
 

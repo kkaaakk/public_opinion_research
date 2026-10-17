@@ -1,3 +1,4 @@
+# 对比计划执行流程前后版本的成本、证据质量和动态研究行为。
 """Align evaluated Before/After runs and generate Markdown artifacts."""
 
 from __future__ import annotations
@@ -43,17 +44,20 @@ QUALITY_METRICS = [
 ]
 
 
+# 读取一份 JSON 产物。
 def load_json(path: Path) -> Any:
     """Read one JSON artifact."""
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# 按稳定格式写入比较结果 JSON。
 def write_json(path: Path, value: Any) -> None:
     """Write one stable JSON artifact."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# 格式化报告字段，缺失观测不转换为零。
 def fmt(value: Any, digits: int = 2) -> str:
     """Format a value for a report without turning missing data into zero."""
     if value is None:
@@ -67,6 +71,7 @@ def fmt(value: Any, digits: int = 2) -> str:
     return str(value)
 
 
+# 计算指定指标的有效观测均值。
 def _mean_metric(evaluated: Mapping[str, Any], name: str) -> float | None:
     aggregate = evaluated.get("aggregate", {})
     if name == "final_quality":
@@ -82,10 +87,12 @@ def _mean_metric(evaluated: Mapping[str, Any], name: str) -> float | None:
     return _as_float((aggregate.get("metrics", {}).get(name) or {}).get("mean"))
 
 
+# 容错转换浮点数，区分无效或缺失值。
 def _as_float(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+# 计算前后有效数值的变化量。
 def _delta(before: float | None, after: float | None, kind: str = "number") -> str:
     if before is None or after is None:
         return "N/A"
@@ -100,11 +107,13 @@ def _delta(before: float | None, after: float | None, kind: str = "number") -> s
     return f"{absolute:+.2f} ({relative})"
 
 
+# 将聚合指标格式化为报告单元格。
 def _aggregate_cell(evaluated: Mapping[str, Any], metric: str, statistic: str) -> Any:
     values = (evaluated.get("aggregate", {}).get("metrics", {}).get(metric) or {})
     return values.get(statistic)
 
 
+# 按运行身份为原始执行记录建立查找映射。
 def _run_map(raw: Mapping[str, Any]) -> dict[tuple[str, int], Mapping[str, Any]]:
     return {
         (str(run.get("case_id")), int(run.get("repeat_index", 1))): run
@@ -112,6 +121,7 @@ def _run_map(raw: Mapping[str, Any]) -> dict[tuple[str, int], Mapping[str, Any]]
     }
 
 
+# 按运行身份为评估结果建立查找映射。
 def _eval_map(evaluated: Mapping[str, Any]) -> dict[tuple[str, int], Mapping[str, Any]]:
     return {
         (str(run.get("case_id")), int(run.get("repeat_index", 1))): run
@@ -119,11 +129,13 @@ def _eval_map(evaluated: Mapping[str, Any]) -> dict[tuple[str, int], Mapping[str
     }
 
 
+# 取得案例对应的唯一运行，避免错误配对多个结果。
 def _unique_run_for_case(runs: Mapping[tuple[str, int], Mapping[str, Any]], case_id: str) -> Mapping[str, Any] | None:
     choices = [value for (identifier, _), value in runs.items() if identifier == case_id]
     return choices[0] if choices else None
 
 
+# 提取运行中的节点执行流程。
 def _flow(run: Mapping[str, Any] | None) -> str:
     if not run:
         return "N/A — run missing"
@@ -136,6 +148,7 @@ def _flow(run: Mapping[str, Any] | None) -> str:
     return " → ".join(dict.fromkeys(nodes)) if nodes else "N/A — no node events recorded"
 
 
+# 整理研究复核记录及任务变化。
 def _review_rows(run: Mapping[str, Any] | None) -> list[str]:
     if not run:
         return ["N/A — run missing"]
@@ -160,6 +173,7 @@ def _review_rows(run: Mapping[str, Any] | None) -> list[str]:
     return rows
 
 
+# 收集证明补充研究实际执行的观测数据。
 def _followup_evidence(run: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
     if not run:
         return []
@@ -170,6 +184,7 @@ def _followup_evidence(run: Mapping[str, Any] | None) -> list[Mapping[str, Any]]
     ]
 
 
+# 寻找完全相同的重复查询，仅标为候选而不判断其语义价值。
 def _tool_repeat_candidates(run: Mapping[str, Any] | None) -> list[str]:
     """Find exact repeated query strings; do not label them semantically useless."""
     if not run:
@@ -194,6 +209,7 @@ def _tool_repeat_candidates(run: Mapping[str, Any] | None) -> list[str]:
     return [query for query, count in seen.items() if count > 1]
 
 
+# 为单个案例生成基于可见证据的版本对比报告。
 def _case_markdown(
     case: Mapping[str, Any],
     before_raw: Mapping[str, Any] | None,
@@ -315,6 +331,7 @@ This case does not by itself determine the architecture decision. The important 
 """
 
 
+# 生成前后流程架构变化的说明。
 def _architecture_section() -> str:
     return """## B. 架构流程对比
 
@@ -330,6 +347,7 @@ The node-level records below are observed executions, not an assumed diagram.
 """
 
 
+# 生成模型、工具和令牌消耗对比表。
 def _cost_table(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
     lines = [
         "| Metric | Before mean | After mean | Δ mean | Before median | After median | Δ median | Before total | After total | Δ total |",
@@ -352,6 +370,7 @@ def _cost_table(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# 生成质量评分及其变化对比表。
 def _quality_table(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
     lines = ["| Metric | Before | After | Delta |", "|---|---:|---:|---:|"]
     for key, label, kind in QUALITY_METRICS:
@@ -361,14 +380,17 @@ def _quality_table(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# 计算动态研究指标的有效均值。
 def _mean_dynamic(evaluated: Mapping[str, Any], name: str) -> float | None:
     return _as_float(((evaluated.get("aggregate", {}).get("dynamic", {}) or {}).get(name) or {}).get("mean"))
 
 
+# 汇总动态研究指标的有效观测值。
 def _sum_dynamic(evaluated: Mapping[str, Any], name: str) -> float | None:
     return _as_float(((evaluated.get("aggregate", {}).get("dynamic", {}) or {}).get(name) or {}).get("total"))
 
 
+# 分析复核与补充研究循环的实际行为。
 def _dynamic_analysis(
     cases: list[Mapping[str, Any]],
     after_eval: Mapping[str, Any],
@@ -440,6 +462,7 @@ def _dynamic_analysis(
     return analysis, text
 
 
+# 根据观测结果生成版本取舍结论。
 def _decision(before_eval: Mapping[str, Any], after_eval: Mapping[str, Any], dynamic: Mapping[str, Any]) -> tuple[str, str]:
     coverage_delta = _mean_metric(after_eval, "evidence_coverage_percentage")
     before_coverage = _mean_metric(before_eval, "evidence_coverage_percentage")
@@ -482,6 +505,7 @@ def _decision(before_eval: Mapping[str, Any], after_eval: Mapping[str, Any], dyn
     return decision, reason
 
 
+# 组合成本、质量和动态流程分析为总报告。
 def _report(
     *,
     cases: list[Mapping[str, Any]],
@@ -605,6 +629,7 @@ If a Case failed, its exact error and traceback are in the corresponding raw JSO
 """
 
 
+# 生成逐案例报告、总 Markdown 及可序列化比较结果。
 def compare_files(
     *,
     before_path: Path,

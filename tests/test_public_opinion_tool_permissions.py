@@ -1,3 +1,4 @@
+# 验证业务角色严格按明确领域白名单取得工具，未知或无标签工具默认拒绝。
 """Regression tests for public-opinion business-agent tool isolation."""
 
 import asyncio
@@ -10,15 +11,18 @@ from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
 from open_deep_research.tools.registry import get_all_tools
 
 
+# 提供带可控领域元数据的工具替身。
 class FixtureTool:
     """Small tool-shaped fixture with optional domain metadata."""
 
+    # 保存工具名及测试领域标签。
     def __init__(self, name: str, domain: str | None = None, *, with_metadata: bool = True):
         self.name = name
         if with_metadata:
             self.metadata = {} if domain is None else {"tool_domain": domain}
 
 
+# 提取工具集合的名称，便于比较白名单。
 def _names(tools) -> set[str]:
     return {
         tool.name if hasattr(tool, "name") else tool.get("name", "web_search")
@@ -26,11 +30,14 @@ def _names(tools) -> set[str]:
     }
 
 
+# 构造角色权限测试的运行配置。
 def _config() -> dict:
-    return {"configurable": {}}
+    return {"configurable": {"research_graph_enabled": False}}
 
 
+# 替换基础工具来源，避免连接真实 MCP 或搜索服务。
 def _patch_tool_source(monkeypatch, tools, social_tools=()) -> None:
+    # 返回本测试预设的工具集合。
     async def fake_get_all_tools(_config):
         return list(tools)
 
@@ -42,6 +49,7 @@ def _patch_tool_source(monkeypatch, tools, social_tools=()) -> None:
     )
 
 
+# 验证公众信号角色仅取得核心、联网和社交工具。
 def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
     """Public Signal cannot inherit database, Feishu, document, or RAG tools."""
     tools = [
@@ -71,6 +79,7 @@ def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
     assert "document_convert" not in _names(filtered)
 
 
+# 验证内部知识角色仅取得核心和 RAG 工具。
 def test_internal_knowledge_gets_only_core_and_rag(monkeypatch) -> None:
     """Internal Knowledge cannot inherit public, database, or external MCP tools."""
     tools = [
@@ -92,6 +101,7 @@ def test_internal_knowledge_gets_only_core_and_rag(monkeypatch) -> None:
     assert _names(filtered) == {"ResearchComplete", "think_tool", "rag_search"}
 
 
+# 验证策略角色不获得 MCP 写入工具。
 def test_response_strategy_does_not_get_mcp_write_tools(monkeypatch) -> None:
     """Response Strategy keeps Feishu, database, document, and external tools out."""
     tools = [
@@ -113,6 +123,7 @@ def test_response_strategy_does_not_get_mcp_write_tools(monkeypatch) -> None:
     assert _names(filtered) == {"ResearchComplete", "think_tool", "rag_search"}
 
 
+# 验证所有角色都拒绝未知领域。
 @pytest.mark.parametrize("role", ["public_signal", "internal_knowledge", "risk_assessment", "response_strategy"])
 def test_unknown_domain_is_denied_for_every_business_agent(monkeypatch, role: str) -> None:
     """An unregistered domain cannot pass a role's allowlist fallback."""
@@ -130,6 +141,7 @@ def test_unknown_domain_is_denied_for_every_business_agent(monkeypatch, role: st
     assert _names(filtered) == {"ResearchComplete"}
 
 
+# 验证缺少领域标签的工具默认不可用。
 def test_unlabeled_tool_is_denied_by_default(monkeypatch) -> None:
     """A normal tool without domain metadata is not exposed to a business agent."""
     unlabeled = FixtureTool("ordinary_tool", with_metadata=False)
@@ -145,6 +157,7 @@ def test_unlabeled_tool_is_denied_by_default(monkeypatch) -> None:
     assert _names(filtered) == {"ResearchComplete", "think_tool"}
 
 
+# 验证仅有 MCP 来源标记不会自动授予公众信号权限。
 def test_mcp_source_does_not_grant_public_signal_authorization(monkeypatch) -> None:
     """MCP tools are admitted by domain, not merely because they came from MCP."""
     tools = [
@@ -169,6 +182,7 @@ def test_mcp_source_does_not_grant_public_signal_authorization(monkeypatch) -> N
     }
 
 
+# 验证各角色显式声明允许领域。
 def test_agent_domain_allowlists_are_explicit() -> None:
     """Every business agent declares its domain permissions in its spec."""
     assert PUBLIC_OPINION_AGENT_SPECS["public_signal"].allowed_domains == frozenset(
@@ -185,6 +199,7 @@ def test_agent_domain_allowlists_are_explicit() -> None:
     )
 
 
+# 验证共享加载器给已知内置工具附加正确领域。
 def test_shared_loader_tags_known_builtin_domains() -> None:
     """Known core tools receive domain metadata at the shared loading boundary."""
     tools = asyncio.run(

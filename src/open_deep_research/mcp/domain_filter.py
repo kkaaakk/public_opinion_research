@@ -1,3 +1,4 @@
+# 按明确的工具领域元数据组织工具，并为角色权限筛选提供统一判断。
 """Scene-based tool domain filtering and role-based tool routing.
 
 All domain metadata lives in :data:`DOMAIN_REGISTRY` — the single source of
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# 保存工具领域的名称、显示标题与提示词说明。
 @dataclass(frozen=True)
 class DomainDef:
     """Definition of one tool domain.
@@ -144,23 +146,27 @@ _BUILTIN_NAME_TO_DOMAIN: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
+# 按领域名称查询定义；未注册的领域返回 None。
 def get_domain(name: str) -> DomainDef | None:
     """Return the :class:`DomainDef` for *name*, or ``None``."""
     return _DOMAIN_BY_NAME.get(name)
 
 
+# 获取领域的简短说明，供动态工具提示使用。
 def get_domain_description(name: str) -> str:
     """Return the one-line description for *name*."""
     dom = _DOMAIN_BY_NAME.get(name)
     return dom.description if dom else ""
 
 
+# 获取领域面向模型或用户的可读标题。
 def get_domain_label(name: str) -> str:
     """Return the human-readable label for *name*."""
     dom = _DOMAIN_BY_NAME.get(name)
     return dom.label if dom else name
 
 
+# 按注册顺序返回指定领域的名称与标题对。
 def iter_domain_labels(domains: set[str]) -> list[tuple[str, str]]:
     """Return ordered ``(name, label)`` pairs for the given *domains*."""
     seen = {name for name, _ in _DOMAIN_PROMPT_ORDER if name in domains}
@@ -181,6 +187,7 @@ _NATIVE_WEB_SEARCH_TYPES = frozenset(
 )
 
 
+# 优先解析工具领域元数据，并兼容已知内置工具及原生搜索声明。
 def get_tool_domain(tool) -> str | None:
     """Resolve a tool's explicit domain, or ``None`` when it is unclassified.
 
@@ -209,11 +216,13 @@ def get_tool_domain(tool) -> str | None:
     return None
 
 
+# 为工具分组取得领域名，同时处理未分类工具的显示值。
 def _tool_domain(tool) -> str:
     """Resolve a tool's domain for grouping and prompt display."""
     return get_tool_domain(tool) or "external_mcp"
 
 
+# 为 LangChain 工具写入已校验的领域标签；供应商原生工具字典保持原结构。
 def tag_tools_with_domain(tools: list, domain: str) -> list:
     """Attach a validated ``tool_domain`` to LangChain tools.
 
@@ -231,6 +240,7 @@ def tag_tools_with_domain(tools: list, domain: str) -> list:
     return tools
 
 
+# 将工具列表按领域归组，供提示词和权限逻辑复用。
 def classify_tools(tools: list[BaseTool]) -> dict[str, list[BaseTool]]:
     """Group *tools* by their domain category."""
     buckets: dict[str, list[BaseTool]] = {}
@@ -240,6 +250,7 @@ def classify_tools(tools: list[BaseTool]) -> dict[str, list[BaseTool]]:
     return buckets
 
 
+# 把领域分组结果整理为可读的工具摘要。
 def tool_domain_summary(tools: list[BaseTool]) -> str:
     """Return a human-readable summary of tools grouped by domain."""
     buckets = classify_tools(tools)

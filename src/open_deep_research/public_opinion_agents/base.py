@@ -1,8 +1,10 @@
+# 定义业务角色的输入输出契约、工作步骤和工具权限。
 """Agent specifications for the public-opinion workflow."""
 
 from dataclasses import dataclass
 
 
+# 封装一个舆情角色的职责、上下文策略、工具领域及输出要求。
 @dataclass(frozen=True)
 class PublicOpinionAgentSpec:
     """Encapsulates the contract and policy for one business agent."""
@@ -22,6 +24,7 @@ class PublicOpinionAgentSpec:
     handoff_policy: tuple[str, ...]
     context_strategy: str = "standard"
 
+    # 将角色职责、权限、输入输出契约渲染为专用系统提示词。
     def format_system_prompt(
         self,
         *,
@@ -51,10 +54,12 @@ class PublicOpinionAgentSpec:
         )
 
 
+# 把条目列表排成项目符号文本。
 def _bullet_lines(items: tuple[str, ...]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
+# 把步骤列表排成带序号的执行说明。
 def _numbered_lines(items: tuple[str, ...]) -> str:
     return "\n".join(f"{index}. {item}" for index, item in enumerate(items, start=1))
 

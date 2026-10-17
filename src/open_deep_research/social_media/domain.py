@@ -1,8 +1,9 @@
+# 复用负面词汇、投诉信号、互动热度和风险评分的领域规则。
 """Shared, behavior-neutral social-media domain primitives."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 DEFAULT_RISK_RULES = {
     "critical": {"min_negative_ratio": 0.6, "min_negative_engagement": 10000, "min_complaints": 10},
@@ -25,11 +26,13 @@ POSITIVE_TERMS = ["good", "great", "resolved", "recommend", "满意", "解决", 
 NEGATIVE_QUERY_TERMS = ["投诉", "质量", "售后", "退款", "维权", "避雷", "避坑"]
 
 
+# 判断小写文本是否包含任一配置词语。
 def contains_any(text: str, terms: list[str]) -> bool:
     """Return whether lower-cased ``text`` contains any configured term."""
     return any(term.lower() in text for term in terms)
 
 
+# 提取命中的负面及投诉词，去重后稳定排序。
 def matched_signal_terms(text: str) -> list[str]:
     """Return the stable sorted set of negative/complaint terms in ``text``."""
     return sorted(
@@ -37,6 +40,7 @@ def matched_signal_terms(text: str) -> list[str]:
     )
 
 
+# 用共享负面词汇扩展查询，增加投诉和风险信号召回。
 def negative_query_variants(query: Any, variant_count: int) -> list[str]:
     """Expand a query with the shared negative-signal vocabulary."""
     base_query = str(query or "").strip()
@@ -53,6 +57,7 @@ def negative_query_variants(query: Any, variant_count: int) -> list[str]:
     return variants
 
 
+# 根据共享领域规则计算风险分数，避免适配器使用不同口径。
 def risk_score(
     negative_ratio: float,
     complaint_count: int,
@@ -77,6 +82,7 @@ def risk_score(
     )
 
 
+# 按互动总量映射为现有阈值定义的热度等级。
 def heat_level(total_engagement: int) -> str:
     """Map engagement volume to the existing heat-level thresholds."""
     if total_engagement >= 100000:
@@ -88,6 +94,7 @@ def heat_level(total_engagement: int) -> str:
     return "low"
 
 
+# 计算比例并保留四位小数，统一统计输出格式。
 def ratio(numerator: int, denominator: int) -> float:
     """Return the existing four-decimal ratio representation."""
     if denominator <= 0:
@@ -98,5 +105,23 @@ def ratio(numerator: int, denominator: int) -> float:
 __all__ = [
     "COMPLAINT_TERMS", "DEFAULT_RISK_RULES", "NEGATIVE_QUERY_TERMS",
     "NEGATIVE_TERMS", "POSITIVE_TERMS", "contains_any", "heat_level",
-    "matched_signal_terms", "negative_query_variants", "ratio", "risk_score",
+    "matched_signal_terms", "negative_query_variants", "ratio", "risk_level", "risk_score",
 ]
+
+
+def risk_level(
+    negative_ratio: float,
+    complaint_count: int,
+    negative_engagement: int,
+    rules: Mapping[str, Mapping[str, Any]],
+) -> str:
+    """Select the highest matching risk tier from adapter-provided rules."""
+    for candidate_level in ("critical", "high", "medium"):
+        rule = rules[candidate_level]
+        if (
+            negative_ratio >= float(rule["min_negative_ratio"])
+            or complaint_count >= int(rule["min_complaints"])
+            or negative_engagement >= int(rule["min_negative_engagement"])
+        ):
+            return candidate_level
+    return "low"

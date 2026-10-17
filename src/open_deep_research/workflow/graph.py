@@ -1,3 +1,4 @@
+# 定义研究工作流的节点连接、并发分支和结束条件。
 """Declare and export the top-level LangGraph workflow."""
 
 from typing import Any
@@ -25,6 +26,7 @@ from open_deep_research.workflow.reporting import (
 from open_deep_research.workflow.research import research_phase
 
 
+# 创建原生 StateGraph，并连接需求澄清、研究、章节写作及报告汇编节点。
 def _create_deep_researcher_builder() -> StateGraph:
     """Build a native LangGraph state graph."""
     builder = StateGraph(
@@ -93,6 +95,7 @@ deep_researcher_builder = _create_deep_researcher_builder()
 deep_researcher_graph = deep_researcher_builder.compile(name=WORKFLOW_NAME)
 
 
+# 为每次 API 调用编译新的研究图，并设置统一追踪名称。
 def deep_researcher(config: Any = None):
     """Return a freshly compiled native graph for LangGraph API per-invocation use.
 

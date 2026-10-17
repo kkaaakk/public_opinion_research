@@ -1,3 +1,4 @@
+# 固定主图、研究子图与模块边界的架构契约，防止重构造成拓扑漂移。
 """Stable graph structure and module ownership contracts."""
 
 import ast
@@ -9,6 +10,7 @@ from open_deep_research.workflow.research import public_opinion_builder
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "open_deep_research"
 
 
+# 验证主研究图包含约定节点和连接。
 def test_main_graph_contract() -> None:
     """The top-level graph keeps its checkpoint-visible node and edge names."""
     assert set(deep_researcher_builder.nodes) == {
@@ -31,6 +33,7 @@ def test_main_graph_contract() -> None:
     }
 
 
+# 验证舆情研究子图的角色拓扑与复核路径。
 def test_research_subgraph_contract() -> None:
     """Parallel producers, review routing, and final agents stay connected."""
     assert set(public_opinion_builder.nodes) == {
@@ -58,6 +61,7 @@ def test_research_subgraph_contract() -> None:
     }
 
 
+# 验证图入口和工具兼容层保持明确的模块职责。
 def test_graph_and_utils_keep_their_module_boundaries() -> None:
     """Graph assembly and compatibility exports cannot regain implementation."""
     graph = ast.parse((SOURCE_ROOT / "workflow" / "graph.py").read_text(encoding="utf-8"))

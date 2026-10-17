@@ -1,3 +1,4 @@
+# 负责加载数据、分块、建立召回索引，以及同步待索引 MySQL 记忆。
 """RAG indexing boundary.
 
 The indexer owns data ingestion: local documents, optional file memories, and
@@ -33,9 +34,11 @@ if TYPE_CHECKING:
     from open_deep_research.rag.service import RAGPipelineConfig
 
 
+# 封装本地 RAG 索引初始化和刷新，供查询管线复用。
 class RAGIndexer:
     """Build and refresh the retrieval index for a RAG pipeline."""
 
+    # 绑定索引依赖并初始化空的文档与检索状态。
     def __init__(self, config: "RAGPipelineConfig", index_id: str):
         """Initialize index dependencies and empty in-memory index state."""
         self.config = config
@@ -67,6 +70,7 @@ class RAGIndexer:
         self._ready = False
         self._lock = threading.Lock()
 
+    # 检查来源变化，构建分块索引并同步本批待处理的 MySQL 记忆。
     def ensure_ready(self, force: bool = False) -> None:
         """Load sources, build chunk indexes, and sync pending MySQL memory."""
         source_fingerprint = self.source_fingerprint()
@@ -74,6 +78,7 @@ class RAGIndexer:
             return
 
         with self._lock:
+            # 获取锁后再次检查，避免多个查询同时发现变化而重复重建索引。
             source_fingerprint = self.source_fingerprint()
             if self._ready and not force and source_fingerprint == self._source_fingerprint:
                 return
@@ -84,6 +89,7 @@ class RAGIndexer:
             keyword = self.config.keyword_search
 
             self.documents = self.load_indexable_documents()
+            # 只记录当前批次已加载的待索引 ID，刷新期间新写入的记忆留给下一批。
             pending_memory_ids = self._pending_memory_ids(self.documents)
             self.chunks = split_documents(
                 self.documents,
@@ -124,10 +130,12 @@ class RAGIndexer:
                 neo4j_password=graph.neo4j_password,
                 neo4j_database=graph.neo4j_database,
             )
+            # 各检索索引初始化成功后才推进记忆状态，失败批次可在下次重试。
             self._mark_pending_memories_indexed(pending_memory_ids)
             self._source_fingerprint = self.source_fingerprint()
             self._ready = True
 
+    # 刷新完整本地索引，使文件资料与 MySQL 记忆在同一集合中保持一致。
     def index_pending_memories(self) -> None:
         """Refresh the full index for a separate indexing job.
 
@@ -136,6 +144,7 @@ class RAGIndexer:
         """
         self.ensure_ready(force=True)
 
+    # 加载全部配置数据源，并转换为标准 RAG 文档。
     def load_indexable_documents(self) -> list[RAGDocument]:
         """Load all data sources and normalize them to RAG documents."""
         chunking = self.config.chunking
@@ -176,6 +185,7 @@ class RAGIndexer:
             )
         return documents
 
+    # 计算来源内容指纹，用于判断是否刷新，不作为索引名称。
     def source_fingerprint(self) -> dict[str, Any]:
         """Fingerprint source content for refresh decisions, not index naming."""
         chunking = self.config.chunking
@@ -200,6 +210,7 @@ class RAGIndexer:
             ),
         }
 
+    # 记录当前文档批次中包含的待索引 MySQL 记忆 ID。
     @staticmethod
     def _pending_memory_ids(documents: Sequence[RAGDocument]) -> list[str]:
         """Snapshot pending MySQL memory ids included in the current document batch."""
@@ -212,6 +223,7 @@ class RAGIndexer:
         ]
         return list(dict.fromkeys(memory_ids))
 
+    # 只标记本批已成功写入索引的记忆，避免误标其他待处理记录。
     def _mark_pending_memories_indexed(self, memory_ids: Sequence[str]) -> None:
         """Mark only the MySQL memory ids that were indexed in this batch."""
         if not memory_ids:

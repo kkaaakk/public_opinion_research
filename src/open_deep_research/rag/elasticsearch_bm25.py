@@ -1,3 +1,4 @@
+# 使用 Elasticsearch 实现与本地 BM25 索引一致的关键词检索接口。
 """Elasticsearch-backed keyword/BM25 index for RAG chunks."""
 
 from typing import Any
@@ -5,9 +6,11 @@ from typing import Any
 from open_deep_research.rag.types import RAGChunk, RetrievalResult
 
 
+# 包装 Elasticsearch 的分块写入、BM25 查询及来源删除。
 class ElasticsearchBM25Index:
     """Small adapter that exposes the same `search(query, top_k)` shape as BM25Index."""
 
+    # 创建客户端并准备索引，将传入分块写入搜索后端。
     def __init__(self, chunks: list[RAGChunk], config: Any):
         self.chunks = chunks
         self.url = config.elasticsearch_url
@@ -32,6 +35,7 @@ class ElasticsearchBM25Index:
                 f"'{self.index_name}' at {self.url}: {exc}"
             ) from exc
 
+    # 在 content 字段执行 BM25 检索，返回统一 RetrievalResult 列表。
     def search(self, query: str, top_k: int) -> list[RetrievalResult]:
         """Search chunks with Elasticsearch BM25 over the `content` field."""
         if not query.strip() or top_k <= 0:
@@ -57,6 +61,7 @@ class ElasticsearchBM25Index:
             )
         return results
 
+    # 删除指定来源的全部索引分块，避免刷新后遗留旧内容。
     def delete_by_source_id(self, source_id: str) -> None:
         """Delete indexed chunks for one source id."""
         if not source_id:
@@ -68,6 +73,7 @@ class ElasticsearchBM25Index:
             refresh=True,
         )
 
+    # 检查并创建检索需要的索引及字段映射。
     def _ensure_index(self) -> None:
         if self.client.indices.exists(index=self.index_name):
             return
@@ -85,6 +91,7 @@ class ElasticsearchBM25Index:
             },
         )
 
+    # 把分块正文和元数据批量写入 Elasticsearch。
     def _index_chunks(self, chunks: list[RAGChunk]) -> None:
         if not chunks:
             return
@@ -116,6 +123,7 @@ class ElasticsearchBM25Index:
         helpers.bulk(self.client, actions, refresh=True)
 
 
+# 将非 JSON 元数据转换为可序列化值，保证索引写入兼容。
 def _jsonable_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Keep metadata storable even when callers put non-JSON objects in it."""
     import json

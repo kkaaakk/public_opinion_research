@@ -1,3 +1,4 @@
+# 提供哈希和 SentenceTransformer 嵌入后端，统一批量文本向量化接口。
 """本地 RAG embedding 后端。
 
 本模块把文本转换成向量，供向量库召回使用。当前提供两类后端：
@@ -48,6 +49,7 @@ class HashEmbeddingBackend(EmbeddingBackend):
     正常 RAG 使用应优先选择 SentenceTransformers 或其它语义 embedding。
     """
 
+    # 保存哈希向量维数，准备无需下载模型的嵌入后端。
     def __init__(self, dimensions: int = 256):
         if dimensions <= 0:
             raise ValueError("Hash embedding dimensions must be greater than 0.")
@@ -99,6 +101,7 @@ class SentenceTransformerEmbeddingBackend(EmbeddingBackend):
     或 FAISS inner product 检索。
     """
 
+    # 加载指定 SentenceTransformer 模型，并选择推理设备。
     def __init__(
         self,
         model_name: str,

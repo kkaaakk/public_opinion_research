@@ -1,3 +1,4 @@
+# 为混合检索结果提供内存或 Neo4j 共现图邻居扩展。
 """Lightweight GraphRAG expansion for local RAG chunks.
 
 This module builds an in-process chunk graph from shared competitor/product
@@ -14,6 +15,7 @@ from open_deep_research.rag.graph_terms import TermExtractor
 from open_deep_research.rag.types import RAGChunk, RetrievalResult
 
 
+# 延迟导入自适应扩展判断，避免模块初始化时的循环依赖。
 def _adaptive_decision(
     query: str,
     seed_results: list[RetrievalResult],
@@ -26,9 +28,11 @@ def _adaptive_decision(
     return decide_expansion(query, seed_results, chunk_terms, term_to_chunk_ids)
 
 
+# 基于分块共享术语构建内存共现图，并扩展初始召回结果。
 class GraphRAGIndex:
     """Co-occurrence graph over RAG chunks."""
 
+    # 建立分块、术语和结构边索引，保存扩展与评分参数。
     def __init__(
         self,
         chunks: list[RAGChunk],
@@ -68,6 +72,7 @@ class GraphRAGIndex:
             all_edges.extend(build_metadata_edges(chunks))
             self._structural_index = StructuralIndex(all_edges)
 
+    # 从种子分块寻找图邻居，计算扩展分数并按分块 ID 合并去重。
     def expand(
         self,
         query: str,
@@ -174,6 +179,7 @@ class GraphRAGIndex:
         return expanded_results
 
 
+# 保留旧术语提取接口，委托默认 TermExtractor 处理。
 def extract_graph_terms(text: str) -> set[str]:
     """Backward-compatible wrapper: extract terms using default TermExtractor.
 
@@ -183,9 +189,11 @@ def extract_graph_terms(text: str) -> set[str]:
     return extractor.extract(text)
 
 
+# 将分块与共现关系存入 Neo4j，供持久化图扩展检索。
 class Neo4jGraphRAGIndex:
     """Neo4j-backed co-occurrence graph over RAG chunks."""
 
+    # 初始化图连接和术语配置，并写入当前分块关系。
     def __init__(
         self,
         chunks: list[RAGChunk],
@@ -219,6 +227,7 @@ class Neo4jGraphRAGIndex:
         self._write_graph(chunks)
         self._last_expansion_decision: Any = None
 
+    # 查询与种子共享术语的 Neo4j 邻居，转换为统一检索结果。
     def expand(
         self,
         query: str,
@@ -296,6 +305,7 @@ class Neo4jGraphRAGIndex:
         expanded_results.sort(key=lambda item: item.score, reverse=True)
         return expanded_results
 
+    # 根据图连接参数构建 Neo4j 驱动。
     def _create_driver(
         self,
         *,
@@ -315,11 +325,13 @@ class Neo4jGraphRAGIndex:
         auth = (username, password) if username and password else None
         return driver_factory(uri, auth=auth)
 
+    # 打开配置数据库对应的图会话。
     def _session(self) -> Any:
         if self.database:
             return self.driver.session(database=self.database)
         return self.driver.session()
 
+    # 将分块、术语及关联关系同步到 Neo4j。
     def _write_graph(self, chunks: list[RAGChunk]) -> None:
         with self._session() as session:
             session.run(
@@ -372,6 +384,7 @@ class Neo4jGraphRAGIndex:
                 )
 
 
+# 按图开关与后端配置创建内存或 Neo4j 扩展索引。
 def create_graph_index(
     chunks: list[RAGChunk],
     *,

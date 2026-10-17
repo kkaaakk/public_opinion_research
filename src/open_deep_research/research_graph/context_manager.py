@@ -1,3 +1,4 @@
+# 用结构化模型输出维护有限工作上下文，并严格验证图引用的有效性。
 """Bounded Working Context updates for ResearchWorkspace."""
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from open_deep_research.research_graph.models import (
 from open_deep_research.research_graph.retriever import format_relevant_subgraph
 
 
+# 记录一次上下文更新的结果及用量。
 @dataclass
 class ContextManagerResult:
     """Result of one structured Context Manager update."""
@@ -32,9 +34,11 @@ class ContextManagerResult:
     budget_usage: dict[str, Any] = field(default_factory=dict)
 
 
+# 仅更新结构化工作区，不负责工具调用或任务调度。
 class ContextManager:
     """Structured-output updater; it cannot call tools or schedule work."""
 
+    # 绑定更新模型，设置发现、冲突、缺口和引用的容量上限。
     def __init__(
         self,
         *,
@@ -59,6 +63,7 @@ class ContextManager:
             "conflicts": max(0, int(max_conflicts)),
         }
 
+    # 结合新图增量与相关子图更新工作上下文，并返回消耗统计。
     async def update(
         self,
         *,
@@ -104,12 +109,14 @@ class ContextManager:
         )
 
 
+# 在首个 ReAct 请求前为角色和任务创建精简工作上下文。
 def initial_working_context(task: Any) -> WorkingContext:
     """Create a small context before the first ReAct model call."""
     objective = str(getattr(task, "objective", "") or task or "").strip()
     return WorkingContext(current_objective=objective)
 
 
+# 应用模型选择的增量，并校验容量限制及来源引用。
 def apply_working_context_delta(
     current: WorkingContext,
     delta: WorkingContextDelta,
@@ -198,6 +205,7 @@ def apply_working_context_delta(
     )
 
 
+# 构造有大小限制且保留原始图 ID 的上下文更新提示。
 def build_context_manager_prompt(
     *,
     task: Any,
@@ -240,6 +248,7 @@ def build_context_manager_prompt(
     )
 
 
+# 为证据复核组装有限图上下文，避免加载完整角色报告。
 def build_research_review_context(
     *,
     run_id: str,
@@ -276,6 +285,7 @@ def build_research_review_context(
     )
 
 
+# 把有限工作上下文渲染为智能体提示文本。
 def render_working_context(context: WorkingContext, *, max_chars: int = 10_000) -> str:
     """Render the bounded context for agent prompts."""
     text = json.dumps(context.model_dump(mode="json"), ensure_ascii=False, indent=2)
@@ -284,6 +294,7 @@ def render_working_context(context: WorkingContext, *, max_chars: int = 10_000) 
     return text
 
 
+# 将结构化响应归一化为 WorkingContextDelta。
 def _coerce_context_delta(response: Any) -> WorkingContextDelta:
     if isinstance(response, WorkingContextDelta):
         return response
@@ -295,6 +306,7 @@ def _coerce_context_delta(response: Any) -> WorkingContextDelta:
     raise TypeError("Context Manager returned an invalid WorkingContextDelta.")
 
 
+# 收集当前增量与检索子图中允许引用的节点和关系 ID。
 def _available_graph_ids(
     current: WorkingContext,
     subgraph: RelevantSubgraph,
@@ -310,6 +322,7 @@ def _available_graph_ids(
     return available
 
 
+# 将候选发现转为标准模型并过滤非法来源引用。
 def _coerce_finding(item: Any) -> ContextFinding | None:
     if isinstance(item, ContextFinding):
         return item
@@ -325,6 +338,7 @@ def _coerce_finding(item: Any) -> ContextFinding | None:
     return None
 
 
+# 将候选冲突转为标准模型并校验关联证据。
 def _coerce_conflict(item: Any) -> ContextConflict | None:
     if isinstance(item, ContextConflict):
         return item
@@ -336,6 +350,7 @@ def _coerce_conflict(item: Any) -> ContextConflict | None:
     return None
 
 
+# 将研究缺口转为标准模型并保留合法来源标识。
 def _coerce_gap(item: Any) -> ContextGap | None:
     if isinstance(item, ContextGap):
         return item
@@ -347,6 +362,7 @@ def _coerce_gap(item: Any) -> ContextGap | None:
     return None
 
 
+# 比较工作上下文条目，供重复发现与缺口合并使用。
 def _same_context_item(left: ContextFinding, right: ContextFinding) -> bool:
     return bool(
         set(left.finding_ids) & set(right.finding_ids)
@@ -355,6 +371,7 @@ def _same_context_item(left: ContextFinding, right: ContextFinding) -> bool:
     )
 
 
+# 按条目身份去重上下文内容，避免重复积累。
 def _dedupe_context_items(items: list[ContextFinding]) -> list[ContextFinding]:
     result: list[ContextFinding] = []
     for item in items:
@@ -364,6 +381,7 @@ def _dedupe_context_items(items: list[ContextFinding]) -> list[ContextFinding]:
     return result
 
 
+# 判断上下文条目是否保留可追溯的图引用。
 def _has_provenance(item: Any, available: set[str]) -> bool:
     ids: set[str] = set()
     for attribute in ("finding_ids", "claim_ids", "evidence_ids", "source_ids"):
@@ -371,6 +389,7 @@ def _has_provenance(item: Any, available: set[str]) -> bool:
     return bool(ids & available) or not available
 
 
+# 通过引用 ID 或摘要匹配判断条目是否已被本次更新解决。
 def _is_resolved(item: Any, resolutions: list[str]) -> bool:
     normalized = {str(value).casefold() for value in resolutions}
     item_ids: set[str] = set()
@@ -379,11 +398,13 @@ def _is_resolved(item: Any, resolutions: list[str]) -> bool:
     return bool(item_ids & normalized or str(getattr(item, "summary", "")).casefold() in normalized)
 
 
+# 只保留当前图中真实存在的 ID，去重后取容量范围内的最近项。
 def _bounded_ids(values: Iterable[str], available: set[str], limit: int) -> list[str]:
     values_list = list(dict.fromkeys(str(value) for value in values if str(value) in available))
     return _take_last(values_list, limit)
 
 
+# 最多保留末尾 limit 项，正确处理零容量。
 def _take_last(values: Iterable[Any], limit: int) -> list[Any]:
     """Take at most ``limit`` trailing values, including the zero case."""
     normalized_limit = max(0, int(limit))

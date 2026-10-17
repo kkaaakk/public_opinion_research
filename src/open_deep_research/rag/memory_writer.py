@@ -1,3 +1,4 @@
+# 保留历史记忆写入导入路径，实际持久化职责位于 memory 包。
 """Compatibility exports for the memory write workflow."""
 
 from open_deep_research.memory.context import (

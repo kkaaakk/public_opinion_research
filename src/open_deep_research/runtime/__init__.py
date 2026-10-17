@@ -1,3 +1,4 @@
+# 导出业务智能体装配入口与共享 ReAct 运行时。
 """Execution and assembly entry points for public-opinion agents."""
 
 from open_deep_research.runtime.agent_runtime import (

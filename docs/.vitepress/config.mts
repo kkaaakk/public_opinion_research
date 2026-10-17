@@ -8,11 +8,11 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: "首页", link: "/" },
-      { text: "快速开始", link: "/guide/project-readme" },
-      { text: "架构", link: "/architecture/technical-stack" },
+      { text: "快速开始", link: "https://github.com/kkaaakk/public_opinion_research/blob/codex/openai-agents-migration/README.md" },
+      { text: "架构", link: "/architecture/agent-loop" },
       { text: "RAG", link: "/architecture/rag" },
       { text: "评估", link: "/evaluation/rag-retrieval-test-records" },
-      { text: "参考", link: "/project/agents" },
+      { text: "参考", link: "/architecture/openai-agents-sdk-migration-plan" },
     ],
     sidebar: {
       "/": [
@@ -20,18 +20,18 @@ export default defineConfig({
           text: "开始",
           items: [
             { text: "文档首页", link: "/" },
-            { text: "项目 README", link: "/guide/project-readme" },
+            { text: "项目 README", link: "https://github.com/kkaaakk/public_opinion_research/blob/codex/openai-agents-migration/README.md" },
           ],
         },
         {
           text: "架构与模块",
           items: [
-            { text: "当前技术栈", link: "/architecture/technical-stack" },
+            { text: "迁移边界", link: "/architecture/openai-agents-sdk-migration-plan" },
             { text: "Agent Loop", link: "/architecture/agent-loop" },
             { text: "Tools 模块", link: "/architecture/tools" },
             { text: "RAG 模块", link: "/architecture/rag" },
             { text: "Memory 模块", link: "/architecture/memory" },
-            { text: "RAG / Memory 笔记", link: "/architecture/rag-notes" },
+            { text: "RAG 设计取舍", link: "/architecture/rag-design-rationale" },
           ],
         },
         {
@@ -51,13 +51,6 @@ export default defineConfig({
             { text: "Data Governance", link: "/knowledge/data-governance" },
             { text: "GitHub Testsets", link: "/knowledge/github-testsets" },
             { text: "Misleading Archive", link: "/knowledge/misleading-archive" },
-          ],
-        },
-        {
-          text: "项目参考",
-          items: [
-            { text: "Agent Instructions", link: "/project/agents" },
-            { text: "Claude Instructions", link: "/project/claude" },
           ],
         },
       ],

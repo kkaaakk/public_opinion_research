@@ -1,3 +1,4 @@
+# 加载文本、结构化文件、代码、PDF 和图片，并按图像特征路由 OCR 与视觉模型。
 """本地 RAG 文档加载器.
 
 这个模块负责把用户配置的 `rag_knowledge_base_paths` 转成 `RAGDocument`。
@@ -159,6 +160,7 @@ def _iter_supported_paths(path: Path, include_multimodal: bool = False) -> Itera
             yield candidate.resolve()
 
 
+# 判断文件扩展名是否属于当前加载器支持的类型。
 def _is_supported_suffix(suffix: str, include_multimodal: bool = False) -> bool:
     if suffix in SUPPORTED_TEXT_EXTENSIONS:
         return True
@@ -234,6 +236,7 @@ def _load_document(
     return []
 
 
+# 读取代码文件并标注语言及来源，供后续语言感知分块使用。
 def _load_code_document(path: Path) -> list[RAGDocument]:
     text = path.read_text(encoding="utf-8", errors="ignore").strip()
     if not text:
@@ -365,6 +368,7 @@ def _load_pdf_document(
     return loaded_pages
 
 
+# 按路由策略将图片送入 OCR、视觉理解、组合处理或跳过。
 def _load_image_document(
     path: Path,
     multimodal_provider: str,
@@ -406,6 +410,7 @@ def _load_image_document(
     ]
 
 
+# 分析图片并选择文字提取方式，返回用于索引的图片文本。
 def extract_routed_image_text(
     path: Path,
     provider: str,
@@ -453,6 +458,7 @@ def extract_routed_image_text(
     return text, metadata
 
 
+# 对内存图片执行相同路由，用于仅含图像的 PDF 页面。
 def extract_routed_image_bytes_text(
     image_bytes: bytes,
     provider: str,
@@ -499,6 +505,7 @@ def extract_routed_image_bytes_text(
     )
 
 
+# 优先根据低成本本地特征选择 OCR、视觉、组合或跳过路径。
 def route_image_for_rag(
     *,
     features: Mapping[str, Any],
@@ -556,6 +563,7 @@ def route_image_for_rag(
     return "vision", "uncertain_vision_fallback", classification
 
 
+# 按已选路由调用对应文字或视觉提取器。
 def _extract_text_for_image_route(
     *,
     route: str,
@@ -604,17 +612,20 @@ def _extract_text_for_image_route(
     return _combine_routed_image_text(ocr_text, vision_text), metadata
 
 
+# 合并 OCR 文本与视觉描述，整理为统一索引内容。
 def _combine_routed_image_text(ocr_text: str, vision_text: str) -> str:
     if ocr_text and vision_text:
         return f"OCR text:\n{ocr_text}\n\nVision description:\n{vision_text}"
     return ocr_text or vision_text
 
 
+# 通过 Pillow 和可选 OpenCV 提取尺寸、色彩及边缘等低成本特征。
 def analyze_image_features(path: Path) -> dict[str, Any]:
     """Extract cheap local image features with Pillow and optional OpenCV."""
     return analyze_image_bytes_features(path.read_bytes())
 
 
+# 从内存图片字节提取与文件图片一致的本地特征。
 def analyze_image_bytes_features(image_bytes: bytes) -> dict[str, Any]:
     """Extract cheap local image features from in-memory image bytes."""
     try:
@@ -664,6 +675,7 @@ def analyze_image_bytes_features(image_bytes: bytes) -> dict[str, Any]:
         }
 
 
+# 可选使用 OpenCV 计算边缘密度，为图片路由提供线索。
 def _try_opencv_edge_density(image_bytes: bytes) -> float | None:
     try:
         import cv2  # type: ignore
@@ -682,6 +694,7 @@ def _try_opencv_edge_density(image_bytes: bytes) -> float | None:
         return None
 
 
+# 执行小规模 OCR 探测，以估计图片文字量。
 def quick_ocr_probe_image_text(path: Path, provider: str, ocr_languages: str) -> str:
     """Run a smaller OCR pass to estimate text volume for routing."""
     normalized_provider = provider.lower().strip()
@@ -705,6 +718,7 @@ def quick_ocr_probe_image_text(path: Path, provider: str, ocr_languages: str) ->
         return pytesseract.image_to_string(image, lang=ocr_languages).strip()
 
 
+# 对内存图片执行轻量 OCR 探测。
 def quick_ocr_probe_image_bytes_text(
     image_bytes: bytes,
     provider: str,
@@ -732,6 +746,7 @@ def quick_ocr_probe_image_bytes_text(
         return pytesseract.image_to_string(image, lang=ocr_languages).strip()
 
 
+# 按多模态提供者配置从图片路径提取文本。
 def extract_image_text(path: Path, provider: str, ocr_languages: str) -> str:
     """Extract text from an image path using the configured multimodal provider."""
     normalized_provider = provider.lower().strip()
@@ -754,6 +769,7 @@ def extract_image_text(path: Path, provider: str, ocr_languages: str) -> str:
         return pytesseract.image_to_string(image, lang=ocr_languages).strip()
 
 
+# 调用视觉模型描述图片语义，补充纯 OCR 无法表达的信息。
 def extract_image_vision_text(
     path: Path,
     model: str,
@@ -770,6 +786,7 @@ def extract_image_vision_text(
     )
 
 
+# 从渲染后的图片字节提取文字。
 def extract_image_bytes_text(
     image_bytes: bytes,
     provider: str,
@@ -796,6 +813,7 @@ def extract_image_bytes_text(
         return pytesseract.image_to_string(image, lang=ocr_languages).strip()
 
 
+# 调用视觉模型理解内存图片，适配 PDF 页面等来源。
 def extract_image_bytes_vision_text(
     image_bytes: bytes,
     model: str,
@@ -813,6 +831,7 @@ def extract_image_bytes_vision_text(
     )
 
 
+# 使用视觉模型判断图片类型，以辅助提取路由。
 def classify_image_with_vision(
     path: Path,
     model: str,
@@ -829,6 +848,7 @@ def classify_image_with_vision(
     )
 
 
+# 对内存图片调用视觉分类，返回路由参考类别。
 def classify_image_bytes_with_vision(
     image_bytes: bytes,
     model: str,
@@ -846,6 +866,7 @@ def classify_image_bytes_with_vision(
     )
 
 
+# 把自由文本分类结果归一化为受支持的路由标签。
 def normalize_image_classification_label(raw_label: Any) -> str:
     """Normalize free-form Vision classification output to a routing label."""
     label = str(raw_label or "").strip().lower()
@@ -871,6 +892,7 @@ def normalize_image_classification_label(raw_label: Any) -> str:
     return "uncertain"
 
 
+# 封装视觉请求的模型创建、消息发送及预算用量记录。
 def _invoke_vision_model(
     *,
     image_bytes: bytes,
@@ -899,6 +921,7 @@ def _invoke_vision_model(
     return _message_content_to_text(response.content).strip()
 
 
+# 将模型字符串或内容块响应整理为纯文本。
 def _message_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -915,6 +938,7 @@ def _message_content_to_text(content: Any) -> str:
     return str(content or "")
 
 
+# 根据图片类型生成多模态请求需要的 MIME 类型。
 def _image_mime_type(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix in {".jpg", ".jpeg"}:
@@ -928,6 +952,7 @@ def _image_mime_type(path: Path) -> str:
     return "image/png"
 
 
+# 容错读取图片特征的浮点值，缺失或格式异常时使用默认值。
 def _feature_float(features: Mapping[str, Any], key: str) -> float:
     try:
         return float(features.get(key, 0) or 0)
@@ -935,6 +960,7 @@ def _feature_float(features: Mapping[str, Any], key: str) -> float:
         return 0.0
 
 
+# 计算可用于判断文字密度的文本信号长度。
 def _text_signal_length(text: str) -> int:
     return len("".join(str(text or "").split()))
 

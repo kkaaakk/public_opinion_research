@@ -4,20 +4,20 @@ layout: doc
 
 # Open Deep Research 文档站
 
-这里汇总 Open Deep Research 当前实现的使用说明、架构文档、RAG / Memory 设计、评估记录、示例报告和项目维护说明。
+这里汇总项目当前实现的使用说明、模块文档、评估记录和示例报告。
 
 ::: tip 阅读建议
 第一次接手项目时，建议按“快速开始 -> 当前技术栈 -> Agent Loop -> Tools -> RAG -> Memory”的顺序阅读；排查检索质量时直接进入评估记录。
 :::
 
 ::: warning 内容边界
-根目录、examples、data/knowledge 中已有的 Markdown 已复制进文档站对应主题目录。原文件仍保留在原位置，避免影响项目入口和示例数据。
+使用说明以根 README 为准；过时副本和已完成草稿已删除。examples 与 knowledge 是历史样例和评测语料。
 :::
 
 ## 推荐阅读路径
 
-1. 阅读 [项目 README](./guide/project-readme.md)，完成环境准备和基础运行。
-2. 阅读 [当前技术栈](./architecture/technical-stack.md)，理解当前默认链路、可选后端和关键依赖。
+1. 阅读 [项目 README](https://github.com/kkaaakk/public_opinion_research/blob/codex/openai-agents-migration/README.md)，完成环境准备和基础运行。
+2. 阅读 [模块与迁移边界](./architecture/openai-agents-sdk-migration-plan.md)，区分当前业务、未来 Runtime 和 Harness 职责。
 3. 阅读 [Agent Loop](./architecture/agent-loop.md)，掌握主流程如何进入 research phase、运行四个业务 Agent、使用 tools 并生成 final report。
 4. 阅读 [Tools 模块](./architecture/tools.md)，确认 web search、RAG、MCP 和控制工具如何装配。
 5. 阅读 [RAG 模块](./architecture/rag.md)，深入本地知识库、memory、hybrid retrieval、reranker 和 citation 链路。
@@ -45,13 +45,13 @@ flowchart TD
 
 | 主题         | 入口                                                           | 说明                                   |
 | ------------ | -------------------------------------------------------------- | -------------------------------------- |
-| 快速开始     | [项目 README](./guide/project-readme.md)                       | 项目介绍、安装、运行和配置说明         |
-| 架构与模块   | [当前技术栈](./architecture/technical-stack.md)                | 当前实现的技术分层、默认栈和模块边界   |
+| 快速开始     | [项目 README](https://github.com/kkaaakk/public_opinion_research/blob/codex/openai-agents-migration/README.md)                       | 项目介绍、安装、运行和配置说明         |
+| 架构与模块   | [模块与迁移边界](./architecture/openai-agents-sdk-migration-plan.md)                | 当前实现的技术分层、默认栈和模块边界   |
 | RAG / Memory | [RAG 模块](./architecture/rag.md)                              | 本地知识库、长期记忆、检索、重排和引用 |
 | 评估         | [RAG 检索测试记录](./evaluation/rag-retrieval-test-records.md) | 历次检索指标、配置、未命中样本和说明   |
 | 示例         | [ArXiv 示例](./examples/arxiv.md)                              | 示例研究报告和输出样本                 |
 | 知识库       | [Team Handbook](./knowledge/team-handbook.md)                  | 本地知识库样例文档                     |
-| 项目参考     | [Agent Instructions](./project/agents.md)                      | 根目录维护说明和 agent 指令副本        |
+| 项目参考     | [Agent Instructions](https://github.com/kkaaakk/public_opinion_research/blob/codex/openai-agents-migration/AGENTS.md)                      | 根目录规范开发规则        |
 
 ## 维护约定
 

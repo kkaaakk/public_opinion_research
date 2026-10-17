@@ -1,3 +1,4 @@
+# 对固定案例执行隔离的前后版本测量，记录真实预算和受限工具证据。
 """Run and collect a single-case model/token cost profile.
 
 The worker imports one requested committed worktree in an isolated process.
@@ -72,11 +73,13 @@ KNOWN_NODE_NAMES = {
 }
 
 
+# 生成带时区的 UTC 时间戳，用于测量产物。
 def utc_now() -> str:
     """Return the current UTC time in ISO-8601 form."""
     return datetime.now(timezone.utc).isoformat()
 
 
+# 把模型或事件对象转换为有大小限制的 JSON 数据。
 def jsonable(value: Any, *, string_limit: int = 50_000, depth: int = 0) -> Any:
     """Convert model/event values into bounded JSON-safe data."""
     if depth > 8:
@@ -124,6 +127,7 @@ def jsonable(value: Any, *, string_limit: int = 50_000, depth: int = 0) -> Any:
     return str(value)[:string_limit]
 
 
+# 加载固定成本分析案例，保持对比输入一致。
 def load_case(case_id: str) -> dict[str, Any]:
     """Load the fixed cost-profile case."""
     case = json.loads(CASE_PATH.read_text(encoding="utf-8"))
@@ -132,8 +136,10 @@ def load_case(case_id: str) -> dict[str, Any]:
     return case
 
 
+# 只读查询提交标识与工作区状态，记录被测代码版本。
 def git_info(root: Path) -> dict[str, Any]:
     """Read target commit and worktree status without mutation."""
+    # 执行只读 Git 命令并取得结果文本。
     def run(*args: str) -> str:
         return subprocess.run(
             ["git", *args],
@@ -151,6 +157,7 @@ def git_info(root: Path) -> dict[str, Any]:
     }
 
 
+# 从仓库环境文件读取非敏感诊断设置。
 def env_value(name: str, default: str | None = None) -> str | None:
     """Read one non-secret value from the repository .env for diagnostics."""
     if not ENV_PATH.exists():
@@ -163,6 +170,7 @@ def env_value(name: str, default: str | None = None) -> str | None:
     return default
 
 
+# 仅附加运行关联元数据，业务参数沿用环境文件及默认值。
 def runtime_config(version: str, case_id: str) -> dict[str, Any]:
     """Add only correlation metadata; all business settings come from .env/defaults."""
     run_tag = f"cost-profile-{version}-{case_id}-{uuid.uuid4().hex[:10]}"
@@ -197,6 +205,7 @@ def runtime_config(version: str, case_id: str) -> dict[str, Any]:
     }
 
 
+# 隐藏形似凭据的配置字段，同时保留可审计的普通设置。
 def redact(value: Any, key: str = "") -> Any:
     """Redact credential-shaped config fields while keeping settings auditable."""
     if re.search(r"(api.?key|token|secret|password|dsn|authorization)", key, re.IGNORECASE):
@@ -208,6 +217,7 @@ def redact(value: Any, key: str = "") -> Any:
     return jsonable(value)
 
 
+# 捕获环境优先级处理后的有效配置快照。
 def config_snapshot(config: Mapping[str, Any]) -> dict[str, Any]:
     """Capture effective Configuration values after env precedence is applied."""
     from open_deep_research.configuration import Configuration
@@ -234,6 +244,7 @@ def config_snapshot(config: Mapping[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
+# 保存报告与复核等必要变化，避免重复保存完整对话。
 def summarize_change(key: str, value: Any) -> Any:
     """Retain reports/reviews but avoid storing full message transcripts twice."""
     if key == "messages":
@@ -257,6 +268,7 @@ def summarize_change(key: str, value: Any) -> Any:
     return jsonable(value, string_limit=5_000)
 
 
+# 将 LangGraph v2 流事件归一化为节点和状态更新记录。
 def collect_stream_chunk(chunk: Any, updates: list[dict[str, Any]]) -> None:
     """Normalize LangGraph v2 update chunks into node/state records."""
     namespace: list[str] = []
@@ -300,6 +312,7 @@ def collect_stream_chunk(chunk: Any, updates: list[dict[str, Any]]) -> None:
         })
 
 
+# 保留诊断所需查询参数，隐藏凭据并限制大小。
 def bounded_args(value: Any) -> Any:
     """Keep query arguments while redacting credential-shaped keys."""
     if isinstance(value, Mapping):
@@ -320,6 +333,7 @@ def bounded_args(value: Any) -> Any:
     return str(value)[:600]
 
 
+# 记录有限工具结果证据，供成本和来源分析使用。
 def result_summary(value: Any) -> dict[str, Any]:
     """Record bounded tool output evidence for cost/source diagnostics."""
     text = value if isinstance(value, str) else json.dumps(jsonable(value, string_limit=3_000), ensure_ascii=False)
@@ -332,6 +346,7 @@ def result_summary(value: Any) -> dict[str, Any]:
     }
 
 
+# 恢复各角色报告，并标记研究轮次和执行模式。
 def parse_reports(updates: list[dict[str, Any]]) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Recover role reports and explicit round/mode markers."""
     merged: dict[str, str] = {}
@@ -383,6 +398,7 @@ def parse_reports(updates: list[dict[str, Any]]) -> tuple[dict[str, str], list[d
     return merged, round_reports
 
 
+# 从流更新恢复结构化证据复核结果。
 def parse_reviews(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Recover structured ResearchReview values from stream state updates."""
     reviews: list[dict[str, Any]] = []
@@ -411,6 +427,7 @@ def parse_reviews(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return reviews
 
 
+# 恢复补充研究角色实际完成的任务。
 def parse_completed_tasks(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Recover tasks actually completed by follow-up role executions."""
     seen: set[str] = set()
@@ -435,11 +452,13 @@ def parse_completed_tasks(updates: list[dict[str, Any]]) -> list[dict[str, Any]]
     return tasks
 
 
+# 保留产物结构兼容接口；当前不再捕获逐请求模型事件。
 def model_calls_from_captures() -> list[dict[str, Any]]:
     """Keep the artifact schema; per-call model events are no longer captured."""
     return []
 
 
+# 把工具捕获记录转换为每次执行对应的一行数据。
 def tool_calls_from_captures(captured: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return one bounded row per captured tool execution."""
     rows: list[dict[str, Any]] = []
@@ -456,6 +475,7 @@ def tool_calls_from_captures(captured: list[dict[str, Any]]) -> list[dict[str, A
     return rows
 
 
+# 累加各节点预算增量，得到本次运行的权威总消耗。
 def budget_usage_from_updates(updates: list[dict[str, Any]]) -> dict[str, Any]:
     """Sum per-node budget deltas from stream updates into one authoritative total."""
     from open_deep_research.budget import merge_budget_usage
@@ -474,6 +494,7 @@ def budget_usage_from_updates(updates: list[dict[str, Any]]) -> dict[str, Any]:
     return total
 
 
+# 只有全部调用同时提供输入输出令牌时才计算完整总量。
 def token_rollup(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Return exact sums only when every call exposes both token fields."""
     input_values = [call.get("input_tokens") for call in calls]
@@ -502,6 +523,7 @@ def token_rollup(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+# 从流更新与捕获数据构建节点和阶段成本汇总。
 def flow_and_summaries(
     updates: list[dict[str, Any]],
     calls: list[dict[str, Any]],
@@ -538,6 +560,7 @@ def flow_and_summaries(
     }
 
 
+# 比较首轮与补充轮次报告长度增长。
 def report_sizes(round_reports: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Summarize round-one/round-two report growth."""
     by_role: dict[str, list[Mapping[str, Any]]] = {}
@@ -577,6 +600,7 @@ def report_sizes(round_reports: list[Mapping[str, Any]]) -> dict[str, Any]:
     return {"roles": rows, "method": "report character length / 4; estimated, not provider tokenization"}
 
 
+# 结合报告长度与代码契约估算重复输入的角色报告规模。
 def repeated_context_analysis(
     calls: list[Mapping[str, Any]],
     round_reports: list[Mapping[str, Any]],
@@ -589,6 +613,7 @@ def repeated_context_analysis(
         round_value = report.get("round") if isinstance(report.get("round"), int) else 1
         report_sizes_by_role.setdefault(role, {})[round_value] = int(report.get("chars") or 0)
 
+    # 计算截至指定阶段已累计的报告字符数。
     def cumulative_chars(role: str, round_value: Any) -> int:
         values = report_sizes_by_role.get(role, {})
         if not values:
@@ -618,11 +643,13 @@ def repeated_context_analysis(
     }
 
 
+# 保留 ReAct 用量走势字段的兼容接口，缺少逐调用事件时不伪造数据。
 def react_progression(calls: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Kept for artifact schema compatibility; per-call events are no longer captured."""
     return []
 
 
+# 保留调用类型占比字段的兼容接口，缺少观测时保持不可用。
 def share_by_call_type(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Kept for artifact schema compatibility; per-call events are no longer captured."""
     return {
@@ -632,6 +659,7 @@ def share_by_call_type(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+# 只根据已知输入输出令牌计算比例。
 def token_ratios(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Compute input/output ratios from known token fields only."""
     token_data = token_rollup(calls)
@@ -649,6 +677,7 @@ def token_ratios(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+# 执行固定案例，收集原始节点流和工具证据。
 async def run_case(
     *,
     version: str,
@@ -668,6 +697,7 @@ async def run_case(
 
     captured_tools: list[dict[str, Any]] = []
 
+    # 包装工具执行并记录有限参数、结果、耗时和失败情况。
     async def capture_tool(tool: Any, args: Any, config: Any = None) -> Any:
         started_at = time.perf_counter()
         item: dict[str, Any] = {
@@ -707,6 +737,7 @@ async def run_case(
     try:
         graph = deep_researcher_module.deep_researcher()
 
+        # 消费研究流，更新累计状态并收集最终报告。
         async def consume() -> None:
             async for chunk in graph.astream(
                 {"messages": [HumanMessage(content=str(case["query"]))]},
@@ -818,6 +849,7 @@ async def run_case(
     }
 
 
+# 将测量产物按 UTF-8 JSON 写入文件。
 def write_json(path: Path, value: Any) -> None:
     """Write one UTF-8 JSON artifact."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -827,6 +859,7 @@ def write_json(path: Path, value: Any) -> None:
     )
 
 
+# 执行单版本测量，异常时仍保存诊断产物。
 async def worker_main(args: argparse.Namespace) -> int:
     """Run one version and always save a diagnostic artifact."""
     case = load_case(args.case_id)
@@ -872,6 +905,7 @@ async def worker_main(args: argparse.Namespace) -> int:
     return 0
 
 
+# 启动隔离进程，避免前后版本的模块导入相互污染。
 def launch_worker(
     *,
     version: str,
@@ -914,6 +948,7 @@ def launch_worker(
         )
 
 
+# 解析工作进程与总控模式的命令行参数。
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse worker/orchestrator arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -929,6 +964,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+# 依次运行修改后、修改前版本，并生成全部分析产物。
 def main(args: argparse.Namespace) -> int:
     """Run After first, then Before, and render all requested artifacts."""
     results_dir = args.results_dir.resolve()

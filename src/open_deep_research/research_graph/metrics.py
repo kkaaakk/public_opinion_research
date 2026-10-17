@@ -1,3 +1,4 @@
+# 维护研究图写入、检索、抽取和上下文管理的指标及数据质量标记。
 """Local Research Graph metrics with exact/estimated quality markers."""
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ METRIC_NAMES = (
 )
 
 
+# 为单个角色累积可序列化的研究图指标。
 @dataclass
 class ResearchGraphMetrics:
     """Mutable per-agent metrics accumulator."""
@@ -42,6 +44,7 @@ class ResearchGraphMetrics:
     )
     quality: dict[str, str] = field(default_factory=dict)
 
+    # 累计数值观察量，并可附加该数值的质量说明。
     def add(self, name: str, value: int | float = 1, *, quality: str | None = None) -> None:
         """Add a numeric observation and optionally record its quality."""
         if name not in self.values:
@@ -50,12 +53,14 @@ class ResearchGraphMetrics:
         if quality:
             self.quality[name] = quality
 
+    # 设置指标当前值，并更新可选质量标记。
     def set(self, name: str, value: int | float, *, quality: str | None = None) -> None:
         """Set a metric value and optionally record its quality."""
         self.values[name] = value
         if quality:
             self.quality[name] = quality
 
+    # 把另一份指标载荷中的数值累计到当前实例。
     def merge(self, other: dict[str, Any] | None) -> None:
         """Merge numeric metrics from another accumulator payload."""
         if not isinstance(other, dict):
@@ -68,11 +73,13 @@ class ResearchGraphMetrics:
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 self.add(str(name), value)
 
+    # 导出可序列化指标及质量字段。
     def as_dict(self) -> dict[str, Any]:
         """Return serializable metric values and quality markers."""
         return {**self.values, "quality": dict(self.quality)}
 
 
+# 作为 reducer 合并并发角色输出的可加指标。
 def merge_research_graph_metrics(
     current_value: Any,
     new_value: Any,

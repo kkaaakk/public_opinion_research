@@ -1,3 +1,4 @@
+# 将工具原始材料按令牌预算分批抽取为证据图，来源元数据与稳定 ID 由代码绑定。
 """Batch, source-bound graph extraction for Research Graph producers."""
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ from open_deep_research.research_graph.schema import (
 LOGGER = logging.getLogger(__name__)
 
 
+# 保存单批模型抽取响应、归一化图增量及统计信息。
 @dataclass
 class ExtractionBatchResult:
     """One LLM extraction batch and its normalized graph delta."""
@@ -56,6 +58,7 @@ class ExtractionBatchResult:
     output_token_quality: str = "unavailable"
 
 
+# 汇总一个工具批次产生的图增量与抽取指标。
 @dataclass
 class ExtractionResult:
     """Aggregate extraction result for a tool batch."""
@@ -64,16 +67,19 @@ class ExtractionResult:
     skipped_documents: list[str] = field(default_factory=list)
     budget_usage: dict[str, Any] = field(default_factory=dict)
 
+    # 仅返回归一化图增量，供不需要指标的调用方使用。
     @property
     def deltas(self) -> list[ResearchDeltaGraph]:
         """Return normalized deltas for callers that do not need metrics."""
         return [batch.delta for batch in self.batches]
 
 
+# 表示抽取响应无法安全归一化或绑定来源。
 class GraphExtractionError(RuntimeError):
     """Raised when a graph extraction response cannot be normalized safely."""
 
 
+# 按预估令牌分组；单文档超长时只裁剪抽取输入，仍保留完整来源哈希。
 def batch_documents_by_tokens(
     documents: Iterable[RawResearchDocument],
     max_tokens: int,
@@ -114,6 +120,7 @@ def batch_documents_by_tokens(
     return batches
 
 
+# 从原始工具数据构造来源文档，URL 从工具结果读取而非让模型生成。
 def build_source_documents_from_raw_result(
     *,
     run_id: str,
@@ -218,9 +225,11 @@ def build_source_documents_from_raw_result(
     return documents
 
 
+# 对每个符合令牌预算的文档批次执行一次结构化图抽取。
 class GraphExtractor:
     """One structured LLM call per token-aware source batch."""
 
+    # 配置抽取模型、批次预算及相关结构化输出选项。
     def __init__(
         self,
         *,
@@ -237,6 +246,7 @@ class GraphExtractor:
         self.max_retries = max_retries
         self.batch_token_limit = batch_token_limit
 
+    # 对全部输入文档分批抽取，并合并图增量和用量。
     async def extract(
         self,
         documents: Iterable[RawResearchDocument],
@@ -257,6 +267,7 @@ class GraphExtractor:
             result.budget_usage = merge_budget_usage(result.budget_usage, batch_result.budget_usage)
         return result
 
+    # 构造单批提示词、调用模型并将输出绑定到真实来源。
     async def _extract_batch(
         self,
         documents: list[RawResearchDocument],
@@ -288,6 +299,7 @@ class GraphExtractor:
         )
 
 
+# 把模型局部引用转换为代码生成的稳定图 ID，并绑定可信来源元数据。
 def normalize_extraction_output(
     output: GraphExtractionOutput | dict[str, Any],
     documents: list[RawResearchDocument],
@@ -606,6 +618,7 @@ def normalize_extraction_output(
     return delta
 
 
+# 将批次来源与抽取要求组织为模型输入，保留来源引用键。
 def _build_extraction_prompt(
     documents: list[RawResearchDocument],
     scope: ResearchGraphScope,
@@ -620,15 +633,34 @@ def _build_extraction_prompt(
         }
         for document in documents
     ]
+    record_contract = {
+        "claims": [{"local_id": "claim-1", "statement": "A qualified factual statement from the supplied material."}],
+        "evidences": [{
+            "local_id": "evidence-1", "source_id": documents[0].source_id if documents else "supplied-source-id",
+            "statement": "The source statement, preserving its qualifications.",
+            "quote": "An exact excerpt from the source.", "supports_claim_ids": ["claim-1"],
+        }],
+        "findings": [{"local_id": "finding-1", "summary": "A bounded observation supported by the claim and evidence.",
+                      "claim_ids": ["claim-1"], "evidence_ids": ["evidence-1"]}],
+    }
     return (
         "You are the Research Graph extraction component, not the final analyst. "
         "Extract only semantic evidence from this batch of new research material. "
-        "Do not call tools, make a final risk judgment, schedule follow-up work, "
+        "Do not execute research tools, make a final risk judgment, schedule follow-up work, "
         "or invent URLs/source metadata. Every evidence item must reference one of "
         "the supplied source_id values. Keep provenance IDs as local refs; code will "
         "assign stable graph IDs. Distinguish facts, allegations, interpretations, "
         "recommendations, and uncertainty. Build one related graph delta with claims, "
-        "events, entities, source findings, uncertainties, and findings where supported.\n\n"
+        "events, entities, source findings, uncertainties, and findings where supported. "
+        "For every source containing a substantive factual statement, include source-bound "
+        "evidences records; events/entities alone do not preserve its evidence. Preserve "
+        "qualifications such as hypothetical or synthetic rather than treating them as real facts. "
+        "Use local_id for local references, supports_claim_ids for evidence-to-claim links, "
+        "and claim_ids/evidence_ids for findings. Do not substitute source IDs for evidence IDs "
+        "or rename these fields to local_ref/supports/claims/evidence. The example below defines "
+        "record field names only: replace its statements with supported source content.\n\n"
+        "Record field contract:\n"
+        f"{json.dumps(record_contract, ensure_ascii=False)}\n\n"
         f"Scope: {scope.model_dump_json()}\n"
         "Allowed source registry and material:\n"
         f"{json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -636,6 +668,7 @@ def _build_extraction_prompt(
     )
 
 
+# 兼容不同结构化响应形式，校验为标准抽取模型。
 def _coerce_extraction_output(response: Any) -> GraphExtractionOutput:
     if isinstance(response, GraphExtractionOutput):
         return response
@@ -647,6 +680,7 @@ def _coerce_extraction_output(response: Any) -> GraphExtractionOutput:
     raise GraphExtractionError("Graph extraction model returned an invalid structured output.")
 
 
+# 将局部来源引用解析到本批实际来源，避免引用不存在的材料。
 def _resolve_source(
     raw: dict[str, Any],
     source_by_id: dict[str, RawResearchDocument],
@@ -663,6 +697,7 @@ def _resolve_source(
     return None
 
 
+# 把单个局部节点引用映射为稳定图 ID。
 def _resolve_ref(reference: str, local_to_id: dict[str, str]) -> str:
     if not reference:
         return ""
@@ -671,6 +706,7 @@ def _resolve_ref(reference: str, local_to_id: dict[str, str]) -> str:
     return reference if reference in set(local_to_id.values()) else ""
 
 
+# 批量解析局部图引用并整理有效 ID。
 def _map_refs(raw: dict[str, Any], keys: tuple[str, ...], mapping: dict[str, str]) -> list[str]:
     for key in keys:
         if key in raw:
@@ -682,6 +718,7 @@ def _map_refs(raw: dict[str, Any], keys: tuple[str, ...], mapping: dict[str, str
     return []
 
 
+# 把抽取结果中的来源引用映射到真实来源节点。
 def _map_source_refs(
     raw: dict[str, Any],
     source_by_id: dict[str, RawResearchDocument],
@@ -699,6 +736,7 @@ def _map_source_refs(
     return result
 
 
+# 按优先顺序选取首个有效文本字段。
 def _first_text(raw: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = raw.get(key)
@@ -707,6 +745,7 @@ def _first_text(raw: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+# 将输入转换为安全可处理的文本值。
 def _safe_text(value: Any) -> str:
     if value is None:
         return ""
@@ -718,6 +757,7 @@ def _safe_text(value: Any) -> str:
         return str(value)
 
 
+# 把单值或序列归一化为文本列表。
 def _text_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value.strip()] if value.strip() else []
@@ -726,6 +766,7 @@ def _text_list(value: Any) -> list[str]:
     return []
 
 
+# 从原始工具载荷中提取 URL，保留代码侧来源控制。
 def _extract_urls(value: Any) -> list[str]:
     text = _safe_text(value)
     candidates = []
@@ -736,6 +777,7 @@ def _extract_urls(value: Any) -> list[str]:
     return candidates
 
 
+# 从工具调用参数解析本次检索查询。
 def _args_query(args: Any) -> str:
     if not isinstance(args, dict):
         return ""
@@ -745,10 +787,12 @@ def _args_query(args: Any) -> str:
     return str(query or "")
 
 
+# 生成抽取与来源元数据使用的当前时间。
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# 归一化置信度数值，限制到支持范围。
 def _confidence(value: Any) -> float | None:
     try:
         if value is None or str(value).strip() == "":
@@ -758,26 +802,31 @@ def _confidence(value: Any) -> float | None:
         return None
 
 
+# 将模型返回的主张状态映射为受支持枚举。
 def _claim_status(value: Any) -> str:
     normalized = normalize_text(value)
     return normalized if normalized in {"confirmed", "disputed", "unsupported", "open", "unknown"} else "open"
 
 
+# 归一化证据对主张的支持、反对或背景立场。
 def _stance(value: Any) -> str:
     normalized = normalize_text(value)
     return normalized if normalized in {"supports", "contradicts", "neutral", "unknown"} else "unknown"
 
 
+# 归一化不确定性或风险的严重程度。
 def _severity(value: Any) -> str:
     normalized = normalize_text(value)
     return normalized if normalized in {"low", "medium", "high", "unknown"} else "unknown"
 
 
+# 归一化研究任务的证据覆盖状态。
 def _coverage_status(value: Any) -> str:
     normalized = normalize_text(value)
     return normalized if normalized in {"covered", "partial", "open", "unknown"} else "unknown"
 
 
+# 从用量数据容错读取指定令牌统计。
 def _usage_token(usage: dict[str, Any], key: str) -> int | None:
     value = usage.get(key)
     return int(value) if isinstance(value, int) and value > 0 else None

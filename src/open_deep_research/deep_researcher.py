@@ -1,3 +1,4 @@
+# 对外保留研究图入口及兼容导出；实际节点实现位于 workflow 包。
 """Compatibility exports for the public-opinion LangGraph workflow.
 
 New code should import from the owning workflow module.

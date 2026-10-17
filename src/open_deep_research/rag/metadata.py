@@ -1,3 +1,4 @@
+# 将来源、标题及结构化元数据转换为检索和重排可用的短文本。
 """Helpers for using structured chunk metadata during retrieval."""
 
 from typing import Any
@@ -22,6 +23,7 @@ STRUCTURED_METADATA_KEYS = (
 )
 
 
+# 合并来源、标题及元数据行，为分块补充可搜索上下文。
 def build_structured_context_text(
     *,
     source: str,
@@ -38,6 +40,7 @@ def build_structured_context_text(
     return "\n".join(lines)
 
 
+# 按稳定顺序格式化对检索有帮助的元数据字段。
 def build_structured_metadata_lines(metadata: dict[str, Any]) -> list[str]:
     """Return stable metadata lines for fields useful to retrieval/reranking."""
     lines: list[str] = []
@@ -49,6 +52,7 @@ def build_structured_metadata_lines(metadata: dict[str, Any]) -> list[str]:
     return lines
 
 
+# 将标量或复合元数据值转换为可比较的文本。
 def _metadata_value_to_text(value: Any) -> str:
     if isinstance(value, (list, tuple, set)):
         return " / ".join(_metadata_value_to_text(item) for item in value)

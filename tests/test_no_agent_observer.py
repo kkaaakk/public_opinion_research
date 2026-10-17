@@ -1,3 +1,4 @@
+# 检查已移除的 AgentObserver 符号及配置不再出现在项目中。
 """Repository-level regression guard: Agent Observer must not return.
 
 The project's observability architecture is exactly:
@@ -53,6 +54,7 @@ ALLOWED_HISTORICAL_PATTERN = re.compile(
 )
 
 
+# 遍历契约检查需要扫描的代码与配置文件。
 def _iter_files():
     self_path = Path(__file__).resolve()
     for root in SCAN_ROOTS:
@@ -69,12 +71,14 @@ def _iter_files():
             yield path
 
 
+# 查找单文件中的遗留观察器符号。
 def _violations_in(content: str) -> list[str]:
     if ALLOWED_HISTORICAL_PATTERN.search(content):
         return []
     return [symbol for symbol in FORBIDDEN_SYMBOLS if re.search(symbol, content)]
 
 
+# 验证仓库未保留被移除的观察器接口。
 def test_no_agent_observer_symbols_in_repository() -> None:
     """No Agent Observer symbol may exist in source, tests, or docs."""
     violations: list[str] = []
@@ -90,6 +94,7 @@ def test_no_agent_observer_symbols_in_repository() -> None:
     )
 
 
+# 验证观测包只暴露当前 LangSmith 能力。
 def test_observability_package_exposes_only_langsmith() -> None:
     """The observability package exports only the LangSmith integration."""
     import open_deep_research.observability as observability
@@ -111,6 +116,7 @@ def test_observability_package_exposes_only_langsmith() -> None:
     assert set(observability.__all__) == expected
 
 
+# 验证环境模板不再提供旧观察器设置。
 def test_env_example_has_no_agent_observer() -> None:
     """The env template keeps only LangSmith as the observability config."""
     env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")

@@ -1,3 +1,4 @@
+# 定义来源、证据、主张及工作上下文模型，保证图增量可验证和可溯源。
 """Typed models for the per-run public-opinion research graph.
 
 The graph is deliberately separate from LangGraph's message state.  These
@@ -42,6 +43,7 @@ ResearchRelationType = Literal[
 ]
 
 
+# 为每次图写入与检索携带运行和身份范围。
 class ResearchGraphScope(BaseModel):
     """Scope attached to every graph write and retrieval."""
 
@@ -51,6 +53,7 @@ class ResearchGraphScope(BaseModel):
     task_id: str = Field(min_length=1)
 
 
+# 承载工具材料及代码生成的来源信息，供模型仅以来源 ID 引用。
 class RawResearchDocument(BaseModel):
     """A tool result converted into a source-bound extraction input.
 
@@ -73,6 +76,7 @@ class RawResearchDocument(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+# 保存具有确定性溯源元数据的来源节点。
 class Source(BaseModel):
     """A source with deterministic provenance metadata."""
 
@@ -93,6 +97,7 @@ class Source(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+# 描述从来源片段提取的观察及其来源绑定。
 class Evidence(BaseModel):
     """A source-bound observation extracted from one or more source spans."""
 
@@ -112,6 +117,7 @@ class Evidence(BaseModel):
     contextualizes_claim_ids: list[str] = Field(default_factory=list)
 
 
+# 表示可被证据支持、反驳或补充背景的命题。
 class Claim(BaseModel):
     """A proposition that can be supported, contradicted, or contextualized."""
 
@@ -127,6 +133,7 @@ class Claim(BaseModel):
     entity_ids: list[str] = Field(default_factory=list)
 
 
+# 保存单一来源的综合发现，并保留局部图引用。
 class SourceFinding(BaseModel):
     """A source-level synthesis that retains all local graph references."""
 
@@ -139,6 +146,7 @@ class SourceFinding(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
 
 
+# 表示带日期的事件、公告、调查等事实节点。
 class Event(BaseModel):
     """A dated incident, announcement, investigation, or other event."""
 
@@ -151,6 +159,7 @@ class Event(BaseModel):
     entity_ids: list[str] = Field(default_factory=list)
 
 
+# 表示抽取证据中出现的实体。
 class Entity(BaseModel):
     """An entity mentioned by extracted evidence."""
 
@@ -162,6 +171,7 @@ class Entity(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
 
+# 将尚未确定的问题明确关联到主张和证据。
 class Uncertainty(BaseModel):
     """An uncertainty explicitly attached to claims and evidence."""
 
@@ -174,6 +184,7 @@ class Uncertainty(BaseModel):
     severity: Literal["low", "medium", "high", "unknown"] = "unknown"
 
 
+# 保存基于主张与证据推导的分析结论。
 class Finding(BaseModel):
     """An analysis conclusion derived from claims and supporting evidence."""
 
@@ -187,6 +198,7 @@ class Finding(BaseModel):
     finding_type: str = "research_finding"
 
 
+# 描述研究任务或具体缺口的证据覆盖情况。
 class Coverage(BaseModel):
     """Evidence coverage for a research task or explicit gap."""
 
@@ -200,6 +212,7 @@ class Coverage(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
 
+# 定义不依赖存储后端的通用节点表示。
 class GraphNode(BaseModel):
     """Storage-neutral node representation."""
 
@@ -212,6 +225,7 @@ class GraphNode(BaseModel):
     task_id: str = ""
 
 
+# 定义不依赖存储后端的有向关系表示。
 class GraphEdge(BaseModel):
     """Storage-neutral directed relationship representation."""
 
@@ -223,6 +237,7 @@ class GraphEdge(BaseModel):
     properties: dict[str, Any] = Field(default_factory=dict)
 
 
+# 承载从一批新材料抽取出的关联图增量。
 class ResearchDeltaGraph(BaseModel):
     """One related graph delta extracted from a batch of new material."""
 
@@ -239,24 +254,34 @@ class ResearchDeltaGraph(BaseModel):
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
 
+    # 在写入前检查节点范围，拒绝意外混入其他运行的数据。
     @model_validator(mode="after")
     def normalize_scope(self) -> ResearchDeltaGraph:
         """Reject accidental cross-run nodes before they reach a store."""
         for node in self.nodes:
             if node.run_id != self.scope.run_id:
-                raise ValueError("ResearchDeltaGraph contains a node outside its scope.")
+                raise ValueError(
+                    "ResearchDeltaGraph contains a node outside its scope."
+                )
         for edge in self.edges:
             if edge.run_id != self.scope.run_id:
-                raise ValueError("ResearchDeltaGraph contains an edge outside its scope.")
+                raise ValueError(
+                    "ResearchDeltaGraph contains an edge outside its scope."
+                )
         return self
 
+    # 把类型化图增量转换为可存储节点及溯源关系。
+    # 图关系沿发现、主张、证据直到来源连接，供后续分析与报告核对结论出处。
     def materialize(self) -> tuple[list[GraphNode], list[GraphEdge]]:
         """Return typed nodes and provenance edges for storage."""
         nodes = list(self.nodes)
         edges = list(self.edges)
         node_ids = {node.node_id for node in nodes}
 
-        def add_node(node_id: str, node_type: ResearchNodeType, value: BaseModel, **meta: Any) -> None:
+        # 将类型化对象加入节点集合，并保留标签与属性。
+        def add_node(
+            node_id: str, node_type: ResearchNodeType, value: BaseModel, **meta: Any
+        ) -> None:
             if node_id in node_ids:
                 return
             payload = value.model_dump(mode="json")
@@ -271,7 +296,9 @@ class ResearchDeltaGraph(BaseModel):
                     properties=payload,
                     run_id=self.scope.run_id,
                     role=str(meta.get("role") or self.scope.role),
-                    research_round=int(meta.get("research_round") or self.scope.research_round),
+                    research_round=int(
+                        meta.get("research_round") or self.scope.research_round
+                    ),
                     task_id=str(meta.get("task_id") or self.scope.task_id),
                 )
             )
@@ -296,8 +323,20 @@ class ResearchDeltaGraph(BaseModel):
         for coverage in self.coverages:
             add_node(coverage.coverage_id, "Coverage", coverage)
 
-        def add_edge(edge_id: str, relation: ResearchRelationType, source_id: str, target_id: str, **props: Any) -> None:
-            if not source_id or not target_id or source_id not in node_ids or target_id not in node_ids:
+        # 按关系类型连接节点，并构造稳定关系标识。
+        def add_edge(
+            edge_id: str,
+            relation: ResearchRelationType,
+            source_id: str,
+            target_id: str,
+            **props: Any,
+        ) -> None:
+            if (
+                not source_id
+                or not target_id
+                or source_id not in node_ids
+                or target_id not in node_ids
+            ):
                 return
             if any(edge.edge_id == edge_id for edge in edges):
                 return
@@ -312,49 +351,131 @@ class ResearchDeltaGraph(BaseModel):
                 )
             )
 
+        # 计算关系去重键，避免重复生成同一关联。
         def edge_key(relation: str, source_id: str, target_id: str) -> str:
             return f"edge:{relation}:{source_id}:{target_id}"
 
         for evidence in self.evidences:
-            add_edge(edge_key("EXTRACTED_FROM", evidence.evidence_id, evidence.source_id), "EXTRACTED_FROM", evidence.evidence_id, evidence.source_id)
+            add_edge(
+                edge_key("EXTRACTED_FROM", evidence.evidence_id, evidence.source_id),
+                "EXTRACTED_FROM",
+                evidence.evidence_id,
+                evidence.source_id,
+            )
         for item in self.source_findings:
-            add_edge(edge_key("FROM_SOURCE", item.source_finding_id, item.source_id), "FROM_SOURCE", item.source_finding_id, item.source_id)
+            add_edge(
+                edge_key("FROM_SOURCE", item.source_finding_id, item.source_id),
+                "FROM_SOURCE",
+                item.source_finding_id,
+                item.source_id,
+            )
             for evidence_id in item.evidence_ids:
-                add_edge(edge_key("DERIVED_FROM", item.source_finding_id, evidence_id), "DERIVED_FROM", item.source_finding_id, evidence_id)
+                add_edge(
+                    edge_key("DERIVED_FROM", item.source_finding_id, evidence_id),
+                    "DERIVED_FROM",
+                    item.source_finding_id,
+                    evidence_id,
+                )
             for claim_id in item.claim_ids:
-                add_edge(edge_key("ABOUT_CLAIM", item.source_finding_id, claim_id), "ABOUT_CLAIM", item.source_finding_id, claim_id)
+                add_edge(
+                    edge_key("ABOUT_CLAIM", item.source_finding_id, claim_id),
+                    "ABOUT_CLAIM",
+                    item.source_finding_id,
+                    claim_id,
+                )
         for evidence in self.evidences:
             for claim_id in evidence.supports_claim_ids:
-                add_edge(edge_key("SUPPORTS", evidence.evidence_id, claim_id), "SUPPORTS", evidence.evidence_id, claim_id)
+                add_edge(
+                    edge_key("SUPPORTS", evidence.evidence_id, claim_id),
+                    "SUPPORTS",
+                    evidence.evidence_id,
+                    claim_id,
+                )
             for claim_id in evidence.contradicts_claim_ids:
-                add_edge(edge_key("CONTRADICTS", evidence.evidence_id, claim_id), "CONTRADICTS", evidence.evidence_id, claim_id)
+                add_edge(
+                    edge_key("CONTRADICTS", evidence.evidence_id, claim_id),
+                    "CONTRADICTS",
+                    evidence.evidence_id,
+                    claim_id,
+                )
             for claim_id in evidence.contextualizes_claim_ids:
-                add_edge(edge_key("CONTEXTUALIZES", evidence.evidence_id, claim_id), "CONTEXTUALIZES", evidence.evidence_id, claim_id)
+                add_edge(
+                    edge_key("CONTEXTUALIZES", evidence.evidence_id, claim_id),
+                    "CONTEXTUALIZES",
+                    evidence.evidence_id,
+                    claim_id,
+                )
         for claim in self.claims:
             for event_id in claim.event_ids:
-                add_edge(edge_key("RELATES_TO", claim.claim_id, event_id), "RELATES_TO", claim.claim_id, event_id)
+                add_edge(
+                    edge_key("RELATES_TO", claim.claim_id, event_id),
+                    "RELATES_TO",
+                    claim.claim_id,
+                    event_id,
+                )
             for entity_id in claim.entity_ids:
-                add_edge(edge_key("INVOLVES", claim.claim_id, entity_id), "INVOLVES", claim.claim_id, entity_id)
+                add_edge(
+                    edge_key("INVOLVES", claim.claim_id, entity_id),
+                    "INVOLVES",
+                    claim.claim_id,
+                    entity_id,
+                )
         for uncertainty in self.uncertainties:
             for claim_id in uncertainty.claim_ids:
-                add_edge(edge_key("APPLIES_TO", uncertainty.uncertainty_id, claim_id), "APPLIES_TO", uncertainty.uncertainty_id, claim_id)
+                add_edge(
+                    edge_key("APPLIES_TO", uncertainty.uncertainty_id, claim_id),
+                    "APPLIES_TO",
+                    uncertainty.uncertainty_id,
+                    claim_id,
+                )
             for evidence_id in uncertainty.evidence_ids:
-                add_edge(edge_key("BASED_ON", uncertainty.uncertainty_id, evidence_id), "BASED_ON", uncertainty.uncertainty_id, evidence_id)
+                add_edge(
+                    edge_key("BASED_ON", uncertainty.uncertainty_id, evidence_id),
+                    "BASED_ON",
+                    uncertainty.uncertainty_id,
+                    evidence_id,
+                )
         for finding in self.findings:
             for claim_id in finding.claim_ids:
-                add_edge(edge_key("DERIVED_FROM", finding.finding_id, claim_id), "DERIVED_FROM", finding.finding_id, claim_id)
+                add_edge(
+                    edge_key("DERIVED_FROM", finding.finding_id, claim_id),
+                    "DERIVED_FROM",
+                    finding.finding_id,
+                    claim_id,
+                )
             for evidence_id in finding.evidence_ids:
-                add_edge(edge_key("SUPPORTED_BY", finding.finding_id, evidence_id), "SUPPORTED_BY", finding.finding_id, evidence_id)
+                add_edge(
+                    edge_key("SUPPORTED_BY", finding.finding_id, evidence_id),
+                    "SUPPORTED_BY",
+                    finding.finding_id,
+                    evidence_id,
+                )
             for uncertainty_id in finding.uncertainty_ids:
-                add_edge(edge_key("CONTEXTUALIZES", finding.finding_id, uncertainty_id), "CONTEXTUALIZES", finding.finding_id, uncertainty_id)
+                add_edge(
+                    edge_key("CONTEXTUALIZES", finding.finding_id, uncertainty_id),
+                    "CONTEXTUALIZES",
+                    finding.finding_id,
+                    uncertainty_id,
+                )
         for coverage in self.coverages:
             for finding_id in coverage.finding_ids:
-                add_edge(edge_key("SUPPORTED_BY", coverage.coverage_id, finding_id), "SUPPORTED_BY", coverage.coverage_id, finding_id)
+                add_edge(
+                    edge_key("SUPPORTED_BY", coverage.coverage_id, finding_id),
+                    "SUPPORTED_BY",
+                    coverage.coverage_id,
+                    finding_id,
+                )
             for claim_id in coverage.claim_ids:
-                add_edge(edge_key("SUPPORTED_BY", coverage.coverage_id, claim_id), "SUPPORTED_BY", coverage.coverage_id, claim_id)
+                add_edge(
+                    edge_key("SUPPORTED_BY", coverage.coverage_id, claim_id),
+                    "SUPPORTED_BY",
+                    coverage.coverage_id,
+                    claim_id,
+                )
         return nodes, edges
 
 
+# 定义模型侧语义抽取结构，不允许模型决定可信来源元数据和稳定 ID。
 class GraphExtractionOutput(BaseModel):
     """LLM-only semantic extraction output.
 
@@ -373,6 +494,7 @@ class GraphExtractionOutput(BaseModel):
     coverages: list[dict[str, Any]] = Field(default_factory=list)
     relations: list[dict[str, Any]] = Field(default_factory=list)
 
+    # 兼容结构化输出测试替身使用的单数键名。
     @model_validator(mode="before")
     @classmethod
     def accept_singular_aliases(cls, value: Any) -> Any:
@@ -396,6 +518,7 @@ class GraphExtractionOutput(BaseModel):
         return normalized
 
 
+# 保存传给模型的有限相关子图及检索信息。
 class RelevantSubgraph(BaseModel):
     """Bounded graph retrieval result passed to the Context Manager/agent."""
 
@@ -404,17 +527,20 @@ class RelevantSubgraph(BaseModel):
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
 
+    # 返回可用于来源校验的节点 ID 集合。
     @property
     def node_ids(self) -> set[str]:
         """Return IDs available for provenance validation."""
         return {node.node_id for node in self.nodes}
 
+    # 返回可用于来源校验的关系 ID 集合。
     @property
     def edge_ids(self) -> set[str]:
         """Return edge IDs available for provenance validation."""
         return {edge.edge_id for edge in self.edges}
 
 
+# 记录图写入的确定性短回执，供微压缩替代原始工具正文。
 class WriteReceipt(BaseModel):
     """Deterministic acknowledgement used by Micro Compact."""
 
@@ -430,6 +556,25 @@ class WriteReceipt(BaseModel):
     edge_ids: list[str] = Field(default_factory=list)
     duplicate_source_ids: list[str] = Field(default_factory=list)
 
+    @property
+    def has_complete_node_references(self) -> bool:
+        """Check reference coverage; the Store remains responsible for persistence proof."""
+        referenced = {
+            *self.source_ids,
+            *self.evidence_ids,
+            *self.claim_ids,
+            *self.finding_ids,
+            *self.duplicate_source_ids,
+        }
+        return bool(
+            self.source_ids
+            and self.node_ids
+            and all(value.strip() for value in referenced)
+            and referenced.issubset(self.node_ids)
+            and set(self.duplicate_source_ids).issubset(self.source_ids)
+        )
+
+    # 把写入回执渲染为保留溯源信息的短文本。
     def as_text(self) -> str:
         """Render a compact, provenance-preserving receipt."""
         lines = [
@@ -450,6 +595,7 @@ class WriteReceipt(BaseModel):
         return "\n".join(lines)
 
 
+# 保存有限工作区中的发现及其图引用。
 class ContextFinding(BaseModel):
     """Bounded working-context finding with provenance."""
 
@@ -461,6 +607,7 @@ class ContextFinding(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
 
 
+# 保存工作区冲突及明确关联的证据标识。
 class ContextConflict(BaseModel):
     """Conflict in working memory with explicit graph references."""
 
@@ -470,6 +617,7 @@ class ContextConflict(BaseModel):
     source_ids: list[str] = Field(default_factory=list)
 
 
+# 保存未解决研究缺口，并在已知时附带证据来源。
 class ContextGap(BaseModel):
     """Open research gap with explicit evidence provenance when known."""
 
@@ -480,6 +628,7 @@ class ContextGap(BaseModel):
     priority: Literal["high", "medium", "low"] = "medium"
 
 
+# 表示一个角色和任务独有的有限短期工作记忆。
 class WorkingContext(BaseModel):
     """Bounded short-term working memory for one role and task."""
 
@@ -493,6 +642,7 @@ class WorkingContext(BaseModel):
     recent_progress: str = ""
 
 
+# 定义上下文管理模型可提出的结构化更新。
 class WorkingContextDelta(BaseModel):
     """Structured output contract for the Context Manager LLM."""
 
@@ -508,12 +658,14 @@ class WorkingContextDelta(BaseModel):
     recent_progress: str = ""
 
 
+# 承载增量历史压缩生成的滚动摘要。
 class RollingCompactOutput(BaseModel):
     """Structured output for incremental rolling history compaction."""
 
     rolling_summary: str = ""
 
 
+# 定义图模式下提供给研究复核的有限状态输入。
 class ResearchReviewContext(BaseModel):
     """Bounded state supplied to Research Review in Graph mode."""
 

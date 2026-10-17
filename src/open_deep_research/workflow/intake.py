@@ -1,3 +1,4 @@
+# 处理用户需求入口：图片上下文、需求澄清、研究简报和章节规划。
 """Intake stage of the public-opinion workflow."""
 
 import asyncio
@@ -16,7 +17,6 @@ from langgraph.types import Command, interrupt
 
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
-    available_research_unit_slots,
     budget_usage_with_reason,
     can_spend_model_call,
     merge_budget_usage,
@@ -52,6 +52,7 @@ from open_deep_research.workflow.state_utils import (
 
 LOGGER = logging.getLogger("open_deep_research.deep_researcher")
 
+# 检查消息历史是否已包含本轮图片解析上下文。
 def _has_query_image_context(messages) -> bool:
     return any(
         bool(getattr(message, "additional_kwargs", {}).get("rag_query_image_context"))
@@ -59,6 +60,7 @@ def _has_query_image_context(messages) -> bool:
     )
 
 
+# 过滤临时图片解析消息，避免重复注入或保存派生内容。
 def _messages_without_query_image_context(messages):
     return [
         message
@@ -67,6 +69,7 @@ def _messages_without_query_image_context(messages):
     ]
 
 
+# 在研究规划前将用户图片转换为临时文本上下文。
 async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict:
     """Convert user-question images into temporary text context before research planning."""
     configurable = Configuration.from_runnable_config(config)
@@ -104,6 +107,7 @@ async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict
     }
 
 
+# 为预算跳过的调用生成工具消息，明确说明跳过原因。
 def budget_skip_tool_message(tool_call: dict, reason: str) -> ToolMessage:
     """Create a synthetic tool result when Budget Guard skips a tool call."""
     return ToolMessage(
@@ -113,6 +117,7 @@ def budget_skip_tool_message(tool_call: dict, reason: str) -> ToolMessage:
     )
 
 
+# 判断研究范围是否清晰，必要时向用户澄清，否则转入简报生成。
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
 
@@ -197,6 +202,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         )
 
 
+# 把用户消息整理为结构化研究简报，并进入规划或研究阶段。
 async def write_research_brief(
     state: AgentState,
     config: RunnableConfig,
@@ -276,6 +282,7 @@ async def write_research_brief(
     )
 
 
+# 根据简报生成章节计划；启用人工反馈时通过图中断接收调整意见。
 async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Command[Literal["plan_report_sections", "research_phase"]]:
     """Plan report sections using Plan-and-Execute pattern.
 
@@ -378,41 +385,9 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             },
         )
 
-    # Budget-aware section count limit with section_writer reservation
-    available_slots = available_research_unit_slots(configurable, budget_usage)
-    max_sections = available_slots if available_slots is not None else 5
-
-    all_sections = list(response.sections)
-    research_section_count = sum(1 for s in all_sections if s.research)
-    slots_after_reservation = max_sections - research_section_count
-    if slots_after_reservation <= 0:
-        LOGGER.warning(
-            "Not enough budget slots for section_writer after planning %d research sections. "
-            "Falling back to single section.",
-            research_section_count,
-        )
-        budget_update = merge_budget_usage(
-            budget_update,
-            budget_usage_with_reason(
-                "Insufficient budget slots for section_writer; falling back to single section."
-            ),
-        )
-        single_section = Section(
-            name="Research Report",
-            description=workflow_state(state).get("brief", ""),
-            research=True,
-            agent_role="public_signal,internal_knowledge,risk_assessment,response_strategy",
-            status="pending",
-        )
-        return Command(
-            goto="research_phase",
-            update={
-                "report": {"sections": [single_section]},
-                "runtime": {"budget": budget_update},
-            },
-        )
-
-    sections = all_sections[:max_sections]
+    # 章节共享角色研究结果，不对应独立研究单元。保留完整计划，避免截断议题；
+    # 写作节点在研究结束后，按最新剩余调用次数分配实际写作额度。
+    sections = list(response.sections)
 
     total_budget_update = merge_budget_usage(
         budget_update,

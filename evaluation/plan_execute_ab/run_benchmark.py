@@ -1,3 +1,4 @@
+# 隔离运行两个版本的固定案例，保存可恢复原始证据并调用评估与比较脚本。
 """Run the committed Before/After public-opinion benchmark.
 
 This module deliberately lives outside ``src/``.  It loads the requested
@@ -72,11 +73,13 @@ KNOWN_STATE_FIELDS = {
 }
 
 
+# 生成稳定且带时区的产物时间戳。
 def utc_now() -> str:
     """Return a stable, timezone-aware timestamp for an artifact."""
     return datetime.now(timezone.utc).isoformat()
 
 
+# 将 LangChain 或 Pydantic 对象转为有限 JSON 数据。
 def jsonable(value: Any, *, string_limit: int = 50_000, depth: int = 0) -> Any:
     """Convert LangChain/Pydantic values to bounded JSON-safe data."""
     if depth > 8:
@@ -128,6 +131,7 @@ def jsonable(value: Any, *, string_limit: int = 50_000, depth: int = 0) -> Any:
     return str(value)[:string_limit]
 
 
+# 加载并校验 JSONL 基准案例。
 def load_cases(path: Path = CASES_PATH) -> list[dict[str, Any]]:
     """Load and validate the JSONL benchmark cases."""
     cases: list[dict[str, Any]] = []
@@ -148,8 +152,10 @@ def load_cases(path: Path = CASES_PATH) -> list[dict[str, Any]]:
     return cases
 
 
+# 只读记录精确提交和工作区状态。
 def git_info(root: Path) -> dict[str, Any]:
     """Read the exact commit and worktree cleanliness without mutation."""
+    # 执行版本诊断所需的只读 Git 命令。
     def run(*args: str) -> str:
         completed = subprocess.run(
             ["git", *args],
@@ -168,6 +174,7 @@ def git_info(root: Path) -> dict[str, Any]:
     }
 
 
+# 从明确选定的环境文件读取非敏感配置。
 def _read_env_value(name: str, default: str) -> str:
     """Read a non-secret setting from the explicitly selected .env file."""
     if not ENV_FILE.exists():
@@ -180,6 +187,7 @@ def _read_env_value(name: str, default: str) -> str:
     return default
 
 
+# 构造所有案例和版本共同使用的相同运行配置。
 def benchmark_config(version: str, case_id: str, repeat_index: int) -> dict[str, Any]:
     """Return the one identical runtime config used by every case/version."""
     run_tag = f"plan-execute-ab-{version}-{case_id}-repeat-{repeat_index}-{uuid.uuid4().hex[:8]}"
@@ -244,6 +252,7 @@ def benchmark_config(version: str, case_id: str, repeat_index: int) -> dict[str,
     }
 
 
+# 保存可比较有效配置，同时排除凭据。
 def effective_config_snapshot(config: Mapping[str, Any]) -> dict[str, Any]:
     """Capture comparable settings without serializing credentials."""
     configurable = config.get("configurable", {})
@@ -297,12 +306,14 @@ def effective_config_snapshot(config: Mapping[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
+# 解包显式状态替换指令，供产物恢复解析。
 def _unwrap_override(value: Any) -> Any:
     if isinstance(value, Mapping) and value.get("type") == "override":
         return value.get("value", {})
     return value
 
 
+# 保留流程证据，避免重复存储完整消息历史。
 def summarize_change(key: str, value: Any) -> Any:
     """Keep workflow evidence while avoiding duplicate message transcripts."""
     if key == "messages":
@@ -318,6 +329,7 @@ def summarize_change(key: str, value: Any) -> Any:
     return jsonable(value, string_limit=4_000)
 
 
+# 把 v2 图流事件整理为明确的节点变化。
 def collect_stream_chunk(chunk: Any, stream_updates: list[dict[str, Any]]) -> None:
     """Normalize LangGraph v2 update chunks into explicit node changes."""
     namespace: list[str] = []
@@ -350,6 +362,7 @@ def collect_stream_chunk(chunk: Any, stream_updates: list[dict[str, Any]]) -> No
         })
 
 
+# 保留搜索词和结构参数，限制大小且隐藏凭据。
 def _bounded_args(value: Any) -> Any:
     """Preserve search terms and structural arguments, never credentials."""
     secret_key = re.compile(r"(key|token|secret|password|authorization)", re.IGNORECASE)
@@ -371,6 +384,7 @@ def _bounded_args(value: Any) -> Any:
     return str(value)[:500]
 
 
+# 记录有限工具结果，供重放和外部数据变化诊断。
 def _result_summary(result: Any) -> dict[str, Any]:
     """Record bounded tool-result evidence for replay/drift diagnostics."""
     if isinstance(result, str):
@@ -390,6 +404,7 @@ def _result_summary(result: Any) -> dict[str, Any]:
     }
 
 
+# 恢复合并后的角色报告及实际研究轮次。
 def parse_role_reports(stream_updates: list[dict[str, Any]]) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Recover merged role reports and their actual research rounds."""
     role_reports: dict[str, str] = {}
@@ -422,6 +437,7 @@ def parse_role_reports(stream_updates: list[dict[str, Any]]) -> tuple[dict[str, 
     return role_reports, round_reports
 
 
+# 恢复修改后流程产生的全部结构化复核记录。
 def parse_reviews(stream_updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Recover every structured ResearchReview emitted by the After graph."""
     reviews: list[dict[str, Any]] = []
@@ -440,6 +456,7 @@ def parse_reviews(stream_updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return reviews
 
 
+# 生成任务去重和结果关联使用的稳定键。
 def _task_identity(task: Mapping[str, Any]) -> str:
     task_id = str(task.get("task_id") or "").strip()
     if task_id:
@@ -447,6 +464,7 @@ def _task_identity(task: Mapping[str, Any]) -> str:
     return ":".join(str(task.get(key) or "").strip() for key in ("target_role", "objective", "evidence_needed"))
 
 
+# 恢复补充研究角色实际返回的完成任务。
 def parse_completed_tasks(stream_updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Recover tasks actually returned by follow-up agent executions."""
     tasks: list[dict[str, Any]] = []
@@ -469,6 +487,7 @@ def parse_completed_tasks(stream_updates: list[dict[str, Any]]) -> list[dict[str
     return tasks
 
 
+# 只聚合真实观测，缺失值保留为 null 或不可用。
 def benchmark_metrics(
     tool_records: list[dict[str, Any]],
     *,
@@ -482,6 +501,7 @@ def benchmark_metrics(
     """Aggregate only observed values; missing values remain null/N/A."""
     tool_calls = tool_records
 
+    # 兼容工具对象与声明，取得统计用工具名。
     def tool_name(record: Mapping[str, Any]) -> str:
         return str(record.get("tool") or record.get("name") or "")
 
@@ -551,6 +571,7 @@ def benchmark_metrics(
     }
 
 
+# 通过选定提交的研究图执行一个基准案例。
 async def run_one_case(
     *,
     target_root: Path,
@@ -579,6 +600,7 @@ async def run_one_case(
 
     tool_records: list[dict[str, Any]] = []
 
+    # 以测量专用包装记录工具，遵循业务工具执行的异常和记账行为。
     async def recording_tool(tool: Any, args: Any, config: Any = None) -> Any:
         """Benchmark-only tool recorder that mirrors execute_tool_safely behavior."""
         started_at = time.perf_counter()
@@ -625,6 +647,7 @@ async def run_one_case(
     try:
         graph = deep_researcher_module.deep_researcher()
 
+        # 消费单案例图流并收集节点状态及最终报告。
         async def consume() -> None:
             nonlocal final_report
             async for chunk in graph.astream(
@@ -705,12 +728,14 @@ async def run_one_case(
     }
 
 
+# 按确定性 UTF-8 格式保存基准产物。
 def write_json(path: Path, value: Any) -> None:
     """Write an artifact with deterministic UTF-8 formatting."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# 执行一个版本的所有案例，持续保存可恢复的部分产物。
 async def worker_main(args: argparse.Namespace) -> int:
     """Run every case for one version, saving a resumable partial artifact."""
     cases = load_cases(Path(args.cases))
@@ -773,6 +798,7 @@ async def worker_main(args: argparse.Namespace) -> int:
     return 0
 
 
+# 启动隔离版本进程，避免不同版本模块混用。
 def run_worker_process(
     *,
     version: str,
@@ -821,6 +847,7 @@ def run_worker_process(
     return json.loads(output_path.read_text(encoding="utf-8"))
 
 
+# 依次运行两个版本，并调用评估器及比较器。
 def orchestrator_main(args: argparse.Namespace) -> int:
     """Run both blocks and invoke the evaluator/comparator."""
     cases_path = Path(args.cases).resolve()
@@ -862,6 +889,7 @@ def orchestrator_main(args: argparse.Namespace) -> int:
     return 0
 
 
+# 解析公开总控模式与内部工作进程模式参数。
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the public runner and private worker modes."""
     parser = argparse.ArgumentParser(description=__doc__)

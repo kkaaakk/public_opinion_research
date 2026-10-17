@@ -1,3 +1,4 @@
+# 可选使用模型改写检索查询，失败或输出不合格时保留原问题。
 """Question rewriting helpers for local RAG retrieval."""
 
 import json
@@ -32,6 +33,7 @@ User question:
 """
 
 
+# 调用改写模型并清理输出；任一失败时回退到原查询。
 def rewrite_query_with_model(
     query: str,
     *,
@@ -86,6 +88,7 @@ def rewrite_query_with_model(
         return rewritten_query
 
 
+# 根据开关决定是否改写查询，关闭时直接返回原文。
 def maybe_rewrite_query_with_model(
     query: str,
     *,
@@ -105,6 +108,7 @@ def maybe_rewrite_query_with_model(
     )
 
 
+# 兼容旧接口，委托统一模型工厂解析凭据。
 def api_key_for_model(model_name: str, config: Mapping[str, Any] | None = None) -> str | None:
     """Compatibility wrapper around the unified credential resolver."""
     try:
@@ -113,6 +117,7 @@ def api_key_for_model(model_name: str, config: Mapping[str, Any] | None = None) 
         return None
 
 
+# 去除代码围栏、JSON 包装和常见前缀，提取实际检索语句。
 def clean_rewritten_query(text: str) -> str:
     """Normalize common LLM wrappers around a rewritten query."""
     stripped = text.strip()
@@ -134,6 +139,7 @@ def clean_rewritten_query(text: str) -> str:
     return " ".join(stripped.split())
 
 
+# 从模型响应的字符串或内容块中提取文本。
 def _response_text(response: Any) -> str:
     content = getattr(response, "content", response)
     if isinstance(content, str):
@@ -151,11 +157,13 @@ def _response_text(response: Any) -> str:
     return str(content)
 
 
+# 去除模型输出外围的 Markdown 代码围栏。
 def _strip_code_fence(text: str) -> str:
     match = re.fullmatch(r"```(?:json|text|markdown)?\s*(.*?)\s*```", text, re.DOTALL)
     return match.group(1).strip() if match else text
 
 
+# 尝试从 JSON 输出中取得查询字段，兼容结构化改写结果。
 def _try_parse_query_json(text: str) -> str:
     try:
         payload = json.loads(text)
@@ -170,6 +178,7 @@ def _try_parse_query_json(text: str) -> str:
     return ""
 
 
+# 检查改写文本是否可作为有效查询，过滤空白或异常输出。
 def _is_usable_rewrite(rewritten_query: str, original_query: str) -> bool:
     if not rewritten_query:
         return False
@@ -177,6 +186,7 @@ def _is_usable_rewrite(rewritten_query: str, original_query: str) -> bool:
     return len(rewritten_query) <= max_length
 
 
+# 安全取得运行配置中的可配置字段映射。
 def _configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     if not config:
         return {}

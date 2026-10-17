@@ -1,3 +1,4 @@
+# 通过分词、可选命名实体识别和 IDF 过滤提取适合建图的术语。
 """Improved graph term extraction for GraphRAG.
 
 This module provides ``TermExtractor``, which replaces the original regex-only
@@ -92,6 +93,7 @@ CHINESE_STOPWORDS = {
 }
 
 
+# 管理语料术语统计及中英文候选提取，过滤低信息量词语。
 class TermExtractor:
     """Extract and filter graph terms from text with optional NER/segmentation.
 
@@ -103,6 +105,7 @@ class TermExtractor:
             Terms below this percentile are considered too common. Default 85.0.
     """
 
+    # 保存 NER、分词和 IDF 选项，必要时根据语料建立词频统计。
     def __init__(
         self,
         *,
@@ -125,6 +128,7 @@ class TermExtractor:
 
     # -- Lazy dependency loading ------------------------------------------------
 
+    # 检查可选命名实体识别依赖是否可用。
     def _ner_is_available(self) -> bool:
         if self._ner_available is not None:
             return self._ner_available
@@ -135,6 +139,7 @@ class TermExtractor:
             self._ner_available = False
         return self._ner_available
 
+    # 检查可选中文分词依赖是否可用。
     def _jieba_is_available(self) -> bool:
         if self._jieba_available is not None:
             return self._jieba_available
@@ -145,6 +150,7 @@ class TermExtractor:
             self._jieba_available = False
         return self._jieba_available
 
+    # 首次需要时加载 spaCy 英文管线，避免启动阶段强制加载模型。
     def _load_nlp(self) -> Any:
         """Lazy-load spaCy pipeline (en_core_web_sm)."""
         if self._nlp is not None:
@@ -161,6 +167,7 @@ class TermExtractor:
 
     # -- IDF computation -------------------------------------------------------
 
+    # 遍历语料统计文档频率，并计算术语的逆文档频率。
     def _build_idf(self, chunk_texts: list[str]) -> None:
         """Build IDF scores from the corpus."""
         if not chunk_texts:
@@ -191,6 +198,7 @@ class TermExtractor:
 
     # -- Core extraction ---------------------------------------------------------
 
+    # 提取未经过 IDF 筛选的原始候选术语。
     def _extract_raw_terms(self, text: str) -> set[str]:
         """Extract raw candidate terms from text (no IDF filter)."""
         terms: set[str] = set()
@@ -247,6 +255,7 @@ class TermExtractor:
 
         return terms
 
+    # 提取候选词并按配置应用 IDF 等过滤规则。
     def extract(self, text: str) -> set[str]:
         """Extract graph terms from text with optional IDF filtering."""
         terms = self._extract_raw_terms(text)
@@ -258,6 +267,7 @@ class TermExtractor:
             if self._idf.get(term, self._idf_threshold + 1.0) >= self._idf_threshold
         }
 
+    # 返回某术语的 IDF；尚未建立统计时返回 None。
     def get_idf(self, term: str) -> float | None:
         """Return the IDF score for a term, or None if not computed."""
         if self._idf is None:
@@ -265,6 +275,7 @@ class TermExtractor:
         return self._idf.get(term)
 
 
+# 提供兼容旧签名的默认术语提取，不要求调用方传入语料。
 def extract_graph_terms(text: str) -> set[str]:
     """Backward-compatible wrapper: extract terms using default TermExtractor.
 

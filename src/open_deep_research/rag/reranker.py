@@ -1,3 +1,4 @@
+# 提供原序、关键词和交叉编码器重排后端，统一候选重排接口。
 """本地 RAG reranker 实现。
 
 retriever 负责“召回候选”，reranker 负责“精排候选”。召回阶段更追求不漏，
@@ -37,6 +38,7 @@ class NoOpReranker(Reranker):
     用于禁用重排时保留 retriever 的结果顺序。
     """
 
+    # 保留原召回顺序并按数量截取结果。
     def rerank(self, query: str, results: list[RetrievalResult], top_k: int) -> list[RetrievalResult]:
         return results[:top_k]
 
@@ -48,6 +50,7 @@ class KeywordOverlapReranker(Reranker):
     适合单测和低依赖环境，但相关性判断能力弱于 cross-encoder。
     """
 
+    # 按查询与候选文本的关键词重合程度重新排序。
     def rerank(self, query: str, results: list[RetrievalResult], top_k: int) -> list[RetrievalResult]:
         query_terms = set(_tokenize(query))
         reranked_results = []
@@ -77,6 +80,7 @@ class CrossEncoderReranker(Reranker):
     少量候选执行。
     """
 
+    # 加载交叉编码器模型，并选择执行设备。
     def __init__(self, model_name: str, device: Optional[str] = None):
         try:
             # sentence-transformers 是重依赖，运行到 cross-encoder 模式时才导入。
@@ -151,6 +155,7 @@ def _tokenize(text: str) -> list[str]:
     return tokens
 
 
+# 合并候选正文与结构化上下文，作为重排模型的输入文本。
 def _reranker_document_text(result: RetrievalResult) -> str:
     """Build the candidate text seen by simple and cross-encoder rerankers."""
     chunk = result.chunk

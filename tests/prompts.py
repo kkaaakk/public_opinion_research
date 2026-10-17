@@ -1,3 +1,4 @@
+# 定义各报告评估维度的模型提示词与评分准则。
 OVERALL_QUALITY_PROMPT = """You are an expert evaluator tasked with assessing the quality of research reports. Please evaluate the provided research report across multiple dimensions, provide scores, and offer a comprehensive assessment.
 
 Evaluation Criteria:

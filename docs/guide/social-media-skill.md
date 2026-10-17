@@ -1,126 +1,171 @@
-# Social Media Skill
+# Social Media Tools
 
-The social media layer uses a two-level design:
-
-```text
-social_media_skill
-  calls social_media_mcp
-    search_x_posts()
-    fetch_x_thread()
-    fetch_comments()
-    fetch_author_profile()
-    extract_images()
-    normalize_post()
-    save_to_database()
-    check_duplicate()
-```
-
-`social_media_mcp` is the low-level platform/data adapter. It can run as an MCP server, but the
-public-opinion agents normally use `social_media_skill` directly as in-process LangChain tools.
-
-`social_media_skill` is the business layer. It composes low-level MCP primitives into agent-facing
-tools:
+Direct MCP tool exposure for the deep research agent. The current LangGraph runtime exposes the social-media primitives directly to each authorized role.
 
 ```text
-social_media_search
-social_media_snapshot
-social_complaint_scan
-social_media_context_bundle
+LangChain @tool (social_media/tools.py)   ← thin wrapper: json.dumps(result)
+  ├─ search_posts
+  ├─ fetch_thread
+  ├─ fetch_comments
+  ├─ fetch_author_profile
+  ├─ search_complaints
+  ├─ get_trending_keywords
+  └─ get_public_opinion_snapshot
+       │  direct Python call
+       ▼
+Social Media MCP Module (social_media_mcp.py)
+  │  read / proxy
+       ▼
+JSONL files / HTTP API / external services
 ```
+
+## Responsibilities
+
+- `social_media/tools.py` — thin LangChain `@tool` wrappers. Each wraps one MCP function, returns `json.dumps(result)`. No orchestration, no business logic.
+- `social_media_mcp.py` — data adapter. Reads local JSON/JSONL or proxies to an HTTP service. Also doubles as an MCP server (FastMCP) for external clients.
+- `web_search` — public web/news channel (Tavily / DuckDuckGo / native search).
+- `rag_search` — internal knowledge base channel.
 
 ## Agent Usage
 
-In `public_opinion_risk` mode, these roles can use the skill tools:
-
-- `public_signal`
-- `risk_assessment`
-
-The skill tools call `social_media_mcp` internally, so the agent does not need to call each raw
-platform primitive by hand.
-
-## Local Data Mode
-
-By default, low-level social media tools read:
+In `business_scenario=public_opinion_risk`, roles whose `tool_policy.allowed_domains` include `social_media` (`public_signal`, `risk_assessment`) receive these seven tools. This domain policy is enforced during tool admission; an MCP connection alone grants no role permissions:
 
 ```text
-data/social_media/sample_posts.jsonl
+search_posts
+fetch_thread
+fetch_comments
+search_complaints
+fetch_author_profile
+get_trending_keywords
+get_public_opinion_snapshot
 ```
 
-Override with:
+The LLM controls the decision flow in its ReAct loop — search posts, check sentiment, fetch comments if negative, search complaints if needed, compute risk from results. No pre-canned orchestration.
 
-```powershell
-$env:SOCIAL_MEDIA_DATA_PATHS="data/social_media/sample_posts.jsonl,C:\data\more_posts.jsonl"
+## Local Mock Data
+
+```text
+SOCIAL_MEDIA_DATA_PATHS=data/social_media/sample_posts.jsonl
 ```
 
-Each record can use this schema:
+Records use a common schema: `platform`, `id`, `author`, `published_at`, `content`, `sentiment`, `engagement`, `url`, `tags`, `images`, `metadata`.
+
+## Optional MCP Server
+
+Run the MCP server for external MCP clients:
+
+```bash
+python -m open_deep_research.social_media_mcp --transport streamable-http --host 127.0.0.1 --port 8001
+```
+
+Or via package script: `social-media-mcp --transport streamable-http --host 127.0.0.1 --port 8001`
+
+Then configure:
 
 ```json
 {
-  "id": "x-root-001",
-  "thread_id": "x-root-001",
-  "parent_id": null,
-  "platform": "x",
-  "type": "social_post",
-  "author": "ev_watch",
-  "author_id": "ev_watch",
-  "title": "Battery range complaint",
-  "content": "Post content",
-  "published_at": "2026-06-02T10:20:00",
-  "sentiment": "negative",
-  "engagement": {
-    "likes": 10,
-    "comments": 2,
-    "shares": 1,
-    "views": 500
+    "configurable": {
+        "mcp_config": {
+            "url": "http://127.0.0.1:8001",
+            "tools": ["search_posts", "fetch_thread", "fetch_comments"],
+            "auth_required": false
+        }
+    }
+}
+```
+
+The legacy `mcp_config.url` above is a base URL: `mcp/tools.py` appends `/mcp`. A new multi-server `mcp_servers` entry must instead supply the full MCP endpoint URL.
+
+## Replacing The Mock Provider
+
+To connect a real social-data provider, either:
+
+- Set `SOCIAL_MEDIA_API_BASE_URL` and optionally `SOCIAL_MEDIA_API_KEY`; `social_media_mcp` will proxy supported endpoints such as `search_social_posts` and `aggregate_public_sentiment`.
+- Replace the local adapter functions in `social_media_mcp.py` with platform adapters for Weibo, Xiaohongshu, Douyin, Zhihu, Black Cat Complaint, or an internal monitoring vendor.
+
+## Apify Adapter
+
+Apify should be connected through the local adapter service instead of assigning
+`SOCIAL_MEDIA_API_BASE_URL` directly to `https://api.apify.com/v2`.
+
+Reason: Apify Actor endpoints are actor-specific, while `social_media_mcp` expects
+a stable business API contract:
+
+```text
+/search_social_posts
+/aggregate_public_sentiment
+/get_post_detail
+/search_complaints
+/get_trending_keywords
+/get_public_opinion_snapshot
+```
+
+The adapter in `open_deep_research.social_media_apify_api` translates those stable
+endpoints into Apify Actor runs and normalizes the returned dataset items into the
+project's `SocialPost` schema.
+
+### Start The Adapter
+
+```bash
+python -m open_deep_research.social_media_apify_api --host 127.0.0.1 --port 9000
+```
+
+or:
+
+```bash
+apify-social-api --host 127.0.0.1 --port 9000
+```
+
+Then point the social media MCP layer at it:
+
+```text
+SOCIAL_MEDIA_API_BASE_URL=http://127.0.0.1:9000
+```
+
+### Required Apify Settings
+
+```text
+APIFY_TOKEN=your-apify-token
+APIFY_SOCIAL_ACTORS={"x":{"actor_id":"apidojo/tweet-scraper","input":{"searchTerms":["{query}"],"maxItems":"{limit}"}}}
+```
+
+`APIFY_SOCIAL_ACTORS` is a JSON object keyed by platform. Each platform config needs:
+
+- `actor_id`: Apify Actor id, such as `apidojo/tweet-scraper`.
+- `input`: Actor input template. Supported placeholders are `{query}`, `{platform}`, `{start_date}`, `{end_date}`, and `{limit}`.
+
+Example with multiple platforms:
+
+```json
+{
+  "x": {
+    "actor_id": "apidojo/tweet-scraper",
+    "input": {
+      "searchTerms": ["{query}"],
+      "maxItems": "{limit}"
+    }
   },
-  "url": "https://example.com/x/root-001",
-  "tags": ["battery", "complaint"],
-  "images": [{"url": "https://example.com/image.png", "caption": "screenshot"}],
-  "metadata": {
-    "keywords": ["service", "quality"]
+  "weibo": {
+    "actor_id": "sian.agency/weibo-scraper",
+    "input": {
+      "keyword": "{query}",
+      "maxItems": "{limit}"
+    }
   }
 }
 ```
 
-## Optional MCP Server
+Actor input schemas vary by Actor. Choose the Actor in Apify Store, inspect its input
+schema, then map this template to that schema. The adapter handles output
+normalization, aggregation, risk scoring, and the stable endpoint contract.
 
-Run the low-level MCP server only if another process or non-Python client needs the raw tools:
+### Verify The Adapter
 
-```powershell
-$env:PYTHONPATH="src"
-python -m open_deep_research.social_media_mcp --transport streamable-http --host 127.0.0.1 --port 8001
+```bash
+curl "http://127.0.0.1:9000/health"
+curl "http://127.0.0.1:9000/search_social_posts?query=battery&platforms=x&limit=5"
+curl "http://127.0.0.1:9000/get_public_opinion_snapshot?query=battery&platforms=x&limit=20"
 ```
 
-If installed, the script entry is:
-
-```powershell
-social-media-mcp --transport streamable-http --host 127.0.0.1 --port 8001
-```
-
-## HTTP Proxy Mode
-
-Set a base URL to proxy low-level calls to a real social media data service:
-
-```powershell
-$env:SOCIAL_MEDIA_API_BASE_URL="https://your-social-data-service.example.com"
-$env:SOCIAL_MEDIA_API_KEY="optional-token"
-```
-
-The low-level adapter can proxy:
-
-```text
-GET /search_social_posts
-GET /aggregate_public_sentiment
-GET /get_post_detail
-GET /search_complaints
-GET /get_trending_keywords
-GET /get_public_opinion_snapshot
-```
-
-## Entity Aliases
-
-```powershell
-$env:SOCIAL_MEDIA_ENTITY_ALIASES='{"Acme EV":["A-EV","Acme electric vehicle"]}'
-```
-
-Alias groups help the skill match brand or product variants consistently.
+If `APIFY_TOKEN` or `APIFY_SOCIAL_ACTORS` is missing, the adapter returns
+`setup_required=true` with the missing settings instead of silently falling back.

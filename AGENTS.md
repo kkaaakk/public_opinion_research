@@ -1,67 +1,74 @@
-# Public Opinion Research Repository Overview
+# Public Opinion Research development guide
 
-## Project Description
+## Current architecture and migration boundary
 
-Public Opinion Research is a configurable, fully open-source deep research agent specialized in public opinion analysis. It works across multiple model providers, search tools, and MCP (Model Context Protocol) servers. It enables automated research with parallel processing, comprehensive report generation, and real-time public opinion monitoring.
+The preparation baseline is `codex/openai-agents-migration` at
+`2c876398639a11c9b2a66232419da8374e187e83`, descended from `backup/pre-deerflow`
+/ `41cbc134f748750ffbfc7c7dde65c7552ace6296`.
+The independent `codex/openai-agents-phase0` branch installs `openai-agents==0.24.0`
+and validates an opt-in adapter in `runtime/sdk_context.py` and `models/sdk.py`.
+The application still runs its existing LangGraph/LangChain implementation;
+production Web/API defaults and the four business agents have not been migrated.
+The selected target is OpenAI Agents SDK + deterministic Python workflow + the
+custom Research Graph Context Harness, without DBOS or LangGraph orchestration.
+Do not enter Phase 1 or replace production entrypoints as part of Phase 0.
+DeerFlow is retired. Its local environments, Docker deployment, branch
+`codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's
+request. The original opinion project backup and `v1-pre-deerflow` remain.
 
-## Repository Structure
+Read [the preparation audit](docs/audits/pre-openai-sdk-cleanup.md) and
+[the migration plan](docs/architecture/openai-agents-sdk-migration-plan.md)
+before changing runtime boundaries. Read [the Phase 0 results](docs/audits/openai-agents-phase0.md)
+for tested SDK interfaces, tool coverage and remaining limitations.
+The applicable findings from the historical Agent Server audit are preserved
+in the migration plan, which links to the original Git evidence.
 
-### Root Directory
+## Source ownership
 
-- `README.md` - Comprehensive project documentation with quickstart guide
-- `pyproject.toml` - Python project configuration and dependencies
-- `langgraph.json` - LangGraph configuration defining the main graph entry point
-- `uv.lock` - UV package manager lock file
-- `LICENSE` - MIT license
-- `.env.example` - Environment variables template (not tracked)
+- `src/open_deep_research/workflow/`: intake, planning, research orchestration,
+  reporting and current LangGraph construction.
+- `runtime/`: current agent loop and role assembly; `public_opinion_agents/`:
+  the four business roles and their prompts, contracts and tool policies.
+- `social_media/domain.py` and `social_media/records.py`: shared domain rules
+  and record helpers. `social_media_mcp.py` and `social_media_apify_api.py` own
+  their distinct MCP/HTTP, pagination, normalization and persistence semantics.
+- `rag/`: knowledge indexing/retrieval and its knowledge graph. `research_graph/`:
+  research evidence, findings, provenance and run-scoped context. Keep their
+  data ownership separate.
+- `memory/`: long-term business memory, independently of conversation sessions,
+  checkpoints and report archives. `web/history.py` owns report history.
+- `models/`, `llm/`, `mcp/`, `tools/`, `security/`: provider adapters, invocation,
+  protocol clients, tool admission and authentication.
+- `web/`: FastAPI and the existing static UI; `evaluation/` and `tests/`:
+  evaluation assets and offline contracts. Root `package.json` is docs tooling.
 
-### Core Implementation (`src/open_deep_research/`)
+Prefer small changes inside these existing modules over empty packages or
+mechanical renames. Preserve compatibility exports until their consumers,
+including external scripts, have been assessed. Keep Golden Sets, meaningful
+baselines, reproducible runners and independent learning materials.
 
-- `deep_researcher.py` - Main LangGraph implementation (entry point: `deep_researcher`)
-- `configuration.py` - Configuration management and settings
-- `state.py` - Graph state definitions and data structures
-- `prompts.py` - System prompts and prompt templates
-- `utils.py` - Utility functions and helpers
-- `files/` - Research output and example files
+## Validation and local data
 
-### Security (`src/security/`)
+Use the root dependency lock and root `.venv`:
 
-- `auth.py` - Authentication handler for LangGraph deployment
+```powershell
+uv sync --extra dev --locked --python 3.11
+.venv/Scripts/python.exe -m pytest
+.venv/Scripts/python.exe -m ruff check --select E,F,I --ignore E501 src/open_deep_research tests/conftest.py tests/test_*.py
+.venv/Scripts/python.exe -m compileall -q src/open_deep_research src/security
+```
 
-### Testing (`tests/`)
+PowerShell does not expand the final Ruff glob; pass
+`(Get-ChildItem tests/test_*.py | ForEach-Object { $_.FullName })` there.
+Mypy is an existing development tool without a CI gate/configuration; its
+35-error historical baseline and reproducible invocation are in the audit.
+Do not call a failing check successful, delete tests or weaken assertions.
+Features and fixes require regression tests. Do not call paid models during
+offline checks; disable dotenv/tracing and use the audit's socket guard.
 
-- `run_evaluate.py` - Main evaluation script configured to run on deep research bench
-- `evaluators.py` - Specialized evaluation functions
-- `prompts.py` - Evaluation prompts and criteria
-- `pairwise_evaluation.py` - Comparative evaluation tools
-
-### Examples (`examples/`)
-
-- `arxiv.md` - ArXiv research example
-- `pubmed.md` - PubMed research example
-- `inference-market.md` - Inference market analysis examples
-
-## Key Technologies
-
-- **LangGraph** - Workflow orchestration and graph execution
-- **LangChain** - LLM integration and tool calling
-- **Multiple LLM Providers** - OpenAI, Anthropic, Google, Groq, DeepSeek support
-- **Search APIs** - Tavily, OpenAI/Anthropic native search, DuckDuckGo, Exa
-- **MCP Servers** - Model Context Protocol for extended capabilities
-
-## Development Commands
-
-- `uvx langgraph dev` - Start development server with LangGraph Studio
-- `python tests/run_evaluate.py` - Run comprehensive evaluations
-- `ruff check` - Code linting
-- `mypy` - Type checking
-
-## Configuration
-
-All settings configurable via:
-
-- Environment variables (`.env` file)
-- Web UI in LangGraph Studio
-- Direct configuration modification
-
-Key settings include model selection, search API choice, concurrency limits, and MCP server configurations.
+Do not commit `.env`, operator configuration, runtime databases, caches or
+local outputs. Small configuration copies are retained under the ignored
+`.tmp/local-config-archive/`; the original opinion `.env` is restored.
+Never use `git clean` against local assets. Preserve the saved pre-cleanup
+changes and their safety ref; restoration instructions are in the audit.
+Do not edit `CLAUDE.md`.

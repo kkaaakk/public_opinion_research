@@ -1,3 +1,4 @@
+# 对研究智能体进行串行与有界并发压力检查，汇总成功率和耗时。
 """Agent-focused stress / reliability test harness.
 
 NOT a traditional load test.  Measures things that matter for agent systems:
@@ -66,6 +67,7 @@ ORG_CONTEXT = (
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+# 保存单次智能体执行结果、耗时和错误信息。
 @dataclass
 class AgentResult:
     """Outcome of a single agent run."""
@@ -89,14 +91,17 @@ class AgentResult:
 # Runner
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 批量运行智能体并收集结构化压力测试结果。
 class AgentStressTester:
     """Runs N agent invocations and collects structured results."""
 
+    # 绑定待测智能体及运行配置。
     def __init__(self, base_url: str = "http://localhost:8000", timeout: int = 600):
         self.base_url = base_url
         self.timeout = timeout
         self.results: list[AgentResult] = []
 
+    # 同步执行一次研究，便于线程池并发调用。
     def run_one(self, scenario: str, mode: str) -> AgentResult:
         """Synchronous — callable from ThreadPoolExecutor for concurrency testing."""
         topic = TOPICS[scenario][0]
@@ -159,6 +164,7 @@ class AgentStressTester:
         result.duration_s = time.time() - t0
         return result
 
+    # 串行执行多次请求，观察连续运行可靠性。
     async def run_serial(self, runs: int, scenario: str, mode: str) -> list[AgentResult]:
         """Run sequentially — measures reliability over time."""
         results = []
@@ -173,12 +179,14 @@ class AgentStressTester:
         self.results.extend(results)
         return results
 
+    # 使用受限并发执行请求，检查竞争问题和吞吐。
     async def run_concurrent(self, runs: int, scenario: str, mode: str,
                              concurrency: int) -> list[AgentResult]:
         """Run with bounded concurrency — finds race conditions."""
         sem = asyncio.Semaphore(concurrency)
         loop = asyncio.get_running_loop()
 
+        # 在并发信号量保护下执行一次测试请求。
         async def bounded_run(i: int):
             async with sem:
                 print(f"  [{i + 1}/{runs}] {scenario}/{mode} … ", end="", flush=True)
@@ -198,6 +206,7 @@ class AgentStressTester:
 # Reporting
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 输出压力测试汇总和失败明细。
 def print_report(results: list[AgentResult]):
     if not results:
         print("No results.")
@@ -264,6 +273,7 @@ def print_report(results: list[AgentResult]):
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 读取参数，运行选定压力模式并打印结果。
 async def main():
     parser = argparse.ArgumentParser(description="Agent stress/reliability test")
     parser.add_argument("--runs", type=int, default=1, help="Runs per combination")

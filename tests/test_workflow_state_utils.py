@@ -1,3 +1,4 @@
+# 检查共享状态读取、角色数据清理和任务身份规则的一致性。
 """Regression guards for shared workflow state helpers."""
 
 from open_deep_research.state import ResearchTask, research_tasks_reducer
@@ -12,6 +13,7 @@ from open_deep_research.workflow.state_utils import (
 )
 
 
+# 创建用于状态辅助函数测试的标准任务。
 def _task(task_id: str = "task-1") -> ResearchTask:
     return ResearchTask(
         task_id=task_id,
@@ -22,6 +24,7 @@ def _task(task_id: str = "task-1") -> ResearchTask:
     )
 
 
+# 验证角色辅助函数正确读取报告、记忆并清理新运行状态。
 def test_shared_role_helpers_preserve_reports_memories_and_new_run_state() -> None:
     state = {
         "agents": {
@@ -44,6 +47,7 @@ def test_shared_role_helpers_preserve_reports_memories_and_new_run_state() -> No
     assert role_context(role_reports(state)) == "## public_signal\nPublic report"
 
 
+# 验证补充轮次判断及运行 ID 解析优先级稳定。
 def test_followup_and_run_id_resolution_priority_are_stable() -> None:
     config = {
         "configurable": {"research_run_id": "config-run", "thread_id": "thread"},
@@ -56,6 +60,7 @@ def test_followup_and_run_id_resolution_priority_are_stable() -> None:
     assert resolve_research_run_id({}, {"metadata": {"thread_id": "metadata-thread"}}) == "metadata-thread"
 
 
+# 验证任务转换与 reducer 使用一致的去重身份。
 def test_task_coercion_and_reducer_share_the_same_identity_rule() -> None:
     first = _task("")
     duplicate = first.model_copy(update={"reason": "Another explanation"})

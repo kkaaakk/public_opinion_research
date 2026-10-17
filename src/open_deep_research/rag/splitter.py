@@ -1,3 +1,4 @@
+# 按 Markdown、JSON、代码和普通文本结构切块，并保留来源跨度与可信度元数据。
 """本地 RAG 文本切块工具.
 
 loader 负责把文件变成 `RAGDocument`，而 splitter 负责把 document 切成
@@ -67,6 +68,7 @@ class TextSpan:
     end: int
 
 
+# 保存转换为 RAGChunk 前的内部切块文本及元数据。
 @dataclass(frozen=True)
 class ChunkDocument:
     """Internal LangChain-like chunk representation used before `RAGChunk`."""
@@ -75,6 +77,7 @@ class ChunkDocument:
     metadata: dict[str, Any]
 
 
+# 表示一个 JSON 标量叶子及其路径、来源位置。
 @dataclass(frozen=True)
 class JSONLeaf:
     """One scalar JSON value with its JSON path and source span."""
@@ -168,6 +171,7 @@ def split_documents(
     return chunked_documents
 
 
+# 按文档类型分派到对应切块策略。
 def _split_document(
     document: RAGDocument,
     *,
@@ -201,6 +205,7 @@ def _split_document(
     )
 
 
+# 按标题层级组织 Markdown，再将较长段落切块并保留标题路径。
 def _split_markdown_document(
     document: RAGDocument,
     *,
@@ -262,6 +267,7 @@ def _split_markdown_document(
     return chunk_documents
 
 
+# 按 JSON 叶子路径和字段组织切块，保留结构定位信息。
 def _split_json_document(
     document: RAGDocument,
     *,
@@ -332,6 +338,7 @@ def _split_json_document(
     return chunk_documents
 
 
+# 对普通文本递归切块，并附加原文跨度元数据。
 def _split_plain_text_document(
     document: RAGDocument,
     *,
@@ -356,6 +363,7 @@ def _split_plain_text_document(
     ]
 
 
+# 根据代码语言选择分隔规则，尽量保留代码结构边界。
 def _split_code_document(
     document: RAGDocument,
     *,
@@ -390,6 +398,7 @@ def _split_code_document(
     ]
 
 
+# 从来源及现有元数据推导可信度字段，供权威性重排使用。
 def infer_authority_metadata(
     *,
     source: str,
@@ -414,6 +423,7 @@ def infer_authority_metadata(
     }
 
 
+# 从文档信息推断来源状态，如正式、草稿或过期等标记。
 def _infer_source_status(source: str, heading_path: list[str], content: str) -> str:
     normalized_source = source.replace("\\", "/").lower()
     normalized_heading = " ".join(heading_path).lower()
@@ -444,6 +454,7 @@ def _infer_source_status(source: str, heading_path: list[str], content: str) -> 
     return "authoritative"
 
 
+# 归一化权威性判断使用的候选元数据值。
 def _authority_values(status: str) -> tuple[float, float]:
     if status == "authoritative":
         return 1.0, 0.0
@@ -456,6 +467,7 @@ def _authority_values(status: str) -> tuple[float, float]:
     return 0.8, -1.0
 
 
+# 使用递归字符分块器由粗到细选择边界，并保留来源位置。
 def _split_text(text: str, chunk_size: int, chunk_overlap: int) -> list[TextSpan]:
     """Use LangChain's recursive character splitter and keep source spans.
 
@@ -484,6 +496,7 @@ def _split_text(text: str, chunk_size: int, chunk_overlap: int) -> list[TextSpan
     )
 
 
+# 使用语言感知的递归分块规则拆分代码文本。
 def _split_code_text(
     text: str,
     *,
@@ -511,6 +524,7 @@ def _split_code_text(
     )
 
 
+# 统一执行 LangChain 分块并恢复每块在原文中的位置。
 def _split_with_langchain_splitter(
     normalized_text: str,
     *,
@@ -542,6 +556,7 @@ def _split_with_langchain_splitter(
     return spans
 
 
+# 按 JSON 字段组构造分块，必要时继续细分长内容。
 def _split_json_group(
     *,
     group_path: str,
@@ -573,6 +588,7 @@ def _split_json_group(
     return chunk_documents
 
 
+# 将可以合并的 JSON 字段整理为同一块，控制总长度。
 def _split_json_combined_fields(
     *,
     group_path: str,
@@ -595,6 +611,7 @@ def _split_json_combined_fields(
     ]
 
 
+# 单独拆分超长 JSON 字段，并保留字段路径关联。
 def _split_json_long_field(
     *,
     group_path: str,
@@ -637,6 +654,7 @@ def _split_json_long_field(
     return chunk_documents
 
 
+# 构造长字段切片的文本表示，保留识别字段所需的上下文。
 def _json_long_field_content(
     *,
     context_lines: list[str],
@@ -649,6 +667,7 @@ def _json_long_field_content(
     return "\n".join([*context_lines, primary_line])
 
 
+# 为同组 JSON 字段构造路径和来源范围元数据。
 def _json_group_metadata(group_path: str, leaves: list[JSONLeaf]) -> dict[str, Any]:
     return {
         "file_type": "json",
@@ -667,10 +686,12 @@ def _json_group_metadata(group_path: str, leaves: list[JSONLeaf]) -> dict[str, A
     }
 
 
+# 将一个 JSON 叶子格式化为路径与值组成的文本行。
 def _json_field_line(leaf: JSONLeaf) -> str:
     return f"{leaf.label}: {leaf.text}"
 
 
+# 递归遍历对象和数组，输出标量叶子及对应 JSON 路径。
 def _iter_json_leaf_values(
     value: Any,
     json_path: str = "$",
@@ -707,6 +728,7 @@ def _iter_json_leaf_values(
     return [(json_path, value, parent_path, label)]
 
 
+# 为对象键追加规范 JSON 路径，处理需要转义的键名。
 def _append_json_object_key(json_path: str, key: Any) -> str:
     key_text = str(key)
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_text):
@@ -715,12 +737,14 @@ def _append_json_object_key(json_path: str, key: Any) -> str:
     return f"{json_path}['{escaped_key}']"
 
 
+# 将 JSON 标量转换为可索引文本。
 def _json_leaf_to_text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return json.dumps(value, ensure_ascii=False)
 
 
+# 在原始 JSON 文本中定位字段值，供来源跨度记录使用。
 def _find_json_value_offset(
     raw_text: str,
     *,
@@ -747,11 +771,13 @@ def _find_json_value_offset(
     return search_start
 
 
+# 判断叶子路径是否符合配置的字段筛选范围。
 def _json_path_matches(json_path: str, allowed_paths: set[str]) -> bool:
     normalized_without_indexes = re.sub(r"\[\d+\]", "", json_path)
     return json_path in allowed_paths or normalized_without_indexes in allowed_paths
 
 
+# 统一 JSON 字段筛选路径的表示方式。
 def _normalize_json_filter_path(path: str) -> str:
     stripped = path.strip()
     if not stripped:
@@ -761,6 +787,7 @@ def _normalize_json_filter_path(path: str) -> str:
     return "$." + stripped
 
 
+# 根据来源名称与元数据推断文档类型。
 def _infer_file_type(document: RAGDocument) -> str:
     metadata = document.metadata or {}
     raw_file_type = str(metadata.get("file_type") or "").strip().lower()
@@ -776,6 +803,7 @@ def _infer_file_type(document: RAGDocument) -> str:
     return _normalize_file_type(match.group(1) if match else "")
 
 
+# 统一文档类型名称，供切块策略分派使用。
 def _normalize_file_type(value: str) -> str:
     normalized = value.strip().lower()
     if normalized in {".md", ".markdown", "md", "markdown"}:
@@ -793,6 +821,7 @@ def _normalize_file_type(value: str) -> str:
     return normalized
 
 
+# 从显式元数据或扩展名推断代码语言。
 def _infer_code_language(document: RAGDocument) -> Language | None:
     metadata = document.metadata or {}
     metadata_language = metadata.get("language")
@@ -812,6 +841,7 @@ def _infer_code_language(document: RAGDocument) -> Language | None:
     return None
 
 
+# 读取并规范化 Markdown 标题层级路径。
 def _heading_path_from_metadata(metadata: dict[str, Any]) -> list[str]:
     return [
         str(metadata[key])
@@ -820,6 +850,7 @@ def _heading_path_from_metadata(metadata: dict[str, Any]) -> list[str]:
     ]
 
 
+# 容错转换非负整数，供偏移和序号元数据使用。
 def _coerce_non_negative_int(value: Any, *, default: int) -> int:
     if isinstance(value, bool):
         return default
@@ -828,6 +859,7 @@ def _coerce_non_negative_int(value: Any, *, default: int) -> int:
     return default
 
 
+# 规范化文本表示，供分块和稳定定位使用。
 def _normalize_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
@@ -868,6 +900,7 @@ def _line_range(text: str, start: int, end: int) -> tuple[int, int]:
     return line_start, line_end
 
 
+# 由文档身份生成短且稳定的键，避免不同来源的分块 ID 冲突。
 def _stable_document_key(document: RAGDocument) -> str:
     """Create a short stable key from the document identity."""
     identity = f"{document.source}\n{document.title or ''}"

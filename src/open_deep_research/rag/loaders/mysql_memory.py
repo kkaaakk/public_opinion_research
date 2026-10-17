@@ -1,3 +1,4 @@
+# 把 MySQL 原始记忆转换为可检索文档，保留来源 URI 和身份范围。
 """RAG document conversion for MySQL-backed memory records."""
 
 from typing import Any, Optional, Sequence
@@ -11,6 +12,7 @@ from open_deep_research.memory.types import (
 from open_deep_research.rag.types import RAGDocument
 
 
+# 把原始记忆模型转换为带引用与类型元数据的索引文档。
 def records_to_documents(
     records: Sequence[ChatMemoryRecord],
     index_record_types: Sequence[str] | None = INDEXABLE_MEMORY_TYPES,
@@ -47,6 +49,7 @@ def records_to_documents(
     return documents
 
 
+# 按配置读取 MySQL 记忆，并转换为标准 RAG 文档。
 def load_memory_documents_from_mysql(
     *,
     database_url: str,
@@ -69,6 +72,7 @@ def load_memory_documents_from_mysql(
     )
 
 
+# 读取轻量数据库指纹，供索引刷新判断使用。
 def fingerprint_mysql_memory(
     *,
     database_url: Optional[str],

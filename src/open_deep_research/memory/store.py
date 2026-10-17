@@ -1,3 +1,4 @@
+# 实现 MySQL 原始记忆的建表、写入、查询和索引状态维护。
 """MySQL-backed raw memory storage.
 
 MySQL stores the complete chat transcript, summaries, and structured long-term
@@ -25,9 +26,11 @@ if TYPE_CHECKING:
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 
+# 封装原始记忆表的读写，向量索引由独立索引器维护。
 class MySQLChatMemoryStore:
     """Store and load raw memory records from MySQL."""
 
+    # 保存并校验连接与表名，延迟创建数据库引擎。
     def __init__(self, database_url: str, table_name: str = "rag_chat_memories"):
         if not database_url:
             raise ValueError("rag_memory_mysql_url is required.")
@@ -35,6 +38,7 @@ class MySQLChatMemoryStore:
         self.table_name = validate_table_name(table_name)
         self._engine = None
 
+    # 首次访问时创建 SQLAlchemy 引擎，避免未启用记忆时建立连接。
     @property
     def engine(self):
         """Lazily create the SQLAlchemy engine only when MySQL memory is enabled."""
@@ -46,6 +50,7 @@ class MySQLChatMemoryStore:
             self._engine = create_engine(self.database_url, pool_pre_ping=True, future=True)
         return self._engine
 
+    # 创建记忆表，并对已有表执行兼容性字段迁移。
     def ensure_schema(self) -> None:
         """Create or lightly migrate the raw memory table."""
         from sqlalchemy import text
@@ -77,6 +82,7 @@ class MySQLChatMemoryStore:
             connection.execute(text(ddl))
             self._best_effort_migrate_schema(connection)
 
+    # 按稳定记忆标识插入或更新原始记录，并将其标为待索引。
     def upsert_records(self, records: Sequence[ChatMemoryRecord]) -> int:
         """Write raw records to MySQL and leave them pending for the indexer."""
         if not records:
@@ -123,6 +129,7 @@ class MySQLChatMemoryStore:
             connection.execute(statement, payload)
         return len(records)
 
+    # 按用户、会话、类型、索引状态和数量限制读取原始记录。
     def load_records(
         self,
         conversation_id: Optional[str] = None,
@@ -175,6 +182,7 @@ class MySQLChatMemoryStore:
 
         return [memory_record_from_row(row) for row in rows]
 
+    # 读取尚未同步到向量库且允许索引的记忆记录。
     def load_pending_indexable_records(
         self,
         conversation_id: Optional[str] = None,
@@ -191,6 +199,7 @@ class MySQLChatMemoryStore:
             index_status="pending",
         )
 
+    # 向量同步成功后更新对应原始记录的索引状态。
     def mark_records_indexed(self, memory_ids: Sequence[str]) -> int:
         """Mark records as indexed after the RAG indexer syncs them."""
         if not memory_ids:
@@ -213,6 +222,7 @@ class MySQLChatMemoryStore:
             result = connection.execute(statement, params)
         return int(result.rowcount or 0)
 
+    # 使用稳定记忆 ID 查询完整原始记录。
     def get_record_by_memory_id(
         self,
         memory_id: str,
@@ -246,6 +256,7 @@ class MySQLChatMemoryStore:
             return None
         return memory_record_from_row(row)
 
+    # 解析 MySQL 记忆引用 URI，并查询其对应的原始记录。
     def get_record_by_source(self, source: str) -> ChatMemoryRecord | None:
         """Load one raw memory row from a `memory://mysql/...` citation source."""
         parsed_source = parse_mysql_memory_source(source)
@@ -257,6 +268,7 @@ class MySQLChatMemoryStore:
             conversation_id=conversation_id,
         )
 
+    # 生成表级轻量指纹，供诊断和索引变化检查使用。
     def fingerprint(
         self,
         conversation_id: Optional[str] = None,
@@ -305,6 +317,7 @@ class MySQLChatMemoryStore:
             "table": self.table_name,
         }
 
+    # 为旧表补充新边界设计所需字段，尽力兼容已有数据库。
     def _best_effort_migrate_schema(self, connection: Any) -> None:
         """Add columns expected by the new boundary split when tables already exist."""
         from sqlalchemy import text
@@ -326,6 +339,7 @@ class MySQLChatMemoryStore:
                 pass
 
 
+# 保留旧调用入口，实际委托 RAG 层执行记忆到文档的转换。
 def records_to_documents(
     records: Sequence[ChatMemoryRecord],
     index_record_types: Sequence[str] | None = INDEXABLE_MEMORY_TYPES,
@@ -341,6 +355,7 @@ def records_to_documents(
     )
 
 
+# 兼容旧接口，转发到 RAG 层的 MySQL 记忆加载器。
 def load_memory_documents_from_mysql(
     *,
     database_url: str,
@@ -365,6 +380,7 @@ def load_memory_documents_from_mysql(
     )
 
 
+# 兼容旧接口，委托 RAG 层生成记忆数据指纹。
 def fingerprint_mysql_memory(
     *,
     database_url: Optional[str],
@@ -387,6 +403,7 @@ def fingerprint_mysql_memory(
     )
 
 
+# 按记忆 ID 加载完整 MySQL 原始记录。
 def load_memory_record_by_id(
     *,
     database_url: str,
@@ -402,6 +419,7 @@ def load_memory_record_by_id(
     )
 
 
+# 根据引用或向量分块来源恢复完整原始记忆。
 def load_memory_record_by_source(
     *,
     database_url: str,
@@ -413,6 +431,7 @@ def load_memory_record_by_source(
     return store.get_record_by_source(source)
 
 
+# 为使用 source_id 命名的调用方提供同等的来源查询入口。
 def load_memory_record_by_source_id(
     *,
     database_url: str,
@@ -427,6 +446,7 @@ def load_memory_record_by_source_id(
     )
 
 
+# 将 memory://mysql/ 引用拆解为会话 ID 和记忆 ID。
 def parse_mysql_memory_source(source: str) -> tuple[str, str] | None:
     """Parse `memory://mysql/{conversation_id}/{memory_id}` into lookup keys."""
     prefix = "memory://mysql/"
@@ -441,6 +461,7 @@ def parse_mysql_memory_source(source: str) -> tuple[str, str] | None:
     return conversation_id, memory_id
 
 
+# 为缺少驱动标识的 MySQL URL 补齐 SQLAlchemy 驱动前缀。
 def normalize_mysql_url(database_url: str) -> str:
     """Fill in the default SQLAlchemy MySQL driver prefix."""
     if database_url.startswith("mysql://"):
@@ -448,6 +469,7 @@ def normalize_mysql_url(database_url: str) -> str:
     return database_url
 
 
+# 校验用于动态建表语句的标识符，拒绝不合法表名。
 def validate_table_name(table_name: str) -> str:
     """Validate a MySQL identifier that will be used in DDL strings."""
     if not TABLE_NAME_PATTERN.match(table_name or ""):
@@ -458,11 +480,13 @@ def validate_table_name(table_name: str) -> str:
     return table_name
 
 
+# 为已校验的 MySQL 标识符添加引用符。
 def quote_identifier(identifier: str) -> str:
     """Quote an already validated MySQL identifier."""
     return f"`{validate_table_name(identifier)}`"
 
 
+# 兼容数据库返回的字典、JSON 字符串、字节及空元数据。
 def parse_metadata(value: Any) -> dict[str, Any]:
     """Handle MySQL JSON values returned as dicts, strings, bytes, or null."""
     if isinstance(value, dict):
@@ -480,6 +504,7 @@ def parse_metadata(value: Any) -> dict[str, Any]:
     return {}
 
 
+# 将 SQLAlchemy 查询行映射转换为标准记忆模型。
 def memory_record_from_row(row: Any) -> ChatMemoryRecord:
     """Convert a SQLAlchemy mapping row into a `ChatMemoryRecord`."""
     return ChatMemoryRecord(
@@ -495,6 +520,7 @@ def memory_record_from_row(row: Any) -> ChatMemoryRecord:
     )
 
 
+# 根据记忆内容及范围生成确定性 ID，使重复写入更新同一记录。
 def stable_memory_id(
     conversation_id: str,
     record_type: str,
@@ -508,6 +534,7 @@ def stable_memory_id(
     return f"{record_type}-{digest[:24]}"
 
 
+# 兼容查询行的字段读取方式，字段不存在时使用默认值。
 def _row_get(row: Any, key: str, default: Any = None) -> Any:
     try:
         return row[key]

@@ -1,3 +1,4 @@
+# 通过服务名前缀解决多个 MCP 服务的工具重名问题。
 """Tool name conflict resolution via namespace-prefix wrapping.
 
 Multiple MCP servers may expose tools with identical names (e.g., both
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 _SERVER_SEPARATOR = "__"
 
 
+# 生成“服务名__工具名”格式的命名空间名称。
 def prefixed_tool_name(server_name: str, tool_name: str) -> str:
     """Generate a server-scoped tool name.
 
@@ -30,6 +32,7 @@ def prefixed_tool_name(server_name: str, tool_name: str) -> str:
     return f"{server_name}{_SERVER_SEPARATOR}{tool_name}"
 
 
+# 复制工具并替换名称和描述，保留执行函数、参数结构及元数据。
 def _copy_tool_with_name(tool: BaseTool, *, name: str, description: str) -> BaseTool:
     """Create a safe copy of *tool* with a different *name* and *description*.
 
@@ -61,6 +64,7 @@ def _copy_tool_with_name(tool: BaseTool, *, name: str, description: str) -> Base
     )
 
 
+# 为冲突工具加服务名前缀，并维护已占用名称集合以避免后续冲突。
 def wrap_mcp_tools(
     server_name: str,
     tools: list[BaseTool],

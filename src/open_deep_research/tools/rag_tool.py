@@ -1,3 +1,4 @@
+# 将本地知识与记忆检索包装为研究智能体可调用的引用上下文工具。
 """Expose RAG retrieval as an agent tool."""
 
 import asyncio
@@ -22,6 +23,7 @@ RAG_SEARCH_DESCRIPTION = (
 )
 
 
+# 根据运行配置执行本地 RAG 检索，仅返回带来源引用的上下文。
 @tool(description=RAG_SEARCH_DESCRIPTION)
 async def rag_search(query: str, config: RunnableConfig = None) -> str:
     """Search local knowledge and memory, returning cited context only."""

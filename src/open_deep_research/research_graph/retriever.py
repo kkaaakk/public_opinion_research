@@ -1,3 +1,4 @@
+# 为内存与 Neo4j 研究图提供一致的有限子图查询及提示格式化入口。
 """Research-memory retrieval adapters.
 
 This retriever returns a bounded subgraph.  It intentionally does not generate
@@ -18,9 +19,11 @@ from open_deep_research.research_graph.models import (
 from open_deep_research.research_graph.store import ResearchGraphStore
 
 
+# 封装存储查询，限制相关子图的节点与关系规模。
 class ResearchGraphRetriever:
     """Small project-side facade over an in-memory or Neo4j graph store."""
 
+    # 绑定图存储并设置最大返回规模。
     def __init__(
         self,
         store: ResearchGraphStore,
@@ -33,6 +36,7 @@ class ResearchGraphRetriever:
         self.max_nodes = max_nodes
         self.max_edges = max_edges
 
+    # 按当前任务和缺口检索本次运行的相关研究记忆。
     def retrieve(
         self,
         task: Any,
@@ -80,6 +84,7 @@ class ResearchGraphRetriever:
             return subgraph
 
 
+# 仅渲染有限子图，并保留节点与关系 ID 以支持溯源。
 def format_relevant_subgraph(
     subgraph: RelevantSubgraph,
     *,
@@ -108,6 +113,7 @@ def format_relevant_subgraph(
     return "\n".join(lines)
 
 
+# 从工作上下文提取适合检索的摘要文本。
 def _context_summaries(context: WorkingContext) -> list[str]:
     values: list[str] = []
     for item in context.confirmed_findings:

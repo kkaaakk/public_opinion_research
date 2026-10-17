@@ -1,3 +1,4 @@
+# 验证精简舆情角色规范、私有记忆和完整报告的状态传播。
 """Tests for public-opinion business-agent encapsulation."""
 
 import asyncio
@@ -18,6 +19,7 @@ from open_deep_research.state import (
 )
 
 
+# 验证注册表只包含当前精简角色。
 def test_public_opinion_agent_registry_has_compact_roles() -> None:
     """Public-opinion workflow exposes four compact business agents."""
     assert PUBLIC_OPINION_AGENT_ORDER == (
@@ -29,6 +31,7 @@ def test_public_opinion_agent_registry_has_compact_roles() -> None:
     assert set(PUBLIC_OPINION_AGENT_SPECS) == set(PUBLIC_OPINION_AGENT_ORDER)
 
 
+# 验证历史角色配置映射到当前角色体系。
 def test_legacy_public_opinion_roles_are_mapped_to_compact_roles() -> None:
     """Old seven-agent role configs remain compatible."""
     config = Configuration(
@@ -52,6 +55,7 @@ def test_legacy_public_opinion_roles_are_mapped_to_compact_roles() -> None:
     ]
 
 
+# 验证每个角色拥有独立提示词、契约及工具策略。
 def test_each_public_opinion_agent_owns_prompt_contract_and_policy() -> None:
     """Each agent spec renders a dedicated prompt with contract and policy sections."""
     for role in PUBLIC_OPINION_AGENT_ORDER:
@@ -74,6 +78,7 @@ def test_each_public_opinion_agent_owns_prompt_contract_and_policy() -> None:
         assert spec.expected_output in prompt
 
 
+# 验证角色状态合并保持私有记忆隔离。
 def test_agents_reducer_keeps_private_memory_by_role() -> None:
     """Private agent memory is appended under each role without cross-role mixing."""
     current = {
@@ -99,15 +104,19 @@ def test_agents_reducer_keeps_private_memory_by_role() -> None:
     ]
 
 
+# 验证章节写作使用完整正式角色报告。
 def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     """Formal role reports, rather than compact memory, reach the writer prompt."""
 
     captured_prompts: list[str] = []
 
+    # 记录输入提示或消息，并返回固定报告以检查证据传递。
     class CapturingModel:
+        # 接收运行配置并返回测试模型，兼容真实调用链。
         def with_config(self, _config):
             return self
 
+        # 记录模型实际输入，并返回预设章节或报告消息。
         async def ainvoke(self, messages, config=None):
             captured_prompts.append(str(messages[0].content))
             return SimpleNamespace(content="section output")
@@ -136,7 +145,7 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     asyncio.run(
         deep_researcher_module.section_writer(
             state,
-            {"configurable": {"section_writer_model": "fixture:model"}},
+            {"configurable": {"section_writer_model": "fixture:model", "research_graph_enabled": False}},
         )
     )
 
@@ -144,6 +153,7 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     assert "TAIL_EVIDENCE_MUST_REACH_SECTION_WRITER" in captured_prompts[0]
 
 
+# 验证短期记忆受大小限制。
 def test_private_memory_remains_compact() -> None:
     """Private memory keeps its bounded representation after P0-2."""
 
@@ -154,6 +164,7 @@ def test_private_memory_remains_compact() -> None:
     assert memory["content"].endswith("[truncated]")
 
 
+# 验证新运行报告按规则替换上一运行输出。
 def test_role_reports_override_previous_run() -> None:
     """A new research phase replaces prior formal reports instead of merging them."""
 

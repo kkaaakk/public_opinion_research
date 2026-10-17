@@ -1,3 +1,4 @@
+# 验证真实模型尝试记账、令牌聚合、预算过滤和上下文捕获隔离。
 """Budget Guard and token accounting tests.
 
 Token usage authority is LangChain ``UsageMetadata`` reported by the official
@@ -40,6 +41,7 @@ from open_deep_research.configuration import Configuration
 from open_deep_research.state import runtime_reducer
 
 
+# 构造带指定令牌元数据的测试消息。
 def _message(
     input_tokens: int = 13,
     output_tokens: int = 7,
@@ -59,11 +61,13 @@ def _message(
     return AIMessage(content="done", usage_metadata=metadata)
 
 
+# 构造已填充用量记录的官方回调处理器。
 def _usage_handler(usage: dict | None = None) -> SimpleNamespace:
     """Stand-in for the public ``.usage_metadata`` of the official usage handler."""
     return SimpleNamespace(usage_metadata=({"fixture": usage} if usage else {}))
 
 
+# 提供用于工具预算分类的示例搜索工具。
 @tool
 def sample_search(query: str) -> str:
     """Search the web for one query."""
@@ -75,6 +79,7 @@ def sample_search(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# 验证预算从官方回调读取输入输出令牌。
 def test_budget_from_model_accounting_usage_metadata():
     usage = budget_from_model_accounting(1, _usage_handler(_message(13, 7).usage_metadata))
 
@@ -84,6 +89,7 @@ def test_budget_from_model_accounting_usage_metadata():
     assert usage["total_tokens"] == 20
 
 
+# 验证供应商响应附加字段不会作为额外令牌来源。
 def test_provider_response_metadata_is_not_a_token_source():
     """Provider-specific token fields never reach the official usage handler."""
     message = AIMessage(
@@ -104,6 +110,7 @@ def test_provider_response_metadata_is_not_a_token_source():
     assert usage["total_tokens"] == 0
 
 
+# 验证处理器中的全部用量记录都参与聚合。
 def test_budget_from_model_accounting_aggregates_all_handler_entries():
     """Multiple model keys are aggregated with the official ``add_usage``."""
     handler = SimpleNamespace(
@@ -121,6 +128,7 @@ def test_budget_from_model_accounting_aggregates_all_handler_entries():
     assert usage["total_tokens"] == 23
 
 
+# 验证缺失用量时保持零值，不生成猜测令牌。
 def test_missing_usage_never_fabricates_tokens():
     usage = budget_from_model_accounting(1, _usage_handler())
 
@@ -129,6 +137,7 @@ def test_missing_usage_never_fabricates_tokens():
     assert usage["total_tokens"] == 0
 
 
+# 验证真实聊天模型启动会增加尝试次数。
 def test_model_attempt_counter_counts_real_chat_model_starts():
     """One provider attempt equals one ``on_chat_model_start`` event."""
     model = GenericFakeChatModel(
@@ -142,6 +151,7 @@ def test_model_attempt_counter_counts_real_chat_model_starts():
     assert counter.starts == 1
 
 
+# 验证聊天回调与普通 LLM 回调不会重复记账。
 def test_model_attempt_counter_does_not_double_count_a_chat_model():
     """A ChatModel emits ``on_chat_model_start`` only; ``on_llm_start`` must not add."""
     model = GenericFakeChatModel(
@@ -153,11 +163,14 @@ def test_model_attempt_counter_does_not_double_count_a_chat_model():
     assert handler.starts == 1
 
 
+# 验证失败重试产生的真实模型尝试全部计入预算。
 def test_model_attempt_counter_counts_retry_attempts():
     """``with_retry`` re-invokes the provider, so each attempt is counted."""
     state = {"n": 0}
 
+    # 模拟前两次失败、第三次成功的聊天模型，验证真实重试次数。
     class Flaky(GenericFakeChatModel):
+        # 前两次抛出临时错误，第三次委托正常生成，验证重试计数。
         def _generate(self, *args, **kwargs):
             state["n"] += 1
             if state["n"] < 3:
@@ -175,6 +188,7 @@ def test_model_attempt_counter_counts_retry_attempts():
     assert counter.starts == 3
 
 
+# 验证结构化解析错误向外抛出以触发真实请求重试。
 def test_require_valid_structured_output_raises_parsing_error():
     error = ValueError("bad parse")
     with pytest.raises(ValueError, match="bad parse"):
@@ -192,6 +206,7 @@ def test_require_valid_structured_output_raises_parsing_error():
 # ---------------------------------------------------------------------------
 
 
+# 验证缓存和推理令牌明细按上报值保留与合并。
 def test_token_details_are_preserved_and_merged_without_guessing():
     left = budget_from_model_accounting(
         1,
@@ -215,6 +230,7 @@ def test_token_details_are_preserved_and_merged_without_guessing():
     assert merged["output_token_details"] == {"reasoning": 1}
 
 
+# 验证没有令牌明细时不报错，也不伪造明细字段。
 def test_missing_token_details_do_not_error_or_appear():
     usage = merge_budget_usage(
         budget_from_model_accounting(1, _usage_handler(_message().usage_metadata)),
@@ -225,6 +241,7 @@ def test_missing_token_details_do_not_error_or_appear():
     assert "output_token_details" not in usage
 
 
+# 验证格式化只展示供应商实际提供的令牌明细。
 def test_token_details_formatting_only_shows_provider_reported_values():
     usage = budget_from_model_accounting(
         1,
@@ -245,6 +262,7 @@ def test_token_details_formatting_only_shows_provider_reported_values():
 # ---------------------------------------------------------------------------
 
 
+# 验证预算令牌合并遵循 LangChain 官方聚合语义。
 def test_merge_matches_langchain_add_usage_semantics():
     left = budget_from_model_accounting(
         1, _usage_handler(_message(10, 4, input_details={"cache_read": 2}).usage_metadata)
@@ -281,11 +299,13 @@ def test_merge_matches_langchain_add_usage_semantics():
 # ---------------------------------------------------------------------------
 
 
+# 构造单节点预算增量，供并行合并测试使用。
 def _node_delta(message: AIMessage, *, attempts: int = 1) -> dict:
     """Build the delta a node returns from the official usage handler shape."""
     return budget_from_model_accounting(attempts, _usage_handler(message.usage_metadata))
 
 
+# 验证并行角色增量各自只被 reducer 累计一次。
 def test_parallel_agent_deltas_reduce_once():
     researcher_a = _node_delta(_message(10, 2))
     researcher_b = _node_delta(_message(20, 4))
@@ -302,6 +322,7 @@ def test_parallel_agent_deltas_reduce_once():
     assert budget["total_tokens"] == 42
 
 
+# 验证子图返回本次新增消耗，不重复返回累计总量。
 def test_subgraph_delta_returns_only_the_increment():
     baseline = _node_delta(_message(10, 2))
     subgraph_total = merge_budget_usage(baseline, _node_delta(_message(4, 1)))
@@ -315,6 +336,7 @@ def test_subgraph_delta_returns_only_the_increment():
     assert merge_budget_usage(baseline, delta) == subgraph_total
 
 
+# 验证嵌套模型请求不会因捕获和外层统计重复记账。
 def test_nested_model_call_records_once_without_double_count():
     model = GenericFakeChatModel(
         messages=iter(
@@ -346,6 +368,7 @@ def test_nested_model_call_records_once_without_double_count():
 # ---------------------------------------------------------------------------
 
 
+# 验证工具次数预算耗尽后跳过后续调用。
 def test_filter_tool_calls_skips_after_tool_budget():
     configurable = Configuration(budget_enabled=True, max_tool_calls=1)
     tool_calls = [
@@ -368,6 +391,7 @@ def test_filter_tool_calls_skips_after_tool_budget():
     assert [tool_call["id"] for tool_call in skipped] == ["call_2"]
 
 
+# 验证搜索预算耗尽后过滤检索工具调用。
 def test_filter_tool_calls_skips_after_search_budget():
     configurable = Configuration(budget_enabled=True, max_search_calls=1)
     usage = {"search_calls": 1}
@@ -386,6 +410,7 @@ def test_filter_tool_calls_skips_after_search_budget():
     assert skipped == tool_calls
 
 
+# 验证计算研究单元余额时为最终报告预留模型调用。
 def test_available_research_units_reserves_final_report_call():
     configurable = Configuration(
         budget_enabled=True,
@@ -397,12 +422,14 @@ def test_available_research_units_reserves_final_report_call():
     assert available_research_unit_slots(configurable, {"model_calls": 3}) == 0
 
 
+# 验证关闭预算管理时研究单元不受数量限制。
 def test_budget_disabled_has_unlimited_research_unit_slots():
     configurable = Configuration(budget_enabled=False, max_model_calls=1)
 
     assert available_research_unit_slots(configurable, {"model_calls": 100}) is None
 
 
+# 验证预算摘要保留执行中的降级原因。
 def test_budget_summary_includes_degradation_reasons():
     configurable = Configuration(budget_enabled=True, max_model_calls=3)
     usage = merge_budget_usage(
@@ -420,6 +447,7 @@ def test_budget_summary_includes_degradation_reasons():
 # ---------------------------------------------------------------------------
 
 
+# 验证上下文估算使用真实消息与官方近似计数器。
 def test_context_estimate_uses_langchain_message_utility():
     messages = [SystemMessage(content="sys"), HumanMessage(content="hello " * 50)]
 
@@ -430,6 +458,7 @@ def test_context_estimate_uses_langchain_message_utility():
     assert estimate_context_tokens(messages) > estimate_text_tokens("hello " * 50)
 
 
+# 验证绑定工具结构也计入下一次请求的输入估算。
 def test_tool_schemas_are_part_of_the_context_estimate():
     messages = [HumanMessage(content="find brand risk")]
 
@@ -439,7 +468,9 @@ def test_tool_schemas_are_part_of_the_context_estimate():
     assert with_tools > without_tools
 
 
+# 验证无法转换的工具结构不会中断上下文估算。
 def test_unconvertible_tool_schema_does_not_break_the_estimate():
+    # 提供无法转换为工具结构的对象，验证估算容错。
     class NotATool:
         name = "mystery"
 
@@ -450,6 +481,7 @@ def test_unconvertible_tool_schema_does_not_break_the_estimate():
     )
 
 
+# 验证文本截断依据官方令牌近似计数，而非固定字符比例。
 def test_truncate_text_to_token_budget_uses_official_counter():
     text = "brand risk analysis " * 500
     budget = 100
@@ -468,6 +500,7 @@ def test_truncate_text_to_token_budget_uses_official_counter():
 # ---------------------------------------------------------------------------
 
 
+# 验证上下文压力在零值、边界和超限输入下的行为。
 def test_context_pressure_ratio_boundaries():
     assert context_pressure_ratio(0, 1000) == 0.0
     assert context_pressure_ratio(100, None) == 0.0
@@ -475,6 +508,7 @@ def test_context_pressure_ratio_boundaries():
     assert context_pressure_ratio(1000, 1000) == pytest.approx(1.0)
 
 
+# 验证配置要求压力阈值顺序合法。
 def test_configuration_validates_pressure_ordering():
     configurable = Configuration(
         context_warning_ratio=0.6,
@@ -486,6 +520,7 @@ def test_configuration_validates_pressure_ordering():
         Configuration(context_warning_ratio=0.9, context_compaction_threshold_ratio=0.75)
 
 
+# 验证只有启用预算管理时才向报告追加消耗摘要。
 def test_budget_summary_appends_only_when_budget_enabled():
     report = "final report"
     assert append_budget_summary(report, Configuration(budget_enabled=False), {}) == report
@@ -498,11 +533,13 @@ def test_budget_summary_appends_only_when_budget_enabled():
     assert "### Budget usage" in appended
 
 
+# 验证空文本可以安全估算令牌数量。
 def test_estimate_text_tokens_handles_empty_text():
     assert estimate_text_tokens("") == 0
     assert estimate_context_tokens([]) == 0
 
 
+# 验证运行状态合并保留列表信息和令牌统计。
 def test_runtime_reducer_keeps_list_and_token_state():
     first = merge_budget_usage(
         {},
@@ -520,6 +557,7 @@ def test_runtime_reducer_keeps_list_and_token_state():
     assert state["budget"]["model_calls"] == 0
 
 
+# 验证工具消息不会被误当作模型令牌用量来源。
 def test_tool_messages_do_not_contribute_token_usage():
     """Only AIMessage usage reaches the handler; tool outputs never bill tokens."""
     assert not hasattr(ToolMessage(content="x", tool_call_id="call-1", name="web_search"), "usage_metadata")
@@ -531,6 +569,7 @@ def test_tool_messages_do_not_contribute_token_usage():
     assert usage["total_tokens"] == 0
 
 
+# 验证正常退出和抛错时捕获上下文都正确恢复。
 def test_budget_capture_context_manager_normal_and_exception_paths():
     delta = {"model_calls": 1, "input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
     with budget_capture() as captured:
@@ -549,7 +588,9 @@ def test_budget_capture_context_manager_normal_and_exception_paths():
     assert restored["tool_calls"] == 1
 
 
+# 验证取消类 BaseException 也不会遗留预算捕获状态。
 def test_budget_capture_context_manager_resets_on_base_exception():
+    # 模拟取消类 BaseException，检查捕获上下文清理。
     class CancellationLike(BaseException):
         pass
 
@@ -563,6 +604,7 @@ def test_budget_capture_context_manager_resets_on_base_exception():
     assert restored["model_calls"] == 2
 
 
+# 验证嵌套与并行任务的预算捕获相互隔离。
 def test_budget_capture_context_manager_nested_and_parallel_isolation():
     with budget_capture() as outer:
         capture_budget_usage({"model_calls": 1})
@@ -573,12 +615,14 @@ def test_budget_capture_context_manager_nested_and_parallel_isolation():
     assert outer["model_calls"] == 1
     assert outer["tool_calls"] == 1
 
+    # 在独立异步上下文中记录指定模型调用次数并返回捕获结果。
     async def capture(value: int) -> dict:
         with budget_capture() as usage:
             await asyncio.sleep(0)
             capture_budget_usage({"model_calls": value})
         return usage
 
+    # 并发运行两份预算捕获，检查各自用量不混合。
     async def capture_parallel() -> tuple[dict, dict]:
         first, second = await asyncio.gather(capture(3), capture(5))
         return first, second
