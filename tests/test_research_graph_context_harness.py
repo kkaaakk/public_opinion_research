@@ -128,10 +128,14 @@ def test_extraction_prompt_record_contract_materializes_full_provenance() -> Non
     prompt = _build_extraction_prompt([document], _scope())
     record_text = prompt.split("Record field contract:\n", 1)[1]
     records, _ = json.JSONDecoder().raw_decode(record_text)
-    delta = normalize_extraction_output(GraphExtractionOutput.model_validate(records), [document], scope=_scope())
+    delta = normalize_extraction_output(
+        GraphExtractionOutput.model_validate(records), [document], scope=_scope()
+    )
     _, edges = delta.materialize()
     relations = {edge.relation_type for edge in edges}
-    assert {"EXTRACTED_FROM", "SUPPORTS", "DERIVED_FROM", "SUPPORTED_BY"}.issubset(relations)
+    assert {"EXTRACTED_FROM", "SUPPORTS", "DERIVED_FROM", "SUPPORTED_BY"}.issubset(
+        relations
+    )
     assert delta.evidences[0].source_id == document.source_id
 
 
