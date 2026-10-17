@@ -1094,6 +1094,10 @@ def test_duplicate_url_compaction_never_publishes_unpersisted_source_ids(
                 return _payload("same-url")
 
             def inspect(call):
+                assert all(
+                    output.startswith("[Research result compacted.")
+                    for output in _outputs(call).values()
+                )
                 for output in _outputs(call).values():
                     if output.startswith("[Research result compacted."):
                         for source_line in output.splitlines():
@@ -1120,6 +1124,9 @@ def test_duplicate_url_compaction_never_publishes_unpersisted_source_ids(
             await harness.run(
                 Agent(name="producer", model=model, tools=[_tool(harness, duplicate)]),
                 "assignment",
+            )
+            assert not any(
+                event[0] == "compaction_deferred" for event in harness.events
             )
         assert store.writes == 1
 

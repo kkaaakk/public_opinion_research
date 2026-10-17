@@ -59,6 +59,20 @@ class ResearchGraphStore(ABC):
     ) -> bool:
         """Return whether this exact source version is already persisted."""
 
+    def get_source_receipt(
+        self,
+        scope: ResearchGraphScope,
+        document: RawResearchDocument,
+    ) -> WriteReceipt | None:
+        """Resolve an exact stored source version to verified provenance references.
+
+        Existing custom stores remain constructible, but must provide this
+        capability before a Producer can safely acknowledge duplicate sources.
+        """
+        raise NotImplementedError(
+            "This Research Graph store cannot verify source receipts."
+        )
+
     # 约定返回有规模限制且保留来源关系的相关子图。
     @abstractmethod
     def retrieve(
@@ -105,16 +119,92 @@ def _query_terms(query: str) -> list[str]:
     return [term for term in terms if len(term) >= 2]
 
 
+def _source_matches(
+    node: GraphNode, scope: ResearchGraphScope, document: RawResearchDocument
+) -> bool:
+    return (
+        node.run_id == scope.run_id
+        and node.node_type == "Source"
+        and (node.properties.get("url") or node.node_id)
+        == (document.url or document.source_id)
+        and node.properties.get("content_hash")
+        == (document.content_hash or content_hash(document.content))
+    )
+
+
+def _persisted_source_receipt(
+    scope: ResearchGraphScope,
+    document: RawResearchDocument,
+    source_id: str,
+    nodes: Iterable[GraphNode],
+    edges: Iterable[GraphEdge],
+) -> WriteReceipt | None:
+    """Build a receipt only from existing scoped nodes and provenance edges."""
+    scoped = {node.node_id: node for node in nodes if node.run_id == scope.run_id}
+    source = scoped.get(source_id)
+    if source is None or not _source_matches(source, scope, document):
+        return None
+    valid_edges = [
+        edge
+        for edge in edges
+        if edge.run_id == scope.run_id
+        and edge.source_id in scoped
+        and edge.target_id in scoped
+    ]
+    evidence_ids = {
+        edge.source_id
+        for edge in valid_edges
+        if edge.target_id == source_id
+        and edge.relation_type == "EXTRACTED_FROM"
+        and scoped[edge.source_id].node_type == "Evidence"
+    }
+    claim_ids = {
+        edge.target_id
+        for edge in valid_edges
+        if edge.source_id in evidence_ids
+        and edge.relation_type in {"SUPPORTS", "CONTRADICTS", "CONTEXTUALIZES"}
+        and scoped[edge.target_id].node_type == "Claim"
+    }
+    finding_ids = {
+        edge.source_id
+        for edge in valid_edges
+        if scoped[edge.source_id].node_type == "Finding"
+        and (
+            (edge.target_id in evidence_ids and edge.relation_type == "SUPPORTED_BY")
+            or (edge.target_id in claim_ids and edge.relation_type == "DERIVED_FROM")
+        )
+    }
+    node_ids = {source_id, *evidence_ids, *claim_ids, *finding_ids}
+    return WriteReceipt(
+        run_id=scope.run_id,
+        role=scope.role,
+        research_round=scope.research_round,
+        task_id=scope.task_id,
+        source_ids=[source_id],
+        duplicate_source_ids=[source_id],
+        evidence_ids=sorted(evidence_ids),
+        claim_ids=sorted(claim_ids),
+        finding_ids=sorted(finding_ids),
+        node_ids=sorted(node_ids),
+        edge_ids=sorted(
+            {
+                edge.edge_id
+                for edge in valid_edges
+                if edge.source_id in node_ids and edge.target_id in node_ids
+            }
+        ),
+    )
+
+
 # 提供确定性的内存图后端，适用于测试和本地开发。
 class InMemoryResearchGraphStore(ResearchGraphStore):
     """Deterministic graph store used by tests and local development."""
 
-    # 初始化按范围保存的节点、关系与来源版本索引。
+    # 按范围保存实际节点和关系，来源版本由 Source 节点确认。
     def __init__(self) -> None:
-        """Initialize empty scoped node, edge, and source-version indexes."""
+        """Initialize scoped nodes and edges as the source of persistence truth."""
         self.nodes: dict[tuple[str, str], GraphNode] = {}
         self.edges: dict[tuple[str, str], GraphEdge] = {}
-        self._source_versions: dict[tuple[str, str], str] = {}
         self._lock = threading.RLock()
 
     # 按稳定标识插入或更新内存图节点与关系。
@@ -125,14 +215,11 @@ class InMemoryResearchGraphStore(ResearchGraphStore):
             for node in nodes:
                 self.nodes[(delta.scope.run_id, node.node_id)] = node
             for edge in edges:
-                if (
-                    (delta.scope.run_id, edge.source_id) in self.nodes
-                    and (delta.scope.run_id, edge.target_id) in self.nodes
-                ):
+                if (delta.scope.run_id, edge.source_id) in self.nodes and (
+                    delta.scope.run_id,
+                    edge.target_id,
+                ) in self.nodes:
                     self.edges[(delta.scope.run_id, edge.edge_id)] = edge
-            for source in delta.sources:
-                source_key = source.url or source.source_id
-                self._source_versions[(delta.scope.run_id, source_key)] = source.content_hash
 
         return WriteReceipt(
             run_id=delta.scope.run_id,
@@ -154,10 +241,31 @@ class InMemoryResearchGraphStore(ResearchGraphStore):
         document: RawResearchDocument,
     ) -> bool:
         """Check whether the exact URL/source content version is stored."""
-        source_key = document.url or document.source_id
-        version = document.content_hash or content_hash(document.content)
+        return self.get_source_receipt(scope, document) is not None
+
+    def get_source_receipt(
+        self,
+        scope: ResearchGraphScope,
+        document: RawResearchDocument,
+    ) -> WriteReceipt | None:
+        """Resolve an exact version from actual in-memory nodes, including older versions."""
         with self._lock:
-            return self._source_versions.get((scope.run_id, source_key)) == version
+            nodes = [
+                node
+                for (run_id, _), node in self.nodes.items()
+                if run_id == scope.run_id
+            ]
+            sources = sorted(
+                node.node_id for node in nodes if _source_matches(node, scope, document)
+            )
+            if not sources:
+                return None
+            edges = [
+                edge
+                for (run_id, _), edge in self.edges.items()
+                if run_id == scope.run_id
+            ]
+            return _persisted_source_receipt(scope, document, sources[0], nodes, edges)
 
     # 在单次运行内评分匹配节点并做一跳扩展，返回有限子图。
     def retrieve(
@@ -181,9 +289,7 @@ class InMemoryResearchGraphStore(ResearchGraphStore):
                 if scope_id == run_id
             }
             scoped_edges = [
-                edge
-                for (scope_id, _), edge in self.edges.items()
-                if scope_id == run_id
+                edge for (scope_id, _), edge in self.edges.items() if scope_id == run_id
             ]
 
         scored: list[tuple[int, str, GraphNode]] = []
@@ -207,7 +313,9 @@ class InMemoryResearchGraphStore(ResearchGraphStore):
                     if len(selected_ids) >= max_nodes:
                         break
 
-        nodes = [scoped_nodes[node_id] for node_id in selected_ids if node_id in scoped_nodes]
+        nodes = [
+            scoped_nodes[node_id] for node_id in selected_ids if node_id in scoped_nodes
+        ]
         nodes.sort(key=lambda node: (node.node_type, node.node_id))
         nodes = nodes[:max_nodes]
         selected_ids = {node.node_id for node in nodes}
@@ -246,7 +354,9 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
     ) -> None:
         """Initialize the driver and fail clearly if Neo4j is unavailable."""
         if not uri:
-            raise ValueError("research_graph_uri is required when Research Graph is enabled.")
+            raise ValueError(
+                "research_graph_uri is required when Research Graph is enabled."
+            )
         self.uri = uri
         self.database = database
         self.driver = self._create_driver(
@@ -307,8 +417,14 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
             return list(result or [])
         session_factory = getattr(self.driver, "session", None)
         if not callable(session_factory):
-            raise ResearchGraphError("Configured Neo4j driver has no execute_query or session API.")
-        session = session_factory(database=self.database) if self.database else session_factory()
+            raise ResearchGraphError(
+                "Configured Neo4j driver has no execute_query or session API."
+            )
+        session = (
+            session_factory(database=self.database)
+            if self.database
+            else session_factory()
+        )
         try:
             result = session.run(query, **params)
             return list(result or [])
@@ -339,7 +455,9 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
                 "role": node.role,
                 "research_round": node.research_round,
                 "task_id": node.task_id,
-                "properties_json": json.dumps(node.properties, ensure_ascii=False, default=str),
+                "properties_json": json.dumps(
+                    node.properties, ensure_ascii=False, default=str
+                ),
                 "url": node.properties.get("url"),
                 "content_hash": node.properties.get("content_hash"),
             }
@@ -352,7 +470,9 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
                 "relation_type": edge.relation_type,
                 "source_id": edge.source_id,
                 "target_id": edge.target_id,
-                "properties_json": json.dumps(edge.properties, ensure_ascii=False, default=str),
+                "properties_json": json.dumps(
+                    edge.properties, ensure_ascii=False, default=str
+                ),
             }
             for edge in edges
         ]
@@ -375,7 +495,9 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
             # are selected only from the constant allow-list, never from raw
             # model text, so the Cypher identifier remains deterministic.
             for node_type in RESEARCH_NODE_TYPES:
-                typed_rows = [row for row in node_rows if row["entity_type"] == node_type]
+                typed_rows = [
+                    row for row in node_rows if row["entity_type"] == node_type
+                ]
                 if not typed_rows:
                     continue
                 self._execute(
@@ -433,7 +555,9 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
                         "id": node.node_id,
                         "run_id": node.run_id,
                         "entity_type": node.node_type,
-                        "properties_json": json.dumps(node.properties, ensure_ascii=False, default=str),
+                        "properties_json": json.dumps(
+                            node.properties, ensure_ascii=False, default=str
+                        ),
                     },
                 )
                 for node in nodes
@@ -446,12 +570,16 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
                     properties={
                         "run_id": edge.run_id,
                         "relation_type": edge.relation_type,
-                        "properties_json": json.dumps(edge.properties, ensure_ascii=False, default=str),
+                        "properties_json": json.dumps(
+                            edge.properties, ensure_ascii=False, default=str
+                        ),
                     },
                 )
                 for edge in edges
             ]
-            return Neo4jGraph(nodes=official_nodes, relationships=official_relationships)
+            return Neo4jGraph(
+                nodes=official_nodes, relationships=official_relationships
+            )
         except Exception:  # pragma: no cover - future GraphRAG API drift
             LOGGER.debug("neo4j-graphrag graph type conversion failed", exc_info=True)
             return None
@@ -463,20 +591,51 @@ class Neo4jResearchGraphStore(ResearchGraphStore):
         document: RawResearchDocument,
     ) -> bool:
         """Check all stored versions of one URL inside the current run."""
-        source_key = document.url or document.source_id
-        version = document.content_hash or content_hash(document.content)
+        return self.get_source_receipt(scope, document) is not None
+
+    def get_source_receipt(
+        self,
+        scope: ResearchGraphScope,
+        document: RawResearchDocument,
+    ) -> WriteReceipt | None:
+        """Read the canonical exact version and its scoped provenance in one query."""
         rows = self._execute(
             """
-            MATCH (source:ResearchNode {run_id: $run_id, entity_type: 'Source'})
-            WHERE coalesce(source.url, source.node_id) = $source_key
-            RETURN source.content_hash AS content_hash
+            MATCH (source:ResearchNode {run_id: $run_id, entity_type: 'Source', content_hash: $version})
+            WHERE CASE WHEN source.url IS NULL OR source.url = ''
+                       THEN source.node_id ELSE source.url END = $source_key
+            WITH source ORDER BY source.node_id LIMIT 1
+            MATCH path=(source)-[:ResearchEdge*0..3]-(related:ResearchNode)
+            WHERE all(node IN nodes(path) WHERE node.run_id = $run_id)
+              AND all(edge IN relationships(path) WHERE edge.run_id = $run_id)
+            RETURN source.node_id AS source_id,
+                   collect(DISTINCT {node_id: related.node_id, node_type: related.entity_type,
+                                    run_id: related.run_id,
+                                    properties: {url: related.url, content_hash: related.content_hash}}) AS nodes,
+                   collect(DISTINCT [edge IN relationships(path) |
+                       {edge_id: edge.edge_id, relation_type: edge.relation_type,
+                        run_id: edge.run_id, source_id: startNode(edge).node_id,
+                        target_id: endNode(edge).node_id}]) AS edge_paths
             """,
             run_id=scope.run_id,
-            source_key=source_key,
+            source_key=document.url or document.source_id,
+            version=document.content_hash or content_hash(document.content),
         )
-        return any(
-            (row.get("content_hash") if hasattr(row, "get") else None) == version
-            for row in rows
+        if not rows:
+            return None
+        row = dict(rows[0])
+        nodes = [GraphNode.model_validate(value) for value in row.get("nodes", [])]
+        edges = {
+            value["edge_id"]: GraphEdge.model_validate(value)
+            for path in row.get("edge_paths", [])
+            for value in path
+        }
+        return _persisted_source_receipt(
+            scope,
+            document,
+            str(row.get("source_id") or ""),
+            nodes,
+            edges.values(),
         )
 
     # 始终携带 run_id 查询节点与溯源关系，限制结果规模。
@@ -596,7 +755,11 @@ def create_research_graph_store(
     still carry ``run_id`` explicitly, so the cache cannot widen retrieval
     scope accidentally.
     """
-    backend = str(getattr(configurable, "research_graph_backend", "neo4j") or "neo4j").strip().lower()
+    backend = (
+        str(getattr(configurable, "research_graph_backend", "neo4j") or "neo4j")
+        .strip()
+        .lower()
+    )
     uri = getattr(configurable, "research_graph_uri", None)
     database = getattr(configurable, "research_graph_database", None)
     username = getattr(configurable, "research_graph_username", None)
@@ -622,7 +785,9 @@ def create_research_graph_store(
                 driver_factory=driver_factory,
             )
         else:
-            raise ValueError("research_graph_backend must be either 'neo4j' or 'memory'.")
+            raise ValueError(
+                "research_graph_backend must be either 'neo4j' or 'memory'."
+            )
         _STORE_CACHE[key] = store
         return store
 

@@ -68,7 +68,15 @@ def micro_compact_messages(
             and tool_call_id not in keep_ids
         ):
             receipt = receipts[tool_call_id]
-            receipt_text = receipt.as_text() if isinstance(receipt, WriteReceipt) else str(receipt)
+            if (
+                isinstance(receipt, WriteReceipt)
+                and not receipt.has_complete_node_references
+            ):
+                compacted.append(message)
+                continue
+            receipt_text = (
+                receipt.as_text() if isinstance(receipt, WriteReceipt) else str(receipt)
+            )
             old_text = str(getattr(message, "content", "") or "")
             replacement = _replace_message_content(message, receipt_text)
             compacted.append(replacement)
@@ -220,7 +228,9 @@ def _recent_step_start(messages: list[Any], recent_raw_steps: int) -> int | None
 
 
 # 将待摘要的历史消息整理为文本。
-def _render_messages(messages: Iterable[Any], *, max_each: int = 5000, max_total: int = 30_000) -> str:
+def _render_messages(
+    messages: Iterable[Any], *, max_each: int = 5000, max_total: int = 30_000
+) -> str:
     parts: list[str] = []
     total = 0
     for index, message in enumerate(messages, start=1):
