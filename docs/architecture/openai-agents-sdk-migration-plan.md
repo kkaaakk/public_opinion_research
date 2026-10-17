@@ -2,6 +2,8 @@
 
 准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-17 更新：**Phase 0 独立接入与可行性验证已实施，生产主链路仍未迁移**。当前实现、离线测试及限制见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)。
 
+后续同日已补做真实 DeepSeek 基础调用、非思考/思考模式 SDK 并行工具与 Producer/Consumer 验证，发现并修正窄边界问题；实测范围、用量和 557 项离线回归见验证记录第10节。该补验没有进入 Phase 1。
+
 准备分支以 `backup/pre-deerflow` 的 `41cbc134f748750ffbfc7c7dde65c7552ace6296` 为源码起点；Phase 0 从准备分支最新提交 `2c876398` 创建 `codex/openai-agents-phase0`。生产运行方式仍是 LangGraph 工作流、LangChain 模型/工具和项目自有 ReAct 循环。Phase 0 新增的 SDK Runner / Context Harness 仅显式调用，不替换原主链路。源码清理和当时未安装 SDK 的基线另见 [准备审计](../audits/pre-openai-sdk-cleanup.md)。
 
 ## 1. 迁移目标与证据基线

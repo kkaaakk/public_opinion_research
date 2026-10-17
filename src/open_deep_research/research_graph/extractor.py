@@ -633,15 +633,34 @@ def _build_extraction_prompt(
         }
         for document in documents
     ]
+    record_contract = {
+        "claims": [{"local_id": "claim-1", "statement": "A qualified factual statement from the supplied material."}],
+        "evidences": [{
+            "local_id": "evidence-1", "source_id": documents[0].source_id if documents else "supplied-source-id",
+            "statement": "The source statement, preserving its qualifications.",
+            "quote": "An exact excerpt from the source.", "supports_claim_ids": ["claim-1"],
+        }],
+        "findings": [{"local_id": "finding-1", "summary": "A bounded observation supported by the claim and evidence.",
+                      "claim_ids": ["claim-1"], "evidence_ids": ["evidence-1"]}],
+    }
     return (
         "You are the Research Graph extraction component, not the final analyst. "
         "Extract only semantic evidence from this batch of new research material. "
-        "Do not call tools, make a final risk judgment, schedule follow-up work, "
+        "Do not execute research tools, make a final risk judgment, schedule follow-up work, "
         "or invent URLs/source metadata. Every evidence item must reference one of "
         "the supplied source_id values. Keep provenance IDs as local refs; code will "
         "assign stable graph IDs. Distinguish facts, allegations, interpretations, "
         "recommendations, and uncertainty. Build one related graph delta with claims, "
-        "events, entities, source findings, uncertainties, and findings where supported.\n\n"
+        "events, entities, source findings, uncertainties, and findings where supported. "
+        "For every source containing a substantive factual statement, include source-bound "
+        "evidences records; events/entities alone do not preserve its evidence. Preserve "
+        "qualifications such as hypothetical or synthetic rather than treating them as real facts. "
+        "Use local_id for local references, supports_claim_ids for evidence-to-claim links, "
+        "and claim_ids/evidence_ids for findings. Do not substitute source IDs for evidence IDs "
+        "or rename these fields to local_ref/supports/claims/evidence. The example below defines "
+        "record field names only: replace its statements with supported source content.\n\n"
+        "Record field contract:\n"
+        f"{json.dumps(record_contract, ensure_ascii=False)}\n\n"
         f"Scope: {scope.model_dump_json()}\n"
         "Allowed source registry and material:\n"
         f"{json.dumps(payload, ensure_ascii=False)}\n\n"

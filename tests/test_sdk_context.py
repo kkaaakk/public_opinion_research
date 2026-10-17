@@ -1124,3 +1124,41 @@ def test_duplicate_url_compaction_never_publishes_unpersisted_source_ids(
         assert store.writes == 1
 
     asyncio.run(scenario())
+
+
+def test_context_update_failure_is_not_settled_by_url_dedup_alone(tmp_path):
+    class FailedContextModel(_GraphModel):
+        def with_structured_output(self, schema, include_raw=False):
+            if schema is WorkingContextDelta:
+                raise ValueError("fixture structured context update failed")
+            return super().with_structured_output(schema, include_raw=include_raw)
+
+    async def scenario():
+        workspace, store, _ = _workspace(tmp_path)
+        graph_model = FailedContextModel()
+        workspace.model_factory = lambda _name, _tokens: graph_model
+        harness = SDKContextHarness(workspace)
+
+        def second(call):
+            assert store.writes == 1
+            assert _outputs(call)["a"] == _payload("a")
+            return [assistant_message("done")]
+
+        model = ScriptedModel(
+            [
+                [function_call("web_search", {"label": "a"}, call_id="a")],
+                ModelStep.respond(second),
+            ]
+        )
+        with pytest.raises(ResearchGraphSettlementError):
+            await harness.run(
+                Agent(name="producer", model=model, tools=[_tool(harness)]),
+                "assignment",
+            )
+        assert store.writes == 1
+        assert len(graph_model.extractions) == 1
+        assert harness.last_settlement.pending_call_ids == ("a",)
+        assert not harness.results["a"].consumed
+        assert not workspace.receipts
+
+    asyncio.run(scenario())

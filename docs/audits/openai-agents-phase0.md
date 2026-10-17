@@ -2,6 +2,8 @@
 
 日期：2026-10-16 至 2026-10-17（Asia/Shanghai）。范围：SDK 基础接入和 Research Graph Context Harness 可行性验证。
 
+**2026-10-17 补充：已使用项目现有 DeepSeek 配置完成真实 API 验证，非思考/思考模式均通过，结果见第10节。第1–9节保留首次提交 `2a29be4d` 的离线交付基线；“未真实调用”等表述仅指当时的执行范围。**
+
 **结论：真实 SDK Runner 的模型→并行工具→模型循环能够通过公开输入过滤器复用现有 Producer / Consumer。生产入口保持原实现，未进入 Phase 1。**
 
 ## 1. Git 基线与审查边界
@@ -33,7 +35,7 @@
 | `tests/conftest.py` | 默认禁止 Agents SDK tracing；原 dotenv / LangSmith 隔离保留 |
 | `AGENTS.md`、迁移计划、本记录 | 更新已完成 Phase 0 和仍使用旧生产链路的事实，记录接口、验收与限制 |
 
-没有新增工作流引擎、通用 Harness 空包或第二套 Agent Loop。没有修改原 runtime、workflow、Research Graph、RAG、社媒、MCP 服务或 Web/API 生产源码。
+首次提交没有新增工作流引擎、通用 Harness 空包或第二套 Agent Loop，也没有修改原 runtime、workflow、Research Graph、RAG、社媒、MCP 服务或 Web/API 生产源码。后续真实补验涉及的窄修正单列在第10节。
 
 ## 3. SDK 版本、接口和依赖
 
@@ -80,7 +82,7 @@
 
 401、429、503 通过官方客户端/SDK 分别传播 AuthenticationError、RateLimitError、InternalServerError，测试客户端禁用重试以固定尝试数。两次成功模型请求的 usage 为 requests=2、input_tokens=24、output_tokens=6；调用方提供的客户端不被关闭，工厂拥有的客户端退出时关闭。
 
-**这些是离线协议兼容验证，不是各供应商线上可用性、模型质量或完整功能验收。** 未调用真实模型，未运行付费 benchmark。
+**本节记录首次离线协议兼容验证，不代表各供应商线上可用性、模型质量或完整功能验收。** 首次交付未调用真实模型；后续 DeepSeek 真实补验见第10节，其他供应商仍未做线上验证，也未运行付费 benchmark。
 
 ## 5. 实际生命周期与批次边界
 
@@ -184,7 +186,7 @@ Mypy 和 pip check 当前返回非零，分别对应上述原有 35 项 / 1 项�
 .venv/Scripts/python.exe scripts/sdk_model_smoke.py --enable-real-api --model 'provider:model'
 ```
 
-本次没有执行此命令；也未验证真实 Neo4j / MCP transport / 生产服务的 SDK E2E。
+首次交付没有执行此命令。后续真实 DeepSeek 调用见第10节；真实 Neo4j / MCP transport / 生产服务的 SDK E2E 仍未验证。
 
 ## 9. 已知限制与 Phase 1 可复用接口
 
@@ -202,3 +204,52 @@ Mypy 和 pip check 当前返回非零，分别对应上述原有 35 项 / 1 项�
 - 模拟 HTTP 不证明真实供应商对所有模型、structured output、托管工具、reasoning 和错误重试的完整兼容性；未接入的供应商显式列为未验证。
 
 下一阶段可在这些公开接缝上迁移一个业务角色及其预算/输出合同，再按用户要求推进 Python 确定性工作流；本次没有提前执行。提交说明为 `feat: validate OpenAI Agents SDK Phase 0 context harness`，实际 SHA 和最终分支状态以交付时 `git log -1` / `git status` 为准。本次只创建本地提交，未推送、未合并 main。
+
+## 10. 2026-10-17 真实 DeepSeek 补验
+
+用户指出实际验证请求已包含真实 API 测试，随后按该授权启用真实调用。复用根 `.env` 的 `DEEPSEEK_API_KEY` / `DEEPSEEK_API_BASE` 和现有 `deepseek:deepseek-flash`，实际服务返回 HTTP 200；没有要求重新提供 Key，没有打印或提交凭据。先前 `2a29be4d` 已按用户要求推送到同名 GitHub 分支，本次补验在该分支追加。
+
+### 10.1 实际运行范围与结果
+
+SDK 主模型、GraphExtractor 的抽取模型和 ContextManager 的更新模型均调用真实 DeepSeek。工具只返回两份标为 synthetic 的本地固定材料，Graph 使用 InMemoryResearchGraphStore；这验证了 SDK 与 Graph 的实际模型/协议/策略链路，不代表真实网页检索、社媒采集或 Neo4j 服务验收。
+
+| 最终通过的场景 | 真实模型调用 | 输入 / 输出 tokens | 结果 |
+| --- | ---: | ---: | --- |
+| 基础 SDK/provider smoke | 1 | 14 / 7 | 严格得到 SDK_SMOKE_OK |
+| 非思考 Producer → Consumer | SDK Producer 2 + Graph 2 + SDK Consumer 1 = 5 | 20,107 / 1,918 | 同轮两工具并行、统一批次、第二轮更新上下文、Consumer 首轮读取、引用校验、退出清算通过 |
+| 思考 Producer → Consumer | SDK Producer 2 + Graph 2 + SDK Consumer 1 = 5 | 17,880 / 2,112 | 同上；真实 SDK 多轮思考工具调用成功，SDK usage 记录 258 reasoning tokens |
+
+最终通过的三轮合计 **11 次模型调用，38,001 input tokens / 4,037 output tokens / 42,038 total tokens**。这是最终通过轮次的统计，**不包含前面调试失败及重跑的额外用量**；reasoning tokens 已包含在 output tokens 中，没有重复累加或推算货币金额。
+
+非思考轮次实际产生 2 Source、2 Evidence、3 Claim、1 Finding；思考轮次产生 2 Source、2 Evidence、2 Claim、1 Finding。两轮均有 EXTRACTED_FROM、SUPPORTS、DERIVED_FROM、SUPPORTED_BY，工具原文只在写入和 ContextManager 成功后替换为回执。第二次 SDK 模型请求中均恰好有两个压缩输出、一个上下文块、已有 Evidence 和更新后的 Working Context；Consumer 第一次请求已经包含 Evidence，且不写入或压缩 Graph。
+
+思考模式使用 SDK 官方 Chat Completions Model，工具前后两次模型调用均成功；没有自建 reasoning 回放或 Agent Loop。DeepSeek 要求携带 tools 的后续请求保留 reasoning_content，且思考模式不支持 required/named tool_choice；本验证使用 auto 工具选择及 SDK 原生回放。[DeepSeek 思考与工具调用文档](https://api-docs.deepseek.com/guides/thinking_mode/)、[Chat Completions 接口](https://api-docs.deepseek.com/api/create-chat-completion/)
+
+### 10.2 真实补验发现并处理的问题
+
+1. **基础冒烟只打印结果，不能证明输出符合要求。** 原 128-token smoke 在默认思考模式下收到带额外标记的结果，却未报错。现对 DeepSeek 基础文本 smoke 显式关闭思考、设置 256 上限，并严格检查最终输出等于 SDK_SMOKE_OK；补充正确/错误响应的离线回归。
+2. **测试预算收缩造成结构化更新失败。** 最初临时使用抽取 2048 / 上下文 1024，上下文模型返回无 parsed result；恢复项目现有 4096 / 2048 后跑通。成功轮次的 ContextManager 输出曾为 1074 tokens，说明不能把 1024 当作可靠上限；早期失败未捕获 finish_reason，故没有把其具体终止原因伪报为已证实。新 runner 记录真实 finish_reason 和 usage。
+3. **上下文失败后的去重确认可能假成功。** 真实错误暴露出“图已写入、ContextManager 未完成；后续 URL 去重分支不重建上下文却确认批次”的情况。先用确定性离线测试复现 DID NOT RAISE，再在 SDK adapter 记录需要完成上下文更新的调用；未观察到成功更新时保留 pending，并在退出时报告 ResearchGraphSettlementError。没有通过删断言或把原文压掉制造通过。
+4. **抽取字段合同不明确。** 真实模型曾只返回 entities/events，或用 local_ref/supports 等字段，导致 Evidence 或引用关系缺失。只补充 GraphExtractor 提示词的准确字段合同及最小示例，并说明合格事实材料需要 source-bound evidence；正常化、稳定 ID、Store 和核心图算法未重写。新增测试将提示词示例交给既有 normalizer/materialize，验证四类溯源关系。线上断言进一步要求实际关系链完整及模型引用均已存在。
+
+调整涉及：新增 `scripts/sdk_context_smoke.py`；修改基础 smoke、SDK 失败清算保护、GraphExtractor 的提示词；三个测试文件补回归。共享抽取提示词也会被旧链路复用，**Web/API 默认入口和四角色装配仍未切换到 SDK**。
+
+### 10.3 回归、复现与限制
+
+补验后全量离线回归 **557 passed、6 deselected、154 warnings，80.80 秒，退出码 0**。定向 SDK/Graph 回归 59 passed。Ruff 的原 CI E,F,I、新 SDK/脚本完整配置 Ruff、5 个文件格式检查和编译通过。Mypy 仍为 35 errors / 16 files / 103 source files，错误消息集合无新增；依赖未变，原 markitdown-mcp/MCP 冲突仍保留。
+
+离线检查仍禁用 dotenv/tracing 并开启 socket guard；以下真实命令在单独终端显式启用，不混入 pytest：
+
+```powershell
+$env:PYTHON_DOTENV_DISABLED = '0'
+$env:LANGSMITH_TRACING = 'false'
+$env:LANGCHAIN_TRACING_V2 = 'false'
+$env:OPENAI_AGENTS_DISABLE_TRACING = '1'
+.venv/Scripts/python.exe scripts/sdk_model_smoke.py --enable-real-api --model deepseek:deepseek-flash
+.venv/Scripts/python.exe scripts/sdk_context_smoke.py --enable-real-api --model deepseek:deepseek-flash --output .tmp/agents-phase0/real-sdk-context-disabled-final.json
+.venv/Scripts/python.exe scripts/sdk_context_smoke.py --enable-real-api --model deepseek:deepseek-flash --thinking enabled --output .tmp/agents-phase0/real-sdk-context-thinking-final.json
+```
+
+真实通过结果、失败轮次、diagnostic JSON、合成工具 transcript 与用量留在忽略的 `.tmp/agents-phase0/`，没有提交运行输出。每次使用新的研究 Run ID，不连接生产数据库；两个 live runner 都要求显式 opt-in。诊断只记录结构化 Graph 输出和计数，不保存模型 reasoning 文本。
+
+仍未完成：其他供应商真实调用、真实数据库/MCP transport、生产 Web/API、streaming/resume、跨角色统一预算和耐久执行。ContextManager 已失败且只剩 URL 缓存命中的批次现在会明确保持未结算，调用方仍需重建/补偿上下文；没有借 Phase 0 实现一套通用恢复引擎。真实模型输出质量仍具有随机性，本补验不等于长期质量基准或已满足所有业务合同。

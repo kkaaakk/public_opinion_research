@@ -8,6 +8,7 @@ import logging
 
 from agents import Agent, ModelSettings, RunConfig, Runner
 
+from open_deep_research.models.factory import parse_model_ref
 from open_deep_research.models.sdk import sdk_model
 
 LOGGER = logging.getLogger(__name__)
@@ -17,12 +18,15 @@ async def _run(args: argparse.Namespace) -> None:
     from dotenv import load_dotenv
 
     load_dotenv()
+    settings = ModelSettings(max_tokens=256)
+    if parse_model_ref(args.model).provider == "deepseek":
+        settings.extra_body = {"thinking": {"type": "disabled"}}
     async with sdk_model(args.model, api=args.api) as model:
         result = await Runner.run(
             Agent(
                 name="sdk-provider-smoke",
                 model=model,
-                model_settings=ModelSettings(max_tokens=128),
+                model_settings=settings,
             ),
             "Reply with exactly SDK_SMOKE_OK.",
             max_turns=1,
@@ -30,8 +34,15 @@ async def _run(args: argparse.Namespace) -> None:
                 tracing_disabled=True, trace_include_sensitive_data=False
             ),
         )
+        if str(result.final_output).strip() != "SDK_SMOKE_OK":
+            raise RuntimeError("Provider smoke returned an unexpected final output.")
         LOGGER.info("%s", result.final_output)
         LOGGER.info("requests=%s", result.context_wrapper.usage.requests)
+        LOGGER.info(
+            "input_tokens=%s output_tokens=%s",
+            result.context_wrapper.usage.input_tokens,
+            result.context_wrapper.usage.output_tokens,
+        )
 
 
 def main() -> None:

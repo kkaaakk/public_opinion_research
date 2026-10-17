@@ -4,11 +4,14 @@ import asyncio
 import importlib.util
 import json
 import sys
+from argparse import Namespace
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx2
 import pytest
 from agents import Agent, ModelSettings, RunConfig, Runner, function_tool
+from agents.testing import ScriptedModel, assistant_message
 from openai import AsyncOpenAI, AuthenticationError, InternalServerError, RateLimitError
 
 import open_deep_research.models.sdk as sdk_models
@@ -331,22 +334,51 @@ def test_sdk_credentials_and_explicit_endpoint_preserve_existing_resolution(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "filename, entrypoint",
+    [("sdk_model_smoke.py", "_run"), ("sdk_context_smoke.py", "run_smoke")],
+)
 def test_real_api_smoke_requires_explicit_opt_in_before_any_invocation(
-    monkeypatch, capsys
+    monkeypatch, capsys, filename, entrypoint
 ):
-    path = Path(__file__).resolve().parents[1] / "scripts" / "sdk_model_smoke.py"
+    path = Path(__file__).resolve().parents[1] / "scripts" / filename
     spec = importlib.util.spec_from_file_location("sdk_smoke_fixture", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(
-        sys, "argv", ["sdk_model_smoke.py", "--model", "openai:fixture"]
-    )
+    monkeypatch.setattr(sys, "argv", [filename, "--model", "openai:fixture"])
 
     async def forbidden(_args):
         raise AssertionError("Smoke made a real invocation without explicit opt-in")
 
-    monkeypatch.setattr(module, "_run", forbidden)
+    monkeypatch.setattr(module, entrypoint, forbidden)
     with pytest.raises(SystemExit) as failure:
         module.main()
     assert failure.value.code == 2
     assert "Real API smoke is disabled" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("output", ["SDK_SMOKE_OK", "SDK_SMOKE_OK truncated"])
+def test_provider_smoke_checks_final_output_and_bounds_deepseek_thinking(
+    monkeypatch, output
+):
+    path = Path(__file__).resolve().parents[1] / "scripts" / "sdk_model_smoke.py"
+    spec = importlib.util.spec_from_file_location("sdk_smoke_response_fixture", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    model = ScriptedModel([[assistant_message(output)]])
+
+    @asynccontextmanager
+    async def fixture_model(*_args, **_kwargs):
+        yield model
+
+    monkeypatch.setattr(module, "sdk_model", fixture_model)
+    args = Namespace(model="deepseek:fixture", api="chat_completions")
+    if output == "SDK_SMOKE_OK":
+        asyncio.run(module._run(args))
+    else:
+        with pytest.raises(RuntimeError, match="unexpected final output"):
+            asyncio.run(module._run(args))
+    assert model.calls[0].model_settings.extra_body == {
+        "thinking": {"type": "disabled"}
+    }
+    assert model.calls[0].model_settings.max_tokens == 256

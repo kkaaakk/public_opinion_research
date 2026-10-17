@@ -27,6 +27,7 @@ from open_deep_research.research_graph import (
     micro_compact_messages,
     normalize_extraction_output,
 )
+from open_deep_research.research_graph.extractor import _build_extraction_prompt
 from open_deep_research.research_graph.models import RawResearchDocument
 from open_deep_research.research_graph.schema import content_hash
 from open_deep_research.state import agents_reducer
@@ -100,6 +101,18 @@ def test_provenance_materializes_finding_claim_evidence_source_edges() -> None:
     assert any(kind == "SUPPORTS" for kind, _, _ in edges)
     assert any(kind == "DERIVED_FROM" for kind, _, _ in edges)
     assert any(kind == "SUPPORTED_BY" for kind, _, _ in edges)
+
+
+def test_extraction_prompt_record_contract_materializes_full_provenance() -> None:
+    document = _document()
+    prompt = _build_extraction_prompt([document], _scope())
+    record_text = prompt.split("Record field contract:\n", 1)[1]
+    records, _ = json.JSONDecoder().raw_decode(record_text)
+    delta = normalize_extraction_output(GraphExtractionOutput.model_validate(records), [document], scope=_scope())
+    _, edges = delta.materialize()
+    relations = {edge.relation_type for edge in edges}
+    assert {"EXTRACTED_FROM", "SUPPORTS", "DERIVED_FROM", "SUPPORTED_BY"}.issubset(relations)
+    assert delta.evidences[0].source_id == document.source_id
 
 
 # 验证不同 run_id 的图检索相互隔离。

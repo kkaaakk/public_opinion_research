@@ -120,6 +120,7 @@ class SDKContextHarness(RunHooks):
         self.budget_usage: dict[str, Any] = {}
         self.last_settlement: BatchSettlement | None = None
         self._compacted: dict[str, str] = {}
+        self._needs_context_update: set[str] = set()
         self._context_text = ""
         self._owned_contexts: set[str] = set()
         self._active: set[asyncio.Task[Any]] = set()
@@ -426,6 +427,10 @@ class SDKContextHarness(RunHooks):
                 return False
             self.events.append(("batch_start", str(len(evidence))))
             previous_receipts = dict(self.workspace.receipts)
+            context_calls_before = int(
+                self.workspace.metrics.as_dict().get("context_manager_calls", 0) or 0
+            )
+            call_ids = {result.tool_call_id for result in evidence}
             try:
                 outcome = await self.workspace.ingest(
                     self._message_view(),
@@ -441,14 +446,47 @@ class SDKContextHarness(RunHooks):
                     ],
                 )
                 if not outcome.succeeded:
+                    if (
+                        int(
+                            self.workspace.metrics.as_dict().get(
+                                "context_manager_calls", 0
+                            )
+                            or 0
+                        )
+                        <= context_calls_before
+                    ):
+                        self._needs_context_update.update(call_ids)
                     self.workspace.receipts.clear()
                     self.workspace.receipts.update(previous_receipts)
                     self.events.append(("batch_failed", str(len(evidence))))
                     return False
             except BaseException:
+                if (
+                    int(
+                        self.workspace.metrics.as_dict().get("context_manager_calls", 0)
+                        or 0
+                    )
+                    <= context_calls_before
+                ):
+                    self._needs_context_update.update(call_ids)
                 self.workspace.receipts.clear()
                 self.workspace.receipts.update(previous_receipts)
                 raise
+            if (
+                call_ids & self._needs_context_update
+                and int(
+                    self.workspace.metrics.as_dict().get("context_manager_calls", 0)
+                    or 0
+                )
+                <= context_calls_before
+            ):
+                # A failed context update cannot be acknowledged by the legacy
+                # URL-cache fast path, which does not rebuild Working Context.
+                self.workspace.receipts.clear()
+                self.workspace.receipts.update(previous_receipts)
+                self.events.append(("batch_recovery_incomplete", str(len(evidence))))
+                return False
+            self._needs_context_update.difference_update(call_ids)
             self.budget_usage = merge_budget_usage(
                 self.budget_usage, outcome.budget_usage
             )
