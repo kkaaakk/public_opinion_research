@@ -34,6 +34,7 @@ async def sdk_model(
     base_url: str | None = None,
     api: SDKModelAPI | None = None,
     client: AsyncOpenAI | None = None,
+    max_retries: int | None = None,
 ) -> AsyncIterator[Model]:
     """Yield an official Responses/Chat Completions model and close owned clients.
 
@@ -84,5 +85,8 @@ async def sdk_model(
             raise ModelConfigurationError(
                 "Model base URL must be an absolute http(s) URL."
             )
-    async with AsyncOpenAI(api_key=credential, base_url=endpoint) as owned_client:
+    client_options: dict[str, Any] = {"api_key": credential, "base_url": endpoint}
+    if max_retries is not None:
+        client_options["max_retries"] = max_retries
+    async with AsyncOpenAI(**client_options) as owned_client:
         yield model_class(model=ref.model, openai_client=owned_client)

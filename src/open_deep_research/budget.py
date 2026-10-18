@@ -1,8 +1,8 @@
 # 统一统计模型、工具、检索和令牌消耗，并在预算不足时控制降级与上下文裁剪。
 """Budget policy and enforcement for bounded deep research runs.
 
-LangChain owns the model-call facts: ``AIMessage.usage_metadata`` for tokens and the
-``on_chat_model_start`` callback lifecycle for real chat-model attempts.  Token
+LangChain services use ``AIMessage.usage_metadata`` and ``on_chat_model_start``;
+SDK business roles use official response Usage and RunHooks model starts. Token
 aggregation goes through LangChain's ``add_usage``; this module only adds the
 project-owned policy layer: model/tool/search limits, token budgets, warnings,
 degradation reasons, and per-node budget deltas for the LangGraph reducers.
@@ -454,6 +454,28 @@ def budget_from_native_search() -> dict[str, Any]:
     usage = empty_budget_usage()
     usage["tool_calls"] = 1
     usage["search_calls"] = 1
+    return usage
+
+
+def budget_from_sdk_usage(sdk_usage: Any) -> dict[str, Any]:
+    """Project official SDK response tokens without recounting model starts.
+
+    RunHooks count attempts, including failed/cancelled requests. Only completed
+    response usage supplies tokens; RunResult's cumulative usage is never added
+    a second time. Missing provider usage remains zero, never an estimate.
+    """
+    usage = empty_budget_usage()
+    for field in TOKEN_FIELDS:
+        usage[field] = int(getattr(sdk_usage, field, 0) or 0)
+    input_details = getattr(sdk_usage, "input_tokens_details", None)
+    output_details = getattr(sdk_usage, "output_tokens_details", None)
+    usage["input_token_details"] = {
+        "cache_read": int(getattr(input_details, "cached_tokens", 0) or 0),
+        "cache_creation": int(getattr(input_details, "cache_write_tokens", 0) or 0),
+    }
+    usage["output_token_details"] = {
+        "reasoning": int(getattr(output_details, "reasoning_tokens", 0) or 0),
+    }
     return usage
 
 

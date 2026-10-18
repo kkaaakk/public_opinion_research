@@ -93,8 +93,8 @@ class SDKContextHarness(RunHooks):
         settlement_timeout: float = 30.0,
     ) -> None:
         """Configure a run-local collector; zero consumer refresh means first call only."""
-        if not workspace.strategy.graph_enabled:
-            raise ValueError("SDKContextHarness requires a graph Producer or Consumer.")
+        # Standard mode reuses the same execution collector and exit drain, but
+        # neither retrieves graph context nor submits evidence.
         if workspace.run_id == stable_id("RUN", workspace.role):
             raise ValueError(
                 "Supply an explicit research run_id when creating the workspace."
@@ -224,6 +224,8 @@ class SDKContextHarness(RunHooks):
         invoke: Callable[[ToolContext[Any], str], Awaitable[Any]],
         is_success: Callable[[Any], bool] | None = None,
         errors_as_results: bool = True,
+        strict_json_schema: bool = True,
+        error_formatter: Callable[[ToolContext[Any], Exception], str] | None = None,
     ) -> FunctionTool:
         """Observe a raw invoker before error formatting can obscure its status.
 
@@ -247,8 +249,19 @@ class SDKContextHarness(RunHooks):
                 self._record(context, "cancelled", None, error_type="CancelledError")
                 raise
             except Exception as exc:
-                output = default_tool_error_function(context, exc)
-                self._record(context, "failed", output, error_type=type(exc).__name__)
+                output = (
+                    error_formatter(context, exc)
+                    if error_formatter is not None
+                    else default_tool_error_function(context, exc)
+                )
+                self._record(
+                    context,
+                    "cancelled"
+                    if isinstance(exc, MCPToolCancellationError)
+                    else "failed",
+                    output,
+                    error_type=type(exc).__name__,
+                )
                 if not errors_as_results:
                     raise
                 return output
@@ -264,6 +277,7 @@ class SDKContextHarness(RunHooks):
             description=description,
             params_json_schema=copy.deepcopy(params_json_schema),
             on_invoke_tool=observed,
+            strict_json_schema=strict_json_schema,
         )
 
     def mcp_result(self, data: MCPToolCustomDataContext) -> dict[str, str]:
@@ -539,6 +553,9 @@ class SDKContextHarness(RunHooks):
             )
         self.events.append(("input_filter", str(self.model_calls + 1)))
         updated = await self._flush()
+        if not self.workspace.strategy.graph_enabled:
+            self.model_calls += 1
+            return data.model_data
         refresh = bool(
             self.model_calls
             and self.consumer_refresh_every

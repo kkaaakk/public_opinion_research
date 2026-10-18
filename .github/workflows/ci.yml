@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      - codex/openai-agents-migration
+      - 'codex/openai-agents-*'
 
 permissions:
   contents: read

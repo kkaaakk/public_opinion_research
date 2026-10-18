@@ -169,6 +169,10 @@ class Configuration(BaseModel):
             }
         }
     )
+    business_agent_runtime: str = Field(
+        default="legacy",
+        description="Business role runtime: legacy or openai_agents. Workflow and Web defaults remain legacy.",
+    )
     max_research_rounds: int = Field(
         default=2,
         metadata={
@@ -1544,6 +1548,8 @@ class Configuration(BaseModel):
     def validate_rag_chunk_settings(self) -> "Configuration":
         """Validate local RAG chunking and budget settings."""
         _apply_rag_path_compatibility(self)
+        if self.business_agent_runtime not in {"legacy", "openai_agents"}:
+            raise ValueError("business_agent_runtime must be legacy or openai_agents.")
         if self.context_strategy.strip().lower() not in {
             "auto",
             "standard",

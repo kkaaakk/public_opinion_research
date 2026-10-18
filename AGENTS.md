@@ -5,13 +5,22 @@
 The preparation baseline is `codex/openai-agents-migration` at
 `2c876398639a11c9b2a66232419da8374e187e83`, descended from `backup/pre-deerflow`
 / `41cbc134f748750ffbfc7c7dde65c7552ace6296`.
-The independent `codex/openai-agents-phase0` branch installs `openai-agents==0.24.0`
-and validates an opt-in adapter in `runtime/sdk_context.py` and `models/sdk.py`.
-The application still runs its existing LangGraph/LangChain implementation;
-production Web/API defaults and the four business agents have not been migrated.
+Phase 0 installs `openai-agents==0.24.0` and validates the adapter in
+`runtime/sdk_context.py` and `models/sdk.py`. The Phase 1 branch
+`codex/openai-agents-phase1` starts from merged Phase 0 at `7a72aadc`.
+All four business roles now have an executable, offline-tested SDK Agent/Runner
+path in `runtime/sdk_runtime.py`, selected with
+`configurable.business_agent_runtime="openai_agents"` (or the corresponding
+`BUSINESS_AGENT_RUNTIME` environment variable). The default remains `legacy`.
+LangGraph still owns parallel research, join, review/gap loops, risk/strategy
+ordering and state reducers; Web/API entrypoints are unchanged.
 The selected target is OpenAI Agents SDK + deterministic Python workflow + the
 custom Research Graph Context Harness, without DBOS or LangGraph orchestration.
-Do not enter Phase 1 or replace production entrypoints as part of Phase 0.
+Keep the agreed phases: 0 SDK feasibility; 1 four-role Runtime; 2 full Research
+Graph Context Harness integration; 3 deterministic Python Workflow; 4 Web/SSE/
+Session integration; 5 old Runtime retirement and dependency cleanup. Do not
+advance later phases as incidental cleanup. Phase 1 reuses Phase 0 collection,
+input filtering and exit settlement, but does not complete Phase 2.
 DeerFlow is retired. Its local environments, Docker deployment, branch
 `codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's
 request. The original opinion project backup and `v1-pre-deerflow` remain.
@@ -20,6 +29,11 @@ Read [the preparation audit](docs/audits/pre-openai-sdk-cleanup.md) and
 [the migration plan](docs/architecture/openai-agents-sdk-migration-plan.md)
 before changing runtime boundaries. Read [the Phase 0 results](docs/audits/openai-agents-phase0.md)
 for tested SDK interfaces, tool coverage and remaining limitations.
+Read [the Phase 1 results](docs/audits/openai-agents-phase1.md) for Runtime
+selection, budget compatibility and explicit unsupported SDK paths. SDK input
+uses native dictionaries and official Models; LangChain tool/report/Graph
+services remain behind the business boundary. Do not add another agent loop or
+silently fall back to legacy after an SDK failure.
 The applicable findings from the historical Agent Server audit are preserved
 in the migration plan, which links to the original Git evidence.
 
