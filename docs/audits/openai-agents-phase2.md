@@ -183,4 +183,15 @@ Mypy 和 pip check 仍按上述已知问题返回非零。原 import smoke 的 1
 
 ## 10. Git 与 GitHub 验收
 
-实现提交、PR 和最终 CI 的实际固定链接将在远程 Actions 完成后补记于此；不以本地通过代替 GitHub 结果。本分支继续使用既有 `.github/workflows/ci.yml` 的 `codex/openai-agents-*` push 与 PR 触发规则，`quality` / `tests` 未降低门禁。
+实现提交：**[`8625c38e068285a91e1d82e1b43f4cf6d579b93e`](https://github.com/kkaaakk/public_opinion_research/commit/8625c38e068285a91e1d82e1b43f4cf6d579b93e)**，已推送 `codex/openai-agents-phase2`。已创建面向 main 的 **[PR #22](https://github.com/kkaaakk/public_opinion_research/pull/22)** 并关联当前任务，保持 OPEN，没有自动合并。
+
+实现提交真实 push 触发的 **[CI 39127589703](https://github.com/kkaaakk/public_opinion_research/actions/runs/39127589703)** 已完成，结论 **success**：
+
+| Job | 真实远程验证 | 固定链接 |
+| --- | --- | --- |
+| quality | 根锁安装、原 Ruff E/F/I、compileall、公共入口导入全部成功；46s | [117675876300](https://github.com/kkaaakk/public_opinion_research/actions/runs/39127589703/job/117675876300) |
+| tests | Linux / Python 3.11.17，**713 passed、6 deselected、154 warnings，52.25s**；Job 1m31s，退出码 0 | [117675876458](https://github.com/kkaaakk/public_opinion_research/actions/runs/39127589703/job/117675876458) |
+
+读取真实 Job 日志核实上述数字；首次远程代码运行即通过，没有 CI 失败补丁或降低门禁。继续使用既有 `.github/workflows/ci.yml` 的 `codex/openai-agents-*` push 与 PR 触发规则，本次没有修改 CI 文件。现有 Node.js Actions 弃用及 ubuntu-latest 镜像迁移通知为非阻断提示，未捆绑升级 Actions。
+
+本节作为纯审计提交补记代码 SHA、PR 和已通过的固定 CI。审计提交也由原规则触发 CI，交付前继续检查最终 HEAD 的 quality/tests；最终审计 SHA 和对应最新 CI 固定链接在交付回复中列出，可从[本分支 CI 记录](https://github.com/kkaaakk/public_opinion_research/actions/workflows/ci.yml?query=branch%3Acodex%2Fopenai-agents-phase2)追溯。Mypy/MCP 已知问题未被改称通过，真实供应商/生产服务范围继续遵守第7节。
