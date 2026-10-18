@@ -1,6 +1,6 @@
 """Execute business AgentSpecs with the official SDK, retaining business results.
 
-Only Runner owns the model/tool loop. The hooks add business admission and SDK
+Only Runner owns the model/tool loop. The harness adds business admission and SDK
 usage to the Phase 0 collector; report services and LangGraph stay in place.
 """
 
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 from agents import Agent, Model, ModelSettings, RunConfig
@@ -32,8 +33,10 @@ from open_deep_research.budget import (
     is_over_budget,
     merge_budget_usage,
 )
+from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
 from open_deep_research.mcp.domain_filter import get_tool_domain
+from open_deep_research.research_graph.workspace import ResearchWorkspace
 from open_deep_research.runtime.agent_runtime import AgentRuntime, AgentRuntimeResult
 from open_deep_research.runtime.sdk_context import SDKContextHarness
 
@@ -60,40 +63,55 @@ def _text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
-class _BusinessRunHooks(SDKContextHarness):
-    """Add role budgets to the existing collector through public SDK hooks."""
+@dataclass
+class _RunBudget:
+    """Share only budget data between the Runtime, tools and Context Harness."""
 
-    def __init__(self, runtime: SDKAgentRuntime) -> None:
-        # Match the existing Producer's source admission: every successfully
-        # executed role tool except the two research control tools. Phase 0's
-        # standalone default remains web_search/rag_search.
-        super().__init__(
-            runtime.workspace,
-            evidence_tools=frozenset(
-                tool.name
-                for tool in runtime.tools
-                if isinstance(tool, BaseTool)
-                and tool.name not in {"think_tool", "ResearchComplete"}
-            ),
+    initial: dict[str, Any]
+    delta: dict[str, Any] = field(default_factory=dict)
+    nested: dict[str, Any] = field(default_factory=dict)
+
+    def projected(self) -> dict[str, Any]:
+        """Project cumulative admission usage without submitting the baseline."""
+        return merge_budget_usage(
+            self.initial, merge_budget_usage(self.delta, self.nested)
         )
-        self.runtime = runtime
+
+    def add(self, usage: Any) -> None:
+        """Merge one actual usage delta with the existing accounting rules."""
+        self.delta = merge_budget_usage(self.delta, usage)
+
+
+class _BusinessAgentHarness(SDKContextHarness):
+    """Apply business budgets while retaining the existing Context Harness lifecycle."""
+
+    def __init__(
+        self,
+        *,
+        workspace: ResearchWorkspace,
+        config: Configuration,
+        budget: _RunBudget,
+        evidence_tools: frozenset[str],
+    ) -> None:
+        super().__init__(workspace, evidence_tools=evidence_tools)
+        self.config = config
+        self.run_budget = budget
         self.items: list[Any] = []
 
     async def filter_model_input(self, data: Any) -> Any:
         self.items = list(data.model_data.input)
         filtered = await super().filter_model_input(data)
-        runtime = self.runtime
         if not can_spend_model_call(
-            runtime.config, runtime.projected_budget(), reserve_final_report_call=True
-        ) or is_over_budget(runtime.config, runtime.projected_budget()):
+            self.config, self.run_budget.projected(), reserve_final_report_call=True
+        ) or is_over_budget(self.config, self.run_budget.projected()):
             raise _ReasoningStopped(
                 "Business budget stopped SDK reasoning before another request."
             )
         # Use the actual SDK input, instructions and registered schemas. This is
         # admission estimation only; reported tokens always come from SDK usage.
         capacity = (
-            runtime.config.research_graph_context_capacity_tokens
-            or get_model_token_limit(runtime.config.research_model)
+            self.config.research_graph_context_capacity_tokens
+            or get_model_token_limit(self.config.research_model)
         )
         estimated = estimate_text_tokens(
             json.dumps(
@@ -108,7 +126,7 @@ class _BusinessRunHooks(SDKContextHarness):
         )
         if (
             context_pressure_ratio(estimated, capacity)
-            >= runtime.config.context_compaction_threshold_ratio
+            >= self.config.context_compaction_threshold_ratio
         ):
             raise SDKContextLimitExceeded(
                 "SDK input requires rolling compaction, which is reserved for Phase 2; "
@@ -120,14 +138,12 @@ class _BusinessRunHooks(SDKContextHarness):
         self, context: Any, agent: Any, system_prompt: Any, input_items: Any
     ) -> None:
         await super().on_llm_start(context, agent, system_prompt, input_items)
-        self.runtime.delta = merge_budget_usage(self.runtime.delta, {"model_calls": 1})
+        self.run_budget.add({"model_calls": 1})
 
     async def on_llm_end(self, context: Any, agent: Any, response: Any) -> None:
         await super().on_llm_end(context, agent, response)
         self.items.extend(response.to_input_items())
-        self.runtime.delta = merge_budget_usage(
-            self.runtime.delta, budget_from_sdk_usage(response.usage)
-        )
+        self.run_budget.add(budget_from_sdk_usage(response.usage))
 
 
 class SDKAgentRuntime(AgentRuntime):
@@ -137,15 +153,12 @@ class SDKAgentRuntime(AgentRuntime):
     memory helpers. No legacy model/tool loop is called from this path.
     """
 
-    delta: dict[str, Any]
-    nested_usage: dict[str, Any]
-    hooks: _BusinessRunHooks
+    run_budget: _RunBudget
+    harness: _BusinessAgentHarness
 
     def projected_budget(self) -> dict[str, Any]:
         """Return cumulative business usage for admission, without submitting it."""
-        return merge_budget_usage(
-            self.initial_budget, merge_budget_usage(self.delta, self.nested_usage)
-        )
+        return self.run_budget.projected()
 
     def _register_tool(self, tool: BaseTool) -> Any:
         name = tool.name
@@ -158,19 +171,24 @@ class SDKAgentRuntime(AgentRuntime):
         validator_class = validator_for(schema)
         validator_class.check_schema(schema)
         validator = validator_class(schema)
+        # The harness retains these invokers through its SDK Agent. Capture only
+        # execution dependencies, never the Runtime or one of its bound methods.
+        allowed_domains = self.spec.allowed_domains
+        role = self.role
+        config = self.config
+        runtime_config = self.runtime_config
+        budget = self.run_budget
+        tool_tasks = self._tool_tasks
 
         async def invoke(context: ToolContext[Any], arguments: str) -> str:
             # Recheck execution permission rather than relying only on visibility.
-            if (
-                get_tool_domain(tool) not in self.spec.allowed_domains
-                or tool.name != name
-            ):
+            if get_tool_domain(tool) not in allowed_domains or tool.name != name:
                 raise _ToolRejected(
-                    f"Tool {name!r} is no longer authorized for {self.role}."
+                    f"Tool {name!r} is no longer authorized for {role}."
                 )
             # A repeated native call ID shares its original result, including an
             # in-flight execution. Different IDs remain separate business calls.
-            previous = self._tool_tasks.get(context.tool_call_id)
+            previous = tool_tasks.get(context.tool_call_id)
             if previous is not None:
                 return await asyncio.shield(previous)
 
@@ -178,12 +196,9 @@ class SDKAgentRuntime(AgentRuntime):
                 call = {"name": name, "id": context.tool_call_id}
                 increment = budget_from_tool_calls([call], {name: tool})
                 if is_over_budget(
-                    self.config, self.projected_budget()
-                ) or not can_spend_tool_call(
-                    self.config, self.projected_budget(), increment
-                ):
-                    self.delta = merge_budget_usage(
-                        self.delta,
+                    config, budget.projected()
+                ) or not can_spend_tool_call(config, budget.projected(), increment):
+                    budget.add(
                         budget_usage_with_reason(
                             f"Budget guard skipped {name}: tool or search budget exhausted."
                         ),
@@ -192,7 +207,7 @@ class SDKAgentRuntime(AgentRuntime):
                         f"Budget guard skipped {name}: tool or search budget exhausted."
                     )
                 # Reserve before awaiting: SDK parallel calls cannot overbook.
-                self.delta = merge_budget_usage(self.delta, increment)
+                budget.add(increment)
                 args = json.loads(arguments)
                 validator.validate(args)
                 with budget_capture() as captured:
@@ -204,10 +219,10 @@ class SDKAgentRuntime(AgentRuntime):
                                 "name": name,
                                 "args": args,
                             },
-                            self.runtime_config,
+                            runtime_config,
                         )
                     finally:
-                        self.delta = merge_budget_usage(self.delta, captured)
+                        budget.add(captured)
                 if isinstance(output, ToolMessage):
                     if output.status == "error":
                         raise _ToolRejected(_text(output.content))
@@ -260,7 +275,7 @@ class SDKAgentRuntime(AgentRuntime):
                 return _text(output)
 
             pending = asyncio.create_task(execute())
-            self._tool_tasks[context.tool_call_id] = pending
+            tool_tasks[context.tool_call_id] = pending
             if (
                 getattr(tool, "func", None) is not None
                 and getattr(tool, "coroutine", None) is None
@@ -276,7 +291,7 @@ class SDKAgentRuntime(AgentRuntime):
                             raise
             return await pending
 
-        return self.hooks.function_tool(
+        return self.harness.function_tool(
             name=name,
             description=tool.description or name,
             params_json_schema=schema,
@@ -288,7 +303,7 @@ class SDKAgentRuntime(AgentRuntime):
     def _report_messages(self, task: str) -> list[Any]:
         messages: list[Any] = [HumanMessage(content=task)]
         output_ids: set[str] = set()
-        for item in self.hooks.items:
+        for item in self.harness.items:
             kind = item.get("type")
             if kind == "function_call":
                 try:
@@ -336,7 +351,7 @@ class SDKAgentRuntime(AgentRuntime):
                 )
                 messages.append(AIMessage(content=text))
         # MaxTurnsExceeded can occur before the next input filter, after tools.
-        for result in self.hooks.results.values():
+        for result in self.harness.results.values():
             if result.tool_call_id not in output_ids and result.status != "running":
                 messages.append(
                     ToolMessage(
@@ -353,10 +368,20 @@ class SDKAgentRuntime(AgentRuntime):
             raise TypeError(
                 "SDKAgentRuntime requires an official SDK Model, not a LangChain model."
             )
-        self.delta = {}
-        self.nested_usage = {}
+        self.run_budget = _RunBudget(initial=self.initial_budget)
         self._tool_tasks: dict[str, asyncio.Task[str]] = {}
-        self.hooks = _BusinessRunHooks(self)
+        # Preserve the existing Producer's admitted tools, excluding controls.
+        self.harness = _BusinessAgentHarness(
+            workspace=self.workspace,
+            config=self.config,
+            budget=self.run_budget,
+            evidence_tools=frozenset(
+                tool.name
+                for tool in self.tools
+                if isinstance(tool, BaseTool)
+                and tool.name not in {"think_tool", "ResearchComplete"}
+            ),
+        )
         registered = []
         names: set[str] = set()
         for tool in self.tools:
@@ -400,9 +425,9 @@ class SDKAgentRuntime(AgentRuntime):
             # Graph services and report synthesis retain their existing model
             # adapters. Capture their actual attempts once, including failures.
             with budget_capture() as nested:
-                self.nested_usage = nested
+                self.run_budget.nested = nested
                 try:
-                    self.sdk_result = await self.hooks.run(
+                    self.sdk_result = await self.harness.run(
                         self.agent,
                         inputs,
                         run_config=RunConfig(
@@ -412,21 +437,18 @@ class SDKAgentRuntime(AgentRuntime):
                     )
                 except (_ReasoningStopped, MaxTurnsExceeded) as stopped:
                     if (
-                        self.hooks.last_settlement is None
-                        or not self.hooks.last_settlement.succeeded
+                        self.harness.last_settlement is None
+                        or not self.harness.last_settlement.succeeded
                     ):
                         raise
-                    self.delta = merge_budget_usage(
-                        self.delta, budget_usage_with_reason(str(stopped))
-                    )
+                    self.run_budget.add(budget_usage_with_reason(str(stopped)))
                 messages = self._report_messages(task)
                 # The old graph finalizer has no budget admission of its own.
                 # Explicitly preserve the final workflow report reserve here.
                 if self.workspace.strategy.graph_enabled and not can_spend_model_call(
                     self.config, self.projected_budget(), reserve_final_report_call=True
                 ):
-                    self.delta = merge_budget_usage(
-                        self.delta,
+                    self.run_budget.add(
                         budget_usage_with_reason(
                             "Skipped graph role report synthesis to preserve the final report budget; retained SDK notes."
                         ),
@@ -448,27 +470,27 @@ class SDKAgentRuntime(AgentRuntime):
                         replace_report=True,
                     )
                 else:
-                    before_report = merge_budget_usage(self.delta, nested)
+                    before_report = merge_budget_usage(self.run_budget.delta, nested)
                     with budget_capture() as report_usage:
                         try:
                             result = await self._finish(task, messages, before_report)
                         except BaseException as exc:
-                            self.delta = merge_budget_usage(
-                                self.delta, getattr(exc, "budget_usage", report_usage)
+                            self.run_budget.add(
+                                getattr(exc, "budget_usage", report_usage)
                             )
                             raise
-                    self.delta = merge_budget_usage(
-                        self.delta, diff_budget_usage(result.budget, before_report)
-                    )
+                    self.run_budget.add(diff_budget_usage(result.budget, before_report))
             # _finish returns the same costs for legacy callers. Use captured
             # nested usage here instead, so none of those costs are merged twice.
-            self.budget_usage = merge_budget_usage(self.delta, nested)
+            self.budget_usage = merge_budget_usage(self.run_budget.delta, nested)
             result.budget = self.budget_usage
             return result
         except BaseException as exc:
-            self.budget_usage = merge_budget_usage(self.delta, self.nested_usage)
+            self.budget_usage = merge_budget_usage(
+                self.run_budget.delta, self.run_budget.nested
+            )
             setattr(exc, "budget_usage", self.budget_usage)
-            setattr(exc, "context_settlement", self.hooks.last_settlement)
+            setattr(exc, "context_settlement", self.harness.last_settlement)
             raise
         finally:
             # Match legacy capture semantics on success and exceptional exits.

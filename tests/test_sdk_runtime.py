@@ -1,12 +1,14 @@
 """Exercise all four business roles through the real offline SDK Runner."""
 
 import asyncio
+import gc
 import json
 import threading
+import weakref
 from contextlib import asynccontextmanager
 
 import pytest
-from agents import FunctionTool
+from agents import Agent, FunctionTool
 from agents.exceptions import ModelBehaviorError
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from agents.usage import Usage
@@ -16,6 +18,7 @@ from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, Field
 
 from open_deep_research.budget import (
+    ainvoke_model_with_budget,
     budget_capture,
     capture_budget_usage,
 )
@@ -29,6 +32,9 @@ from open_deep_research.runtime import business_agent
 from open_deep_research.runtime.sdk_runtime import (
     SDKAgentRuntime,
     SDKContextLimitExceeded,
+    _BusinessAgentHarness,
+    _ReasoningStopped,
+    _RunBudget,
 )
 
 ROLES = PUBLIC_OPINION_AGENT_ORDER
@@ -186,7 +192,7 @@ def test_four_roles_execute_sdk_model_tool_model_with_contracts(role):
     }
     assert result.budget["output_token_details"] == {"reasoning": 6}
     assert runtime.sdk_result.context_wrapper.usage.input_tokens == 20
-    assert runtime.hooks.results["lookup"].status == "succeeded"
+    assert runtime.harness.results["lookup"].status == "succeeded"
 
 
 @pytest.mark.parametrize("role", ROLES)
@@ -210,7 +216,7 @@ def test_tool_schema_validation_prevents_invalid_execution(role, arguments):
     runtime = _runtime(role, model=model, tools=[tool])
     result = asyncio.run(runtime.run("task"))
     assert not invoked
-    assert runtime.hooks.results["invalid"].status == "failed"
+    assert runtime.harness.results["invalid"].status == "failed"
     assert "validation handled" in result.report
     assert result.budget["model_calls"] == 2
 
@@ -234,7 +240,7 @@ def test_registration_and_execution_both_enforce_role_permission(role):
     )
     runtime = _runtime(role, model=model, tools=[tool])
     asyncio.run(runtime.run("task"))
-    assert runtime.hooks.results["revoked"].status == "failed"
+    assert runtime.harness.results["revoked"].status == "failed"
     assert runtime.budget_usage["tool_calls"] == 0
 
 
@@ -300,7 +306,7 @@ def test_explicit_tool_failure_status_is_retained(kind):
         ),
     )
     result = asyncio.run(runtime.run("task"))
-    assert runtime.hooks.results["failed"].status == "failed"
+    assert runtime.harness.results["failed"].status == "failed"
     assert result.budget["tool_calls"] == 1
     assert "failure acknowledged" in result.report
 
@@ -337,7 +343,7 @@ def test_parallel_tool_search_budget_reserves_before_execution(role):
     assert calls == ["one"]
     assert result.budget["search_calls"] == result.budget["tool_calls"] == 1
     assert result.budget["model_calls"] == 1
-    assert runtime.hooks.results["two"].status == "failed"
+    assert runtime.harness.results["two"].status == "failed"
     assert any("skipped" in reason for reason in result.budget["degradation_reasons"])
 
 
@@ -367,7 +373,7 @@ def test_model_failure_keeps_attempts_tokens_and_never_replays_tools(role):
     assert captured["model_calls"] == 2
     assert captured["input_tokens"] == 10
     assert captured["tool_calls"] == 1
-    assert runtime.hooks.last_settlement.succeeded
+    assert runtime.harness.last_settlement.succeeded
     assert len(runtime.model.calls) == 2
 
 
@@ -399,8 +405,8 @@ def test_tool_cancellation_propagates_with_budget_and_terminal_status(role):
             await running
         assert error.value.budget_usage["model_calls"] == 2
         assert error.value.budget_usage["tool_calls"] == 1
-        assert runtime.hooks.results["cancel"].status == "cancelled"
-        assert runtime.hooks.last_settlement.succeeded
+        assert runtime.harness.results["cancel"].status == "cancelled"
+        assert runtime.harness.last_settlement.succeeded
         assert len(runtime.model.calls) == 1
 
     asyncio.run(run())
@@ -446,7 +452,7 @@ def test_max_turns_and_research_complete_still_finalize_without_extra_runner():
         assert "Evidence q" in result.report
         assert result.budget["model_calls"] == 1
         assert result.budget["tool_calls"] == 1
-        assert runtime.hooks.last_settlement.succeeded
+        assert runtime.harness.last_settlement.succeeded
 
 
 def test_unknown_tool_fails_closed_without_business_execution():
@@ -693,7 +699,7 @@ def test_model_cancellation_keeps_started_attempt():
             await task
         assert error.value.budget_usage["model_calls"] == 1
         assert error.value.budget_usage["input_tokens"] == 0
-        assert runtime.hooks.last_settlement.succeeded
+        assert runtime.harness.last_settlement.succeeded
 
     asyncio.run(run())
 
@@ -734,7 +740,7 @@ def test_sync_tool_cancellation_drains_actual_thread_result_and_usage():
         with pytest.raises(asyncio.CancelledError) as error:
             await asyncio.wait_for(task, 5)
         assert calls == ["q"]
-        assert runtime.hooks.results["thread"].status == "succeeded"
+        assert runtime.harness.results["thread"].status == "succeeded"
         assert error.value.budget_usage["model_calls"] == 2
         assert error.value.budget_usage["input_tokens"] == 15
         assert error.value.context_settlement.succeeded
@@ -763,7 +769,7 @@ def test_sdk_token_budget_stops_tools_and_further_reasoning(limit):
     result = asyncio.run(runtime.run("task"))
     assert result.budget["model_calls"] == 1
     assert result.budget["tool_calls"] == 0
-    assert runtime.hooks.results["limited"].status == "failed"
+    assert runtime.harness.results["limited"].status == "failed"
 
 
 @pytest.mark.parametrize("result_kind", ["multimodal", "cancelled"])
@@ -792,8 +798,118 @@ def test_unverified_multimodal_and_explicit_cancelled_results_are_not_success(
     )
     result = asyncio.run(runtime.run("task"))
     assert result.budget["tool_calls"] == 1
-    assert runtime.hooks.results["result"].status == (
+    assert runtime.harness.results["result"].status == (
         "failed" if result_kind == "multimodal" else "cancelled"
     )
     if result_kind == "multimodal":
-        assert "multimodal MCP outputs" in runtime.hooks.results["result"].observation
+        assert "multimodal MCP outputs" in runtime.harness.results["result"].observation
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_retained_harness_and_registered_tools_do_not_keep_runtime_alive(role):
+    async def run():
+        tool = _tool(role)
+        model = ScriptedModel(
+            [
+                [function_call(tool.name, '{"query":"brand"}', call_id="retained")],
+                [assistant_message("completed without a Runtime backreference")],
+            ],
+            default_usage=TOKENS,
+        )
+        runtime = _runtime(role, model=model, tools=[tool])
+        result = await runtime.run("task")
+        harness = runtime.harness
+        assert not hasattr(runtime, "hooks")
+        assert harness.last_settlement.succeeded
+        assert result.budget["model_calls"] == 2
+        assert result.budget["tool_calls"] == 1
+        reference = weakref.ref(runtime)
+        del runtime
+        gc.collect()
+        # Retain the real harness, SDK Agent and FunctionTool invokers. A hidden
+        # bound Runtime callback or closure would keep this weakref alive.
+        assert reference() is None
+        assert harness.results["retained"].status == "succeeded"
+        assert harness.run_budget.delta == result.budget
+        model.assert_complete()
+
+    asyncio.run(run())
+
+
+def test_standalone_business_harness_observes_live_nested_budget_without_runtime():
+    async def run():
+        config = Configuration(
+            research_graph_enabled=False,
+            research_model="openai:fixture",
+            budget_enabled=True,
+            max_model_calls=4,
+            reserve_final_report_call=True,
+        )
+        workspace = ResearchWorkspace(
+            strategy=create_context_strategy("standard", graph_enabled=False),
+            research_state={},
+            role="public_signal",
+            configurable=config,
+            model_factory=lambda *_: pytest.fail("Unexpected graph model"),
+            run_id="standalone-business-harness",
+        )
+        budget = _RunBudget(initial={"model_calls": 1})
+        harness = _BusinessAgentHarness(
+            workspace=workspace,
+            config=config,
+            budget=budget,
+            evidence_tools=frozenset(),
+        )
+        nested_model = FakeMessagesListChatModel(
+            responses=[
+                AIMessage(
+                    content="nested model evidence",
+                    response_metadata={"model_name": "fixture-nested"},
+                    usage_metadata={
+                        "input_tokens": 7,
+                        "output_tokens": 3,
+                        "total_tokens": 10,
+                    },
+                )
+            ]
+        )
+
+        async def invoke(context, arguments):
+            response, _ = await ainvoke_model_with_budget(
+                nested_model, [AIMessage(content="query")]
+            )
+            return response.content
+
+        tool = harness.function_tool(
+            name="nested_model",
+            description="Collect nested model evidence",
+            params_json_schema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            invoke=invoke,
+        )
+        model = ScriptedModel(
+            [
+                [function_call(tool.name, "{}", call_id="nested")],
+                [assistant_message("must not spend the reserved call")],
+            ],
+            default_usage=TOKENS,
+        )
+        with budget_capture() as nested:
+            # Bind the capture after harness construction, as the Runtime does.
+            budget.nested = nested
+            with pytest.raises(_ReasoningStopped, match="Business budget stopped"):
+                await harness.run(
+                    Agent(name="standalone", model=model, tools=[tool]), "task"
+                )
+        assert len(model.calls) == 1
+        assert budget.delta["model_calls"] == nested["model_calls"] == 1
+        assert budget.projected()["model_calls"] == 3
+        assert budget.projected()["input_tokens"] == 17
+        assert budget.projected()["total_tokens"] == 24
+        assert harness.results["nested"].status == "succeeded"
+        assert harness.last_settlement.succeeded
+
+    asyncio.run(run())

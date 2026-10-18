@@ -74,18 +74,18 @@ def test_existing_mcp_adapter_schema_protocol_status_and_artifact(is_error):
     result = asyncio.run(runtime.run("task"))
     assert calls == [("social_media__lookup", {"query": "brand"})]
     assert result.budget["tool_calls"] == 1
-    assert runtime.hooks.results["mcp"].status == (
+    assert runtime.harness.results["mcp"].status == (
         "failed" if is_error else "succeeded"
     )
     if not is_error:
         assert (
-            json.loads(runtime.hooks.results["mcp"].observation)["structured_content"][
-                "source_id"
-            ]
+            json.loads(runtime.harness.results["mcp"].observation)[
+                "structured_content"
+            ]["source_id"]
             == "mcp-source"
         )
     else:
-        assert "MCP error" in runtime.hooks.results["mcp"].observation
+        assert "MCP error" in runtime.harness.results["mcp"].observation
 
 
 @pytest.mark.parametrize("role", ROLES)
@@ -163,7 +163,7 @@ def test_four_sdk_roles_reuse_phase0_graph_and_keep_report_override(
     result = asyncio.run(runtime.run("task"))
     assert result.replace_report is True
     assert f"Graph grounded {role} report" in result.report
-    assert runtime.hooks.last_settlement.succeeded
+    assert runtime.harness.last_settlement.succeeded
     assert result.budget["model_calls"] == 3
     assert result.budget["input_tokens"] == 27
     if role in ROLES[:2]:
