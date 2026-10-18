@@ -168,3 +168,24 @@ uv pip check --python .venv/Scripts/python.exe
 Phase 1 交付为现有 `codex/openai-agents-phase1` 上的提交并推送，不合并 main。四业务 Runtime 迁移完成，生产默认仍保持兼容。
 
 Phase 2 需要继续完成完整 Research Graph Context Harness：对全部业务工具批次及失败状态建立生产准入，贯通四角色证据传递和 Working Context，实施 SDK rolling compaction，统一压缩/终止/异常清算与预算，并以真实服务和全链路用例验收。LangGraph 替换仍等 Phase 3，不能因 Phase 1 的离线子图验证提前宣称后续阶段完成。
+
+## 10. GitHub CI 最终验收（2026-10-18 补充）
+
+本次仅补齐远程 CI 验收。在已有 `codex/openai-agents-phase1` 上从 Runtime 实现提交 `121f660853c520870b26c5e4b2edbb5f21315732` 继续，未修改业务源码、架构、测试、依赖或 Phase 2 范围。
+
+检查发现 `.github/workflows/ci.yml` 的 push 白名单仅包含 `main` 和 `codex/openai-agents-migration`，因此此前 Phase 1 push 没有触发 CI。将准备分支的单个名称替换为 `'codex/openai-agents-*'`，复用于 Phase 0、Phase 1 和后续 Phase 分支，同时继续覆盖准备分支。`main`、`pull_request`、只读 permissions、`quality` / `tests` 的全部步骤和命令保持不变。没有使用跳过 CI 的提交标记，也没有降低门禁。
+
+最终 CI 配置提交 SHA：**`8b71ccdffa4ec0a898b30db0fc9a58fe7b5af775`**。该提交已推送，并由真实 `push` 事件触发 [CI 39118677318](https://github.com/kkaaakk/public_opinion_research/actions/runs/39118677318)，运行结论为 **success**，所有 Jobs 均已完成：
+
+| Job | 结果与实际验证 | 用时 / 链接 |
+| --- | --- | --- |
+| `quality` | success；根锁安装、原 Ruff E/F/I、compileall、公共 runtime boundaries import 均通过 | 41s；[Job 117649613035](https://github.com/kkaaakk/public_opinion_research/actions/runs/39118677318/job/117649613035) |
+| `tests` | success；Linux / Python 3.11.17，收集 670 项，**664 passed、6 deselected、154 warnings**，pytest 退出码 0 | Job 1m17s，pytest 39.75s；[Job 117649613229](https://github.com/kkaaakk/public_opinion_research/actions/runs/39118677318/job/117649613229) |
+
+本地额外检查了 YAML 解析、main/准备分支/Phase 0–5 的 glob 匹配，比较修改前后 `jobs`、permissions 和 PR trigger 完全相同；`git diff --check` 通过。远程首次运行即通过，没有失败 Jobs，也没有为了通过 CI 修改任何业务行为或测试断言。
+
+远程运行存在非阻断提示：旧版 checkout/setup-python/setup-uv Actions 的 Node.js 20 弃用及托管方切换到 Node.js 24、`ubuntu-latest` 即将迁移 Ubuntu 26，以及两个并发 Jobs 争用同一 uv cache key 导致其中一次缓存保存未成功。实际安装和质量/测试命令均成功；这些提示没有被隐藏，本次不捆绑升级 Actions 或 runner 镜像。第7节的既有 Mypy 35 项错误和 MCP 依赖冲突仍保留：现有 CI 不包含这两项门禁，本次没有将它们改称通过。
+
+以上固定链接及完整 SHA 对应最后一次 CI 配置变更。本节随后以纯审计文档提交收尾，该提交也由同一 push 规则运行 CI，交付前等待两个 Jobs 全部结束。包含本节的最终审计提交 SHA 可由 `git log -1 --format=%H -- docs/audits/openai-agents-phase1.md` 获取；最终 HEAD、对应 CI 运行链接及远程一致性检查在交付回复中列出。[本分支 CI 运行记录](https://github.com/kkaaakk/public_opinion_research/actions/workflows/ci.yml?query=branch%3Acodex%2Fopenai-agents-phase1) 可追溯配置提交和文档收尾提交。
+
+本次变更文件仅为 `.github/workflows/ci.yml` 和本审计文档；不合并 main，不执行 Phase 2。
