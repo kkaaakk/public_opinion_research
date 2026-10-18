@@ -8,8 +8,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from open_deep_research.budget import estimate_text_tokens
 from open_deep_research.research_graph.compaction import render_protected_context
 from open_deep_research.research_graph.context_manager import (
+    ContextManager,
     initial_working_context,
     render_working_context,
 )
@@ -41,6 +43,7 @@ class TaskDescriptor:
     objective: str
     evidence_needed: str
     reason: str = ""
+    related_task_ids: tuple[str, ...] = ()
 
 
 # 保存一次工具调用参数、结果及执行状态。
@@ -104,8 +107,12 @@ class ResearchWorkspace:
         self.retriever = (
             ResearchGraphRetriever(
                 self.store,
-                max_nodes=int(getattr(configurable, "research_graph_max_retrieved_nodes", 24)),
-                max_edges=int(getattr(configurable, "research_graph_max_retrieved_edges", 48)),
+                max_nodes=int(
+                    getattr(configurable, "research_graph_max_retrieved_nodes", 24)
+                ),
+                max_edges=int(
+                    getattr(configurable, "research_graph_max_retrieved_edges", 48)
+                ),
             )
             if self.store is not None
             else None
@@ -114,10 +121,14 @@ class ResearchWorkspace:
         self.relevant_subgraph = RelevantSubgraph(run_id=self.run_id)
         self.rolling_summary = ""
         self.receipts: dict[str, WriteReceipt] = {}
+        # Retain extraction/write/context stages during this invocation only.
+        # A retry of settlement resumes graph work without replaying tools.
+        self.pending_ingestions: dict[tuple[str, ...], Any] = {}
         self.metrics = ResearchGraphMetrics()
         self.transcript = (
             ResearchTranscript(
-                getattr(configurable, "research_graph_transcript_dir", None), self.run_id
+                getattr(configurable, "research_graph_transcript_dir", None),
+                self.run_id,
             )
             if strategy.graph_enabled
             else None
@@ -126,12 +137,26 @@ class ResearchWorkspace:
     # 从序列化状态恢复工作上下文，必要时创建初始值。
     def _load_working_context(self) -> WorkingContext:
         values = self.research_state.get("working_contexts", {}) or {}
+        if self.research_state.get("run_id") not in (None, "", self.run_id):
+            return initial_working_context(self.task)
+        scopes = self.research_state.get("working_context_scopes", {}) or {}
+        saved_scope = scopes.get(self.role) if isinstance(scopes, dict) else None
+        if isinstance(saved_scope, dict) and (
+            saved_scope.get("run_id") != self.run_id
+            or saved_scope.get("role") != self.role
+            or int(saved_scope.get("research_round", 1)) > self.scope.research_round
+        ):
+            return initial_working_context(self.task)
         value = values.get(self.role) if isinstance(values, dict) else None
         if isinstance(value, WorkingContext):
-            return value
+            return value.model_copy(
+                deep=True, update={"current_objective": self.task.objective}
+            )
         if isinstance(value, dict):
             try:
-                return WorkingContext.model_validate(value)
+                return WorkingContext.model_validate(value).model_copy(
+                    update={"current_objective": self.task.objective}
+                )
             except Exception:
                 pass
         return initial_working_context(self.task)
@@ -144,7 +169,70 @@ class ResearchWorkspace:
     # 将工具批次交给生产或消费策略处理。
     async def ingest(self, messages: list[Any], batch: list[ToolBatchItem]) -> Any:
         """Ingest a tool batch through the producer/consumer context strategy."""
+        if self.strategy.is_producer and self.store is not None:
+            async with self.store.ingestion_lock():
+                return await self.strategy.after_tool_batch(self, messages, batch)
         return await self.strategy.after_tool_batch(self, messages, batch)
+
+    async def update_working_context(self, deltas: list[Any]) -> Any:
+        """Refresh bounded role memory from committed graph data, then publish it."""
+        model_name = str(
+            getattr(self.configurable, "context_manager_model", None)
+            or getattr(self.configurable, "research_model", "")
+        )
+        manager = ContextManager(
+            model=self.model_factory(
+                model_name,
+                int(
+                    getattr(self.configurable, "context_manager_model_max_tokens", 2048)
+                ),
+            ),
+            model_name=model_name,
+            max_retries=int(
+                getattr(self.configurable, "max_structured_output_retries", 3)
+            ),
+            max_active_findings=int(
+                getattr(self.configurable, "working_context_max_active_findings", 8)
+            ),
+            max_active_claims=int(
+                getattr(self.configurable, "working_context_max_active_claims", 16)
+            ),
+            max_active_evidence=int(
+                getattr(self.configurable, "working_context_max_active_evidence", 24)
+            ),
+            max_open_gaps=int(
+                getattr(self.configurable, "working_context_max_open_gaps", 8)
+            ),
+            max_conflicts=int(
+                getattr(self.configurable, "working_context_max_conflicts", 8)
+            ),
+        )
+        result = await manager.update(
+            task=self.task,
+            current=self.working_context,
+            relevant_subgraph=self.relevant_subgraph,
+            research_delta=deltas,
+        )
+        self.working_context = result.context
+        self.metrics.add("context_manager_calls")
+        for direction in ("input", "output"):
+            actual = result.budget_usage.get(f"{direction}_tokens")
+            self.metrics.add(
+                f"context_manager_{direction}_tokens",
+                actual
+                or estimate_text_tokens(
+                    self.protected_context()
+                    if direction == "input"
+                    else result.delta.model_dump_json()
+                ),
+                quality="exact" if actual else "estimated",
+            )
+        self.metrics.set(
+            "working_context_tokens",
+            estimate_text_tokens(render_working_context(self.working_context)),
+            quality="estimated",
+        )
+        return result
 
     # 在图模式负责报告生成时产出基于图证据的角色报告。
     async def finalize(self, messages: list[Any], expected_output: str) -> Any:
@@ -152,13 +240,13 @@ class ResearchWorkspace:
         return await self.strategy.finalize(self, messages, expected_output)
 
     # 渲染运行时压缩历史时必须保留的任务与工作上下文。
-    def protected_context(self) -> str:
+    def protected_context(self, *, include_summary: bool = True) -> str:
         """Render context that AgentRuntime must preserve during compaction."""
         return render_protected_context(
             current_task=self.task.objective,
             working_context=render_working_context(self.working_context),
             relevant_subgraph=format_relevant_subgraph(self.relevant_subgraph),
-            rolling_summary=self.rolling_summary,
+            rolling_summary=self.rolling_summary if include_summary else "",
         )
 
     # 按当前任务检索受运行范围限制的相关子图，可随时重新计算。
@@ -208,6 +296,9 @@ class ResearchWorkspace:
                 "run_id": self.run_id,
                 "working_contexts": {
                     self.role: self.working_context.model_dump(mode="json")
+                },
+                "working_context_scopes": {
+                    self.role: self.scope.model_dump(mode="json")
                 },
             },
             "runtime": {"metrics": self.metrics.as_dict()},

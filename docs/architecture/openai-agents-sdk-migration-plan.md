@@ -1,6 +1,6 @@
 # OpenAI Agents SDK 迁移边界与实施准备
 
-准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-17 更新：**Phase 0 已完成；Phase 1 已完成四角色可选择的 SDK Runtime，LangGraph 编排与 Web/API 默认保持兼容**。实现、离线测试及限制分别见 [Phase 0 验证记录](../audits/openai-agents-phase0.md) 和 [Phase 1 审计](../audits/openai-agents-phase1.md)。
+准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-18 更新：**Phase 0、Phase 1 和 Phase 2 已完成；四角色 SDK Runtime 已贯通 Research Graph Context Harness，LangGraph 编排与 Web/API 默认保持兼容**。实现、验证及限制分别见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)、[Phase 1 审计](../audits/openai-agents-phase1.md) 和 [Phase 2 审计](../audits/openai-agents-phase2.md)。Phase 3–5 尚未实施。
 
 后续同日已补做真实 DeepSeek 基础调用、非思考/思考模式 SDK 并行工具与 Producer/Consumer 验证，发现并修正窄边界问题；实测范围、用量和 557 项离线回归见验证记录第10节。该补验没有进入 Phase 1。
 
@@ -153,9 +153,11 @@ LangGraph Workflow
 ```
 
 SDK 分支复用 `models/sdk.py` 和 `SDKContextHarness`，没有改写 `workflow/`。
-Graph 模式只使用 Phase 0 已验证的单调用接缝；完整四角色证据交接、Working
-Context 和 rolling compaction 的生产全链路仍属于 Phase 2。预算、失败/取消及
-未验证功能的显式限制见 Phase 1 审计。以下蓝图继续表示最终目标，并非当前部署。
+Phase 2 在原接缝上完成批次阶段保留/补清算、四角色证据交接、Working Context
+作用域与刷新，以及兼容 SDK 原生工具/reasoning 协议的应用侧滚动摘要。Graph 模式
+的策略角色另外接收有界上游风险分析，风险报告不作为原始证据入图。
+预算与失败/取消限制及真实存储验收见 Phase 2 审计。以下蓝图继续表示最终目标，
+不是全部已经部署的能力，尤其不包含 Phase 3 Workflow 替换或 Phase 4 耐久执行。
 
 延续 `src/open_deep_research/` 包名，优先在已有目录内明确边界。下列是正式迁移时的职责建议；Phase 0 仅新增少量 SDK 适配文件，未按蓝图批量创建模块或空目录。
 
@@ -290,7 +292,7 @@ PR #12 的 RAG 配置整合作为独立参考保留，不因此提前整体合�
 | --- | --- | --- |
 | Phase 0 | SDK 安装、provider:model 适配、Hook、Producer/Consumer 可行性；生产入口不切换 | 已完成，见 Phase 0 审计 |
 | Phase 1 | 四业务 Agent Runtime 全部使用可选择的 SDK Agent/Runner；保留旧 Runtime、LangGraph Workflow 和 Web/API 默认 | 已完成，见 Phase 1 审计 |
-| Phase 2 | 完整 Research Graph Context Harness：工具批次、四角色证据交接、Working Context 更新、压缩和终止清算全链路 | 待执行；Phase 0 接缝复用不等于完成 |
+| Phase 2 | 完整 Research Graph Context Harness：工具批次、四角色证据交接、Working Context 更新、压缩和终止清算全链路 | 已完成；真实 Runner/编译 LangGraph 离线全链路、本地 MCP stdio 与 Neo4j 受控 smoke，范围及限制见 Phase 2 审计 |
 | Phase 3 | 确定性 Python Workflow 接替 LangGraph；保留双研究并行、汇合、Review/Gap 循环和 State 业务合同 | 待执行 |
 | Phase 4 | Web/SSE/Session、Run 生命周期、身份/审批、取消/恢复、事件与档案补偿的生产集成和故障验证 | 待执行 |
 | Phase 5 | 旧 Runtime 退役及依赖清理，完成必要观测适配和兼容入口验收 | 待执行；不整分支合并 DSH |

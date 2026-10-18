@@ -9,12 +9,14 @@ another.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from open_deep_research.research_graph.models import (
     GraphEdge,
@@ -44,6 +46,20 @@ class ResearchGraphError(RuntimeError):
 # 定义图写入、来源检查、检索和关闭的最小存储契约。
 class ResearchGraphStore(ABC):
     """Minimal storage contract used by graph strategies and tests."""
+
+    def ingestion_lock(self) -> asyncio.Lock:
+        """Serialize in-process producer transactions sharing this store and loop.
+
+        Keep extraction, source-version checking and context acknowledgement in
+        one critical section. Backend writes retain their own thread/DB safety;
+        this lock makes no cross-worker transaction or crash-recovery promise.
+        """
+        if not hasattr(self, "_ingestion_locks"):
+            self._ingestion_locks: WeakKeyDictionary[Any, asyncio.Lock] = (
+                WeakKeyDictionary()
+            )
+        loop = asyncio.get_running_loop()
+        return self._ingestion_locks.setdefault(loop, asyncio.Lock())
 
     # 约定写入一份关联图增量并返回短回执。
     @abstractmethod

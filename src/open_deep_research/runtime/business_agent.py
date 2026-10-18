@@ -92,16 +92,19 @@ def _task_descriptor(
 ) -> TaskDescriptor:
     tasks = [
         task
-        for task in coerce_research_tasks(workflow_state(state).get("pending_tasks", []))
+        for task in coerce_research_tasks(
+            workflow_state(state).get("pending_tasks", [])
+        )
         if task.target_role == role
     ]
     if tasks:
         task = tasks[0]
         return TaskDescriptor(
             task_id=task.task_id,
-            objective=task.objective,
-            evidence_needed=task.evidence_needed,
-            reason=task.reason,
+            objective="\n".join(item.objective for item in tasks),
+            evidence_needed="\n".join(item.evidence_needed for item in tasks),
+            reason="\n".join(item.reason for item in tasks),
+            related_task_ids=tuple(item.task_id for item in tasks),
         )
     return TaskDescriptor(
         task_id=stable_id("TASK", run_id, role, workflow_state(state).get("round", 1)),
@@ -127,13 +130,22 @@ def _build_business_agent_assignment(
             "The ResearchWorkspace will retrieve only the relevant subgraph; do not "
             "reconstruct or request complete upstream role reports."
         )
+        if role == "response_strategy":
+            risk_report = role_reports(state).get("risk_assessment", "")
+            upstream_context += (
+                "\n\nUpstream risk assessment (analysis, not original Graph evidence):\n"
+                + (risk_report[:12_000] or "No risk assessment report is available.")
+                + ("\n[Risk assessment bounded]" if len(risk_report) > 12_000 else "")
+            )
     else:
         upstream_context = role_context(
             role_reports(state),
             _UPSTREAM_ROLES.get(role, ()),
         )
     review = coerce_research_review(workflow_state(state).get("review"))
-    review_context = review.model_dump_json(indent=2) if review else "No research review yet."
+    review_context = (
+        review.model_dump_json(indent=2) if review else "No research review yet."
+    )
     assignment = (
         f"Overall research brief:\n{workflow_state(state).get('brief', '')}\n\n"
         f"Upstream research context:\n{upstream_context}\n\n"
@@ -146,7 +158,9 @@ def _build_business_agent_assignment(
 
     followup_tasks = [
         task
-        for task in coerce_research_tasks(workflow_state(state).get("pending_tasks", []))
+        for task in coerce_research_tasks(
+            workflow_state(state).get("pending_tasks", [])
+        )
         if task.target_role == role
     ]
     if not followup_tasks:
@@ -211,7 +225,9 @@ async def _business_agent_tools(
         all_tools = [tool for tool in all_tools if tool_name(tool) not in raw_names]
         all_tools.extend(raw_search_tools)
     if "social_media" in allowed_domains:
-        all_tools.extend(tag_tools_with_domain(get_social_media_tools(), "social_media"))
+        all_tools.extend(
+            tag_tools_with_domain(get_social_media_tools(), "social_media")
+        )
 
     filtered_tools = []
     rejected_tools = []
@@ -247,7 +263,9 @@ async def _execute_tool_safely(
         try:
             observation = await tool.ainvoke(args, config)
         except Exception as exc:
-            LOGGER.exception("Unexpected tool execution failure for '%s'.", tool_name(tool))
+            LOGGER.exception(
+                "Unexpected tool execution failure for '%s'.", tool_name(tool)
+            )
             observation = f"Error executing tool: {exc}"
             failed = True
     finally:
@@ -309,7 +327,9 @@ async def _compress_research(
                     model,
                     [
                         SystemMessage(
-                            content=compress_research_system_prompt.format(date=get_today_str())
+                            content=compress_research_system_prompt.format(
+                                date=get_today_str()
+                            )
                         ),
                         *researcher_messages,
                     ],
@@ -347,14 +367,18 @@ async def _compress_research(
 
     raw_notes = "\n".join(
         str(message.content)
-        for message in filter_messages(researcher_messages, include_types=["tool", "ai"])
+        for message in filter_messages(
+            researcher_messages, include_types=["tool", "ai"]
+        )
     )
     return (
         "Error synthesizing research report: Maximum retries exceeded",
         [raw_notes],
         merge_budget_usage(
             attempt_budget,
-            budget_usage_with_reason("Research compression failed after maximum retries."),
+            budget_usage_with_reason(
+                "Research compression failed after maximum retries."
+            ),
         ),
     )
 
@@ -495,7 +519,9 @@ async def run_business_agent(
     if configurable.business_agent_runtime == "openai_agents":
         # Disable opaque HTTP retries: one SDK start is one provider attempt.
         # No failure falls back to legacy and repeats a business tool.
-        async with sdk_model(configurable.research_model, config=config, max_retries=0) as model:
+        async with sdk_model(
+            configurable.research_model, config=config, max_retries=0
+        ) as model:
             result = await SDKAgentRuntime(model=model, **runtime_args).run(assignment)
     else:
         model_config = {

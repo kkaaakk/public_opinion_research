@@ -466,12 +466,15 @@ def test_write_failure_retains_raw_output_and_pending_batch(tmp_path):
         assert harness.last_settlement.pending_call_ids == ("a",)
         assert not harness.last_settlement.succeeded
         assert not harness.results["a"].consumed
-        assert len(graph_model.extractions) == 2
+        # Phase 2 resumes the retained write stage, rather than paying for the
+        # same successful extraction again on exit settlement.
+        assert len(graph_model.extractions) == 1
         assert workspace.metrics.as_dict().get("micro_compact_count", 0) == 0
         store.fail = False
         assert (await harness.settle("explicit_retry")).succeeded
         assert len(store.nodes) > 0
         assert harness.results["a"].consumed
+        assert len(graph_model.extractions) == 1
 
     asyncio.run(scenario())
 

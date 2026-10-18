@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,7 +45,7 @@ class RollingCompactionResult:
 # 把已持久化的旧工具正文替换成短回执，保留 AI 调用及 tool_call_id 配对。
 def micro_compact_messages(
     messages: Iterable[Any],
-    receipts: dict[str, WriteReceipt | str],
+    receipts: Mapping[str, WriteReceipt | str],
     *,
     recent_raw_steps: int = 3,
 ) -> CompactionResult:
@@ -120,6 +120,48 @@ async def rolling_compact(
         )
     compactable = items[1:keep_start]
     compactable_text = _render_messages(compactable)
+    summary, budget_usage = await summarize_compactable_history(
+        compactable_text,
+        previous_summary=previous_summary,
+        protected_context=protected_context,
+        model=model,
+        model_name=model_name,
+        max_retries=max_retries,
+    )
+    replacement = HumanMessage(
+        content=(
+            "[Rolling Agent Runtime Summary]\n"
+            f"{summary}\n"
+            "[Older ReAct steps compacted; durable provenance remains in the Research Graph.]"
+        )
+    )
+    kept = items[keep_start:]
+    result_messages = [items[0], replacement, *kept]
+    return RollingCompactionResult(
+        messages=result_messages,
+        rolling_summary=summary,
+        budget_usage=budget_usage,
+        tokens_removed=max(
+            0,
+            estimate_text_tokens(compactable_text) - estimate_text_tokens(summary),
+        ),
+    )
+
+
+async def summarize_compactable_history(
+    compactable_text: str,
+    *,
+    previous_summary: str,
+    protected_context: str,
+    model: Any,
+    model_name: str,
+    max_retries: int = 3,
+) -> tuple[str, dict[str, Any]]:
+    """Summarize an admitted history slice using the existing structured service.
+
+    SDK callers select complete native protocol units before calling here;
+    legacy callers continue selecting complete LangChain steps above.
+    """
     prompt = (
         "You are the incremental rolling context compactor for AgentRuntime. "
         "Summarize only the newly compactable reasoning/progress below and merge it "
@@ -143,24 +185,9 @@ async def rolling_compact(
     )
     output = _coerce_rolling_output(response["parsed"])
     summary = output.rolling_summary.strip()
-    replacement = HumanMessage(
-        content=(
-            "[Rolling Agent Runtime Summary]\n"
-            f"{summary}\n"
-            "[Older ReAct steps compacted; durable provenance remains in the Research Graph.]"
-        )
-    )
-    kept = items[keep_start:]
-    result_messages = [items[0], replacement, *kept]
-    return RollingCompactionResult(
-        messages=result_messages,
-        rolling_summary=summary,
-        budget_usage=budget_usage,
-        tokens_removed=max(
-            0,
-            estimate_text_tokens(compactable_text) - estimate_text_tokens(summary),
-        ),
-    )
+    if not summary:
+        raise ValueError("Rolling compaction returned an empty summary.")
+    return summary, budget_usage
 
 
 # 生成当前任务、工作上下文等压缩过程中必须保留的输入块。
@@ -264,4 +291,5 @@ __all__ = [
     "micro_compact_messages",
     "render_protected_context",
     "rolling_compact",
+    "summarize_compactable_history",
 ]
