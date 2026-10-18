@@ -189,3 +189,52 @@ Phase 2 需要继续完成完整 Research Graph Context Harness：对全部业�
 以上固定链接及完整 SHA 对应最后一次 CI 配置变更。本节随后以纯审计文档提交收尾，该提交也由同一 push 规则运行 CI，交付前等待两个 Jobs 全部结束。包含本节的最终审计提交 SHA 可由 `git log -1 --format=%H -- docs/audits/openai-agents-phase1.md` 获取；最终 HEAD、对应 CI 运行链接及远程一致性检查在交付回复中列出。[本分支 CI 运行记录](https://github.com/kkaaakk/public_opinion_research/actions/workflows/ci.yml?query=branch%3Acodex%2Fopenai-agents-phase1) 可追溯配置提交和文档收尾提交。
 
 本次变更文件仅为 `.github/workflows/ci.yml` 和本审计文档；不合并 main，不执行 Phase 2。
+
+## 11. Harness 命名与 Runtime 解耦（2026-10-18 补充）
+
+开始时本地与远程 Phase 1 HEAD 均为 `71b4ddfb6a39c724f765ca636f8e37f50b26c26b`，工作区干净。保留此前 Runtime、CI 触发修复及审计提交，在同一分支继续；没有重置或合并 main。
+
+两项修复均已完成：`SDKAgentRuntime.hooks` 改为 `harness`，私有类 `_BusinessRunHooks` 相应改为 `_BusinessAgentHarness`；其构造函数改为显式接收 workspace、配置、证据工具名和共享预算状态，不再接收或保存整个 Runtime。
+
+| 原来依赖的 Runtime 内容 | 当前显式依赖 |
+| --- | --- |
+| `runtime.workspace` | `workspace` 参数，继续使用原 SDKContextHarness 的 workspace 生命周期 |
+| `runtime.tools` | 已准入证据工具名的 `frozenset`，排除控制工具的规则不变 |
+| `runtime.config` | `Configuration` 数据对象，继续调用原模型准入和上下文压力规则 |
+| `runtime.projected_budget()`、`runtime.delta`、嵌套 capture | `_RunBudget` 的 initial/delta/nested 三份预算字典；继续使用原 `merge_budget_usage` 和预算策略函数 |
+
+新增的 `_RunBudget` 仅是当前模块内的简单共享数据对象，两个方法分别合并实际增量、投影累计准入值。它使 Runtime、Harness 和工具可观察相同的预算状态，尤其是在 Harness 构造后才绑定嵌套 capture 的情况下，避免复制出过时快照或把 Runtime 的绑定方法作为回调传入。
+
+同时移除了原工具 invoker 闭包对 `self` 的捕获。原来的间接依赖为 `Harness -> SDK Agent -> FunctionTool -> invoker -> Runtime`；现在 invoker 只捕获配置、角色/领域权限、原工具与 schema、工具任务表及 `_RunBudget`，不捕获 Runtime 或其绑定方法。修复后的关系为 `Runtime -> Harness`，二者共享预算数据；不存在由本适配代码建立的 Runtime 反向引用。
+
+`SDKContextHarness.run()` 没有修改或拆分，也没有新增 run wrapper：它仍委托唯一的 SDK Runner，并负责原输入过滤、证据处理和异常/取消/终止清算。模型循环、工具权限、并行预占、真实 SDK Usage、报告预算、结果 State 合同及原错误/取消行为保持。未修改四角色 Spec、LangGraph Workflow、Research Graph 规则、Legacy Runtime、Web/API、依赖和 `.github/workflows/ci.yml`，不涉及 Phase 2 或 Phase 5。
+
+新增 5 项回归测试：
+
+- 四角色分别完成真实离线 Runner 的模型→工具→模型流程后，继续持有 Harness、SDK Agent 和 FunctionTool；释放 Runtime 并执行 GC，弱引用必须失效。这同时防止显式 Runtime 属性、绑定回调和工具闭包造成隐藏回引；原结果、预算和清算状态仍可读取。
+- 独立构造业务 Harness，不创建 Runtime；在构造后绑定 budget capture，实际执行工具内 LangChain 离线模型，确认 SDK 模型启动/Usage 和嵌套消耗共享，并在下一模型请求前保留最终报告额度、完成退出清算。
+
+原测试只同步引用名称并保留断言；没有删除测试、扩大 skip 或放宽权限/预算检查。
+
+| 本地验证 | 实际结果 |
+| --- | --- |
+| 根锁同步 | `uv sync --extra dev --locked --python 3.11` 成功，313 个解析包 / 250 个已安装包；无依赖修改 |
+| SDK Runtime / Context Harness / 业务集成 / 模型定向 | **141 passed、150 warnings**，31.08s，退出码 0；含 Phase 0 全部 SDK 测试 |
+| 全量 pytest，原 socket guard / 禁 dotenv 与 tracing | **669 passed、6 deselected、154 warnings**，46.55s，退出码 0 |
+| Ruff | 原 CI E/F/I 范围通过；修改的 SDK Runtime 和两份测试完整规则通过 |
+| 格式 / compileall / 导入 | 3 文件格式通过；生产包、安全包、scripts、evaluation 编译通过；原 24 个无凭据/无出网入口导入通过 |
+| Mypy 原审计命令，修改前/后对比 | 均 **35 errors / 16 files / 104 source files**；错误消息集合新增=0、移除=0，仍非零退出 |
+| 依赖一致性 | 原有 1 项 markitdown-mcp / MCP 版本冲突保持，检查仍非零退出；未伪报通过 |
+
+命令沿用第8节的环境隔离、socket guard 和检查范围；定向测试为 `tests/test_sdk_runtime.py tests/test_sdk_context.py tests/test_sdk_business_integration.py tests/test_sdk_models.py`。新增回归用例包含在这组和全量测试中。运行日志、Mypy 前后消息对比与远程结果保留于忽略的 `.tmp/phase1-harness-cleanup/`，不提交本地输出或操作配置。
+
+最终修复提交 SHA：**`e31e6ce4e74dbe6a06f30038c3e48be069f741f4`**，已推送至远程 Phase 1 分支，实际 push 触发 [CI 39122138696](https://github.com/kkaaakk/public_opinion_research/actions/runs/39122138696)。两个 Jobs 均已完成且为 **success**：
+
+| Job | 远程结果 | 用时 / 链接 |
+| --- | --- | --- |
+| `quality` | 根锁安装、原 Ruff 门禁、编译、公共入口导入全部成功 | 45s；[Job 117659712588](https://github.com/kkaaakk/public_opinion_research/actions/runs/39122138696/job/117659712588) |
+| `tests` | 收集 675 项，**669 passed、6 deselected、154 warnings**，pytest 退出码 0 | Job 1m19s，pytest 49.99s；[Job 117659712419](https://github.com/kkaaakk/public_opinion_research/actions/runs/39122138696/job/117659712419) |
+
+本次首次远程运行通过，没有失败 Jobs 或业务补丁。第10节已列的 Actions Node.js 弃用及托管 runner 提示仍为非阻断提示，未捆绑修改 CI 配置。既有 Mypy/MCP 问题如实保留，未推进后续迁移阶段。
+
+以上完整 SHA 与固定 CI 链接记录最终代码修复。本节随后作为纯审计提交推送，同样触发现有 CI 并在交付前等待所有 Jobs 完成；最终审计 HEAD 和对应最新 CI 链接在交付回复中列出，亦可从[本分支运行记录](https://github.com/kkaaakk/public_opinion_research/actions/workflows/ci.yml?query=branch%3Acodex%2Fopenai-agents-phase1)追溯。本次总变更仅 `runtime/sdk_runtime.py`、两份对应测试和本审计文档，共 4 文件。
