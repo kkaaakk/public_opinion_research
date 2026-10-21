@@ -183,6 +183,14 @@ class RunStore:
             **(
                 {"connect_args": {"check_same_thread": False, "timeout": 30}}
                 if url.startswith("sqlite:")
+                else {
+                    "connect_args": {
+                        "connect_timeout": 5,
+                        "read_timeout": 10,
+                        "write_timeout": 10,
+                    }
+                }
+                if url.startswith("mysql+pymysql:")
                 else {}
             ),
         )

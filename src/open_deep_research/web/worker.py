@@ -99,33 +99,68 @@ class RunWorker:
         run_id, attempt_id = run["run_id"], run["attempt_id"]
         sessions = []
 
+        async def commit(operation, *args, **kwargs):
+            # Cancelling an asyncio awaiter cannot stop its SQL thread. Own the
+            # actual commit until it returns so settlement cannot race a receipt
+            # that is still being written, or abandon an initialized Session.
+            pending = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+            cancellation = None
+            while not pending.done():
+                try:
+                    await asyncio.shield(pending)
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+            return pending.result(), cancellation
+
         async def observer(kind, **facts):
             if kind == "sdk_session":
-                await asyncio.to_thread(
+                _, cancellation = await commit(
                     self.store.progress, run_id, attempt_id, "agent_started", **facts
                 )
+                if cancellation is not None:
+                    raise cancellation
                 if self.session_path is None:
                     return None
                 # Session is private to one role invocation, never a new role's
                 # memory source or a Workflow/side-effect recovery mechanism.
-                session = await asyncio.to_thread(
+                session, cancellation = await commit(
                     SQLiteSession,
                     f"{run['owner']}:{run_id}:{attempt_id}:{facts['role']}:{facts['invocation_id']}",
                     self.session_path,
                 )
                 sessions.append(session)
+                if cancellation is not None:
+                    raise cancellation
                 return session
             if kind in {"tool_started", "tool_finished"}:
-                return await asyncio.to_thread(
+                result, cancellation = await commit(
                     self.store.operation,
                     run_id,
                     attempt_id,
                     facts["identity"],
                     status="started" if kind == "tool_started" else facts["status"],
                 )
-            return await asyncio.to_thread(
+                if kind == "tool_started" and cancellation is not None:
+                    # The invoker has not been entered. Commit that known fact
+                    # before propagating cancellation; never leave a false
+                    # unknown external effect merely because intent committed.
+                    await commit(
+                        self.store.operation,
+                        run_id,
+                        attempt_id,
+                        facts["identity"],
+                        status="not_executed",
+                    )
+                    raise cancellation
+                # A finished invoker's result must reach the original Harness.
+                # Runner/Workflow retain their parent cancellation independently.
+                return result
+            result, cancellation = await commit(
                 self.store.progress, run_id, attempt_id, kind, **facts
             )
+            if cancellation is not None:
+                raise cancellation
+            return result
 
         async def workflow():
             token = execution_observer.set(observer)

@@ -79,7 +79,7 @@ stateDiagram-v2
 | `por_runs` | run_id、可信 owner、owner 范围幂等键、research_session_id、状态版本、事件 seq、当前 attempt、租约、隔离标志、创建/更新时间；JSON 保存经过准入的请求/config、Workflow/Runtime/SDK 版本、有效配置指纹、当前业务 State/安全 cursor、完成阶段、usage/error/settlement、不可变计划/审批、报告和归档引用、终止时间 |
 | `por_run_attempts` | 每次交付的新 attempt_id、worker_id、起止时间、版本、初始/结束累计 usage、错误与清算。恢复保留原 Run 和原 research run scope，只生成新 attempt |
 | `por_run_events` | `(run_id, seq)` 主键，稳定版本化公开事件；每 Run seq 连续递增 |
-| `por_run_operations` | 稳定 operation_id、run/attempt、SDK invocation/native call/task/round 身份、参数指纹、意图时间和 returned/uncertain 状态；不复制工具参数/正文 |
+| `por_run_operations` | 稳定 operation_id、run/attempt、SDK invocation/native call/task/round 身份、参数指纹、意图时间和 returned/uncertain/not_executed 状态；不复制工具参数/正文 |
 
 State 使用 JSON 和白名单数据类型（原消息、Section、ResearchTask、ResearchReview），不使用 pickle 或动态 import。完整 Snapshot 是原 `DeepResearchState` 的持久表示，不创建第二套业务 State/reducer。有效配置只存指纹用于比较，不把环境凭据复制入请求 config。配置、代码合同或已安装 SDK 版本漂移会在执行前明确失败，记录变更字段名，不自动改用另一 Runtime。
 
@@ -141,6 +141,7 @@ Phase 3 的 `start_at="research"` 保持原入口合同：它会清理上次研�
 - 正常异常沿用 Phase 3 的 owned 子任务与 SDK 有界清算。保存诊断 State、成功阶段报告、全部已观察费用、失败步骤/类别，不把部分成功变成 completed。
 - Worker 周期续租并读取 cancelling；只发出一次取消，等待原 Workflow/SDK 子任务退出。运行超时单独记录 timeout；SDK 的30s工具/批次清算窗口继续有效。未结清工具为 interrupted/unresolved，保留隔离容量。
 - 每次工具在执行前写 durable intent；operation_id 从 run/attempt/role/task/round/SDK invocation/native call 确定，参数只存哈希。操作 ID 通过原 RunnableConfig metadata 提供给工具；外部服务是否真正支持该幂等键仍由各协议决定。invoker 返回回执与 Harness 的业务成功/证据回执是不同事实。
+- 取消不能停止正在提交的 SQL 线程。Worker 持有并 shield 等待真实控制事务退出；已经返回的工具先提交回执并把实际结果交还原 Harness，再完成父级取消清算。意图写入期间取消且尚未进入 invoker 时保存 not_executed。SQLite锁等待30s；MySQL/PyMySQL连接5s、读写10s，不能无限等待丢失的数据库响应。
 - claim/进度/工具准入/回执/终态都检查当前 attempt 和未过期租约。失去所有权的旧 Worker 不能再提交 Run/事件/回执或开始后续模型/工具。不假设能撤销失租前已发出的远程请求、线程或 Neo4j 写入。
 - 租约过期：未进入步骤的持久边界可显式 resume；执行中的步骤进入 interrupted，usage_complete=false，不自动重投。未知副作用的 Run 继续占用全局/owner/session 容量，避免旧 Worker 仍存活时启动替代执行。
 - 人工核对必须先确认原 Worker 已停止、查外部权威记录，然后使用受信 Worker CLI 的 `--reconcile-run / --state-version / --worker-stopped / --note` 释放隔离容量。该操作**不会**把未知业务步骤改成可重放，也不伪造成功清算。
@@ -188,13 +189,15 @@ SIGINT/SIGTERM 停止接纳并让现有任务传递取消、清算退出；MCP/�
 
 默认新增回归覆盖真实文件 SQL、并发提交与幂等冲突、双Store/多连接全局配额、session隔离、终态/取消竞争、事务回滚、租约失效/旧attempt fencing、工具意图/回执防重放、完整真实SDK Runner/Workflow/Harness失败/双失败/取消/超时、审批并发/拒绝/过期/不重算、跨owner各API、实际body大小、归档补偿、配置漂移、隔离释放与DB故障清算。
 
-真实进程测试使用 `subprocess.kill`、持久 SQLite 和独立外部效果表：在 Producer 汇合 Checkpoint 后终止进程，新进程从 Review 继续且外部效果数不增加；在工具实际执行成功但回执尚未提交时终止进程，重启为 interrupted并拒绝重放。另用真实TCP/独立Web与Worker进程断开SSE、重复create、重连补发并完成归档。这些用例属于默认离线回归，不是只抛出 Mock异常；推理使用官方 ScriptedModel，禁止非本地网络。
+真实进程测试使用 `subprocess.kill`、持久 SQLite 和独立外部效果表：在 Producer 汇合 Checkpoint 后终止进程，新进程从 Review 继续且外部效果数不增加；在工具实际执行成功但回执尚未提交时终止进程，重启为 interrupted并拒绝重放。进程故障 fixture 使用 standard 策略；真实 Neo4j 证据/档案在下述单独服务集成中验证，不冒称跨库原子崩溃恢复。另用真实TCP/独立Web与Worker进程断开SSE、重复create、重连补发并完成归档。这些用例属于默认离线回归，不是只抛出 Mock异常；推理使用官方 ScriptedModel，禁止非本地网络。
+
+首次远程 Linux CI [39613156693](https://github.com/kkaaakk/public_opinion_research/actions/runs/39613156693) 的 quality通过，pytest为814 passed/1 failed/6 deselected：`model_error` 场景未等待兄弟工具回执，取消与 SQL 线程提交产生真实竞争。修复没有放宽断言或跳过用例：保留原failed/settled断言，为“工具已完成后模型失败”fixture加入双回执屏障；同时修复控制事务的取消拥有权，并新增“两个工具已返回、回执提交期间取消”的真实Runner/Harness回归，要求两份成功结果和证据均完成清算，终态cancelled而非误报unknown。修复后定向6项通过；完整与远程复验见下方最终结果。
 
 本地服务分层：`scripts/sdk_phase4_smoke.py --enable-local-services` 对本次临时 MySQL8.4、现有Neo4j和真实MCP stdio 执行生产Worker/四角色SDK流程，模型/图抽取推理全部为离线响应。并发8次create只接纳1个Run，审批后不重算规划，2份工具回执、2 Source/2 Evidence、4角色完成，真实Neo4j History owner隔离与归档通过。只清理本次创建的合成run/history/SQL行，原数据与容器保留；临时MySQL容器在验证后单独移除。fixture账本为28 model_calls /235 input /76 output /311 total tokens，供应商调用0，不是实际账单。
 
 | 最终本地检查 | 结果 |
 | --- | --- |
-| 全量 pytest（保留所有 Phase 0–3 用例） | **815 passed / 6 deselected / 156 warnings，170.39s**；新增51项，退出码0 |
+| 全量 pytest（保留所有 Phase 0–3 用例） | **816 passed / 6 deselected / 156 warnings，154.50s**；新增52项，退出码0 |
 | 浏览器控制器合同 | **5 passed**；实际app.js执行，覆盖模糊create响应/刷新、已知Run重连去重、一次审批、真实cancel请求、非终态EOF；加入CI，不新增npm依赖 |
 | Ruff CI E/F/I / 新模块完整规则 | 通过；没有降低原门禁 |
 | format | 13个新增/修改Python文件通过；Web既有文件同时按formatter格式化。未修改Configuration旧格式 |

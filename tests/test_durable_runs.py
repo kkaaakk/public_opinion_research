@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from unittest.mock import Mock
@@ -221,6 +222,20 @@ def test_real_sdk_runner_python_workflow_and_sql_worker(
             monkeypatch, tmp_path / "transcripts", mode
         )
         cfg["configurable"]["allow_clarification"] = False
+        if mode == "model_error":
+            # This scenario means a model fails AFTER both tools have durable
+            # results. Otherwise sibling cancellation can legitimately interrupt
+            # an in-flight external operation, which has a different contract.
+            original_operation = store.operation
+            receipt_barrier = threading.Barrier(2, timeout=5)
+
+            def committed_tools(*args, **kwargs):
+                result = original_operation(*args, **kwargs)
+                if kwargs.get("status") == "returned":
+                    receipt_barrier.wait()
+                return result
+
+            monkeypatch.setattr(store, "operation", committed_tools)
         # Token accounting assertions use the same nonzero Phase 3 baseline.
         run = create(store, state=state, cfg=cfg)
         claim = store.claim("worker")
@@ -703,5 +718,69 @@ def test_database_control_failure_drains_sdk_then_requires_restart_reconciliatio
         assert result["status"] == "interrupted"
         assert result["data"]["error"]["usage_complete"] is False
         assert not public_run(result)["retry_safe"]
+
+    asyncio.run(run_test())
+
+
+def test_cancellation_during_receipt_commit_retains_real_tool_results(
+    monkeypatch, tmp_path, store
+):
+    async def run_test():
+        state, cfg, runtimes, _, calls, _ = install_sdk(
+            monkeypatch, tmp_path / "transcripts"
+        )
+        receipts_ready, release, cancel_seen = (
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
+        )
+        roles = set()
+        lock = threading.Lock()
+        original_operation, original_heartbeat = store.operation, store.heartbeat
+
+        def delayed_receipt(*args, **kwargs):
+            if kwargs.get("status") == "returned":
+                with lock:
+                    roles.add(args[2]["role"])
+                    if len(roles) == 2:
+                        receipts_ready.set()
+                assert release.wait(10), "receipt test failed to release the SQL writer"
+            return original_operation(*args, **kwargs)
+
+        def heartbeat(*args):
+            result = original_heartbeat(*args)
+            if result == "cancelling":
+                cancel_seen.set()
+            return result
+
+        monkeypatch.setattr(store, "operation", delayed_receipt)
+        monkeypatch.setattr(store, "heartbeat", heartbeat)
+        run = create(store, state=state, cfg=cfg)
+        task = asyncio.create_task(
+            worker.RunWorker(store).execute(store.claim("worker"))
+        )
+        try:
+            assert await asyncio.to_thread(receipts_ready.wait, 5)
+            assert calls == {"public_signal": 1, "internal_knowledge": 1}
+            store.cancel(run["run_id"], "alice")
+            assert await asyncio.to_thread(cancel_seen.wait, 5)
+            await asyncio.sleep(
+                0.05
+            )  # deliver the observed cancellation before acknowledging receipts
+        finally:
+            release.set()
+        await asyncio.wait_for(task, 10)
+        result = get(store, run)
+        assert result["status"] == "cancelled"
+        assert result["data"]["settlement"] == "settled"
+        assert all(rt.harness.last_settlement.succeeded for rt in runtimes)
+        observed = [item for rt in runtimes for item in rt.harness.results.values()]
+        assert len(observed) == 2
+        assert all(item.status == "succeeded" and item.consumed for item in observed)
+        with store.engine.connect() as db:
+            assert list(db.execute(select(store.operations.c.status)).scalars()) == [
+                "returned",
+                "returned",
+            ]
 
     asyncio.run(run_test())
