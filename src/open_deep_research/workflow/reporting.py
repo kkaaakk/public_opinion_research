@@ -1,8 +1,8 @@
 # 依据角色证据或研究图生成章节，并按计划顺序汇编最终报告。
 """Reporting stage of the public-opinion workflow."""
 
-import asyncio
 import logging
+import sys
 from typing import Any, Callable
 
 from langchain_core.messages import (
@@ -54,6 +54,7 @@ from open_deep_research.time_utils import get_today_str
 
 # Initialize a configurable model that we will use throughout the agent
 from open_deep_research.workflow import shared
+from open_deep_research.workflow.execution import gather_owned
 from open_deep_research.workflow.state_utils import (
     business_context,
     report_state,
@@ -68,17 +69,25 @@ from open_deep_research.workflow.state_utils import (
 
 LOGGER = logging.getLogger("open_deep_research.deep_researcher")
 
+
 # 只格式化指定角色的私有短期记忆，供缺失正式输出时补充上下文。
-def _agent_private_memory_context(agent_memories: dict[str, list[dict[str, Any]]], role: str) -> str:
+def _agent_private_memory_context(
+    agent_memories: dict[str, list[dict[str, Any]]], role: str
+) -> str:
     """Format one agent's private short-term memory for prompt injection."""
     return format_private_memory(
         {"memory": list((agent_memories or {}).get(role, []) or [])}
     )
 
 
-_PUBLIC_OPINION_ROLE_NAMES = frozenset({
-    "public_signal", "internal_knowledge", "risk_assessment", "response_strategy",
-})
+_PUBLIC_OPINION_ROLE_NAMES = frozenset(
+    {
+        "public_signal",
+        "internal_knowledge",
+        "risk_assessment",
+        "response_strategy",
+    }
+)
 
 
 # 解析章节的角色列表并提取相应证据，校验未知角色。
@@ -91,11 +100,14 @@ def _extract_section_evidence(section, role_report_content: dict[str, str]) -> s
     agent_role_str = (section.agent_role or "").strip()
     if not agent_role_str:
         # No agent_role specified, use all available role reports
-        return "\n\n".join(
-            f"## {role}\n{content}"
-            for role, content in role_report_content.items()
-            if content
-        ) or "No role evidence is available."
+        return (
+            "\n\n".join(
+                f"## {role}\n{content}"
+                for role, content in role_report_content.items()
+                if content
+            )
+            or "No role evidence is available."
+        )
 
     role_names = [r.strip() for r in agent_role_str.split(",")]
     evidence_parts = []
@@ -105,23 +117,32 @@ def _extract_section_evidence(section, role_report_content: dict[str, str]) -> s
         if not role_name:
             continue
         if role_name not in _PUBLIC_OPINION_ROLE_NAMES:
-            LOGGER.warning("Invalid agent_role '%s' in section '%s'; ignoring.", role_name, section.name)
+            LOGGER.warning(
+                "Invalid agent_role '%s' in section '%s'; ignoring.",
+                role_name,
+                section.name,
+            )
             continue
         content = role_report_content.get(role_name, "")
         if content:
             evidence_parts.append(f"## {role_name}\n{content}")
             valid_roles_found = True
         else:
-            evidence_parts.append(f"## {role_name}\n(No evidence was collected by this role.)")
+            evidence_parts.append(
+                f"## {role_name}\n(No evidence was collected by this role.)"
+            )
             valid_roles_found = True
 
     if not valid_roles_found:
         # Fallback: use all available role reports
-        return "\n\n".join(
-            f"## {role}\n{content}"
-            for role, content in role_report_content.items()
-            if content
-        ) or "No role evidence is available."
+        return (
+            "\n\n".join(
+                f"## {role}\n{content}"
+                for role, content in role_report_content.items()
+                if content
+            )
+            or "No role evidence is available."
+        )
 
     return "\n\n".join(evidence_parts)
 
@@ -198,7 +219,11 @@ def _graph_report_context(
     context_text = []
     for role, value in contexts.items():
         try:
-            parsed = value if isinstance(value, WorkingContext) else WorkingContext.model_validate(value)
+            parsed = (
+                value
+                if isinstance(value, WorkingContext)
+                else WorkingContext.model_validate(value)
+            )
         except Exception:
             continue
         context_text.append(f"## {role}\n{render_working_context(parsed)}")
@@ -238,6 +263,7 @@ async def _write_sections_parallel(
                 section.status = "done"
             except Exception as exc:
                 if not is_token_limit_exceeded(exc, model_name):
+                    setattr(exc, "budget_usage", dict(response_budget))
                     LOGGER.exception(
                         "Unexpected %s failure for '%s'.", log_label, section.name
                     )
@@ -250,13 +276,34 @@ async def _write_sections_parallel(
                 )
                 section.content = ""
                 failure_reason = failure_reason_for(section)
+            except BaseException as exc:
+                setattr(exc, "budget_usage", dict(response_budget))
+                raise
         if failure_reason:
             response_budget = merge_budget_usage(
                 response_budget, budget_usage_with_reason(failure_reason)
             )
         return section, response_budget
 
-    results = await asyncio.gather(*[_write_one(section) for section in sections])
+    try:
+        results = list(
+            (
+                await gather_owned(
+                    {
+                        str(index): _write_one(section)
+                        for index, section in enumerate(sections)
+                    }
+                )
+            ).values()
+        )
+    except BaseException as exc:
+        usage: dict[str, Any] = {}
+        for _, response_budget in getattr(exc, "parallel_results", {}).values():
+            usage = merge_budget_usage(usage, response_budget)
+        for failure in getattr(exc, "parallel_errors", {}).values():
+            usage = merge_budget_usage(usage, getattr(failure, "budget_usage", {}))
+        setattr(exc, "budget_usage", usage)
+        raise
     completed = []
     budget_update: dict[str, Any] = {}
     for result, response_budget in results:
@@ -267,6 +314,29 @@ async def _write_sections_parallel(
         budget_usage_with_reason(completion_reason_for(len(completed))),
     )
     return completed, budget_update
+
+
+def _section_plan_update(
+    sections: list[Section], completed: list[Section]
+) -> list[Section]:
+    """Publish completed section values without relying on shared object mutation."""
+    by_name = {section.name: section for section in completed}
+    return [by_name.get(section.name, section) for section in sections]
+
+
+async def _persist_report(
+    state: AgentState, config: RunnableConfig, report: str, usage: dict[str, Any]
+) -> None:
+    """Preserve report costs if the existing memory write fails; never replay it."""
+    try:
+        await maybe_persist_chat_memory(state, config, report)
+    except BaseException as exc:
+        setattr(
+            exc,
+            "budget_usage",
+            merge_budget_usage(usage, getattr(exc, "budget_usage", {})),
+        )
+        raise
 
 
 # 为需要研究的章节提取角色或图证据，并行生成正文。
@@ -308,7 +378,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         configurable, budget_usage, reserve_final_report_call=True
     )
     sections_to_write = research_sections[:call_allowance]
-    fallback_sections = research_sections[len(sections_to_write):]
+    fallback_sections = research_sections[len(sections_to_write) :]
     fallback_budget: dict[str, Any] = {}
     if fallback_sections:
         fallback_budget = budget_usage_with_reason(
@@ -320,12 +390,17 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
             section.status = "done"
     if not sections_to_write:
         return {
-            "report": {"completed_sections": fallback_sections},
+            "report": {
+                "sections": _section_plan_update(sections, fallback_sections),
+                "completed_sections": fallback_sections,
+            },
             "runtime": {"budget": fallback_budget},
         }
 
     # Write sections in parallel using section_writer_model
-    writer_model_name = configurable.section_writer_model or configurable.final_report_model
+    writer_model_name = (
+        configurable.section_writer_model or configurable.final_report_model
+    )
     writer_max_tokens = configurable.section_writer_model_max_tokens
 
     writer_model_config: dict[str, Any] = {
@@ -354,7 +429,10 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
         ),
     )
     return {
-        "report": {"completed_sections": completed + fallback_sections},
+        "report": {
+            "sections": _section_plan_update(sections, completed + fallback_sections),
+            "completed_sections": completed + fallback_sections,
+        },
         "runtime": {"budget": merge_budget_usage(budget_update, fallback_budget)},
     }
 
@@ -381,8 +459,7 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
             completed_map[cs.name] = cs.content
 
     context = "\n\n".join(
-        f"## {name}\n{content}"
-        for name, content in completed_map.items()
+        f"## {name}\n{content}" for name, content in completed_map.items()
     )
 
     if not context:
@@ -432,13 +509,18 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
         completion_reason_for=lambda count: f"Wrote {count} final sections.",
     )
     return {
-        "report": {"completed_sections": completed},
+        "report": {
+            "sections": _section_plan_update(sections, completed),
+            "completed_sections": completed,
+        },
         "runtime": {"budget": merge_budget_usage(budget_update, skipped_budget)},
     }
 
 
 # 按原章节计划组装报告；全部章节缺失时启用综合生成回退。
-async def compile_final_report(state: AgentState, config: RunnableConfig):
+async def compile_final_report(
+    state: AgentState, config: RunnableConfig, *, fail_on_error: bool = False
+):
     """Compile the final report by assembling sections in planned order.
 
     Assembles sections in their original planned order.
@@ -475,22 +557,28 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
             if can_spend_model_call(configurable, budget_usage):
                 # 使用当前图证据或完整角色报告补齐缺失内容。
                 findings = (
-                    _graph_report_context(state, config, query_suffix="missing sections")
+                    _graph_report_context(
+                        state, config, query_suffix="missing sections"
+                    )
                     if configurable.research_graph_enabled
                     else role_context(role_reports(state))
                 )
 
-                final_report_prompt = public_opinion_final_report_generation_prompt.format(
-                    research_brief=workflow_state(state).get("brief", ""),
-                    organization_context=business_context(configurable),
-                    messages=get_buffer_string(state.get("messages", [])),
-                    findings=f"已有报告内容:\n{report}\n\n补充证据:\n{findings}",
-                    date=get_today_str(),
+                final_report_prompt = (
+                    public_opinion_final_report_generation_prompt.format(
+                        research_brief=workflow_state(state).get("brief", ""),
+                        organization_context=business_context(configurable),
+                        messages=get_buffer_string(state.get("messages", [])),
+                        findings=f"已有报告内容:\n{report}\n\n补充证据:\n{findings}",
+                        date=get_today_str(),
+                    )
                 )
 
                 writer_config: dict[str, Any] = {
                     "model": configurable.final_report_model,
-                    "api_key": get_api_key_for_model(configurable.final_report_model, config),
+                    "api_key": get_api_key_for_model(
+                        configurable.final_report_model, config
+                    ),
                     "tags": ["langsmith:nostream"],
                 }
                 attempt_token = start_budget_capture()
@@ -503,8 +591,12 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                             model_name=configurable.final_report_model,
                         )
                     except Exception as exc:
-                        if not is_token_limit_exceeded(exc, configurable.final_report_model):
-                            LOGGER.exception("Unexpected missing-section report fill failure.")
+                        if not is_token_limit_exceeded(
+                            exc, configurable.final_report_model
+                        ):
+                            LOGGER.exception(
+                                "Unexpected missing-section report fill failure."
+                            )
                             raise
                         LOGGER.warning(
                             "Filling missing sections hit the model context limit: %s",
@@ -513,12 +605,16 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                         fill_failed = True
                 finally:
                     fill_budget_update = stop_budget_capture(attempt_token)
+                    if (failure := sys.exc_info()[1]) is not None:
+                        setattr(failure, "budget_usage", fill_budget_update)
                 if fill_failed:
                     report += f"\n\n> Note: 以下 section 因模型上下文限制未完成: {', '.join(missing_names)}"
                 else:
                     budget_update = merge_budget_usage(
                         fill_budget_update,
-                        budget_usage_with_reason(f"Filled {len(missing_names)} missing sections via final_report_model."),
+                        budget_usage_with_reason(
+                            f"Filled {len(missing_names)} missing sections via final_report_model."
+                        ),
                     )
                     final_usage = merge_budget_usage(budget_usage, budget_update)
                     report = append_budget_summary(
@@ -526,7 +622,7 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
                         configurable,
                         final_usage,
                     )
-                    await maybe_persist_chat_memory(state, config, report)
+                    await _persist_report(state, config, report, budget_update)
                     return {
                         "report": {"final": report},
                         "messages": [AIMessage(content=report)],
@@ -535,7 +631,7 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
             else:
                 report += f"\n\n> Note: 以下 section 因预算限制未完成: {', '.join(missing_names)}"
 
-        await maybe_persist_chat_memory(state, config, report)
+        await _persist_report(state, config, report, fill_budget_update)
         return {
             "report": {"final": report},
             "messages": [AIMessage(content=report)],
@@ -544,11 +640,13 @@ async def compile_final_report(state: AgentState, config: RunnableConfig):
 
     # 全部章节缺失时，基于角色报告或限定运行范围的图上下文综合生成兜底报告。
     LOGGER.warning("No sections completed; falling back to role-report synthesis.")
-    return await _fallback_report_generation(state, config)
+    return await _fallback_report_generation(state, config, fail_on_error=fail_on_error)
 
 
 # 使用图上下文或正式角色报告生成兜底报告，并遵守剩余预算。
-async def _fallback_report_generation(state: AgentState, config: RunnableConfig):
+async def _fallback_report_generation(
+    state: AgentState, config: RunnableConfig, *, fail_on_error: bool = False
+):
     """Generate a fallback report from graph context or formal role reports."""
     configurable = Configuration.from_runnable_config(config)
     findings = (
@@ -563,7 +661,10 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
         budget_update = budget_usage_with_reason(
             "Skipped final report generation because no model call budget remained."
         )
-        fallback_report = findings or "Budget guard stopped before enough research notes were collected to generate a final report."
+        fallback_report = (
+            findings
+            or "Budget guard stopped before enough research notes were collected to generate a final report."
+        )
         final_usage = merge_budget_usage(budget_usage, budget_update)
         final_report_content = append_budget_summary(
             fallback_report,
@@ -594,7 +695,9 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
     if context_window:
         window_budget = max(0, context_window - output_reserve - reserved_prompt_budget)
         findings_budget = (
-            window_budget if findings_budget is None else min(findings_budget, window_budget)
+            window_budget
+            if findings_budget is None
+            else min(findings_budget, window_budget)
         )
     if findings_budget is not None:
         findings, findings_truncated = truncate_text_to_token_budget(
@@ -617,7 +720,9 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
     )
     if remaining_output_budget is not None:
         if remaining_output_budget > 0:
-            final_report_max_tokens = min(final_report_max_tokens, remaining_output_budget)
+            final_report_max_tokens = min(
+                final_report_max_tokens, remaining_output_budget
+            )
         elif configurable.reserve_final_report_call:
             final_report_max_tokens = min(final_report_max_tokens, 512)
             budget_update = merge_budget_usage(
@@ -633,7 +738,10 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                     "Skipped final report generation because no output token budget remained."
                 ),
             )
-            fallback_report = findings or "Budget guard stopped before enough research notes were collected to generate a final report."
+            fallback_report = (
+                findings
+                or "Budget guard stopped before enough research notes were collected to generate a final report."
+            )
             final_usage = merge_budget_usage(budget_usage, budget_update)
             final_report_content = append_budget_summary(
                 fallback_report,
@@ -650,7 +758,7 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
         "model": configurable.final_report_model,
         "max_tokens": final_report_max_tokens,
         "api_key": get_api_key_for_model(configurable.final_report_model, config),
-        "tags": ["langsmith:nostream"]
+        "tags": ["langsmith:nostream"],
     }
 
     # Step 3: Attempt report generation with token limit retry logic
@@ -666,12 +774,14 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
         try:
             try:
                 # Create comprehensive prompt with all research context
-                final_report_prompt = public_opinion_final_report_generation_prompt.format(
-                    research_brief=workflow_state(state).get("brief", ""),
-                    organization_context=business_context(configurable),
-                    messages=messages_text,
-                    findings=findings,
-                    date=get_today_str(),
+                final_report_prompt = (
+                    public_opinion_final_report_generation_prompt.format(
+                        research_brief=workflow_state(state).get("brief", ""),
+                        organization_context=business_context(configurable),
+                        messages=messages_text,
+                        findings=findings,
+                        date=get_today_str(),
+                    )
                 )
 
                 # Generate the final report
@@ -689,6 +799,8 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
             budget_update = merge_budget_usage(
                 budget_update, stop_budget_capture(attempt_token)
             )
+            if (failure := sys.exc_info()[1]) is not None:
+                setattr(failure, "budget_usage", budget_update)
 
         if not token_limit_hit:
             final_usage = merge_budget_usage(budget_usage, budget_update)
@@ -697,7 +809,7 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                 configurable,
                 final_usage,
             )
-            await maybe_persist_chat_memory(state, config, final_report_content)
+            await _persist_report(state, config, final_report_content, budget_update)
 
             # Return successful report generation
             return {
@@ -716,9 +828,21 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
                 LOGGER.exception(
                     "Final report model exceeded its context limit and no model limit is configured."
                 )
+                if fail_on_error:
+                    failure = RuntimeError(
+                        "Final report generation failed due to a model context limit"
+                    )
+                    setattr(failure, "budget_usage", budget_update)
+                    raise failure
                 return {
-                    "report": {"final": "Error generating final report due to a model context limit."},
-                    "messages": [AIMessage(content="Report generation failed due to token limits")],
+                    "report": {
+                        "final": "Error generating final report due to a model context limit."
+                    },
+                    "messages": [
+                        AIMessage(
+                            content="Report generation failed due to token limits"
+                        )
+                    ],
                     "runtime": {"budget": budget_update},
                 }
             findings_token_limit = max(0, model_token_limit - output_reserve)
@@ -729,15 +853,26 @@ async def _fallback_report_generation(state: AgentState, config: RunnableConfig)
         # Truncate findings by token budget and retry
         findings, _ = truncate_text_to_token_budget(findings, findings_token_limit)
 
-    # Step 4: Return failure result if all retries exhausted
+    # The legacy path keeps its original error report. Python propagates failure.
+    if fail_on_error:
+        failure = RuntimeError("Final report generation failed after maximum retries")
+        setattr(failure, "budget_usage", budget_update)
+        raise failure
     return {
         "report": {"final": "Error generating final report: Maximum retries exceeded"},
-        "messages": [AIMessage(content="Report generation failed after maximum retries")],
-        "runtime": {"budget": merge_budget_usage(
-            budget_update,
-            budget_usage_with_reason("Final report generation failed after maximum retries."),
-        )},
+        "messages": [
+            AIMessage(content="Report generation failed after maximum retries")
+        ],
+        "runtime": {
+            "budget": merge_budget_usage(
+                budget_update,
+                budget_usage_with_reason(
+                    "Final report generation failed after maximum retries."
+                ),
+            )
+        },
     }
+
 
 # Main Deep Researcher Graph Construction
 # Creates the complete deep research workflow from user input to final report.

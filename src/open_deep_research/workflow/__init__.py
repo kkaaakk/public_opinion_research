@@ -20,7 +20,23 @@ from open_deep_research.workflow.state_utils import (
     workflow_state,
 )
 
+
+def get_workflow(config=None):
+    """Select the explicit Python API backend without changing Web/CLI defaults."""
+    from open_deep_research.configuration import Configuration
+
+    settings = Configuration.from_runnable_config(config)
+    if settings.workflow_backend == "python":
+        from open_deep_research.workflow.python_workflow import PythonWorkflow
+
+        return PythonWorkflow()
+    from open_deep_research.workflow.graph import deep_researcher
+
+    return deep_researcher(config)
+
+
 __all__ = [
+    "get_workflow",
     "agents_for_new_run",
     "agents_state",
     "business_context",
