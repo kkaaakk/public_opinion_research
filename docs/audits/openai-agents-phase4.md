@@ -83,6 +83,8 @@ stateDiagram-v2
 
 State 使用 JSON 和白名单数据类型（原消息、Section、ResearchTask、ResearchReview），不使用 pickle 或动态 import。完整 Snapshot 是原 `DeepResearchState` 的持久表示，不创建第二套业务 State/reducer。有效配置只存指纹用于比较，不把环境凭据复制入请求 config。配置、代码合同或已安装 SDK 版本漂移会在执行前明确失败，记录变更字段名，不自动改用另一 Runtime。
 
+Run Store 在准入后标记受信 `accepted_run` 配置：已校验的模型/Backend/Runtime/审批等请求选项随 Run 保存，不再被进程环境默认值悄悄覆盖。操作方强制审批在首次准入取更严格值，用户不能通过关闭checkbox绕过；批准后只有已消费的审批事务能关闭同一Run的再次规划。URL/凭据、资源与预算策略仍来自操作方并参与配置核对。该规则仅用于新持久Run；旧 `Configuration.from_runnable_config` 的环境优先级保持。新增回归覆盖环境false不能绕过请求审批、环境true批准后不重算、客户端不能关闭操作方强制审批，以及预算仍受服务端控制。
+
 所有控制写入先获取数据库调度锁；幂等唯一约束、状态版本、attempt/未过期租约复核、终态和 Outbox 在同一事务内提交。SSE 不生成 seq。数据库异常回滚全部控制变化；终态无法提交时由重启核对保留不确定状态，不能声称执行成功。
 
 ## 4. Session、Run、Attempt、Graph、History、Trace
@@ -180,6 +182,7 @@ SIGINT/SIGTERM 停止接纳并让现有任务传递取消、清算退出；MCP/�
 | 原 `workflow/execution.py` 的 observer ContextVar | 一个 async 事实回调，asyncio 子任务继承；Workflow/Runtime 不反向导入 Web/SQL，不把存储依赖传进每个业务方法 |
 | 原 `PythonWorkflow` cursor/PlanApprovalRequired | 显式安全边界、审批交回 Worker；原顺序与分支保留，没有通用节点注册表、DSL 或第二套 State |
 | 原 SDK Runtime 的窄接缝 | 公共 Hook 发真实生命周期、原工具 invoker 前后写意图/回执、传官方 Session；仍只调用原 Harness/Runner 一次 |
+| 原 `Configuration.from_runnable_config` 的受信Run分支 | 只固定已准入的请求选项与审批消费结果；不接收客户端任意config，不改变旧入口优先级、凭据或预算政策 |
 
 新生产模块只有3个。两个核心基础设施类；额外异常类表示冲突、owner隐藏/失租、审批暂停，全部有实际控制语义。调用深度的主要部分仍是原业务角色→Runtime→Harness→Runner；新数据库方法没有多层转发，observer只负责一次持久提交。不新增 Manager、Service、通用 Workflow Engine、Agent 或 BudgetManager。Phase 5 的旧 Runtime/LangGraph/依赖退役未混入。
 
@@ -197,10 +200,10 @@ SIGINT/SIGTERM 停止接纳并让现有任务传递取消、清算退出；MCP/�
 
 | 最终本地检查 | 结果 |
 | --- | --- |
-| 全量 pytest（保留所有 Phase 0–3 用例） | **816 passed / 6 deselected / 156 warnings，154.50s**；新增52项，退出码0 |
+| 全量 pytest（保留所有 Phase 0–3 用例） | **820 passed / 6 deselected / 156 warnings，153.36s**；新增56项，退出码0 |
 | 浏览器控制器合同 | **5 passed**；实际app.js执行，覆盖模糊create响应/刷新、已知Run重连去重、一次审批、真实cancel请求、非终态EOF；加入CI，不新增npm依赖 |
 | Ruff CI E/F/I / 新模块完整规则 | 通过；没有降低原门禁 |
-| format | 13个新增/修改Python文件通过；Web既有文件同时按formatter格式化。未修改Configuration旧格式 |
+| format | 13个新增/修改Python文件通过；Web既有文件同时按formatter格式化。Configuration整文件仍有历史差异，固定main副本同样失败；新增分支局部对齐formatter，未捆绑大型配置文件的无关重排 |
 | compileall / import | 生产包、安全包、scripts、evaluation通过；禁dotenv/凭据/网络的**29入口**导入通过，独立Python导入不构造旧图 |
 | Mypy | **33 errors / 15 files / 110 source files**；逐消息去行号对比新增0、移除0，仍非零退出 |
 | 依赖 | 原1项markitdown-mcp/mcp冲突保持，仍非零退出；锁和依赖声明不变 |

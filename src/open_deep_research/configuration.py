@@ -1741,6 +1741,29 @@ class Configuration(BaseModel):
             field_name: os.environ.get(field_name.upper(), configurable.get(field_name))
             for field_name in field_names
         }
+        if config and (config.get("metadata") or {}).get("accepted_run") is True:
+            # The durable Web boundary has already validated these request
+            # choices. Ambient defaults must not bypass required approval,
+            # re-enable planning after approval or silently select another model.
+            # Credentials, service locations and resource/budget policy remain
+            # operator-controlled. The legacy parsing order is unchanged.
+            for field_name in (
+                "workflow_backend",
+                "business_agent_runtime",
+                "allow_plan_feedback",
+                "allow_clarification",
+                "research_model",
+                "compression_model",
+                "final_report_model",
+                "summarization_model",
+                "search_api",
+                "organization_context",
+                "rag_enabled",
+                "retrieval_mode",
+                "enabled_business_agents",
+            ):
+                if field_name in configurable:
+                    values[field_name] = configurable[field_name]
         return cls(**{k: v for k, v in values.items() if v is not None})
 
     # 声明 Pydantic 配置行为，控制额外字段等模型解析选项。

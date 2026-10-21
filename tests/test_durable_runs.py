@@ -348,6 +348,38 @@ def test_approval_rejection_expiry_and_start_failure_are_durable(store, decision
         store.approve(run["run_id"], "alice", version, "approve")
 
 
+@pytest.mark.parametrize("ambient_approval", ["false", "true"])
+def test_accepted_approval_cannot_be_bypassed_or_replanned_by_environment(
+    monkeypatch, tmp_path, store, ambient_approval
+):
+    async def run_test():
+        monkeypatch.setenv("ALLOW_PLAN_FEEDBACK", ambient_approval)
+        state, cfg, runtimes, models, calls, _ = install_sdk(
+            monkeypatch, tmp_path / "transcripts"
+        )
+        cfg["configurable"]["allow_plan_feedback"] = True
+        run = create(store, state=state, cfg=cfg)
+        await worker.RunWorker(store).execute(store.claim("planner"))
+        paused = get(store, run)
+        assert paused["status"] == "awaiting_approval"
+        assert not models and not calls
+        assert paused["data"]["usage"]["model_calls"] == 10
+        store.approve(
+            run["run_id"], "alice", paused["data"]["plan"]["version"], "approve"
+        )
+        await worker.RunWorker(store).execute(store.claim("researcher"))
+        result = get(store, run)
+        assert result["status"] == "completed"
+        assert result["data"]["usage"]["model_calls"] == 28
+        assert result["data"]["plan"] == paused["data"]["plan"]
+        assert len(models) == 4 and calls == {
+            "public_signal": 1,
+            "internal_knowledge": 1,
+        }
+
+    asyncio.run(run_test())
+
+
 def test_archive_compensation_retains_failed_stages_and_does_not_repeat_work(
     store, monkeypatch
 ):
@@ -472,6 +504,39 @@ def test_api_rejects_untrusted_configuration(api, payload):
     assert "SECRET" not in response.text
 
 
+def test_durable_api_freezes_admitted_choices_and_keeps_operator_budget(
+    api, store, monkeypatch
+):
+    from open_deep_research.configuration import Configuration
+
+    monkeypatch.setenv("WORKFLOW_BACKEND", "langgraph")
+    monkeypatch.setenv("BUSINESS_AGENT_RUNTIME", "legacy")
+    monkeypatch.setenv("RESEARCH_MODEL", "operator-default:model")
+    monkeypatch.setenv("ALLOW_PLAN_FEEDBACK", "false")
+    monkeypatch.setenv("MAX_MODEL_CALLS", "3")
+    response = api.post(
+        "/api/runs", json={**BODY, "model": "openai:gpt-4.1", "require_approval": True}
+    )
+    assert response.status_code == 202
+    run = store.get(response.json()["run_id"], "operator")
+    accepted = Configuration.from_runnable_config(run["data"]["config"])
+    assert (
+        accepted.workflow_backend == "python"
+        and accepted.business_agent_runtime == "openai_agents"
+    )
+    assert accepted.research_model == "openai:gpt-4.1" and accepted.allow_plan_feedback
+    assert accepted.max_model_calls == 3
+    legacy = Configuration.from_runnable_config({})
+    assert (
+        legacy.workflow_backend == "langgraph"
+        and legacy.business_agent_runtime == "legacy"
+    )
+    assert (
+        legacy.research_model == "operator-default:model"
+        and not legacy.allow_plan_feedback
+    )
+
+
 @pytest.mark.parametrize(
     "path,method",
     [
@@ -499,6 +564,21 @@ def test_api_authentication_for_every_control(api, path, method):
         headers={"Authorization": "Bearer bad"},
     )
     assert response.status_code == 401
+
+
+def test_operator_required_approval_cannot_be_disabled_by_a_web_request(
+    api, store, monkeypatch
+):
+    from open_deep_research.configuration import Configuration
+
+    monkeypatch.setenv("ALLOW_PLAN_FEEDBACK", "true")
+    response = api.post("/api/runs", json={**BODY, "require_approval": False})
+    assert response.status_code == 202
+    run = store.get(response.json()["run_id"], "operator")
+    assert (
+        Configuration.from_runnable_config(run["data"]["config"]).allow_plan_feedback
+        is True
+    )
 
 
 def test_api_foreign_owner_cannot_read_stream_cancel_approve_or_retry(

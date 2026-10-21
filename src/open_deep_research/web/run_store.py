@@ -417,6 +417,15 @@ class RunStore:
             ).scalar_one()
             if count >= self.policy["queue_capacity"]:
                 raise RunConflict("Research queue is full")
+            config = loads(dumps(config))
+            required_approval = Configuration.from_runnable_config(
+                config
+            ).allow_plan_feedback
+            config.setdefault("configurable", {})["allow_plan_feedback"] = bool(
+                config.get("configurable", {}).get("allow_plan_feedback")
+                or required_approval
+            )
+            config.setdefault("metadata", {})["accepted_run"] = True
             effective = Configuration.from_runnable_config(config).model_dump(
                 mode="json"
             )
@@ -431,7 +440,6 @@ class RunStore:
             run_id = uuid4().hex
             state = loads(dumps(state))
             state.setdefault("research", {})["run_id"] = run_id
-            config = loads(dumps(config))
             config.setdefault("configurable", {}).update(
                 research_run_id=run_id,
                 thread_id=session_id or uuid4().hex,
