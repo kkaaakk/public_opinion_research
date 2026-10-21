@@ -212,7 +212,16 @@ SIGINT/SIGTERM 停止接纳并让现有任务传递取消、清算退出；MCP/�
 
 浏览器验证环境是 `http://127.0.0.1:8764`，独立Web/Worker和离线模型；Browser插件未提供，采用可用Playwright MCP。1365×960桌面与390×844移动视口均验证。流程：显式选择后台研究/审批→计划暂停→真实页面reload→重新填写令牌→恢复相同Run/幂等键→批准→报告/归档；另一次拒绝显示已停止。页面身份/非空、无错误overlay、交互、无横向溢出通过。console仅有填写令牌前的预期401及最初favicon404，无应用JS错误；截图已视觉检查，保留在本次聊天的visualizations目录，不提交运行截图。
 
-GitHub CI由本分支push/PR触发，保留原quality/tests门禁并增加Node22控制器合同；远程终态结果在交付记录中补充。检查日志保留在忽略的 `.tmp/agents-phase4/`，不提交运行DB、凭据、缓存或报告输出。Windows既有pyreadline3退出析构提示和SWIG弃用输出不改变pytest退出码，没有隐藏测试失败。
+代码提交 **`0091a94aaf0a5a9c93692e40fd65693c284e9dac`** 已推送至 [PR #24](https://github.com/kkaaakk/public_opinion_research/pull/24)，面向main，保持open且未合并。实际 PR CI [39618288250](https://github.com/kkaaakk/public_opinion_research/actions/runs/39618288250) 已完成且为 **success**：
+
+| GitHub Job | 远程实际结果 |
+| --- | --- |
+| [quality 119284725338](https://github.com/kkaaakk/public_opinion_research/actions/runs/39618288250/job/119284725338) | locked安装、原Ruff门禁、编译和公共入口导入均success |
+| [tests 119284725245](https://github.com/kkaaakk/public_opinion_research/actions/runs/39618288250/job/119284725245) | Linux/Python3.11：**820 passed / 6 deselected / 156 warnings，105.74s**；Node22合同 **5 passed / 0 failed**；全部步骤success |
+
+GitHub Git传输后期出现连接重置，API仍可访问；通过Git Data API上传相同对象并逐一验证blob/tree/commit SHA，再带expected head进行非强制快进。保留原本地提交SHA，没有修改持久Git/网络配置、关闭TLS校验或改写其他分支。临时测试MySQL与浏览器进程已关闭，原有MySQL/Neo4j服务保持healthy。
+
+本节随后以纯审计提交收尾，同样触发并等待完整CI；最终审计HEAD及对应最新CI在交付回复中列出，亦可从[本分支CI记录](https://github.com/kkaaakk/public_opinion_research/actions/workflows/ci.yml?query=branch%3Acodex%2Fopenai-agents-phase4)追溯。检查日志保留在忽略的 `.tmp/agents-phase4/`，不提交运行DB、凭据、缓存或报告输出。Windows既有pyreadline3退出析构提示和SWIG弃用输出不改变pytest退出码，没有隐藏测试失败。
 
 已知基线：Configuration 旧格式差异、Mypy历史33项、markitdown-mcp 对 mcp~=1.8.0 与锁中1.23.0的已知依赖冲突；不能写成通过。真实付费模型、生产远程MCP、生产多机吞吐/HA、供应商质量及完整租户ACL未在本阶段验证。
 
