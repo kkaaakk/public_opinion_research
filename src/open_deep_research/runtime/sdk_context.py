@@ -89,6 +89,7 @@ class SDKContextHarness(RunHooks):
         *,
         evidence_tools: frozenset[str] = DEFAULT_EVIDENCE_TOOLS,
         consumer_refresh_every: int = 0,
+        update_consumer_context: bool = False,
         context_max_chars: int = 16_000,
         settlement_timeout: float = 30.0,
     ) -> None:
@@ -112,6 +113,7 @@ class SDKContextHarness(RunHooks):
         self.sdk_run_id = uuid4().hex
         self.evidence_tools = frozenset(evidence_tools)
         self.consumer_refresh_every = consumer_refresh_every
+        self.update_consumer_context = update_consumer_context
         self.context_max_chars = context_max_chars
         self.settlement_timeout = settlement_timeout
         self.results: dict[str, ObservedToolResult] = {}
@@ -121,7 +123,10 @@ class SDKContextHarness(RunHooks):
         self.last_settlement: BatchSettlement | None = None
         self._compacted: dict[str, str] = {}
         self._needs_context_update: set[str] = set()
+        self._batch_errors: dict[str, str] = {}
         self._context_text = ""
+        self._retrieved_signature = ""
+        self._response_starts: list[str] = []
         self._owned_contexts: set[str] = set()
         self._active: set[asyncio.Task[Any]] = set()
         self._batch_lock = asyncio.Lock()
@@ -356,6 +361,9 @@ class SDKContextHarness(RunHooks):
     ) -> None:
         """Observe a model response without treating hosted items as local evidence."""
         self.events.append(("llm_end", str(self.model_calls)))
+        items = response.to_input_items()
+        if items:
+            self._response_starts.append(self._item_key(items[0]))
 
     async def on_agent_start(
         self, context: RunContextWrapper[Any], agent: Agent[Any]
@@ -439,42 +447,42 @@ class SDKContextHarness(RunHooks):
                     )
                     self._remember_compaction(compacted.messages)
                 return False
-            self.events.append(("batch_start", str(len(evidence))))
-            previous_receipts = dict(self.workspace.receipts)
-            context_calls_before = int(
-                self.workspace.metrics.as_dict().get("context_manager_calls", 0) or 0
+            updated = False
+            for turn in sorted({result.model_turn for result in evidence}):
+                # Preserve the original SDK model batch identity across retries,
+                # including when later model turns add more completed tools.
+                group = [result for result in evidence if result.model_turn == turn]
+                updated = await self._flush_evidence(group) or updated
+            return updated
+
+    async def _flush_evidence(self, evidence: list[ObservedToolResult]) -> bool:
+        self.events.append(("batch_start", str(len(evidence))))
+        previous_receipts = dict(self.workspace.receipts)
+        context_calls_before = int(
+            self.workspace.metrics.as_dict().get("context_manager_calls", 0) or 0
+        )
+        call_ids = {result.tool_call_id for result in evidence}
+        try:
+            outcome = await self.workspace.ingest(
+                self._message_view(),
+                [
+                    ToolBatchItem(
+                        result.tool_name,
+                        result.graph_call_id,
+                        result.args,
+                        result.observation,
+                        True,
+                    )
+                    for result in evidence
+                ],
             )
-            call_ids = {result.tool_call_id for result in evidence}
-            try:
-                outcome = await self.workspace.ingest(
-                    self._message_view(),
-                    [
-                        ToolBatchItem(
-                            result.tool_name,
-                            result.graph_call_id,
-                            result.args,
-                            result.observation,
-                            True,
-                        )
-                        for result in evidence
-                    ],
+            if not outcome.succeeded:
+                self._batch_errors.update(
+                    {
+                        call_id: outcome.error_type or "ResearchGraphError"
+                        for call_id in call_ids
+                    }
                 )
-                if not outcome.succeeded:
-                    if (
-                        int(
-                            self.workspace.metrics.as_dict().get(
-                                "context_manager_calls", 0
-                            )
-                            or 0
-                        )
-                        <= context_calls_before
-                    ):
-                        self._needs_context_update.update(call_ids)
-                    self.workspace.receipts.clear()
-                    self.workspace.receipts.update(previous_receipts)
-                    self.events.append(("batch_failed", str(len(evidence))))
-                    return False
-            except BaseException:
                 if (
                     int(
                         self.workspace.metrics.as_dict().get("context_manager_calls", 0)
@@ -485,30 +493,42 @@ class SDKContextHarness(RunHooks):
                     self._needs_context_update.update(call_ids)
                 self.workspace.receipts.clear()
                 self.workspace.receipts.update(previous_receipts)
-                raise
+                self.events.append(("batch_failed", str(len(evidence))))
+                return False
+        except BaseException:
             if (
-                call_ids & self._needs_context_update
-                and int(
+                int(
                     self.workspace.metrics.as_dict().get("context_manager_calls", 0)
                     or 0
                 )
                 <= context_calls_before
             ):
-                # A failed context update cannot be acknowledged by the legacy
-                # URL-cache fast path, which does not rebuild Working Context.
-                self.workspace.receipts.clear()
-                self.workspace.receipts.update(previous_receipts)
-                self.events.append(("batch_recovery_incomplete", str(len(evidence))))
-                return False
-            self._needs_context_update.difference_update(call_ids)
-            self.budget_usage = merge_budget_usage(
-                self.budget_usage, outcome.budget_usage
+                self._needs_context_update.update(call_ids)
+            self.workspace.receipts.clear()
+            self.workspace.receipts.update(previous_receipts)
+            raise
+        if (
+            call_ids & self._needs_context_update
+            and int(
+                self.workspace.metrics.as_dict().get("context_manager_calls", 0) or 0
             )
-            self._remember_compaction(outcome.messages)
-            for result in evidence:
-                result.consumed = True
-            self.events.append(("batch_end", str(len(evidence))))
-            return True
+            <= context_calls_before
+        ):
+            # A failed context update cannot be acknowledged by the legacy
+            # URL-cache fast path, which does not rebuild Working Context.
+            self.workspace.receipts.clear()
+            self.workspace.receipts.update(previous_receipts)
+            self.events.append(("batch_recovery_incomplete", str(len(evidence))))
+            return False
+        self._needs_context_update.difference_update(call_ids)
+        for call_id in call_ids:
+            self._batch_errors.pop(call_id, None)
+        self.budget_usage = merge_budget_usage(self.budget_usage, outcome.budget_usage)
+        self._remember_compaction(outcome.messages)
+        for result in evidence:
+            result.consumed = True
+        self.events.append(("batch_end", str(len(evidence))))
+        return True
 
     def _remember_compaction(self, messages: list[Any]) -> None:
         by_graph_id = {result.graph_call_id: result for result in self.results.values()}
@@ -556,17 +576,28 @@ class SDKContextHarness(RunHooks):
         if not self.workspace.strategy.graph_enabled:
             self.model_calls += 1
             return data.model_data
-        refresh = bool(
+        # Business roles request per-turn refresh; standalone Phase 0 callers
+        # retain the explicit refresh interval and retrieval-only default.
+        refresh_due = bool(
             self.model_calls
             and self.consumer_refresh_every
             and self.model_calls % self.consumer_refresh_every == 0
         )
-        if not self._context_text or (
-            refresh and not self.workspace.strategy.is_producer
+        if not self._context_text or updated or refresh_due:
+            self.workspace.context_for(query_suffix="SDK current task")
+        signature = self.workspace.relevant_subgraph.model_dump_json(exclude={"query"})
+        changed = signature != self._retrieved_signature
+        refresh = changed or refresh_due
+        if (
+            not self.workspace.strategy.is_producer
+            and self.update_consumer_context
+            and self.workspace.relevant_subgraph.nodes
+            and changed
         ):
-            self.workspace.context_for(query_suffix="SDK consumer refresh")
+            await self.workspace.update_working_context([])
+        self._retrieved_signature = signature
         if not self._context_text or updated or refresh:
-            body = self.workspace.protected_context()
+            body = self.workspace.protected_context(include_summary=False)
             identity = f"run={self.scope.run_id} sdk_run={self.sdk_run_id} role={self.scope.role} task={self.scope.task_id}\n"
             bound = self.context_max_chars - len(identity) - 160
             if bound <= 0:
@@ -602,6 +633,80 @@ class SDKContextHarness(RunHooks):
             instructions=data.model_data.instructions,
         )
 
+    @staticmethod
+    def _item_key(item: dict[str, Any]) -> str:
+        return json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
+
+    def history_units(
+        self, items: list[TResponseInputItem]
+    ) -> tuple[list[TResponseInputItem], list[tuple[int, list[TResponseInputItem]]]]:
+        """Partition at observed SDK response boundaries, keeping reasoning with tools.
+
+        Unknown/reordered protocol histories cannot be safely compacted. Preserve
+        them for the caller's explicit capacity error instead of guessing pairs.
+        """
+        starts = {key: index for index, key in enumerate(self._response_starts)}
+        if len(starts) != len(self._response_starts):
+            return list(items), []
+        boundaries = [
+            (index, starts[self._item_key(item)])
+            for index, item in enumerate(items)
+            if self._item_key(item) in starts
+        ]
+        if not boundaries:
+            return list(items), []
+        units = []
+        for offset, (start, turn) in enumerate(boundaries):
+            end = (
+                boundaries[offset + 1][0]
+                if offset + 1 < len(boundaries)
+                else len(items)
+            )
+            units.append((turn, list(items[start:end])))
+        return list(items[: boundaries[0][0]]), units
+
+    def can_compact_unit(self, items: list[TResponseInputItem]) -> bool:
+        """Admit complete function-call/output units and their reasoning as one slice."""
+        calls = [
+            item.get("call_id") for item in items if item.get("type") == "function_call"
+        ]
+        outputs = [
+            item.get("call_id")
+            for item in items
+            if item.get("type") == "function_call_output"
+        ]
+        if any(
+            not isinstance(call_id, str) or not call_id
+            for call_id in [*calls, *outputs]
+        ):
+            return False
+        if sorted(calls) != sorted(outputs) or len(set(calls)) != len(calls):
+            return False
+        for item in items:
+            if item.get("type", "message") not in {
+                "message",
+                "reasoning",
+                "function_call",
+                "function_call_output",
+            }:
+                return False
+            if item.get("role") in {"user", "system", "developer"}:
+                return False
+        if self.workspace.strategy.is_producer:
+            for call_id in calls:
+                result = self.results.get(call_id)
+                if (
+                    result is None
+                    or result.status != "succeeded"
+                    or not result.consumed
+                ):
+                    return False
+                if result.tool_name in self.evidence_tools:
+                    receipt = self.workspace.receipts.get(result.graph_call_id)
+                    if receipt is None or not receipt.has_complete_node_references:
+                        return False
+        return True
+
     async def settle(self, reason: str) -> BatchSettlement:
         """Drain observed tools and evidence without replaying any business tool.
 
@@ -634,7 +739,7 @@ class SDKContextHarness(RunHooks):
                 for result in self.results.values()
                 if result.status == "running"
             ),
-            error_type=error_type,
+            error_type=error_type or next(iter(self._batch_errors.values()), None),
         )
         self.last_settlement = settlement
         self.events.append(("settlement", reason))

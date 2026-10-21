@@ -14,13 +14,22 @@ path in `runtime/sdk_runtime.py`, selected with
 `BUSINESS_AGENT_RUNTIME` environment variable). The default remains `legacy`.
 LangGraph still owns parallel research, join, review/gap loops, risk/strategy
 ordering and state reducers; Web/API entrypoints are unchanged.
+Phase 2 integrates the Research Graph Context Harness across all four SDK roles:
+completed tool batches use staged persistence/receipt/context settlement,
+Consumers refresh committed evidence, and SDK-native history uses bounded rolling
+summaries through the official input filter. See
+[the Phase 2 audit](docs/audits/openai-agents-phase2.md) for provider, budget,
+concurrency and external-service validation limits. Unknown model aliases use a
+32,768-token application window unless an explicit capacity is configured; this
+is not a provider capability claim. The default Runtime remains `legacy`.
 The selected target is OpenAI Agents SDK + deterministic Python workflow + the
 custom Research Graph Context Harness, without DBOS or LangGraph orchestration.
 Keep the agreed phases: 0 SDK feasibility; 1 four-role Runtime; 2 full Research
 Graph Context Harness integration; 3 deterministic Python Workflow; 4 Web/SSE/
 Session integration; 5 old Runtime retirement and dependency cleanup. Do not
 advance later phases as incidental cleanup. Phase 1 reuses Phase 0 collection,
-input filtering and exit settlement, but does not complete Phase 2.
+input filtering and exit settlement; Phase 2 extends those same seams without
+replacing LangGraph or introducing another Agent Loop.
 DeerFlow is retired. Its local environments, Docker deployment, branch
 `codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's
 request. The original opinion project backup and `v1-pre-deerflow` remain.
@@ -32,7 +41,9 @@ for tested SDK interfaces, tool coverage and remaining limitations.
 Read [the Phase 1 results](docs/audits/openai-agents-phase1.md) for Runtime
 selection, budget compatibility and explicit unsupported SDK paths. SDK input
 uses native dictionaries and official Models; LangChain tool/report/Graph
-services remain behind the business boundary. Do not add another agent loop or
+services remain behind the business boundary. Read the Phase 2 audit before
+changing batch staging, context scoping or native history compaction.
+Do not add another agent loop or
 silently fall back to legacy after an SDK failure.
 The applicable findings from the historical Agent Server audit are preserved
 in the migration plan, which links to the original Git evidence.

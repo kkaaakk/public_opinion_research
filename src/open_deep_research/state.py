@@ -26,6 +26,7 @@ class ResearchComplete(BaseModel):
 # 保存研究摘要与可用于引用的代表性摘录。
 class Summary(BaseModel):
     """Research summary with representative excerpts."""
+
     summary: str
     key_excerpts: str
 
@@ -33,6 +34,7 @@ class Summary(BaseModel):
 # 定义是否澄清、澄清问题及研究确认信息的结构化输出。
 class ClarifyWithUser(BaseModel):
     """Structured clarification decision."""
+
     need_clarification: bool = Field(description="Whether clarification is required.")
     question: str = Field(description="Question used to clarify the report scope.")
     verification: str = Field(description="Confirmation shown before research starts.")
@@ -41,6 +43,7 @@ class ClarifyWithUser(BaseModel):
 # 承载生成后的正式研究简报。
 class ResearchQuestion(BaseModel):
     """Structured research brief output."""
+
     research_brief: str = Field(description="Research question used to guide research.")
 
 
@@ -59,6 +62,7 @@ class ResearchTask(BaseModel):
 # 记录证据充分性、已确认发现、冲突、缺口与后续任务。
 class ResearchReview(BaseModel):
     """Evidence sufficiency review and optional follow-up tasks."""
+
     research_complete: bool
     confirmed_findings: list[str] = Field(default_factory=list)
     unresolved_claims: list[str] = Field(default_factory=list)
@@ -70,6 +74,7 @@ class ResearchReview(BaseModel):
 # 承载一条补充检索查询。
 class SearchQuery(BaseModel):
     """One follow-up search query."""
+
     search_query: str
 
 
@@ -88,12 +93,14 @@ class Section(BaseModel):
 # 作为报告章节规划的结构化模型输出。
 class Sections(BaseModel):
     """Structured section plan output."""
+
     sections: list[Section]
 
 
 # 保存章节质量结论及需补充的查询。
 class Feedback(BaseModel):
     """Section quality feedback."""
+
     grade: Literal["pass", "fail"]
     follow_up_queries: list[SearchQuery]
 
@@ -124,11 +131,13 @@ class ResearchState(TypedDict, total=False):
 
     run_id: str
     working_contexts: dict[str, dict[str, Any]]
+    working_context_scopes: dict[str, dict[str, Any]]
 
 
 # 保存章节计划、完成章节、规划反馈与最终报告。
 class ReportState(TypedDict, total=False):
     """Plan, section outputs, feedback, and final report."""
+
     sections: list[Section]
     completed_sections: list[Section]
     plan_feedback: list[str]
@@ -184,8 +193,10 @@ def _task_values(value: Any) -> list[Any]:
 # 合并并去重任务；收到 override 指令时允许清空或整体替换。
 def research_tasks_reducer(current_value: Any, new_value: Any) -> list[ResearchTask]:
     """Merge and de-duplicate task values; an override token clears/replaces."""
-    values = _task_values(new_value) if _is_override(new_value) else (
-        _task_values(current_value) + _task_values(new_value)
+    values = (
+        _task_values(new_value)
+        if _is_override(new_value)
+        else (_task_values(current_value) + _task_values(new_value))
     )
     merged: list[ResearchTask] = []
     seen: set[str] = set()
@@ -261,7 +272,9 @@ def _merge_role_state(current: Any, incoming: Any) -> dict[str, Any]:
         if _is_override(memory_update):
             merged["memory"] = list(_override_value(memory_update, []) or [])
         else:
-            additions = memory_update if isinstance(memory_update, list) else [memory_update]
+            additions = (
+                memory_update if isinstance(memory_update, list) else [memory_update]
+            )
             merged["memory"] = list(left.get("memory", []) or []) + list(additions)
     if "rolling_summary" in right:
         merged["rolling_summary"] = str(right["rolling_summary"] or "")
@@ -292,15 +305,22 @@ def research_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
     incoming = dict(new_value) if isinstance(new_value, Mapping) else {}
     merged: dict[str, Any] = dict(current)
     if incoming.get("run_id"):
+        if current.get("run_id") not in (None, "", incoming["run_id"]):
+            merged.pop("working_contexts", None)
+            merged.pop("working_context_scopes", None)
         merged["run_id"] = str(incoming["run_id"])
     if "working_contexts" in incoming:
-        contexts = dict(current.get("working_contexts", {}) or {})
+        contexts = dict(merged.get("working_contexts", {}) or {})
         update = incoming["working_contexts"]
         if _is_override(update):
             contexts = dict(_override_value(update, {}) or {})
         elif isinstance(update, Mapping):
             contexts.update({str(role): value for role, value in update.items()})
         merged["working_contexts"] = contexts
+    if "working_context_scopes" in incoming:
+        scopes = dict(merged.get("working_context_scopes", {}) or {})
+        scopes.update(incoming["working_context_scopes"] or {})
+        merged["working_context_scopes"] = scopes
     return merged
 
 
@@ -315,7 +335,9 @@ def report_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
     merged: dict[str, Any] = dict(current)
     for key in ("sections", "final"):
         if key in incoming:
-            merged[key] = _override_value(incoming[key], [] if key == "sections" else "")
+            merged[key] = _override_value(
+                incoming[key], [] if key == "sections" else ""
+            )
     for key in ("completed_sections", "plan_feedback"):
         if key in incoming:
             value = incoming[key]
@@ -375,11 +397,31 @@ PublicOpinionState = DeepResearchState
 
 
 __all__ = [
-    "AgentInputState", "AgentRoleState", "AgentState", "BusinessAgentRole",
-    "ClarifyWithUser", "DeepResearchState", "Feedback", "PublicOpinionState",
-    "ReportState", "ResearchComplete", "ResearchQuestion", "ResearchReview",
-    "ResearchState", "ResearchTask", "RuntimeState", "SearchQuery", "Section",
-    "Sections", "Summary", "WorkflowState", "agents_reducer", "report_reducer",
-    "research_reducer", "research_task_identity", "research_tasks_reducer",
-    "runtime_reducer", "workflow_reducer",
+    "AgentInputState",
+    "AgentRoleState",
+    "AgentState",
+    "BusinessAgentRole",
+    "ClarifyWithUser",
+    "DeepResearchState",
+    "Feedback",
+    "PublicOpinionState",
+    "ReportState",
+    "ResearchComplete",
+    "ResearchQuestion",
+    "ResearchReview",
+    "ResearchState",
+    "ResearchTask",
+    "RuntimeState",
+    "SearchQuery",
+    "Section",
+    "Sections",
+    "Summary",
+    "WorkflowState",
+    "agents_reducer",
+    "report_reducer",
+    "research_reducer",
+    "research_task_identity",
+    "research_tasks_reducer",
+    "runtime_reducer",
+    "workflow_reducer",
 ]

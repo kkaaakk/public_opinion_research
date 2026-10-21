@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from agents import Agent, Model, ModelSettings, RunConfig
 from agents.exceptions import MaxTurnsExceeded, MCPToolCancellationError
 from agents.retry import ModelRetrySettings
+from agents.run import ModelInputData
 from agents.tool_context import ToolContext
 from jsonschema.validators import validator_for
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -32,17 +34,19 @@ from open_deep_research.budget import (
     estimate_text_tokens,
     is_over_budget,
     merge_budget_usage,
+    model_budget_admission,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
 from open_deep_research.mcp.domain_filter import get_tool_domain
+from open_deep_research.research_graph.compaction import summarize_compactable_history
 from open_deep_research.research_graph.workspace import ResearchWorkspace
 from open_deep_research.runtime.agent_runtime import AgentRuntime, AgentRuntimeResult
 from open_deep_research.runtime.sdk_context import SDKContextHarness
 
 
 class SDKContextLimitExceeded(RuntimeError):
-    """Reject oversized requests until Phase 2 supports SDK rolling compaction."""
+    """Reject requests whose protected history cannot fit safely after compaction."""
 
 
 class _ReasoningStopped(Exception):
@@ -93,10 +97,17 @@ class _BusinessAgentHarness(SDKContextHarness):
         budget: _RunBudget,
         evidence_tools: frozenset[str],
     ) -> None:
-        super().__init__(workspace, evidence_tools=evidence_tools)
+        super().__init__(
+            workspace,
+            evidence_tools=evidence_tools,
+            consumer_refresh_every=1,
+            update_consumer_context=True,
+        )
         self.config = config
         self.run_budget = budget
         self.items: list[Any] = []
+        self._compacted_turns: set[int] = set()
+        self._summary_references: set[str] = set()
 
     async def filter_model_input(self, data: Any) -> Any:
         self.items = list(data.model_data.input)
@@ -107,32 +118,196 @@ class _BusinessAgentHarness(SDKContextHarness):
             raise _ReasoningStopped(
                 "Business budget stopped SDK reasoning before another request."
             )
-        # Use the actual SDK input, instructions and registered schemas. This is
-        # admission estimation only; reported tokens always come from SDK usage.
-        capacity = (
-            self.config.research_graph_context_capacity_tokens
-            or get_model_token_limit(self.config.research_model)
-        )
-        estimated = estimate_text_tokens(
+        filtered = await self._compact_history(filtered, data.agent)
+        if not can_spend_model_call(
+            self.config, self.run_budget.projected(), reserve_final_report_call=True
+        ) or is_over_budget(self.config, self.run_budget.projected()):
+            raise _ReasoningStopped(
+                "Rolling compaction used the remaining reasoning allowance."
+            )
+        return filtered
+
+    def _estimate(self, data: ModelInputData, agent: Agent[Any]) -> int:
+        return estimate_text_tokens(
             json.dumps(
                 {
-                    "instructions": filtered.instructions,
-                    "input": filtered.input,
-                    "tools": [tool.params_json_schema for tool in data.agent.tools],
+                    "instructions": data.instructions,
+                    "input": data.input,
+                    "tools": [tool.params_json_schema for tool in agent.tools],
                 },
                 ensure_ascii=False,
                 default=str,
             )
         )
+
+    def _with_summary(
+        self, head: list[Any], units: list[Any], summary: str, instructions: Any
+    ) -> ModelInputData:
+        summary_items = (
+            [
+                {
+                    "role": "user",
+                    "content": "<SDK Rolling Summary>\n"
+                    + summary
+                    + "\n</SDK Rolling Summary>",
+                }
+            ]
+            if summary
+            else []
+        )
+        return ModelInputData(
+            input=[
+                *head,
+                *summary_items,
+                *(item for _, unit in units for item in unit),
+            ],
+            instructions=instructions,
+        )
+
+    async def _compact_history(
+        self, data: ModelInputData, agent: Agent[Any]
+    ) -> ModelInputData:
+        # The public filter changes requests, not Runner's original transcript.
+        # Reapply the committed window on every call without mutating SDK internals.
+        head, units = self.history_units(data.input)
+        active = [
+            (turn, unit) for turn, unit in units if turn not in self._compacted_turns
+        ]
+        current = self._with_summary(
+            head, active, self.workspace.rolling_summary, data.instructions
+        )
+        capacity = (
+            self.config.research_graph_context_capacity_tokens
+            or get_model_token_limit(self.config.research_model)
+            # Unknown deployment aliases still get a bounded application
+            # window. This is not a claim about the provider's context limit.
+            or 32_768
+        )
+        before = self._estimate(current, agent)
         if (
-            context_pressure_ratio(estimated, capacity)
-            >= self.config.context_compaction_threshold_ratio
+            context_pressure_ratio(before, capacity)
+            < self.config.context_compaction_threshold_ratio
         ):
+            return current
+        recent = max(1, self.config.recent_raw_steps)
+        eligible = [
+            (turn, unit)
+            for turn, unit in active[:-recent]
+            if self.can_compact_unit(unit)
+        ]
+        if not eligible:
             raise SDKContextLimitExceeded(
-                "SDK input requires rolling compaction, which is reserved for Phase 2; "
-                "use a smaller task/context or the legacy runtime. No history was discarded."
+                "Protected task, memory, pending evidence or recent native steps exceed context capacity; Phase 2 cannot safely discard them."
             )
-        return filtered
+        removed = {turn for turn, _ in eligible}
+        kept = [(turn, unit) for turn, unit in active if turn not in removed]
+        # Bound the summary request independently of the business context window.
+        # The complete original items and tool observations remain available.
+        history_text = json.dumps(
+            [item for _, unit in eligible for item in unit],
+            ensure_ascii=False,
+            default=str,
+        )
+        if len(history_text) > 30_000:
+            history_text = (
+                history_text[:15_000]
+                + "\n[Middle omitted from summary input; original transcript retained.]\n"
+                + history_text[-15_000:]
+            )
+        model_name = (
+            self.config.rolling_compaction_model or self.config.compression_model
+        )
+        protected = json.dumps(head, ensure_ascii=False, default=str)
+        previous = self.workspace.rolling_summary
+        try:
+            summary, _ = await summarize_compactable_history(
+                history_text,
+                previous_summary=previous,
+                protected_context=protected,
+                model=self.workspace.model_factory(
+                    model_name, self.config.rolling_compaction_model_max_tokens
+                ),
+                model_name=model_name,
+                max_retries=self.config.max_structured_output_retries,
+            )
+            # Keep receipt identities independently of lossy model prose. They
+            # remain references, never newly verified evidence or a second graph.
+            references = set()
+            for _, unit in eligible:
+                for item in unit:
+                    result = self.results.get(item.get("call_id"))
+                    receipt = (
+                        self.workspace.receipts.get(result.graph_call_id)
+                        if result
+                        else None
+                    )
+                    if receipt is not None:
+                        references.update(receipt.node_ids)
+            references.update(self._summary_references)
+            allowed = set(self.workspace.relevant_subgraph.node_ids) | references
+            cited = set(
+                re.findall(
+                    r"\b(?:SRC|EVD|CLM|FND|EVT|ENT|UNT|SFD|COV)_[a-f0-9]{20}\b", summary
+                )
+            )
+            if not cited.issubset(allowed):
+                raise ValueError(
+                    "Rolling summary contains unverified graph references."
+                )
+            references.update(cited)
+            if references:
+                summary += "\nCommitted graph references: " + ", ".join(
+                    sorted(references)
+                )
+            if (
+                estimate_text_tokens(summary)
+                > self.config.rolling_compaction_model_max_tokens
+            ):
+                raise ValueError("Rolling summary exceeds the configured output bound.")
+            candidate = self._with_summary(head, kept, summary, data.instructions)
+            after = self._estimate(candidate, agent)
+            if (
+                after >= before
+                or context_pressure_ratio(after, capacity)
+                >= self.config.context_compaction_threshold_ratio
+            ):
+                raise ValueError(
+                    "Rolling compaction cannot fit the protected request or did not reduce it."
+                )
+        except BaseException as exc:
+            self.events.append(("rolling_compact_failed", type(exc).__name__))
+            self.workspace.metrics.add("rolling_compact_failures")
+            if self.workspace.transcript is not None:
+                self.workspace.transcript.append(
+                    "sdk_rolling_compact_failed",
+                    {
+                        "error_type": type(exc).__name__,
+                        "estimated_input_tokens": before,
+                    },
+                )
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise SDKContextLimitExceeded(
+                f"Rolling compaction failed safely: {type(exc).__name__}: {exc}; original history retained."
+            ) from exc
+        self._compacted_turns.update(removed)
+        self._summary_references = references
+        self.workspace.rolling_summary = summary
+        self.workspace.metrics.add("rolling_compact_count")
+        self.workspace.metrics.add(
+            "rolling_compact_tokens_removed", before - after, quality="estimated"
+        )
+        self.events.append(("rolling_compact", str(len(removed))))
+        if self.workspace.transcript is not None:
+            self.workspace.transcript.append(
+                "sdk_rolling_compact",
+                {
+                    "turns": sorted(removed),
+                    "tokens_removed": before - after,
+                    "rolling_summary": summary,
+                },
+            )
+        return candidate
 
     async def on_llm_start(
         self, context: Any, agent: Any, system_prompt: Any, input_items: Any
@@ -261,9 +436,13 @@ class SDKAgentRuntime(AgentRuntime):
                 if isinstance(envelope, dict) and envelope.get("status") == "cancelled":
                     raise MCPToolCancellationError(_text(output))
                 if isinstance(envelope, dict) and (
-                    envelope.get("isError") is True
-                    or envelope.get("success") is False
-                    or envelope.get("status") in ("failed", "error")
+                    ("isError" in envelope and envelope["isError"] is not False)
+                    or ("success" in envelope and envelope["success"] is not True)
+                    or (
+                        "status" in envelope
+                        and envelope["status"]
+                        not in {"ok", "success", "succeeded", "completed"}
+                    )
                 ):
                     raise _ToolRejected(_text(output))
                 if (
@@ -414,8 +593,6 @@ class SDKAgentRuntime(AgentRuntime):
                     "content": (
                         "<Agent Dynamic Context>\nPrivate Agent Memory:\n"
                         + private_memory
-                        + "\nRolling Summary:\n"
-                        + self.rolling_summary
                         + "\n</Agent Dynamic Context>"
                     ),
                 }
@@ -424,7 +601,10 @@ class SDKAgentRuntime(AgentRuntime):
         try:
             # Graph services and report synthesis retain their existing model
             # adapters. Capture their actual attempts once, including failures.
-            with budget_capture() as nested:
+            with (
+                budget_capture() as nested,
+                model_budget_admission(self.config, self.run_budget.projected),
+            ):
                 self.run_budget.nested = nested
                 try:
                     self.sdk_result = await self.harness.run(

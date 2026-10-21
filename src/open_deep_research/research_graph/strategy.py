@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import sys
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -22,10 +22,10 @@ from open_deep_research.research_graph.compaction import (
     micro_compact_messages,
 )
 from open_deep_research.research_graph.context_manager import (
-    ContextManager,
     render_working_context,
 )
 from open_deep_research.research_graph.extractor import (
+    ExtractionResult,
     GraphExtractor,
     build_source_documents_from_raw_result,
 )
@@ -56,6 +56,7 @@ class WorkspaceHookResult:
     succeeded: bool = True
     budget_usage: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
+    error_type: str | None = None
 
 
 # 保存图策略负责生成的最终角色报告。
@@ -220,6 +221,18 @@ class _ResearchGraphStrategyBase:
         )
 
 
+@dataclass
+class _ProducerBatch:
+    """Retain unfinished graph stages so settlement never repeats extraction."""
+
+    documents: list[tuple[ToolBatchItem, RawResearchDocument]]
+    duplicates: list[tuple[ToolBatchItem, RawResearchDocument]]
+    extraction: ExtractionResult | None = None
+    written: int = 0
+    context_done: bool = False
+    context_budget: dict[str, Any] = field(default_factory=dict)
+
+
 # 执行原始工具结果、抽取、图写入和工作上下文更新的生产链路。
 class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
     """Producer lifecycle: raw tools -> extraction -> graph -> context."""
@@ -254,214 +267,122 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                     ],
                 },
             )
+        key = tuple(sorted(item.tool_call_id for item in batch))
         try:
-            documents, duplicates = _producer_documents(workspace, batch)
-        except Exception:
-            return _producer_hook_failure(workspace, messages)
-
-        if not documents:
-            # Exact duplicates can still be compacted; failures and empty tools
-            # have no receipt and therefore remain raw.
-            try:
-                verified = _verified_tool_receipts(workspace, documents, duplicates)
-            except Exception:
-                return _producer_hook_failure(workspace, messages)
-            workspace.receipts.update(verified)
-            compacted = micro_compact_messages(
-                messages,
-                workspace.receipts,
-                recent_raw_steps=int(
-                    getattr(workspace.configurable, "recent_raw_steps", 3)
-                ),
-            )
-            workspace.metrics.add(
-                "micro_compact_count", len(compacted.compacted_tool_call_ids)
-            )
-            workspace.metrics.add(
-                "micro_compact_tokens_removed", compacted.tokens_removed
-            )
-            return WorkspaceHookResult(
-                messages=compacted.messages,
-                metrics=workspace.metrics.as_dict(),
-            )
-
-        graph_model_name = str(
-            getattr(workspace.configurable, "research_graph_extraction_model", None)
-            or getattr(workspace.configurable, "research_model", "")
-        )
-        graph_model = workspace.model_factory(
-            graph_model_name,
-            int(
-                getattr(
-                    workspace.configurable,
-                    "research_graph_extraction_model_max_tokens",
-                    4096,
-                )
-            ),
-        )
-        extractor = GraphExtractor(
-            model=graph_model,
-            model_name=graph_model_name,
-            max_tokens=int(
-                getattr(
-                    workspace.configurable,
-                    "research_graph_extraction_model_max_tokens",
-                    4096,
-                )
-            ),
-            max_retries=int(
-                getattr(workspace.configurable, "max_structured_output_retries", 3)
-            ),
-            batch_token_limit=int(
-                getattr(
-                    workspace.configurable,
-                    "research_graph_extraction_batch_tokens",
-                    12_000,
-                )
-            ),
-        )
-        source_only_documents = [document for _, document in documents]
-        try:
-            extraction = await extractor.extract(
-                source_only_documents, scope=workspace.scope
-            )
-            combined_deltas = []
-            for batch_result in extraction.batches:
-                delta = batch_result.delta
-                if workspace.store is None:
-                    raise RuntimeError("Producer strategy has no Research Graph store.")
-                write_started_at = time.perf_counter()
-                receipt = workspace.store.write_delta(delta)
-                workspace.metrics.add(
-                    "graph_write_latency",
-                    (time.perf_counter() - write_started_at) * 1000,
-                    quality="exact",
-                )
-                combined_deltas.append(delta)
-                workspace.metrics.add("graph_nodes_written", len(receipt.node_ids))
-                workspace.metrics.add("graph_edges_written", len(receipt.edge_ids))
-                input_tokens = batch_result.input_tokens
-                output_tokens = batch_result.output_tokens
-                workspace.metrics.add(
-                    "graph_extraction_input_tokens",
-                    input_tokens
-                    if input_tokens
-                    else estimate_text_tokens(_render_documents(source_only_documents)),
-                    quality="exact" if input_tokens else "estimated",
-                )
-                workspace.metrics.add(
-                    "graph_extraction_output_tokens",
-                    output_tokens
-                    if output_tokens
-                    else estimate_text_tokens(
-                        json.dumps(delta.model_dump(mode="json"), ensure_ascii=False)
-                    ),
-                    quality="exact" if output_tokens else "estimated",
-                )
-            workspace.metrics.add("graph_extraction_calls", len(extraction.batches))
-            if combined_deltas:
-                if workspace.store is None:
-                    raise RuntimeError("Producer strategy has no Research Graph store.")
-                workspace.context_for(query_suffix="new research delta")
-                context_model_name = str(
-                    getattr(workspace.configurable, "context_manager_model", None)
+            stage = workspace.pending_ingestions.get(key)
+            if stage is None:
+                documents, duplicates = _producer_documents(workspace, batch)
+                stage = _ProducerBatch(documents, duplicates)
+                workspace.pending_ingestions[key] = stage
+            if stage.extraction is None:
+                graph_model_name = str(
+                    getattr(
+                        workspace.configurable, "research_graph_extraction_model", None
+                    )
                     or getattr(workspace.configurable, "research_model", "")
                 )
-                context_manager = ContextManager(
-                    model=workspace.model_factory(
-                        context_model_name,
-                        int(
-                            getattr(
-                                workspace.configurable,
-                                "context_manager_model_max_tokens",
-                                2048,
-                            )
-                        ),
-                    ),
-                    model_name=context_model_name,
+                max_tokens = int(
+                    getattr(
+                        workspace.configurable,
+                        "research_graph_extraction_model_max_tokens",
+                        4096,
+                    )
+                )
+                extractor = GraphExtractor(
+                    model=workspace.model_factory(graph_model_name, max_tokens),
+                    model_name=graph_model_name,
+                    max_tokens=max_tokens,
                     max_retries=int(
                         getattr(
                             workspace.configurable, "max_structured_output_retries", 3
                         )
                     ),
-                    max_active_findings=int(
+                    batch_token_limit=int(
                         getattr(
                             workspace.configurable,
-                            "working_context_max_active_findings",
-                            8,
-                        )
-                    ),
-                    max_active_claims=int(
-                        getattr(
-                            workspace.configurable,
-                            "working_context_max_active_claims",
-                            16,
-                        )
-                    ),
-                    max_active_evidence=int(
-                        getattr(
-                            workspace.configurable,
-                            "working_context_max_active_evidence",
-                            24,
-                        )
-                    ),
-                    max_open_gaps=int(
-                        getattr(
-                            workspace.configurable, "working_context_max_open_gaps", 8
-                        )
-                    ),
-                    max_conflicts=int(
-                        getattr(
-                            workspace.configurable, "working_context_max_conflicts", 8
+                            "research_graph_extraction_batch_tokens",
+                            12_000,
                         )
                     ),
                 )
-                context_result = await context_manager.update(
-                    task=workspace.task,
-                    current=workspace.working_context,
-                    relevant_subgraph=workspace.relevant_subgraph,
-                    research_delta=combined_deltas,
-                )
-                workspace.working_context = context_result.context
-                workspace.metrics.add("context_manager_calls")
-                context_input_tokens = estimate_text_tokens(
-                    json.dumps(
-                        {
-                            "task": workspace.task.objective,
-                            "context": workspace.working_context.model_dump(
-                                mode="json"
-                            ),
-                            "subgraph": workspace.relevant_subgraph.model_dump(
-                                mode="json"
-                            ),
-                        },
-                        ensure_ascii=False,
+                stage.extraction = (
+                    await extractor.extract(
+                        [document for _, document in stage.documents],
+                        scope=workspace.scope,
                     )
+                    if stage.documents
+                    else ExtractionResult()
                 )
                 workspace.metrics.add(
-                    "context_manager_input_tokens",
-                    context_input_tokens,
-                    quality="estimated",
+                    "graph_extraction_calls", len(stage.extraction.batches)
                 )
-                output_tokens = context_result.budget_usage.get("output_tokens")
+            if workspace.store is None:
+                raise ResearchGraphError(
+                    "Producer strategy has no Research Graph store."
+                )
+            while stage.written < len(stage.extraction.batches):
+                batch_result = stage.extraction.batches[stage.written]
+                write_started_at = time.perf_counter()
+                receipt = workspace.store.write_delta(batch_result.delta)
+                if not receipt.has_complete_node_references or (
+                    receipt.run_id,
+                    receipt.role,
+                    receipt.task_id,
+                    receipt.research_round,
+                ) != (
+                    workspace.run_id,
+                    workspace.role,
+                    workspace.scope.task_id,
+                    workspace.scope.research_round,
+                ):
+                    raise ResearchGraphError(
+                        "Invalid graph write receipt; raw evidence retained."
+                    )
+                stage.written += 1
                 workspace.metrics.add(
-                    "context_manager_output_tokens",
-                    output_tokens
-                    if isinstance(output_tokens, int) and output_tokens > 0
-                    else estimate_text_tokens(context_result.delta.model_dump_json()),
-                    quality="exact"
-                    if isinstance(output_tokens, int) and output_tokens > 0
-                    else "estimated",
+                    "graph_write_latency",
+                    (time.perf_counter() - write_started_at) * 1000,
+                    quality="exact",
                 )
-                workspace.metrics.set(
-                    "working_context_tokens",
-                    estimate_text_tokens(
-                        render_working_context(workspace.working_context)
+                workspace.metrics.add("graph_nodes_written", len(receipt.node_ids))
+                workspace.metrics.add("graph_edges_written", len(receipt.edge_ids))
+                workspace.metrics.add(
+                    "graph_extraction_input_tokens",
+                    batch_result.input_tokens
+                    or estimate_text_tokens(
+                        _render_documents([doc for _, doc in stage.documents])
                     ),
-                    quality="estimated",
+                    quality="exact" if batch_result.input_tokens else "estimated",
                 )
-            receipts_by_call = _verified_tool_receipts(workspace, documents, duplicates)
-            workspace.receipts.update(receipts_by_call)
+                workspace.metrics.add(
+                    "graph_extraction_output_tokens",
+                    batch_result.output_tokens
+                    or estimate_text_tokens(batch_result.delta.model_dump_json()),
+                    quality="exact" if batch_result.output_tokens else "estimated",
+                )
+            receipts = _verified_tool_receipts(
+                workspace, stage.documents, stage.duplicates
+            )
+            # A failed context update resumes here on settlement. Never let the
+            # duplicate-source fast path acknowledge an unfinished update.
+            if not stage.context_done and (stage.documents or stage.duplicates):
+                workspace.context_for(query_suffix="new committed research delta")
+                previous_context = workspace.working_context
+                try:
+                    context_result = await workspace.update_working_context(
+                        stage.extraction.deltas
+                    )
+                    # Context inference awaits external work. Reconfirm every
+                    # source afterwards before publishing context or receipts.
+                    receipts = _verified_tool_receipts(
+                        workspace, stage.documents, stage.duplicates
+                    )
+                except BaseException:
+                    workspace.working_context = previous_context
+                    raise
+                stage.context_budget = context_result.budget_usage
+                stage.context_done = True
+            workspace.receipts.update(receipts)
             compacted = micro_compact_messages(
                 messages,
                 workspace.receipts,
@@ -480,19 +401,15 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                 estimate_context_tokens(compacted.messages),
                 quality="estimated",
             )
-            compacted_messages = compacted.messages
+            del workspace.pending_ingestions[key]
             return WorkspaceHookResult(
-                messages=compacted_messages,
+                messages=compacted.messages,
                 budget_usage=merge_budget_usage(
-                    extraction.budget_usage,
-                    context_result.budget_usage if combined_deltas else {},
+                    stage.extraction.budget_usage, stage.context_budget
                 ),
                 metrics=workspace.metrics.as_dict(),
             )
         except Exception:
-            # Preserve the raw messages when extraction, writing, or context
-            # update fails.  A receipt is only issued after the entire pipeline
-            # succeeds, so retry/debug tooling still has the original material.
             return _producer_hook_failure(workspace, messages)
 
 
@@ -583,6 +500,10 @@ def _producer_documents(
             args=item.args,
             observation=item.observation,
         ):
+            if workspace.task.related_task_ids:
+                document.metadata["research_task_ids"] = list(
+                    workspace.task.related_task_ids
+                )
             if workspace.store is None:
                 raise ResearchGraphError(
                     "Producer strategy has no Research Graph store."
@@ -667,7 +588,10 @@ def _producer_hook_failure(
     if workspace.transcript is not None:
         workspace.transcript.append("graph_hook_failure", {"role": workspace.role})
     return WorkspaceHookResult(
-        messages=list(messages), succeeded=False, metrics=workspace.metrics.as_dict()
+        messages=list(messages),
+        succeeded=False,
+        error_type=type(sys.exc_info()[1]).__name__,
+        metrics=workspace.metrics.as_dict(),
     )
 
 

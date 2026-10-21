@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import Any, Iterator, Mapping, cast
+from typing import Any, Callable, Iterator, Mapping, cast
 
 from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage
@@ -43,6 +43,47 @@ _BUDGET_CAPTURE: ContextVar[dict[str, Any] | None] = ContextVar(
     "open_deep_research_budget_capture",
     default=None,
 )
+_MODEL_ADMISSION: ContextVar[Callable[[int], None] | None] = ContextVar(
+    "research_model_admission", default=None
+)
+
+
+class ModelBudgetExceeded(RuntimeError):
+    """Reject a nested model attempt before its provider request starts."""
+
+
+@contextmanager
+def model_budget_admission(
+    configurable: Configuration, usage: Callable[[], dict[str, Any]]
+) -> Iterator[None]:
+    """Apply existing policy to nested graph, summary and report model attempts.
+
+    Pending attempts belong to one accounting invocation (including its retry
+    chain). This is a role-local guard, not a distributed quota reservation.
+    """
+
+    baseline_capture = _BUDGET_CAPTURE.get()
+
+    def admit(pending_attempts: int) -> None:
+        projected = usage()
+        active_capture = _BUDGET_CAPTURE.get()
+        if active_capture is not None and active_capture is not baseline_capture:
+            # Tool/report subcaptures are merged into the role only on exit;
+            # account their already-completed calls during admission as well.
+            projected = merge_budget_usage(projected, active_capture)
+        projected = merge_budget_usage(projected, {"model_calls": pending_attempts})
+        if is_over_budget(configurable, projected) or not can_spend_model_call(
+            configurable, projected, reserve_final_report_call=True
+        ):
+            raise ModelBudgetExceeded(
+                "Nested model budget exhausted; final report reserve retained."
+            )
+
+    token = _MODEL_ADMISSION.set(admit)
+    try:
+        yield
+    finally:
+        _MODEL_ADMISSION.reset(token)
 
 
 # 创建各计数器为零的预算记录，作为累加和状态初始化的起点。
@@ -107,7 +148,9 @@ def _usage_metadata_from(usage: Mapping[str, Any]) -> UsageMetadata:
 
 
 # 把聚合后的令牌元数据写回传入的预算字典，包含缓存和推理明细。
-def _apply_usage_metadata(usage: dict[str, Any], metadata: UsageMetadata | None) -> None:
+def _apply_usage_metadata(
+    usage: dict[str, Any], metadata: UsageMetadata | None
+) -> None:
     """Write a ``UsageMetadata`` payload back into the flat budget fields."""
     if not metadata:
         return
@@ -237,11 +280,14 @@ class ModelAttemptCounter(BaseCallbackHandler):
     ``on_chat_model_start``, so a single attempt is never counted twice.
     """
 
+    raise_error = True
+
     # 初始化调用计数及回调处理所需的实例状态。
     def __init__(self) -> None:
         """Initialize the attempt counter."""
         super().__init__()
         self.starts = 0
+        self.admission = _MODEL_ADMISSION.get()
 
     # 每次聊天模型真正开始请求时增加一次尝试计数。
     def on_chat_model_start(
@@ -256,6 +302,8 @@ class ModelAttemptCounter(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Count one chat-model attempt."""
+        if self.admission is not None:
+            self.admission(self.starts)
         self.starts += 1
 
     # 记录非聊天 LLM 的启动次数，与聊天模型回调分别适配。
@@ -271,6 +319,8 @@ class ModelAttemptCounter(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Count one non-chat LLM attempt (chat models use ``on_chat_model_start``)."""
+        if self.admission is not None:
+            self.admission(self.starts)
         self.starts += 1
 
 
@@ -529,7 +579,9 @@ def remaining_model_calls(
     if not configurable.budget_enabled or limit is None:
         return None
 
-    reserve = 1 if reserve_final_report_call and configurable.reserve_final_report_call else 0
+    reserve = (
+        1 if reserve_final_report_call and configurable.reserve_final_report_call else 0
+    )
     return max(0, limit - reserve - normalize_budget_usage(usage)["model_calls"])
 
 
@@ -566,7 +618,8 @@ def can_spend_tool_call(
         return False
     if (
         configurable.max_search_calls is not None
-        and current["search_calls"] + incoming["search_calls"] > configurable.max_search_calls
+        and current["search_calls"] + incoming["search_calls"]
+        > configurable.max_search_calls
     ):
         return False
     return True
@@ -600,7 +653,9 @@ def filter_tool_calls_for_budget(
 
 
 # 返回还可启动的研究单元数量；未限制时返回 None。
-def available_research_unit_slots(configurable: Configuration, usage: Any) -> int | None:
+def available_research_unit_slots(
+    configurable: Configuration, usage: Any
+) -> int | None:
     """Return how many new researcher subgraphs can start, or None when unlimited."""
     if not configurable.budget_enabled or configurable.max_model_calls is None:
         return None
@@ -624,7 +679,10 @@ def is_over_budget(configurable: Configuration, usage: Any) -> bool:
         "input_tokens": configurable.max_input_tokens,
         "output_tokens": configurable.max_output_tokens,
     }
-    return any(limit is not None and normalized[field] >= limit for field, limit in limits.items())
+    return any(
+        limit is not None and normalized[field] >= limit
+        for field, limit in limits.items()
+    )
 
 
 # 列出达到预警比例的预算项，提示接近上限的资源消耗。
@@ -670,7 +728,9 @@ def estimate_context_tokens(
     try:
         return count_tokens_approximately(messages, tools=tools)
     except Exception:  # noqa: BLE001 - a tool schema must never break the estimate
-        LOGGER.debug("Tool schema is not convertible for token estimation.", exc_info=True)
+        LOGGER.debug(
+            "Tool schema is not convertible for token estimation.", exc_info=True
+        )
         return count_tokens_approximately(messages)
 
 
@@ -724,7 +784,9 @@ def remaining_output_tokens(configurable: Configuration, usage: Any) -> int | No
     """Return remaining output tokens, if the user configured that budget."""
     if not configurable.budget_enabled or configurable.max_output_tokens is None:
         return None
-    return configurable.max_output_tokens - normalize_budget_usage(usage)["output_tokens"]
+    return (
+        configurable.max_output_tokens - normalize_budget_usage(usage)["output_tokens"]
+    )
 
 
 # 将各项用量、上限、预警和降级原因整理为报告中的预算摘要。
@@ -760,7 +822,9 @@ def format_budget_summary(configurable: Configuration, usage: Any) -> str:
 
     lines.extend(_format_token_details(normalized))
 
-    warnings = normalized["budget_warnings"] + get_budget_warnings(configurable, normalized)
+    warnings = normalized["budget_warnings"] + get_budget_warnings(
+        configurable, normalized
+    )
     reasons = normalized["degradation_reasons"]
     if warnings:
         lines.append("- Warnings: " + "; ".join(dict.fromkeys(warnings)))
@@ -806,4 +870,3 @@ def _format_limit(limit: int | None) -> str:
     if limit is None:
         return ""
     return f" / {limit}"
-
