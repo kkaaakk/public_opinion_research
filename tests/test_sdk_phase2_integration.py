@@ -222,9 +222,9 @@ def scripted_tool_runtime(
     )
 
 
-def test_compiled_workflow_graph_handoff_gap_followup_and_final_report(
-    monkeypatch, tmp_path
-):
+def run_workflow_fixture(monkeypatch, tmp_path, backend="langgraph"):
+    """Run identical inference/data through either real workflow implementation."""
+
     async def scenario():
         clear_research_graph_store_cache()
         services = Services()
@@ -429,7 +429,12 @@ def test_compiled_workflow_graph_handoff_gap_followup_and_final_report(
                 agent_role=",".join(ROLES),
             )
         ]
-        result = await builder.compile().ainvoke(state, config)
+        if backend == "python":
+            from open_deep_research.workflow.python_workflow import PythonWorkflow
+
+            result = await PythonWorkflow().ainvoke(state, config, start_at="research")
+        else:
+            result = await builder.compile().ainvoke(state, config)
         assert "FINAL brand recall report" in result["report"]["final"]
         assert role_calls == Counter(
             {
@@ -465,9 +470,20 @@ def test_compiled_workflow_graph_handoff_gap_followup_and_final_report(
         assert result["runtime"]["budget"]["input_tokens"] == 70 + 8 * 10 + 16 * 7
         assert result["runtime"]["budget"]["output_tokens"] == 7 + 8 * 4 + 16 * 3
         assert all(node.run_id == run_id for node in store.nodes.values())
+        evidence = sorted(
+            (node.node_id, node.node_type, node.role, node.task_id)
+            for node in store.nodes.values()
+        )
         clear_research_graph_store_cache()
+        return result, evidence, events, tool_calls
 
-    asyncio.run(scenario())
+    return asyncio.run(scenario())
+
+
+def test_compiled_workflow_graph_handoff_gap_followup_and_final_report(
+    monkeypatch, tmp_path
+):
+    run_workflow_fixture(monkeypatch, tmp_path)
 
 
 @pytest.mark.parametrize("role", ROLES)

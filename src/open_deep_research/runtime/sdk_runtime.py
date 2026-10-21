@@ -671,6 +671,9 @@ class SDKAgentRuntime(AgentRuntime):
             )
             setattr(exc, "budget_usage", self.budget_usage)
             setattr(exc, "context_settlement", self.harness.last_settlement)
+            # Keep an explicit owner for any result that outlives the bounded
+            # drain. Callers can inspect/settle it without replaying the role.
+            setattr(exc, "context_harness", self.harness)
             raise
         finally:
             # Match legacy capture semantics on success and exceptional exits.

@@ -8,8 +8,6 @@ from langchain_core.messages import (
     HumanMessage,
 )
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
 
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
@@ -61,6 +59,7 @@ LOGGER = logging.getLogger("open_deep_research.deep_researcher")
 
 _RESEARCH_TASK_ROLES = ("public_signal", "internal_knowledge")
 
+
 # 取得已启用且支持补充研究的公众信号、内部知识角色集合。
 def _enabled_research_roles(configurable: Configuration) -> set[str]:
     """Return enabled roles that can execute dynamic follow-up research."""
@@ -83,7 +82,9 @@ def _effective_followup_tasks(
 
     completed_ids = {
         research_task_identity(task)
-        for task in coerce_research_tasks(workflow_state(state).get("completed_tasks", []))
+        for task in coerce_research_tasks(
+            workflow_state(state).get("completed_tasks", [])
+        )
     }
     seen_ids = set(completed_ids)
     effective_tasks: list[ResearchTask] = []
@@ -93,7 +94,11 @@ def _effective_followup_tasks(
             continue
         if task.target_role not in _enabled_research_roles(configurable):
             continue
-        if not task.objective.strip() or not task.evidence_needed.strip() or not task.reason.strip():
+        if (
+            not task.objective.strip()
+            or not task.evidence_needed.strip()
+            or not task.reason.strip()
+        ):
             continue
         identity = research_task_identity(task)
         if identity in seen_ids:
@@ -136,9 +141,9 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     completed_tasks = coerce_research_tasks(
         workflow_state(state).get("completed_tasks", [])
     )
-    completed_tasks_text = "\n".join(
-        f"- {task.model_dump_json()}" for task in completed_tasks
-    ) or "None"
+    completed_tasks_text = (
+        "\n".join(f"- {task.model_dump_json()}" for task in completed_tasks) or "None"
+    )
     previous_review_text = (
         previous_review.model_dump_json(indent=2) if previous_review else "None"
     )
@@ -239,48 +244,39 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
 
 # 将有效补充任务按角色分组发送；无需补充时转入风险评估。
 # 同角色多个缺口共享一次 Send；载荷携带完整状态域，避免丢失报告、记忆和记账。
-def route_after_research_review(
+def followup_assignments(
     state: PublicOpinionState,
-    config: RunnableConfig | None = None,
-) -> list[Send | str]:
-    """Route a review to risk assessment or grouped role-specific Sends."""
+    config: RunnableConfig | Configuration | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return grouped role packets using the existing evidence and round rules."""
     review = coerce_research_review(workflow_state(state).get("review"))
     if review is None or review.research_complete:
-        return ["risk_assessment_agent"]
-
+        return {}
     configurable = (
         config
         if isinstance(config, Configuration)
         else Configuration.from_runnable_config(config)
     )
-    # Deliberately route only on review findings, task validity, and the
-    # workflow safety limit. Budget usage is carried for instrumentation and
-    # must not decide whether this research loop continues.
     effective_tasks = _effective_followup_tasks(state, review, configurable)
-    if not effective_tasks:
-        return ["risk_assessment_agent"]
-
-    current_round = max(1, int(workflow_state(state).get("round", 1) or 1))
-    next_round = current_round + 1
-    grouped_tasks = {
-        role: [task for task in effective_tasks if task.target_role == role]
+    next_round = max(1, int(workflow_state(state).get("round", 1) or 1)) + 1
+    return {
+        role: _build_followup_send_payload(state, tasks, next_round)
         for role in _RESEARCH_TASK_ROLES
+        if (tasks := [task for task in effective_tasks if task.target_role == role])
     }
-    sends: list[Send | str] = []
-    node_by_role = {
-        "public_signal": "public_signal_agent",
-        "internal_knowledge": "internal_knowledge_agent",
-    }
-    for role in _RESEARCH_TASK_ROLES:
-        tasks = grouped_tasks[role]
-        if tasks:
-            sends.append(
-                Send(
-                    node_by_role[role],
-                    _build_followup_send_payload(state, tasks, next_round),
-                )
-            )
-    return sends or ["risk_assessment_agent"]
+
+
+def route_after_research_review(
+    state: PublicOpinionState,
+    config: RunnableConfig | None = None,
+) -> list:
+    """Adapt the shared follow-up decision to legacy LangGraph Sends."""
+    from langgraph.types import Send
+
+    assignments = followup_assignments(state, config)
+    return [Send(f"{role}_agent", packet) for role, packet in assignments.items()] or [
+        "risk_assessment_agent"
+    ]
 
 
 # 仅让由补充 Send 启动的角色回到复核节点。
@@ -292,88 +288,107 @@ def route_after_research_agent(state: PublicOpinionState) -> list[str]:
 
 
 # 执行公众信号角色，收集新闻、社交、投诉、竞争与传播证据。
-async def public_signal_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
+async def public_signal_agent(
+    state: PublicOpinionState, config: RunnableConfig
+) -> dict:
     """Collect integrated news, social, complaint, competitor, and spread evidence."""
     return await run_business_agent(role="public_signal", state=state, config=config)
 
 
 # 执行内部知识角色，检索企业资料、预案和历史记忆。
-async def internal_knowledge_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
+async def internal_knowledge_agent(
+    state: PublicOpinionState, config: RunnableConfig
+) -> dict:
     """Collect internal RAG evidence from company knowledge, playbooks, and memory."""
-    return await run_business_agent(role="internal_knowledge", state=state, config=config)
+    return await run_business_agent(
+        role="internal_knowledge", state=state, config=config
+    )
 
 
 # 执行风险角色，核验主张并评估合规、法律及产品风险。
-async def risk_assessment_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
+async def risk_assessment_agent(
+    state: PublicOpinionState, config: RunnableConfig
+) -> dict:
     """Verify claims and assess compliance, legal, and product-risk signals."""
     return await run_business_agent(role="risk_assessment", state=state, config=config)
 
 
 # 执行策略角色，生成回应口径、FAQ、处置行动和监测词。
-async def response_strategy_agent(state: PublicOpinionState, config: RunnableConfig) -> dict:
+async def response_strategy_agent(
+    state: PublicOpinionState, config: RunnableConfig
+) -> dict:
     """Create PR response posture, FAQ points, actions, and monitoring keywords."""
-    return await run_business_agent(role="response_strategy", state=state, config=config)
+    return await run_business_agent(
+        role="response_strategy", state=state, config=config
+    )
 
 
-public_opinion_builder = StateGraph(DeepResearchState, config_schema=Configuration)
-public_opinion_builder.add_node(
-    "public_signal_agent",
-    public_signal_agent,
-    metadata=node_metadata("public_signal_agent", kind="agent"),
-)
-public_opinion_builder.add_node(
-    "internal_knowledge_agent",
-    internal_knowledge_agent,
-    metadata=node_metadata("internal_knowledge_agent", kind="agent"),
-)
-public_opinion_builder.add_node(
-    "research_review",
-    research_review,
-    metadata=node_metadata("research_review"),
-)
-public_opinion_builder.add_node(
-    "risk_assessment_agent",
-    risk_assessment_agent,
-    metadata=node_metadata("risk_assessment_agent", kind="agent"),
-)
-public_opinion_builder.add_node(
-    "response_strategy_agent",
-    response_strategy_agent,
-    metadata=node_metadata("response_strategy_agent", kind="agent"),
-)
+def __getattr__(name: str) -> Any:
+    """Build the compatibility graph only when a legacy caller requests it."""
+    if name not in {"public_opinion_builder", "public_opinion_subgraph"}:
+        raise AttributeError(name)
+    from langgraph.graph import END, START, StateGraph
 
-public_opinion_builder.add_edge(START, "public_signal_agent")
-public_opinion_builder.add_edge(START, "internal_knowledge_agent")
-public_opinion_builder.add_edge(
-    [
+    builder = StateGraph(DeepResearchState, config_schema=Configuration)
+    builder.add_node(
         "public_signal_agent",
+        public_signal_agent,
+        metadata=node_metadata("public_signal_agent", kind="agent"),
+    )
+    builder.add_node(
         "internal_knowledge_agent",
-    ],
-    "research_review",
-)
-public_opinion_builder.add_conditional_edges(
-    "public_signal_agent",
-    route_after_research_agent,
-    path_map={"research_review": "research_review"},
-)
-public_opinion_builder.add_conditional_edges(
-    "internal_knowledge_agent",
-    route_after_research_agent,
-    path_map={"research_review": "research_review"},
-)
-public_opinion_builder.add_conditional_edges(
-    "research_review",
-    route_after_research_review,
-    path_map={
-        "public_signal_agent": "public_signal_agent",
-        "internal_knowledge_agent": "internal_knowledge_agent",
-        "risk_assessment_agent": "risk_assessment_agent",
-    },
-)
-public_opinion_builder.add_edge("risk_assessment_agent", "response_strategy_agent")
-public_opinion_builder.add_edge("response_strategy_agent", END)
+        internal_knowledge_agent,
+        metadata=node_metadata("internal_knowledge_agent", kind="agent"),
+    )
+    builder.add_node(
+        "research_review",
+        research_review,
+        metadata=node_metadata("research_review"),
+    )
+    builder.add_node(
+        "risk_assessment_agent",
+        risk_assessment_agent,
+        metadata=node_metadata("risk_assessment_agent", kind="agent"),
+    )
+    builder.add_node(
+        "response_strategy_agent",
+        response_strategy_agent,
+        metadata=node_metadata("response_strategy_agent", kind="agent"),
+    )
 
-public_opinion_subgraph = public_opinion_builder.compile(name="public_opinion_agents")
+    builder.add_edge(START, "public_signal_agent")
+    builder.add_edge(START, "internal_knowledge_agent")
+    builder.add_edge(
+        [
+            "public_signal_agent",
+            "internal_knowledge_agent",
+        ],
+        "research_review",
+    )
+    builder.add_conditional_edges(
+        "public_signal_agent",
+        route_after_research_agent,
+        path_map={"research_review": "research_review"},
+    )
+    builder.add_conditional_edges(
+        "internal_knowledge_agent",
+        route_after_research_agent,
+        path_map={"research_review": "research_review"},
+    )
+    builder.add_conditional_edges(
+        "research_review",
+        route_after_research_review,
+        path_map={
+            "public_signal_agent": "public_signal_agent",
+            "internal_knowledge_agent": "internal_knowledge_agent",
+            "risk_assessment_agent": "risk_assessment_agent",
+        },
+    )
+    builder.add_edge("risk_assessment_agent", "response_strategy_agent")
+    builder.add_edge("response_strategy_agent", END)
+    globals()["public_opinion_builder"] = builder
+    globals()["public_opinion_subgraph"] = builder.compile(name="public_opinion_agents")
+    return globals()[name]
 
 
 # 运行首轮及缺口驱动的研究子图，汇总结果交给报告阶段。
@@ -386,7 +401,10 @@ async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
     subgraph_config = _with_correlation_metadata(
         config, {"research_run_id": research_run_id}
     )
-    result = await public_opinion_subgraph.ainvoke(
+    subgraph = globals().get("public_opinion_subgraph") or __getattr__(
+        "public_opinion_subgraph"
+    )
+    result = await subgraph.ainvoke(
         {
             "messages": state.get("messages", []),
             "workflow": {

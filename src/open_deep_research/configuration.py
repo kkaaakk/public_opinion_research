@@ -173,6 +173,15 @@ class Configuration(BaseModel):
         default="legacy",
         description="Business role runtime: legacy or openai_agents. Workflow and Web defaults remain legacy.",
     )
+    workflow_backend: str = Field(
+        default="langgraph",
+        description="Explicit Python API workflow selection: langgraph or python. Web integration remains unchanged.",
+    )
+    workflow_step_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        description="Optional Python workflow step deadline; cancellation waits for Runtime settlement. No workflow retries.",
+    )
     max_research_rounds: int = Field(
         default=2,
         metadata={
@@ -1550,6 +1559,8 @@ class Configuration(BaseModel):
         _apply_rag_path_compatibility(self)
         if self.business_agent_runtime not in {"legacy", "openai_agents"}:
             raise ValueError("business_agent_runtime must be legacy or openai_agents.")
+        if self.workflow_backend not in {"langgraph", "python"}:
+            raise ValueError("workflow_backend must be langgraph or python.")
         if self.context_strategy.strip().lower() not in {
             "auto",
             "standard",

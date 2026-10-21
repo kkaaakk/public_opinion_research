@@ -3,6 +3,8 @@
 
 import asyncio
 import logging
+import sys
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from langchain_core.messages import (
@@ -12,7 +14,6 @@ from langchain_core.messages import (
     get_buffer_string,
 )
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import END
 from langgraph.types import Command, interrupt
 
 from open_deep_research.budget import (
@@ -52,6 +53,16 @@ from open_deep_research.workflow.state_utils import (
 
 LOGGER = logging.getLogger("open_deep_research.deep_researcher")
 
+
+@dataclass
+class IntakeDecision:
+    """Carry a business transition and State patch without a workflow engine."""
+
+    goto: str
+    update: dict[str, Any] | None = None
+    needs_plan_feedback: bool = False
+
+
 # 检查消息历史是否已包含本轮图片解析上下文。
 def _has_query_image_context(messages) -> bool:
     return any(
@@ -65,7 +76,9 @@ def _messages_without_query_image_context(messages):
     return [
         message
         for message in messages
-        if not bool(getattr(message, "additional_kwargs", {}).get("rag_query_image_context"))
+        if not bool(
+            getattr(message, "additional_kwargs", {}).get("rag_query_image_context")
+        )
     ]
 
 
@@ -118,7 +131,9 @@ def budget_skip_tool_message(tool_call: dict, reason: str) -> ToolMessage:
 
 
 # 判断研究范围是否清晰，必要时向用户澄清，否则转入简报生成。
-async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
+async def clarification_step(
+    state: AgentState, config: RunnableConfig
+) -> IntakeDecision:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
 
     This function determines whether the user's request needs clarification before proceeding
@@ -135,19 +150,21 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     configurable = Configuration.from_runnable_config(config)
     if not configurable.allow_clarification:
         # Skip clarification step and proceed directly to research
-        return Command(goto="write_research_brief")
+        return IntakeDecision(goto="write_research_brief")
     budget_usage = runtime_state(state).get("budget", {})
     if not can_spend_model_call(
         configurable,
         budget_usage,
         reserve_final_report_call=True,
     ):
-        return Command(
+        return IntakeDecision(
             goto="write_research_brief",
             update={
-                "runtime": {"budget": budget_usage_with_reason(
-                    "Skipped clarification to preserve the final report model call."
-                )}
+                "runtime": {
+                    "budget": budget_usage_with_reason(
+                        "Skipped clarification to preserve the final report model call."
+                    )
+                }
             },
         )
 
@@ -157,7 +174,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         "model": configurable.research_model,
         "max_tokens": configurable.research_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.research_model, config),
-        "tags": ["langsmith:nostream"]
+        "tags": ["langsmith:nostream"],
     }
 
     # Configure model with structured output and retry logic
@@ -169,8 +186,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
 
     # Step 3: Analyze whether clarification is needed
     prompt_content = clarify_with_user_instructions.format(
-        messages=get_buffer_string(messages),
-        date=get_today_str()
+        messages=get_buffer_string(messages), date=get_today_str()
     )
     response, budget_update = await ainvoke_model_with_budget(
         clarification_model,
@@ -184,29 +200,29 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     # Step 4: Route based on clarification analysis
     if response.need_clarification:
         # End with clarifying question for user
-        return Command(
-            goto=END,
+        return IntakeDecision(
+            goto="__end__",
             update={
                 "messages": [AIMessage(content=response.question)],
                 "runtime": {"budget": budget_update},
-            }
+            },
         )
     else:
         # Proceed to research with verification message
-        return Command(
+        return IntakeDecision(
             goto="write_research_brief",
             update={
                 "messages": [AIMessage(content=response.verification)],
                 "runtime": {"budget": budget_update},
-            }
+            },
         )
 
 
 # 把用户消息整理为结构化研究简报，并进入规划或研究阶段。
-async def write_research_brief(
+async def research_brief_step(
     state: AgentState,
     config: RunnableConfig,
-) -> Command[Literal["plan_report_sections", "research_phase"]]:
+) -> IntakeDecision:
     """Transform user messages into a structured brief for the research phase.
 
     This function analyzes the user's messages and generates a focused research brief
@@ -228,13 +244,15 @@ async def write_research_brief(
         reserve_final_report_call=True,
     ):
         research_brief = get_buffer_string(state.get("messages", []))
-        return Command(
+        return IntakeDecision(
             goto="research_phase",
             update={
                 "workflow": {"brief": research_brief},
-                "runtime": {"budget": budget_usage_with_reason(
-                    "Skipped research brief generation to preserve the final report model call."
-                )},
+                "runtime": {
+                    "budget": budget_usage_with_reason(
+                        "Skipped research brief generation to preserve the final report model call."
+                    )
+                },
             },
         )
 
@@ -242,7 +260,7 @@ async def write_research_brief(
         "model": configurable.research_model,
         "max_tokens": configurable.research_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.research_model, config),
-        "tags": ["langsmith:nostream"]
+        "tags": ["langsmith:nostream"],
     }
 
     # Configure model for structured research question generation
@@ -273,17 +291,19 @@ async def write_research_brief(
     )
     response = response["parsed"]
 
-    return Command(
+    return IntakeDecision(
         goto="plan_report_sections",
         update={
             "workflow": {"brief": response.research_brief},
             "runtime": {"budget": budget_update},
-        }
+        },
     )
 
 
 # 根据简报生成章节计划；启用人工反馈时通过图中断接收调整意见。
-async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Command[Literal["plan_report_sections", "research_phase"]]:
+async def section_plan_step(
+    state: AgentState, config: RunnableConfig
+) -> IntakeDecision:
     """Plan report sections using Plan-and-Execute pattern.
 
     Generates structured Sections from the research brief,
@@ -293,7 +313,9 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
     budget_usage = runtime_state(state).get("budget", {})
 
     # Budget guard: degrade to single section if we can't reserve final report call
-    if not can_spend_model_call(configurable, budget_usage, reserve_final_report_call=True):
+    if not can_spend_model_call(
+        configurable, budget_usage, reserve_final_report_call=True
+    ):
         budget_update = budget_usage_with_reason(
             "Skipped section planning due to budget constraints; falling back to single section."
         )
@@ -304,7 +326,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             agent_role="public_signal,internal_knowledge,risk_assessment,response_strategy",
             status="pending",
         )
-        return Command(
+        return IntakeDecision(
             goto="research_phase",
             update={
                 "report": {"sections": [single_section]},
@@ -324,7 +346,10 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
     if planner_max_tokens is not None:
         planner_model_config["max_tokens"] = planner_max_tokens
 
-    feedback_text = "\n///\n".join(report_state(state).get("plan_feedback", [])) or "No feedback yet."
+    feedback_text = (
+        "\n///\n".join(report_state(state).get("plan_feedback", []))
+        or "No feedback yet."
+    )
 
     prompt = report_planner_instructions.format(
         topic=workflow_state(state).get("brief", ""),
@@ -361,11 +386,11 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
                 "Section planning hit the model context limit: %s. Falling back to single section.",
                 exc,
             )
-            fallback_reason = (
-                "Section planning hit the model context limit; falling back to a single section."
-            )
+            fallback_reason = "Section planning hit the model context limit; falling back to a single section."
     finally:
         budget_update = stop_budget_capture(attempt_token)
+        if (failure := sys.exc_info()[1]) is not None:
+            setattr(failure, "budget_usage", budget_update)
     if fallback_reason:
         budget_update = merge_budget_usage(
             budget_update, budget_usage_with_reason(fallback_reason)
@@ -377,7 +402,7 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
             agent_role="public_signal,internal_knowledge,risk_assessment,response_strategy",
             status="pending",
         )
-        return Command(
+        return IntakeDecision(
             goto="research_phase",
             update={
                 "report": {"sections": [single_section]},
@@ -391,42 +416,60 @@ async def plan_report_sections(state: AgentState, config: RunnableConfig) -> Com
 
     total_budget_update = merge_budget_usage(
         budget_update,
-        budget_usage_with_reason(f"Planned {len(sections)} report sections (public-opinion mode)."),
+        budget_usage_with_reason(
+            f"Planned {len(sections)} report sections (public-opinion mode)."
+        ),
     )
 
-    # Human feedback via interrupt when enabled
-    if configurable.allow_plan_feedback:
-        feedback = interrupt({"sections": [s.model_dump() for s in sections]})
-
-        if feedback is True:
-            return Command(
-                goto="research_phase",
-                update={
-                    "report": {"sections": sections},
-                    "runtime": {"budget": total_budget_update},
-                },
-            )
-        elif isinstance(feedback, str):
-            return Command(
-                goto="plan_report_sections",
-                update={
-                    "report": {"plan_feedback": [feedback]},
-                    "runtime": {"budget": total_budget_update},
-                },
-            )
-        else:
-            raise TypeError(
-                f"Expected resume value to be True (bool) or str, got {type(feedback).__name__}. "
-                f"Value: {feedback!r}"
-            )
-
-    return Command(
+    return IntakeDecision(
         goto="research_phase",
         update={
             "report": {"sections": sections},
             "runtime": {"budget": total_budget_update},
         },
+        needs_plan_feedback=True,
     )
+
+
+async def clarify_with_user(
+    state: AgentState, config: RunnableConfig
+) -> Command[Literal["write_research_brief", "__end__"]]:
+    """Adapt the clarification decision to the original graph entrypoint."""
+    decision = await clarification_step(state, config)
+    return Command(goto=decision.goto, update=decision.update)
+
+
+async def write_research_brief(
+    state: AgentState, config: RunnableConfig
+) -> Command[Literal["plan_report_sections", "research_phase"]]:
+    """Adapt the research brief decision to the original graph entrypoint."""
+    decision = await research_brief_step(state, config)
+    return Command(goto=decision.goto, update=decision.update)
+
+
+async def plan_report_sections(
+    state: AgentState, config: RunnableConfig
+) -> Command[Literal["plan_report_sections", "research_phase"]]:
+    """Keep the existing LangGraph approval and feedback contract."""
+    decision = await section_plan_step(state, config)
+    if (
+        decision.needs_plan_feedback
+        and Configuration.from_runnable_config(config).allow_plan_feedback
+    ):
+        update = decision.update or {}
+        sections = update["report"]["sections"]
+        feedback = interrupt({"sections": [s.model_dump() for s in sections]})
+        if feedback is True:
+            pass
+        elif isinstance(feedback, str):
+            decision.goto = "plan_report_sections"
+            update["report"] = {"plan_feedback": [feedback]}
+        else:
+            raise TypeError(
+                f"Expected resume value to be True (bool) or str, got {type(feedback).__name__}. "
+                f"Value: {feedback!r}"
+            )
+    return Command(goto=decision.goto, update=decision.update)
 
 
 # Public-opinion role names for validation
