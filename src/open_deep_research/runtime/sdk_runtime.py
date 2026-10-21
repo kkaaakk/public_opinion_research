@@ -43,6 +43,9 @@ from open_deep_research.research_graph.compaction import summarize_compactable_h
 from open_deep_research.research_graph.workspace import ResearchWorkspace
 from open_deep_research.runtime.agent_runtime import AgentRuntime, AgentRuntimeResult
 from open_deep_research.runtime.sdk_context import SDKContextHarness
+from open_deep_research.workflow.execution import observe_execution
+
+SDK_RUNTIME_VERSION = "sdk-phase4-v1"
 
 
 class SDKContextLimitExceeded(RuntimeError):
@@ -313,12 +316,14 @@ class _BusinessAgentHarness(SDKContextHarness):
         self, context: Any, agent: Any, system_prompt: Any, input_items: Any
     ) -> None:
         await super().on_llm_start(context, agent, system_prompt, input_items)
+        await observe_execution("model_started", role=self.scope.role)
         self.run_budget.add({"model_calls": 1})
 
     async def on_llm_end(self, context: Any, agent: Any, response: Any) -> None:
         await super().on_llm_end(context, agent, response)
         self.items.extend(response.to_input_items())
         self.run_budget.add(budget_from_sdk_usage(response.usage))
+        await observe_execution("model_completed", role=self.scope.role)
 
 
 class SDKAgentRuntime(AgentRuntime):
@@ -385,6 +390,28 @@ class SDKAgentRuntime(AgentRuntime):
                 budget.add(increment)
                 args = json.loads(arguments)
                 validator.validate(args)
+                identity = dict(
+                    role=role,
+                    name=name,
+                    task_id=context.context.scope.task_id,
+                    research_round=context.context.scope.research_round,
+                    invocation_id=context.context.sdk_run_id,
+                    tool_call_id=context.tool_call_id,
+                    arguments=arguments,
+                )
+                operation_id = await observe_execution(
+                    "tool_started", identity=identity
+                )
+                call_config = runtime_config
+                if operation_id is not None:
+                    call_config = {
+                        **runtime_config,
+                        "metadata": {
+                            **runtime_config.get("metadata", {}),
+                            "operation_id": operation_id,
+                            "idempotency_key": operation_id,
+                        },
+                    }
                 with budget_capture() as captured:
                     try:
                         output = await tool.ainvoke(
@@ -394,10 +421,20 @@ class SDKAgentRuntime(AgentRuntime):
                                 "name": name,
                                 "args": args,
                             },
-                            runtime_config,
+                            call_config,
                         )
+                    except BaseException:
+                        await observe_execution(
+                            "tool_finished", identity=identity, status="uncertain"
+                        )
+                        raise
                     finally:
                         budget.add(captured)
+                # The receipt states that the external invoker returned. The
+                # Harness separately validates business success/evidence status.
+                await observe_execution(
+                    "tool_finished", identity=identity, status="returned"
+                )
                 if isinstance(output, ToolMessage):
                     if output.status == "error":
                         raise _ToolRejected(_text(output.content))
@@ -598,6 +635,9 @@ class SDKAgentRuntime(AgentRuntime):
                 }
             )
         self.sdk_result = None
+        session = await observe_execution(
+            "sdk_session", role=self.role, invocation_id=self.harness.sdk_run_id
+        )
         try:
             # Graph services and report synthesis retain their existing model
             # adapters. Capture their actual attempts once, including failures.
@@ -614,6 +654,7 @@ class SDKAgentRuntime(AgentRuntime):
                             tracing_disabled=True, trace_include_sensitive_data=False
                         ),
                         max_turns=max(1, self.config.max_react_tool_calls),
+                        session=session,
                     )
                 except (_ReasoningStopped, MaxTurnsExceeded) as stopped:
                     if (

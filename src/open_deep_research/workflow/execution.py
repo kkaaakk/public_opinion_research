@@ -3,8 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from contextvars import ContextVar
 from typing import Any
+
+# A worker installs one observer for its owned attempt. Parallel asyncio children
+# inherit it; neither Workflow nor Runtime imports the Web/database layer.
+execution_observer: ContextVar[Callable[..., Awaitable[Any]] | None] = ContextVar(
+    "execution_observer", default=None
+)
+
+
+async def observe_execution(kind: str, **data: Any) -> Any:
+    """Publish execution facts, awaiting durable admission before external work."""
+    observer = execution_observer.get()
+    if observer is not None:
+        return await observer(kind, **data)
+    return None
 
 
 async def gather_owned(calls: Mapping[str, Coroutine[Any, Any, Any]]) -> dict[str, Any]:

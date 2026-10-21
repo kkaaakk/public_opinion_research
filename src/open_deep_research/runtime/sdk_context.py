@@ -19,6 +19,7 @@ from agents import Agent, FunctionTool, RunConfig, RunContextWrapper, RunHooks, 
 from agents.exceptions import MCPToolCancellationError
 from agents.items import ModelResponse, TResponseInputItem
 from agents.mcp import MCPToolCustomDataContext
+from agents.memory import Session
 from agents.result import RunResult
 from agents.run import CallModelData, ModelInputData
 from agents.tool import Tool, default_tool_error_function
@@ -770,6 +771,7 @@ class SDKContextHarness(RunHooks):
         *,
         run_config: RunConfig | None = None,
         max_turns: int = 10,
+        session: Session | None = None,
     ) -> RunResult:
         """Delegate one invocation to Runner and explicitly settle every exit path."""
         if self._started:
@@ -802,6 +804,7 @@ class SDKContextHarness(RunHooks):
                 hooks=self,
                 run_config=config,
                 max_turns=max_turns,
+                session=session,
             )
         except BaseException as exc:
             self._closing = True

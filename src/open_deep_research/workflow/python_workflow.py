@@ -19,7 +19,11 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.state import DeepResearchState
 from open_deep_research.workflow import intake, reporting, research
-from open_deep_research.workflow.execution import gather_owned
+from open_deep_research.workflow.execution import (
+    execution_observer,
+    gather_owned,
+    observe_execution,
+)
 from open_deep_research.workflow.python_state import (
     RESEARCH_ROLES,
     apply_patch,
@@ -143,11 +147,38 @@ def _account_failure(
     return failures
 
 
+class PlanApprovalRequired(Exception):
+    """Return ownership to the worker after the immutable plan has been committed."""
+
+
+WORKFLOW_VERSION = "python-phase4-v1"
+RESUME_CURSORS = frozenset(
+    {
+        "enrich_query_images",
+        "clarify_with_user",
+        "write_research_brief",
+        "plan_report_sections",
+        "approval",
+        "research_init",
+        "research_agents",
+        "research_review",
+        "followup",
+        "risk_assessment_agent",
+        "response_strategy_agent",
+        "section_writer",
+        "write_final_sections",
+        "compile_final_report",
+        "done",
+    }
+)
+
+
 class PythonWorkflow:
     """Execute intake, joined research rounds, ordered consumers and reporting.
 
-    This object owns no per-run mutable state and offers no Session, streaming,
-    checkpoint, approval or crash-resume API. The SDK is the only Agent loop.
+    A durable worker may observe committed boundaries and supply a verified
+    cursor. Storage, admission and recovery policy belong to that worker.
+    The SDK is the only Agent loop.
     """
 
     async def ainvoke(
@@ -156,6 +187,7 @@ class PythonWorkflow:
         config: RunnableConfig | None = None,
         *,
         start_at: Literal["intake", "research"] = "intake",
+        resume: Mapping[str, Any] | None = None,
     ) -> DeepResearchState:
         """Run once; optionally accept an already-prepared brief and section plan."""
         config = config or {}
@@ -164,97 +196,159 @@ class PythonWorkflow:
             raise ValueError(
                 "Python Workflow requires business_agent_runtime=openai_agents"
             )
-        if settings.allow_plan_feedback:
+        if settings.allow_plan_feedback and execution_observer.get() is None:
             raise ValueError(
-                "Plan approval remains on the LangGraph path until Phase 4"
+                "Plan approval requires a durable worker approval observer"
             )
         if start_at not in {"intake", "research"}:
             raise ValueError("start_at must be intake or research")
         state = copy_state(input)
+        if resume is not None and (
+            resume.get("version") != WORKFLOW_VERSION
+            or resume.get("cursor") not in RESUME_CURSORS
+        ):
+            raise ValueError("Incompatible Workflow checkpoint")
+        cursor = (
+            str(resume["cursor"])
+            if resume
+            else ("enrich_query_images" if start_at == "intake" else "research_init")
+        )
         initial_budget = deepcopy(state.get("runtime", {}).get("budget", {}))
         timeout = settings.workflow_step_timeout_seconds
+
+        async def begin(name: str) -> None:
+            await observe_execution("step_started", step=name, state=deepcopy(state))
+
+        async def commit(name: str, next_cursor: str) -> None:
+            nonlocal cursor
+            cursor = next_cursor
+            await observe_execution(
+                "checkpoint",
+                step=name,
+                state=deepcopy(state),
+                cursor=cursor,
+                version=WORKFLOW_VERSION,
+            )
 
         async def call(
             name: str, operation: Callable[..., Coroutine[Any, Any, Any]]
         ) -> Any:
+            await begin(name)
             return await _step(name, operation, state, config, timeout)
 
         try:
-            if start_at == "intake":
+            if cursor == "enrich_query_images":
                 apply_patch(
                     state, await call("enrich_query_images", intake.enrich_query_images)
                 )
+                await commit("enrich_query_images", "clarify_with_user")
+            if cursor == "clarify_with_user":
                 decision = await call("clarify_with_user", intake.clarification_step)
                 apply_patch(state, decision.update or {})
+                await commit(
+                    "clarify_with_user",
+                    "done" if decision.goto == "__end__" else "write_research_brief",
+                )
                 if decision.goto == "__end__":
                     return state
+            if cursor == "write_research_brief":
                 decision = await call(
                     "write_research_brief", intake.research_brief_step
                 )
                 apply_patch(state, decision.update or {})
-                if decision.goto == "plan_report_sections":
-                    decision = await call(
-                        "plan_report_sections", intake.section_plan_step
-                    )
-                    apply_patch(state, decision.update or {})
+                await commit(
+                    "write_research_brief",
+                    "plan_report_sections"
+                    if decision.goto == "plan_report_sections"
+                    else "approval",
+                )
+            if cursor == "plan_report_sections":
+                decision = await call("plan_report_sections", intake.section_plan_step)
+                apply_patch(state, decision.update or {})
+                await commit("plan_report_sections", "approval")
+            if cursor == "approval":
+                if settings.allow_plan_feedback:
+                    await observe_execution("approval_required", state=deepcopy(state))
+                    raise PlanApprovalRequired()
+                await commit("plan_ready", "research_init")
 
             # Match the original research_phase's new-run boundary: retain private
             # memory and plan, clear prior reports/summaries/tasks/Working Context.
-            run_id = resolve_research_run_id(state, config)
-            apply_patch(
-                state,
-                {
-                    "workflow": {
-                        "type": "override",
-                        "value": {
-                            "brief": state.get("workflow", {}).get("brief", ""),
-                            "round": 1,
-                            "review": None,
-                            "pending_tasks": [],
-                            "completed_tasks": [],
+            if cursor == "research_init":
+                await begin("research_init")
+                run_id = resolve_research_run_id(state, config)
+                apply_patch(
+                    state,
+                    {
+                        "workflow": {
+                            "type": "override",
+                            "value": {
+                                "brief": state.get("workflow", {}).get("brief", ""),
+                                "round": 1,
+                                "review": None,
+                                "pending_tasks": [],
+                                "completed_tasks": [],
+                            },
+                        },
+                        "agents": {
+                            "type": "override",
+                            "value": agents_for_new_run(state),
+                        },
+                        "research": {
+                            "type": "override",
+                            "value": {"run_id": run_id, "working_contexts": {}},
                         },
                     },
-                    "agents": {"type": "override", "value": agents_for_new_run(state)},
-                    "research": {
-                        "type": "override",
-                        "value": {"run_id": run_id, "working_contexts": {}},
-                    },
-                },
-            )
-            packets: dict[str, DeepResearchState] = {
-                role: state for role in RESEARCH_ROLES
-            }
-            while True:
-                patches = await gather_owned(
-                    {
-                        role: _step(
-                            f"{role}_agent",
-                            getattr(research, f"{role}_agent"),
-                            role_snapshot(packet, role),
-                            config,
-                            timeout,
-                        )
-                        for role, packet in packets.items()
-                    }
                 )
-                try:
-                    merge_research_patches(state, patches)
-                except ValueError as exc:
-                    setattr(exc, "parallel_results", patches)
-                    raise
-                apply_patch(
-                    state, await call("research_review", research.research_review)
-                )
-                packets = {
-                    role: cast(DeepResearchState, packet)
-                    for role, packet in research.followup_assignments(
-                        state, settings
-                    ).items()
-                }
-                if not packets:
-                    break
+                await commit("research_init", "research_agents")
+            # A recovered cursor never repeats this destructive new-run boundary.
+            while cursor in {"research_agents", "research_review", "followup"}:
+                if cursor == "research_agents":
+                    packets = (
+                        {role: state for role in RESEARCH_ROLES}
+                        if state.get("workflow", {}).get("review") is None
+                        else research.followup_assignments(state, settings)
+                    )
+                    await begin("research_agents")
+                    patches = await gather_owned(
+                        {
+                            role: _step(
+                                f"{role}_agent",
+                                getattr(research, f"{role}_agent"),
+                                role_snapshot(cast(DeepResearchState, packet), role),
+                                config,
+                                timeout,
+                            )
+                            for role, packet in packets.items()
+                        }
+                    )
+                    try:
+                        merge_research_patches(state, patches)
+                    except ValueError as exc:
+                        setattr(exc, "parallel_results", patches)
+                        raise
+                    await commit("research_agents", "research_review")
+                if cursor == "research_review":
+                    apply_patch(
+                        state, await call("research_review", research.research_review)
+                    )
+                    await commit("research_review", "followup")
+                if cursor == "followup":
+                    # followup_assignments returns packets for the NEXT round.
+                    packets = research.followup_assignments(state, settings)
+                    if not packets:
+                        await commit("followup", "risk_assessment_agent")
+                    else:
+                        # Packet construction is pure and re-computable.
+                        await commit("followup", "research_agents")
 
-            for role in ("risk_assessment", "response_strategy"):
+            for role, next_cursor in (
+                ("risk_assessment", "response_strategy_agent"),
+                ("response_strategy", "section_writer"),
+            ):
+                if cursor != f"{role}_agent":
+                    continue
+                await begin(f"{role}_agent")
                 patch = await _step(
                     f"{role}_agent",
                     getattr(research, f"{role}_agent"),
@@ -263,16 +357,22 @@ class PythonWorkflow:
                     timeout,
                 )
                 apply_patch(state, patch)
-            for name in (
-                "section_writer",
-                "write_final_sections",
-                "compile_final_report",
+                await commit(f"{role}_agent", next_cursor)
+            for name, next_cursor in (
+                ("section_writer", "write_final_sections"),
+                ("write_final_sections", "compile_final_report"),
+                ("compile_final_report", "done"),
             ):
+                if cursor != name:
+                    continue
                 operation = getattr(reporting, name)
                 if name == "compile_final_report":
                     operation = partial(operation, fail_on_error=True)
                 apply_patch(state, await call(name, operation))
+                await commit(name, next_cursor)
             return state
+        except PlanApprovalRequired:
+            raise
         except BaseException as exc:
             failures = _account_failure(state, exc)
             if isinstance(exc, asyncio.CancelledError):

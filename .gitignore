@@ -79,6 +79,7 @@ temp/
 .uv-cache/
 .tmp-*
 .tmp/runtime/transcripts/
+data/runs/
 data/indexes/rag/*
 !data/indexes/rag/.gitkeep
 

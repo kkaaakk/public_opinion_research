@@ -22,6 +22,14 @@ summaries through the official input filter. See
 concurrency and external-service validation limits. Unknown model aliases use a
 32,768-token application window unless an explicit capacity is configured; this
 is not a provider capability claim. The default Runtime remains `legacy`.
+Phase 3 provides the explicit deterministic Python Workflow. Phase 4 adds opt-in
+durable Runs, a SQLAlchemy/MySQL task queue (file SQLite locally), independent
+workers, cursor-based Web/SSE, immutable plan approval and safe step recovery.
+Read `docs/audits/openai-agents-phase4.md` before changing Run ownership, leases,
+checkpoints, tool intents, archive compensation or the single-operator API auth.
+Never replay an interrupted Agent/tool step whose external effects are unknown.
+The default Web/Runtime remains compatible with the legacy path; Phase 5 is not
+part of this work.
 The selected target is OpenAI Agents SDK + deterministic Python workflow + the
 custom Research Graph Context Harness, without DBOS or LangGraph orchestration.
 Keep the agreed phases: 0 SDK feasibility; 1 four-role Runtime; 2 full Research

@@ -37,7 +37,9 @@ from langchain_core.messages import HumanMessage  # noqa: E402
 from pydantic import BaseModel, Field, field_validator  # noqa: E402
 
 from open_deep_research.configuration import DEFAULT_PUBLIC_OPINION_AGENTS  # noqa: E402
-from open_deep_research.deep_researcher import deep_researcher as _deep_researcher_factory  # noqa: E402, I001
+from open_deep_research.deep_researcher import (  # noqa: E402, I001
+    deep_researcher as _deep_researcher_factory,
+)
 from open_deep_research.web.history import (  # noqa: E402, I001
     HistoryUnavailable,
     close_history_store,
@@ -68,9 +70,7 @@ ALLOWED_RESEARCH_MODELS = frozenset(
     }
 )
 WEB_API_TOKEN = (
-    os.environ.get("PUBLIC_OPINION_API_TOKEN")
-    or os.environ.get("WEB_API_TOKEN")
-    or ""
+    os.environ.get("PUBLIC_OPINION_API_TOKEN") or os.environ.get("WEB_API_TOKEN") or ""
 ).strip()
 _RESEARCH_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_RESEARCH_REQUESTS)
 
@@ -83,6 +83,9 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         await asyncio.to_thread(close_history_store)
+        from open_deep_research.web.worker import close_run_store
+
+        await asyncio.to_thread(close_run_store)
 
 
 app = FastAPI(
@@ -106,6 +109,10 @@ class ResearchRequest(BaseModel):
     mode: Literal["fast", "normal", "deep"] = "normal"
     org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
     rag_enabled: bool = False
+    workflow_backend: Literal["langgraph", "python"] = "langgraph"
+    business_agent_runtime: Literal["legacy", "openai_agents"] = "legacy"
+    require_approval: bool = False
+    research_session_id: str | None = Field(default=None, max_length=64)
 
     # 去除主题两端空白，并拒绝空主题。
     @field_validator("topic")
@@ -135,11 +142,24 @@ async def enforce_request_size(request: Request, call_next):
         request_size = int(content_length) if content_length else 0
     except ValueError:
         request_size = MAX_REQUEST_BYTES + 1
-    if request_size > MAX_REQUEST_BYTES:
+    if request_size > MAX_REQUEST_BYTES or request_size < 0:
         return JSONResponse(
             status_code=413,
             content={"detail": "Request payload exceeds the allowed size."},
         )
+    chunks = []
+    actual_bytes = 0
+    async for chunk in request.stream():
+        actual_bytes += len(chunk)
+        if actual_bytes > MAX_REQUEST_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request payload exceeds the allowed size."},
+            )
+        chunks.append(chunk)
+    # Starlette's cached Request replays this bounded body to validation, even
+    # when Content-Length was absent, false, or the request used chunked framing.
+    request._body = b"".join(chunks)
     return await call_next(request)
 
 
@@ -150,8 +170,16 @@ async def handle_request_validation_error(
     exc: RequestValidationError,
 ) -> JSONResponse:
     """Return stable, non-sensitive validation errors to API clients."""
-    oversized_types = {"string_too_long", "bytes_too_long", "value_error.any_str.max_length"}
-    status_code = 413 if any(error.get("type") in oversized_types for error in exc.errors()) else 400
+    oversized_types = {
+        "string_too_long",
+        "bytes_too_long",
+        "value_error.any_str.max_length",
+    }
+    status_code = (
+        413
+        if any(error.get("type") in oversized_types for error in exc.errors())
+        else 400
+    )
     message = (
         "Request payload exceeds the allowed size."
         if status_code == 413
@@ -235,7 +263,9 @@ def _require_authorization(request: Request) -> None:
 
 # 返回历史服务错误，隐藏连接串与数据库凭据。
 @app.exception_handler(HistoryUnavailable)
-async def handle_history_unavailable(_request: Request, exc: HistoryUnavailable) -> JSONResponse:
+async def handle_history_unavailable(
+    _request: Request, exc: HistoryUnavailable
+) -> JSONResponse:
     """Report history failures without leaking connection strings or credentials."""
     LOGGER.warning("History service unavailable", exc_info=exc)
     return JSONResponse(status_code=503, content={"detail": str(exc)})
@@ -251,8 +281,17 @@ def list_history(
 ) -> JSONResponse:
     """List and search completed reports from the existing Neo4j database."""
     _require_authorization(raw)
-    data = get_history_store().list(query=q, limit=limit, offset=offset)
-    return JSONResponse(content=data, headers={"Cache-Control": "no-store"})
+    from open_deep_research.web.run_store import public_payload
+
+    data = get_history_store().list(
+        query=q,
+        limit=limit,
+        offset=offset,
+        **({"owner": "operator"} if WEB_API_TOKEN else {}),
+    )
+    return JSONResponse(
+        content=public_payload(data), headers={"Cache-Control": "no-store"}
+    )
 
 
 # 将已有 LangSmith 研究输出导入历史库，避免追踪过期后丢失。
@@ -268,10 +307,16 @@ def import_history(raw: Request) -> dict:
 def read_history(history_id: str, raw: Request) -> JSONResponse:
     """Return a saved report and the research parameters used to produce it."""
     _require_authorization(raw)
-    record = get_history_store().get(history_id)
+    record = get_history_store().get(
+        history_id, **({"owner": "operator"} if WEB_API_TOKEN else {})
+    )
     if record is None:
         raise HTTPException(status_code=404, detail="研究历史不存在。")
-    return JSONResponse(content=record, headers={"Cache-Control": "no-store"})
+    from open_deep_research.web.run_store import public_payload
+
+    return JSONResponse(
+        content=public_payload(record), headers={"Cache-Control": "no-store"}
+    )
 
 
 # 启动研究图，并以 SSE 流推送阶段进度、报告及归档状态。
@@ -280,6 +325,11 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
     """Run deep research with real-time streaming via SSE."""
     if not _request_is_authorized(raw):
         raise HTTPException(status_code=401, detail="Authentication required.")
+    if request.workflow_backend == "python":
+        from open_deep_research.web.runs import create_run, subscription
+
+        run, _ = await asyncio.to_thread(create_run, request.model_dump(), raw)
+        return subscription(raw, run["run_id"])
 
     # 消费研究图流事件，累计状态与角色报告，并在结束或异常时归档。
     async def _research_event_stream():
@@ -296,8 +346,16 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
                 run_id=thread_id,
                 request=request.model_dump(),
                 report=final_report or "",
-                usage={key: budget[key] for key in
-                       ("model_calls", "input_tokens", "output_tokens", "total_tokens") if key in budget},
+                usage={
+                    key: budget[key]
+                    for key in (
+                        "model_calls",
+                        "input_tokens",
+                        "output_tokens",
+                        "total_tokens",
+                    )
+                    if key in budget
+                },
                 started_at=started_at,
                 status=status,
                 error_message=error_message,
@@ -312,8 +370,14 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
 
         # 生成前端可识别的历史保存成功事件。
         def saved_event(record):
-            return _event({"type": "history_saved", "id": record.id,
-                           "completed_at": record.completed_at, "status": record.status})
+            return _event(
+                {
+                    "type": "history_saved",
+                    "id": record.id,
+                    "completed_at": record.completed_at,
+                    "status": record.status,
+                }
+            )
 
         try:
             yield _event({"type": "status", "message": "Starting research…"})
@@ -353,7 +417,9 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
                 },
                 # Bounded correlation facts only; LangSmith reads them without
                 # copying state, prompt, or user content.
-                "metadata": correlation_metadata({"configurable": {"thread_id": thread_id}}),
+                "metadata": correlation_metadata(
+                    {"configurable": {"thread_id": thread_id}}
+                ),
             }
             config["metadata"]["web_research_mode"] = request.mode
 
@@ -371,13 +437,24 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
                     if isinstance(node_output, dict):
                         # Capture original role outputs as they finish inside
                         # the research subgraph, before a later role can fail.
-                        if node_name.removesuffix("_agent") in DEFAULT_PUBLIC_OPINION_AGENTS or not stage_reports:
+                        if (
+                            node_name.removesuffix("_agent")
+                            in DEFAULT_PUBLIC_OPINION_AGENTS
+                            or not stage_reports
+                        ):
                             stages = stage_reports_from_state(
-                                node_output, stage_id=f"{namespace}:{node_name}",
+                                node_output,
+                                stage_id=f"{namespace}:{node_name}",
                                 completed_at=utc_timestamp(),
                             )
-                            known = {(stage.role, stage.content) for stage in stage_reports}
-                            stage_reports.extend(stage for stage in stages if (stage.role, stage.content) not in known)
+                            known = {
+                                (stage.role, stage.content) for stage in stage_reports
+                            }
+                            stage_reports.extend(
+                                stage
+                                for stage in stages
+                                if (stage.role, stage.content) not in known
+                            )
                     if namespace:
                         # Nested state is retained for history, not broadcast
                         # as extra copies of the regular frontend stream.
@@ -389,20 +466,30 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
 
                     # ── Content streaming ─────────────────────
                     content = _extract_text(node_output)
-                    if content and node_name not in ("enrich_query_images", "identify_skill", "load_skill"):
-                        yield _event({
-                            "type": "stream",
-                            "node": node_name,
-                            "content": content,
-                        })
+                    if content and node_name not in (
+                        "enrich_query_images",
+                        "identify_skill",
+                        "load_skill",
+                    ):
+                        yield _event(
+                            {
+                                "type": "stream",
+                                "node": node_name,
+                                "content": content,
+                            }
+                        )
 
                     # ── Capture final report ──────────────────
                     if isinstance(node_output, dict):
                         report_update = node_output.get("report", {}) or {}
                         runtime_update = node_output.get("runtime", {}) or {}
-                        if isinstance(report_update, dict) and report_update.get("final"):
+                        if isinstance(report_update, dict) and report_update.get(
+                            "final"
+                        ):
                             final_report = report_update["final"]
-                        if isinstance(runtime_update, dict) and runtime_update.get("budget"):
+                        if isinstance(runtime_update, dict) and runtime_update.get(
+                            "budget"
+                        ):
                             budget = runtime_update["budget"]
 
             # ── Final result ────────────────────────────────────────
@@ -416,43 +503,59 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
             if final_report:
                 record = await archive_run()
                 if record is None:
-                    yield _event({
-                        "type": "warning",
-                        "message": "报告已生成，但历史记录保存失败。请下载报告，并检查 Neo4j 服务。",
-                    })
-                yield _event({
-                    "type": "report",
-                    "content": final_report,
-                })
-                yield _event({
-                    "type": "usage",
-                    **usage,
-                })
+                    yield _event(
+                        {
+                            "type": "warning",
+                            "message": "报告已生成，但历史记录保存失败。请下载报告，并检查 Neo4j 服务。",
+                        }
+                    )
+                yield _event(
+                    {
+                        "type": "report",
+                        "content": final_report,
+                    }
+                )
+                yield _event(
+                    {
+                        "type": "usage",
+                        **usage,
+                    }
+                )
                 if record is not None:
                     yield saved_event(record)
             else:
-                record = await archive_run("incomplete", "研究结束但尚未生成最终报告，已保留阶段输出。")
-                yield _event({
-                    "type": "error",
-                    "message": "Research completed but no report was generated.",
-                })
+                record = await archive_run(
+                    "incomplete", "研究结束但尚未生成最终报告，已保留阶段输出。"
+                )
+                yield _event(
+                    {
+                        "type": "error",
+                        "message": "Research completed but no report was generated.",
+                    }
+                )
                 if record is not None:
                     yield saved_event(record)
 
             yield _event({"type": "done"})
 
         except asyncio.CancelledError:
-            record = await archive_run("cancelled", "研究已停止，已保留停止前完成的阶段输出。")
+            record = await archive_run(
+                "cancelled", "研究已停止，已保留停止前完成的阶段输出。"
+            )
             yield _event({"type": "error", "message": "Research cancelled."})
             if record is not None:
                 yield saved_event(record)
         except Exception:
             LOGGER.exception("Research request failed; trace_id=%s", trace_id)
-            record = await archive_run("failed", "研究运行失败，已保留原始主题、参数及已完成的阶段内容。")
-            yield _event({
-                "type": "error",
-                "message": f"Research request failed. Trace ID: {trace_id}.",
-            })
+            record = await archive_run(
+                "failed", "研究运行失败，已保留原始主题、参数及已完成的阶段内容。"
+            )
+            yield _event(
+                {
+                    "type": "error",
+                    "message": f"Research request failed. Trace ID: {trace_id}.",
+                }
+            )
             if record is not None:
                 yield saved_event(record)
 
@@ -497,6 +600,11 @@ def main():
         reload=False,
         log_level="info",
     )
+
+
+from open_deep_research.web.runs import router as _run_router  # noqa: E402
+
+app.include_router(_run_router)
 
 
 if __name__ == "__main__":

@@ -2,15 +2,17 @@
 
 基于 LangGraph、RAG、MCP 和多 Agent 协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒体监控、长期记忆等能力。
 
-## 当前开发方向（2026-10-16）
+## 当前开发方向（2026-10-21）
 
-后续 Agent Runtime 选用 OpenAI Agents SDK，并按需自主组合 Harness 能力。
-当前 `codex/openai-agents-migration` 从 DeerFlow 改造前的完整备份恢复，
-仅完成仓库清理、业务边界审计和迁移准备，仍使用原 LangGraph 运行实现。
-DeerFlow 试验环境及其分支、标签已按要求清除；RAG 配置整理和 DSH 轨迹观测成果
-继续保留在各自分支，尚未合并到本分支。
-详见[清理与测试记录](docs/audits/pre-openai-sdk-cleanup.md)和
-[SDK 迁移计划](docs/architecture/openai-agents-sdk-migration-plan.md)。
+OpenAI Agents SDK + Python 确定性 Workflow + Research Graph Context Harness 已完成 Phase 0–4。
+现有 Web/Runtime 默认保持兼容；页面可显式选择后台研究，支持计划审批、刷新后恢复进度与取消清算。
+新链路需要配置受信访问令牌、持久 `RUN_DATABASE_URL`，并独立运行
+`python -m open_deep_research.web.worker`。多进程/多主机可使用 MySQL/InnoDB，
+本机可使用文件 SQLite；不确定工具效果的中断不会自动重放。
+部署命令、恢复范围及验证证据见 [Phase 4 审计](docs/audits/openai-agents-phase4.md)。
+单操作员 Token 不等于多租户身份；Phase 5 的旧 Runtime/依赖退役尚未实施。
+DeerFlow 已退役，独立分支中的 RAG 配置和 DSH 轨迹成果保留。
+详见[清理与测试记录](docs/audits/pre-openai-sdk-cleanup.md)和[SDK 迁移计划](docs/architecture/openai-agents-sdk-migration-plan.md)。
 
 ## 🆕 扩展功能
 
