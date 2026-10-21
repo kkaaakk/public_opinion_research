@@ -112,7 +112,7 @@ SDK 可恢复的单工具错误仍按原工具 observation/状态策略处理；
 | 检查 | 实际结果 |
 | --- | --- |
 | locked sync | 成功，依赖/锁不变 |
-| 全量 pytest | **764 passed、6 deselected、156 warnings，50.57s，退出码 0** |
+| 全量 pytest | **764 passed、6 deselected、156 warnings，49.78s，退出码 0** |
 | Phase 3 新测试 | **51 passed**；真实 SDK Runner/图/本地 MCP/长摘要包含其中 |
 | Ruff CI E/F/I | 全生产包、conftest、全部 test_*.py 及新 smoke 通过 |
 | 新模块/新测试/新 smoke 完整 Ruff | 通过 |
@@ -179,6 +179,15 @@ uv pip check --python .venv/Scripts/python.exe
 
 ## 10. GitHub 与验收结论
 
-代码、测试和审计将提交到 `codex/openai-agents-phase3`，面向 `main` 创建 PR；最终提交的 quality/tests 必须实际完成后才在交付中报告通过。GitHub CI 固定证据在完成后补记本节，最终 HEAD 的 CI 链接同时在交付回复列出。不自动合并。
+实现提交 **[`d276ea6c126191239374b7fa77e06ac50d948f84`](https://github.com/kkaaakk/public_opinion_research/commit/d276ea6c126191239374b7fa77e06ac50d948f84)** 已推送 `codex/openai-agents-phase3`。已创建并关联面向 main 的 **[PR #23](https://github.com/kkaaakk/public_opinion_research/pull/23)**；实际核对 OPEN、merged=false、mergeable=true，未自动合并。PR base 仍为本次起点 `dabb2fbc`。
+
+该实现提交的真实 PR CI **[39574383486](https://github.com/kkaaakk/public_opinion_research/actions/runs/39574383486)** 已全部完成，两个 Jobs 均为 success：
+
+| Job | 实际远程结果 | 固定证据 |
+| --- | --- | --- |
+| quality | locked 安装、原 Ruff E/F/I、compileall、公共入口导入全部成功 | [119136152921](https://github.com/kkaaakk/public_opinion_research/actions/runs/39574383486/job/119136152921) |
+| tests | 读取实际 Job 日志核实 **764 passed、6 deselected、156 warnings，49.45s**，退出码0 | [119136152394](https://github.com/kkaaakk/public_opinion_research/actions/runs/39574383486/job/119136152394) |
+
+首次代码 CI 即通过，无失败门禁补丁、测试放宽或 CI 配置变更。本节是随后补记固定 CI 证据的纯文档提交，也沿现有 push/PR 规则运行 CI；交付前继续核对最终文档 HEAD 的 quality/tests，最新固定链接在交付回复中给出，可从[本分支 CI 记录](https://github.com/kkaaakk/public_opinion_research/actions/workflows/ci.yml?query=branch%3Acodex%2Fopenai-agents-phase3)追溯。
 
 本地 Phase 3 功能与离线合同已满足；继承问题和真实服务限制如上保留。具备进入 Phase 4 的实现基础；Phase 4/5 尚未完成，新路径没有生产 Web/Session/耐久执行验收。
