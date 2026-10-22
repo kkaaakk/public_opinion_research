@@ -1,0 +1,8 @@
+# POC additions on top of unchanged uv.lock, in this worktree's .venv only.
+openai-agents==0.24.0
+dbos==3.3.0
+SQLAlchemy==2.1.6
+psycopg[binary]==3.3.6
+croniter==6.2.4
+# Route B and the native SDK replay comparison only:
+dbos-openai-agents==0.3.0
