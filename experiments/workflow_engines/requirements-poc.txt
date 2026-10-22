@@ -1,0 +1,11 @@
+# POC-only additions on top of the unchanged root uv.lock environment.
+# Install only in the isolated evaluation worktree; do not add to production.
+openai-agents==0.24.0
+dbos==3.3.0
+dbos-openai-agents==0.3.0
+temporalio==1.34.0
+SQLAlchemy==2.1.6
+croniter==6.2.4
+psycopg[binary]==3.3.6
+nexus-rpc==1.4.0
+types-protobuf==7.35.1.20260906
