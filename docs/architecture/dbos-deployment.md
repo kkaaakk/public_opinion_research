@@ -45,6 +45,8 @@ contain a task pool, application claim, lease or heartbeat scheduler.
 `RUN_MAX_ACTIVE` (default4), `RUN_OWNER_ACTIVE` (2), `RUN_QUEUE_CAPACITY` (1000),
 `RUN_APPROVAL_SECONDS` (86400), `RUN_TIMEOUT_SECONDS` (3600 per executing planning/research segment), and optional `RUN_SDK_SESSION_PATH` are centralized
 in `workflow/dbos_config.py`. All processes must use the same persisted policy.
+Create the parent directory of RUN_SDK_SESSION_PATH explicitly and grant the
+Executor file permissions before enabling that optional SQLite transcript store.
 Session means the existing trusted research session ID; SDK sessions are private
 per durable role invocation, useful for inspection, not workflow checkpoints.
 

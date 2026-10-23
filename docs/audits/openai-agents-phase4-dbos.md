@@ -169,6 +169,8 @@ native business queue 配置 global_concurrency、owner partition_concurrency。
 
 ### 真实失败记录
 
+- 首次Linux CI的quality、786项离线及Node合同通过，native为63 passed /1 failed；SDK Session夹具依赖本地既有`.tmp`，fresh checkout没有该目录。修复为夹具显式建立配置的会话父目录，并在部署文档明确文件权限；生产执行代码未因此改变。修复后的最终CI以PR checks为准。
+
 - 原生首条四角色链路的阶段 report 使用 override 包装；History 投影曾按 str 处理。修复为原协议字符串，保留实际模型费用精确断言。
 - 首轮 native 预算夹具将步骤外服务调用少数一次，修正为 intake3 + sections/final2，仍保留 normal28 model_calls /311 tokens 精确合同。
 - Stream 终态/归档原生 Event 曾早于尾消息交付；修复以公开事件交付事实确定 EOF/归档可见性，而非删除断言。

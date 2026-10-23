@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -52,6 +53,9 @@ def pg_database(monkeypatch, request):
         monkeypatch.delenv(name_, raising=False)
     options = getattr(request, "param", {})
     for policy_name, value in options.items():
+        if policy_name == "RUN_SDK_SESSION_PATH":
+            # A fresh CI checkout has no ignored runtime/log directories.
+            Path(value).parent.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv(policy_name, str(value))
     settings.cache_clear()
     DBOS.migrate(isolated, schema="por_dbos")
