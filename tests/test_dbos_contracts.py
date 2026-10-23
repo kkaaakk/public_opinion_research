@@ -859,7 +859,9 @@ def test_cancel_of_safe_retry_cannot_release_an_active_unsettled_unit(
     monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
     case = native_case
     run = case.create()
-    failed = case.wait(run)
+    failed = case.wait(
+        run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
+    )
     assert failed["retry_safe"]
     case.client.retry(run["run_id"], "alice", "retry", failed["state_version"])
     end = time.monotonic() + 10
@@ -973,47 +975,38 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
 ):
     import threading
 
-    from open_deep_research.web.durable import RunClient
     from open_deep_research.workflow import dbos_workflow as engine
 
     case = native_case
-    original_review = engine.OPERATIONS["research_review"]
+    original = engine.OPERATIONS["research_review"]
+    entered, release = threading.Event(), threading.Event()
     attempts = []
 
     async def review(state, cfg):
-        if not attempts:
-            attempts.append("failed")
+        attempts.append(1)
+        if len(attempts) == 1:
             raise RuntimeError("Safe read failed")
-        return await original_review(state, cfg)
+        entered.set()
+        while not release.is_set():
+            await asyncio.sleep(0.02)
+        return await original(state, cfg)
 
     monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
     run = case.create()
-    failed = case.wait(run)
-    entered = threading.Event()
-    release = threading.Event()
-    original = RunClient._rewind_safe
-
-    def delayed(client, run_id):
-        entered.set()
-        assert release.wait(15)
-        return original(client, run_id)
-
-    monkeypatch.setattr(RunClient, "_rewind_safe", delayed)
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(
-            case.client.retry, run["run_id"], "alice", "first", failed["state_version"]
-        )
-        try:
-            assert entered.wait(10)
-            observed = case.client.get(run["run_id"], "alice")
-            assert observed["retry_requested"]
-            with pytest.raises(RunConflict):
-                case.client.retry(
-                    run["run_id"], "alice", "second", observed["state_version"]
-                )
-        finally:
-            release.set()
-        future.result(timeout=10)
+    failed = case.wait(
+        run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
+    )
+    case.client.retry(run["run_id"], "alice", "first", failed["state_version"])
+    try:
+        assert entered.wait(15)
+        observed = case.client.get(run["run_id"], "alice")
+        with pytest.raises(RunConflict):
+            case.client.retry(
+                run["run_id"], "alice", "second", observed["state_version"]
+            )
+    finally:
+        release.set()
     result = case.wait(run, lambda r: r["status"] == "completed")
     assert result["generation"] == 1
+    assert len(attempts) == 2
     assert len(case.models) == 4

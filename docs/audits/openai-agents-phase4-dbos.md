@@ -2,7 +2,9 @@
 
 日期：2026-10-23（Asia/Shanghai）。生产基线 `5ca71c12f15013654a26f619071218a2be151a00`，分支 `codex/dbos-phase4-integration`，替代原 PR #24 的执行层。开始时确认 #24 open / 未合并 / HEAD 未变；从该 SHA 创建独立 worktree。此前评估/实验通过 Git 引用读取，未假定它们存在于本分支：[第一轮](https://github.com/kkaaakk/public_opinion_research/blob/31764e646a71675cec7c1a3d98cd39d671343391/docs/audits/workflow-engine-evaluation.md)、[第二轮](https://github.com/kkaaakk/public_opinion_research/blob/8894b67158cf5782e03f56eab9761fcda38cae8a/docs/audits/dbos-native-architecture-poc.md)。
 
-**本地功能与故障验收已通过。交付为指向 main 的替代性 Phase 4 PR；最终合并还需 PR checks 通过，并由操作方接受下述部署/恢复边界；本任务保持未合并，不部署生产。**
+**本地功能、故障验收及最终Review P1修复证据如下。替代性Phase4以Merge Commit合入main前，必须由当前HEAD的完整CI和最终审查通过；本报告不代表生产部署或跨主机HA验收。部署/恢复边界继续适用。**
+
+**最终 Review 补充：`cac82fa5` 的旧 786/64/5 结果遗漏了重试幂等时序 P1；修复、真实故障回归和最终验收见第11节。原始失败证据保留，没有将旧 CI 全绿当作无阻塞证明。**
 
 ## 1. 已实施架构与职责
 
@@ -192,7 +194,7 @@ native business queue 配置 global_concurrency、owner partition_concurrency。
 | 生产模块 | 原SLOC | 最终SLOC | 净变化 |
 | --- | ---: | ---: | ---: |
 | `runtime/sdk_context.py` | 728 | 736 | +8 |
-| `web/durable.py` | 0 | 497 | +497 |
+| `web/durable.py` | 0 | 569 | +569 |
 | `web/executor.py` | 0 | 104 | +104 |
 | `web/history.py` | 513 | 516 | +3 |
 | `web/run_data.py` | 0 | 71 | +71 |
@@ -203,15 +205,15 @@ native business queue 配置 global_concurrency、owner partition_concurrency。
 | `workflow/__init__.py` | 45 | 46 | +1 |
 | `workflow/business_steps.py` | 0 | 74 | +74 |
 | `workflow/dbos_config.py` | 0 | 62 | +62 |
-| `workflow/dbos_workflow.py` | 0 | 619 | +619 |
+| `workflow/dbos_workflow.py` | 0 | 644 | +644 |
 | `workflow/execution.py` | 63 | 92 | +29 |
 | `workflow/python_workflow.py` | 344 | 0 | -344 |
 | `workflow/reporting.py` | 730 | 731 | +1 |
-| `workflow/run_facts.py` | 0 | 420 | +420 |
+| `workflow/run_facts.py` | 0 | 422 | +422 |
 
-整文件生产删除 **1,789 SLOC**（2,001物理行）；7个新生产文件 **1,847 SLOC**（2,059物理行）；其余原生产文件净增 **48 SLOC**。全量 `src` 实际净变化 **+106 SLOC / +114物理行**。并未达到显著减少总代码量，不能把删除旧文件当净收益。
+整文件生产删除 **1,789 SLOC**（2,001物理行）；7个新生产文件 **1,946 SLOC**（2,173物理行）；其余原生产文件净增 **48 SLOC**。全量 `src` 实际净变化 **+205 SLOC / +228物理行**。并未达到显著减少总代码量，不能把删除旧文件当净收益。
 
-原RunStore/Worker/PythonWorkflow/Run API四模块共1,997 SLOC；新替换文件加保留API共2,061 SLOC。正式补齐联合配额、清算、原事件协议、错误/版本、Session及归档/重试代次后，与原型的749行差额明显不同。SDKRuntime原631 SLOC未改，不计为删除代码。
+原RunStore/Worker/PythonWorkflow/Run API四模块共1,997 SLOC；新替换文件加保留API共2,160 SLOC。正式补齐联合配额、清算、原事件协议、错误/版本、Session及归档/重试代次后，与原型的749行差额明显不同。SDKRuntime原631 SLOC未改，不计为删除代码。
 
 同口径职责主链约由原9层变为10层（省略两边共同内部调用），没有明显缩短。SQL claim、Task池、lease/heartbeat、Attempt执行身份、Cursor解释器、重复Run状态机、SQL公开Outbox七类通用实现退出。领域幂等、准入、许可、费用/清算、审批和业务归档仍维护；这些是七类领域失败责任，非独立异常组合总数。native消息合并/finalizer、PG、Journal/partition、版本/Executor身份、rewind及可选Conductor是新增的学习/运维成本。
 
@@ -236,3 +238,33 @@ Phase 5 继续处理旧 LangGraph/runtime 退役：默认 legacy interactive/API
 ## 10. 官方语义依据
 
 固定包安装源码与真实运行优先，说明链接用于核对公开契约：[DBOS3.3.0](https://pypi.org/project/dbos/3.3.0/)、[Client/transaction/rewind](https://docs.dbos.dev/python/reference/client)、[Workflow/Step](https://docs.dbos.dev/python/reference/decorators)、[Queue/partition](https://docs.dbos.dev/python/reference/queues)、[Communication/Streams](https://docs.dbos.dev/python/tutorials/workflow-communication)、[Concurrent executions](https://docs.dbos.dev/explanations/concurrent-executions)、[Distributed recovery](https://docs.dbos.dev/conductor/distributed-recovery)、[OpenAI SDK](https://developers.openai.com/api/docs/guides/agents/sdk)、[Neo4j写锁与丢失更新](https://neo4j.com/docs/operations-manual/current/database-internals/concurrent-data-access/)。源码复用不等于第三方接口永不变化；版本升级需要重跑同一合同矩阵。
+
+
+## 11. 最终 Review P1：重试请求不是可重用执行授权
+
+问题基线 `cac82fa55acfdc92ef2bc5a8b903a99c63aa52ab`。本地最终审查先用真实 DBOS/PostgreSQL/Neo4j 与现有 SDK/Harness 夹具复现：安全读失败 → K/V重试后再次失败 → 重发K/V触发第三次执行，generation仍为1；Run completed，但History failed且API archive_status=saved。原始新增用例为1 failed，未合并问题提交。
+
+根因是 `RunClient.retry()` 对重复键仅校验 version，却在分支后无条件执行 `_rewind_safe()`；HTTP与Finalizer两条恢复路径都根据当前ERROR选取重试边界。原请求身份没有绑定它所授权的失败实例，已应用请求可越权作用于后来的失败；新业务执行也没有相应的新代次/归档事件。
+
+### 局部修复与原子性
+
+- HTTP在既有请求行锁内重新校验当前失败、观察游标、终态事件交付、清算和许可；一次事务提交授权行、`retry_started`和native retry消息。同键/同版本只确认原请求；不同键受请求锁及 `(run_id,generation)` 唯一约束保护。
+- 授权 payload 绑定 source_generation、应用版本、目标 Workflow ID、公开 journal 的错误命令边界及 native status/Step 起止时间版本。只有Finalizer调用 `retry_execution(run_id, command)`；删除HTTP直接rewind。
+- Finalizer只接受下一个代次且与授权行一致的命令；重复、过期、伪造消息不改变代次。`retry_applied`在实际应用/核对之后写入原生receipt（generation与明确outcome），不会把控制请求确认等同于研究成功。
+- 进程死于消息提交后、子流程rewind后、全部rewind后但Step ACK前，均恢复同一命令。native目标版本已经前进时不再rewind该目标；再次失败必须取得新的观察版本和新key。仅使用公开native APIs，没有直接改vendor表。
+- 归档失败时收到旧/非法retry消息后继续补偿，不能丢弃待归档结果。新代次不会使用旧代次History receipt确认archive_status；迟到SSE/History的原有代次过滤/CAS保留并加入回归。
+- SDK、Context Harness、未知效果拒绝、费用累计、资源占位和执行许可均保留；不引入新SQL调度器或Checkpoint。工作流命令结构变动明确提升应用版本至dbos-phase4-v2，不用新代码重放v1 pending journal。
+
+### 正式回归
+
+`tests/test_dbos_retry.py`纳入CI与Phase4 smoke，覆盖旧键在运行中/再次失败/成功/取消/未知效果后的重复、不同键并发、合法下一代次、旧/非法native消息、Stream终态延迟、History提交丢ACK、迟到归档和费用一致性。原`test_distinct_retry_keys_cannot_reaccept_one_pending_outcome`改为真实业务等待边界，不再替换 `_rewind_safe()` 的行为。
+
+四项进程用例使用真实Executor进程树kill/restart、原SDK受控模型、真实PostgreSQL/Neo4j、SQLite独立效果/调用见证。故障钩子在真实native调用之前/之后暂停；ACK窗口钩子先完成原 `_rewind_safe()` 的全部真实调用再暂停返回，未伪造重试结果。恢复后的review见证恰为2次，重发旧key不变；新key后恰为3次，Producer工具效果和实际调用均始终为2，最终model_calls=30、generation=2、History版本3，SSE尾事件/usage与API及History一致。
+
+最终冻结代码本地验收：**74项真实原生合同全部通过 /0 skipped /0 xfailed，905.77s**（原64项+新增10项）；完整离线 **786 passed /80 deselected，60.72s**，带socket guard；Node **5 passed**；Ruff、8个变更Python文件格式、compileall及禁dotenv/tracing/非loopback网络的29入口导入通过。付费模型/API调用0。最新提交和合并后的完整GitHub CI均作为合并门禁，实际run链接见PR checks及交付记录。
+
+迭代失败如实保留：收紧观察版本后首次完整矩阵72 passed /1 failed；取消用例在首个done后读到的游标被随后History尾事件推进，严格CAS返回409。保持CAS与取消/清算断言，改为观察实际archive saved尾事件后复验通过。新增native ACK丢失场景首次夹具沿用了rewind前的1次见证期望，真实已执行2次；修正为与该故障边界一致的精确2次期望，完整重启/下一代次见证仍保持2→3，未降低安全断言。
+
+源码审查发现JSON异常规范化会改变重放后的Python异常类型，因此瞬时SQL控制失败在`retry_execution`内记录为原生Step的可重试数据，不写`retry_applied`；第4项真实进程测试在该结果已提交、native已重试并再次失败后终止进程，重启后正确消费同一命令且不触发第3次业务执行。原markitdown-mcp/mcp继承依赖冲突未通过、不扩大到本次修复。
+
+增量迁移额外验证：独立UUID库模拟v1 retries表，正式CLI初始化执行两次，outcome列/唯一索引增加且旧授权行原样保留。临时夹具最初采用不同的默认数值类型构造策略，被严格policy门禁拒绝；统一使用正式环境解析后通过，没有放宽生产策略校验。

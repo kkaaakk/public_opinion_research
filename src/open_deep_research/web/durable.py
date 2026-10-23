@@ -257,6 +257,8 @@ class RunClient:
             )
             or 0
         )
+        if isinstance(applied, dict):
+            applied = applied["generation"]
         current = next(
             (u["name"] for u in reversed(units) if u["artifact"] is None), ""
         )
@@ -305,6 +307,7 @@ class RunClient:
             else None,
             "retry_safe": status.status == "ERROR"
             and not req["cancel_requested"]
+            and generation == applied
             and not unsettled
             and any(u["error"] and u["name"] in SAFE_STEPS for u in units),
             "created_at": timestamp(req["data"]["created"]),
@@ -383,55 +386,104 @@ class RunClient:
         self.client.cancel_workflow(run_id, cancel_children=True)
         return self.get(run_id, owner)
 
-    def _rewind_safe(self, run_id):
-        # One Run's control lock serializes an HTTP acknowledgement and its
-        # crash-recovery command. Native journal/state mutations use public APIs.
+    def _failure_target(self, status, queue):
+        """Identify one native failed execution, never a reusable Run-level grant."""
+        steps = self.client.list_workflow_steps(status.workflow_id)
+        errors = [s["function_id"] for s in steps if s.get("error") is not None]
+        return {
+            "workflow_id": status.workflow_id,
+            "queue": queue,
+            "start_step": min(errors)
+            if errors
+            else max((s["function_id"] for s in steps), default=0) + 1,
+            "failure": digest(
+                {
+                    "version": status.app_version,
+                    "updated": status.updated_at,
+                    "completed": status.completed_at,
+                    "steps": [
+                        {
+                            k: s.get(k)
+                            for k in (
+                                "function_id",
+                                "function_name",
+                                "child_workflow_id",
+                                "started_at_epoch_ms",
+                                "completed_at_epoch_ms",
+                            )
+                        }
+                        for s in steps
+                    ],
+                }
+            ),
+        }
+
+    def _rewind_safe(self, run_id, command):
+        # Only the durable Finalizer calls this. Replaying its Step after a lost
+        # ACK may confirm the original command, never authorize a later ERROR.
         with self.facts.engine.begin() as db:
             req = self.facts.request(run_id, db=db, lock=True)
+            row = db.execute(
+                text(
+                    "SELECT version,generation,outcome FROM por_domain.retries WHERE run_id=:id AND key=:k"
+                ),
+                {"id": run_id, "k": command.get("key")},
+            ).first()
+            if (
+                not row
+                or not row[2]
+                or command
+                != {
+                    "key": command.get("key"),
+                    "generation": row[1],
+                    "version": row[0],
+                    "outcome": digest(loads(row[2])),
+                }
+            ):
+                return None
+            outcome = loads(row[2])
+            if (
+                outcome["source_generation"] + 1 != row[1]
+                or outcome["version"] != VERSION
+            ):
+                return None
+            self.facts.validate(req)
             if req["cancel_requested"]:
                 self.client.cancel_workflow(run_id, cancel_children=True)
-                return
-            self.facts.validate(req)
-            children = self.client.list_workflows(
-                workflow_id_prefix=run_id + ":",
-                status="ERROR",
-                load_input=False,
-                load_output=False,
-            )
-            targets = [
-                (c.workflow_id, BUSINESS)
-                for c in children
-                if c.name in {"por.plan", "por.research"}
-            ] + [(run_id, RECOVERY)]
-            for workflow_id, queue in targets:
-                status = self.client.list_workflows(
-                    workflow_ids=[workflow_id], load_input=False, load_output=False
-                )
-                if not status or status[0].status != "ERROR":
+                return {"generation": row[1], "outcome": "cancelled"}
+            # The captured native status/journal timestamps are execution
+            # versions. Rewind clears/replaces them before another execution.
+            # A crash after native commit but before our Step ACK therefore
+            # skips an advanced target, even if it has already failed again.
+            root_target = outcome["targets"][-1]
+            root_status = self.native(run_id)
+            if (
+                root_status.status != "ERROR"
+                or self._failure_target(root_status, root_target["queue"])
+                != root_target
+            ):
+                return {"generation": row[1], "outcome": "superseded"}
+            for target in outcome["targets"]:
+                status = self.native(target["workflow_id"])
+                if (
+                    status.status != "ERROR"
+                    or self._failure_target(status, target["queue"]) != target
+                ):
                     continue
-                steps = self.client.list_workflow_steps(workflow_id)
-                errors = [
-                    step["function_id"]
-                    for step in steps
-                    if step.get("error") is not None
-                ]
-                boundary = (
-                    min(errors)
-                    if errors
-                    else max((step["function_id"] for step in steps), default=0) + 1
-                )
+                if target["queue"] == BUSINESS and self.facts.unresolved(run_id, db):
+                    return {"generation": row[1], "outcome": "blocked"}
                 self.client.rewind_workflow(
-                    workflow_id,
-                    start_step=boundary,
-                    queue_name=queue,
+                    target["workflow_id"],
+                    start_step=target["start_step"],
+                    queue_name=target["queue"],
                     queue_partition_key=req["owner"],
                 )
+            return {"generation": row[1], "outcome": "applied"}
 
     def retry(self, run_id, owner, key, expected_version):
-        result = self.get(run_id, owner)
-        self.facts.validate(self.facts.request(run_id, owner))
-        with self.facts.engine.begin() as db:
-            self.facts.request(run_id, owner, db=db, lock=True)
+        repo = self.facts
+        with repo.engine.begin() as db:
+            req = repo.request(run_id, owner, db=db, lock=True)
             existing = db.execute(
                 text(
                     "SELECT version FROM por_domain.retries WHERE run_id=:id AND key=:k"
@@ -441,40 +493,68 @@ class RunClient:
             if existing:
                 if existing[0] != expected_version:
                     raise RunConflict("Retry key was used for another observed version")
+                # An idempotent acknowledgement is never an execution grant.
+                # The original native message survives a submitter crash.
             else:
-                latest_generation = int(
-                    db.execute(
-                        text(
-                            "SELECT coalesce(max(generation),0) FROM por_domain.retries WHERE run_id=:id"
-                        ),
-                        {"id": run_id},
-                    ).scalar_one()
-                )
-                if latest_generation != result["generation"]:
-                    raise RunConflict("Retry already accepted for this outcome")
+                repo.validate(req)
+                result = self.get(run_id, owner)
                 if (
                     result["state_version"] != expected_version
                     or not result["retry_safe"]
+                    or not result["events_complete"]
                     or result["retry_requested"]
+                    or req["cancel_requested"]
                     or not key
                 ):
                     raise RunConflict(
                         "Run requires reconciliation; no safe automatic retry"
                     )
-                generation = result["generation"] + 1
-                db.execute(
-                    text("INSERT INTO por_domain.retries VALUES (:id,:k,:v,:g)"),
-                    {"id": run_id, "k": key, "v": expected_version, "g": generation},
+                children = self.client.list_workflows(
+                    workflow_id_prefix=run_id + ":",
+                    status="ERROR",
+                    load_input=False,
+                    load_output=False,
                 )
-                self.facts.publish(db, run_id, "retry_started", generation=generation)
+                targets = [
+                    self._failure_target(c, BUSINESS)
+                    for c in children
+                    if c.name in {"por.plan", "por.research"}
+                ]
+                root = self.native(run_id)
+                if root.status != "ERROR" or root.app_version != VERSION or not targets:
+                    raise RunConflict("The observed failed execution changed")
+                targets.append(self._failure_target(root, RECOVERY))
+                generation = result["generation"] + 1
+                outcome = {
+                    "source_generation": result["generation"],
+                    "version": VERSION,
+                    "targets": targets,
+                }
+                db.execute(
+                    text(
+                        "INSERT INTO por_domain.retries(run_id,key,version,generation,outcome) VALUES (:id,:k,:v,:g,:o)"
+                    ),
+                    {
+                        "id": run_id,
+                        "k": key,
+                        "v": expected_version,
+                        "g": generation,
+                        "o": dumps(outcome),
+                    },
+                )
+                repo.publish(db, run_id, "retry_started", generation=generation)
                 self.client.send_in_transaction(
                     db,
                     run_id + ":finalize",
-                    {"key": key, "generation": generation},
+                    {
+                        "key": key,
+                        "generation": generation,
+                        "version": expected_version,
+                        "outcome": digest(outcome),
+                    },
                     topic="retry",
                     idempotency_key=key,
                 )
-        self._rewind_safe(run_id)
         return self.get(run_id, owner)
 
     def reconcile(self, run_id, owner, expected_version, *, worker_stopped, note):

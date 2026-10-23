@@ -134,5 +134,5 @@ jobs:
           TEST_DBOS_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: >-
           uv run python -m pytest -m integration
-          tests/test_dbos_contracts.py tests/test_dbos_process.py
+          tests/test_dbos_contracts.py tests/test_dbos_process.py tests/test_dbos_retry.py
           --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1

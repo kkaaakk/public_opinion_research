@@ -565,11 +565,33 @@ async def archive_step(run_id, result):
 
 
 @DBOS.step()
-async def retry_execution(run_id):
+async def retry_execution(run_id, command):
     from open_deep_research.web.durable import RunClient
 
-    await asyncio.to_thread(RunClient(facts())._rewind_safe, run_id)
-    return True
+    try:
+        return await asyncio.to_thread(RunClient(facts())._rewind_safe, run_id, command)
+    except SQLAlchemyError:
+        # JSON-normalized exceptions need not retain their Python type on replay.
+        # Persist transient control failure as data, without acknowledging a grant.
+        return {"retryable": True}
+
+
+async def apply_retry(run_id, command, applied_generation):
+    # A duplicate/late message cannot become a grant for another native ERROR.
+    if (
+        not isinstance(command, dict)
+        or command.get("generation") != applied_generation + 1
+    ):
+        return applied_generation
+    while True:
+        receipt = await retry_execution(run_id, command)
+        if receipt != {"retryable": True}:
+            break
+        await DBOS.sleep_async(1)
+    if receipt is None:
+        return applied_generation
+    await DBOS.set_event_async("retry_applied", receipt)
+    return receipt["generation"]
 
 
 @DBOS.workflow(name="por.finalize")
@@ -589,11 +611,14 @@ async def finalize_workflow(run_id):
                 if result["generation"] > applied_generation:
                     command = await DBOS.recv_async("retry", timeout_seconds=0)
                     if command:
-                        while not await retry_execution(run_id):
-                            await DBOS.sleep_async(1)
-                        applied_generation = command["generation"]
-                        await DBOS.set_event_async("retry_applied", applied_generation)
-                        continue
+                        applied_generation = await apply_retry(
+                            run_id, command, applied_generation
+                        )
+                    else:
+                        await DBOS.sleep_async(1)
+                    # Never publish the previous failure as the new generation
+                    # while its transactionally submitted command is pending.
+                    continue
                 break
             cleanup_wait = cleanup_wait + 1 if result else 0
             await DBOS.sleep_async(1)
@@ -648,7 +673,7 @@ async def finalize_workflow(run_id):
             archive_status="pending",
             generation=result["generation"],
         )
-        retry = None
+        advanced = False
         while True:
             try:
                 history_id = await archive_step(run_id, result)
@@ -667,14 +692,21 @@ async def finalize_workflow(run_id):
                     generation=result["generation"],
                     message="Report archive is pending; the Run retains its result.",
                 )
-                retry = await DBOS.recv_async("retry", timeout_seconds=30)
-                if retry:
-                    break
+                command = await DBOS.recv_async("retry", timeout_seconds=30)
+                if command and result["retry_safe"]:
+                    updated = await apply_retry(run_id, command, applied_generation)
+                    if updated > applied_generation:
+                        applied_generation = updated
+                        advanced = True
+                        break
+        if advanced:
+            continue
         if not result["retry_safe"]:
             return
-        while retry is None:
-            retry = await DBOS.recv_async("retry", timeout_seconds=86400)
-        while not await retry_execution(run_id):
-            await DBOS.sleep_async(1)
-        applied_generation = retry["generation"]
-        await DBOS.set_event_async("retry_applied", applied_generation)
+        while True:
+            command = await DBOS.recv_async("retry", timeout_seconds=86400)
+            if command:
+                updated = await apply_retry(run_id, command, applied_generation)
+                if updated > applied_generation:
+                    applied_generation = updated
+                    break

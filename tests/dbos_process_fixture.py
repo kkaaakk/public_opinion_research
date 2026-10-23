@@ -37,7 +37,7 @@ socket.socket.connect = local_connect
 
 import pytest
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
-from dbos import DBOS
+from dbos import DBOS, DBOSClient
 from dbos_support import NEO4J, NEO4J_PASSWORD
 from langchain_core.runnables import RunnableConfig
 from neo4j import GraphDatabase
@@ -104,6 +104,66 @@ def install(directory, scenario):
         (directory / name).write_text("ready")
         while not (directory / (name + ".release")).exists():
             time.sleep(0.05)
+
+    if scenario.startswith("retry-"):
+        from open_deep_research.budget import capture_budget_usage
+        from open_deep_research.web.durable import RunClient
+        from open_deep_research.workflow import dbos_workflow as engine
+
+        original_review = engine.OPERATIONS["research_review"]
+        original_rewind = DBOSClient.rewind_workflow
+        original_apply = RunClient._rewind_safe
+        original_sleep = DBOS.sleep_async
+
+        async def retry_review(state, config):
+            with sqlite3.connect(directory / "external.db", timeout=10) as db:
+                db.execute("CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY)")
+                attempt = db.execute("INSERT INTO reviews DEFAULT VALUES").lastrowid
+            if attempt <= 2:
+                capture_budget_usage({"model_calls": 1, "input_tokens": 2})
+                raise RuntimeError("Synthetic safe read failure with durable witness")
+            return await original_review(state, config)
+
+        def rewind(client, workflow_id, **kwargs):
+            if scenario == "retry-before" and workflow_id.endswith(":research"):
+                gate(scenario)
+            result = original_rewind(client, workflow_id, **kwargs)
+            if scenario == "retry-between" and workflow_id.endswith(":research"):
+                gate(scenario)
+            if (
+                scenario == "retry-error"
+                and ":" not in workflow_id
+                and not (directory / "retry-error.release").exists()
+            ):
+                (directory / "retry-error-native").write_text(
+                    "real native commit before lost ACK"
+                )
+                raise SQLAlchemyError("Synthetic native control commit ACK loss")
+            return result
+
+        def apply(client, run_id, command):
+            # Fault injection only: execute the entire real grant/native rewind
+            # first, release its transaction, then stop before the Step ACK.
+            # Never substitute a recovery result or fake a journal write.
+            result = original_apply(client, run_id, command)
+            if scenario == "retry-after":
+                gate(scenario)
+            return result
+
+        async def sleep(seconds):
+            if (
+                scenario == "retry-error"
+                and DBOS.workflow_id.endswith(":finalize")
+                and (directory / "retry-error-native").exists()
+            ):
+                # The retryable result is already in the real native Step journal.
+                await asyncio.to_thread(gate, scenario)
+            return await original_sleep(seconds)
+
+        patch.setattr(DBOS, "sleep_async", staticmethod(sleep))
+        patch.setitem(engine.OPERATIONS, "research_review", retry_review)
+        patch.setattr(DBOSClient, "rewind_workflow", rewind)
+        patch.setattr(RunClient, "_rewind_safe", apply)
 
     def acquire(self, run_id, unit, name, **kw):
         if scenario == "checkpoint" and name == "research_review":

@@ -53,6 +53,8 @@ class RunFacts:
                 "CREATE INDEX IF NOT EXISTS por_unit_run ON por_domain.units(run_id)",
                 "CREATE TABLE IF NOT EXISTS por_domain.operations (id text PRIMARY KEY, unit text NOT NULL REFERENCES por_domain.units(id), fingerprint text NOT NULL, status text NOT NULL, name text NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS por_domain.retries (run_id text NOT NULL REFERENCES por_domain.requests(id), key text NOT NULL, version bigint NOT NULL, generation bigint NOT NULL, PRIMARY KEY(run_id,key))",
+                "ALTER TABLE por_domain.retries ADD COLUMN IF NOT EXISTS outcome text",
+                "CREATE UNIQUE INDEX IF NOT EXISTS por_retry_generation ON por_domain.retries(run_id,generation)",
                 "CREATE TABLE IF NOT EXISTS por_domain.approvals (run_id text PRIMARY KEY REFERENCES por_domain.requests(id), version text NOT NULL, decision text NOT NULL)",
             ):
                 db.execute(text(ddl))

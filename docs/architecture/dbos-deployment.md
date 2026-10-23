@@ -94,7 +94,7 @@ and isolated Neo4j and only use controlled inference:
 ```powershell
 docker compose -p por-dbos-phase4 -f compose.dbos.yaml up -d postgres neo4j-test --wait
 .venv/Scripts/python.exe -m pytest
-.venv/Scripts/python.exe -m pytest -m integration tests/test_dbos_contracts.py tests/test_dbos_process.py
+.venv/Scripts/python.exe -m pytest -m integration tests/test_dbos_contracts.py tests/test_dbos_process.py tests/test_dbos_retry.py
 ```
 
 `TEST_DBOS_DATABASE_URL`, `TEST_DBOS_NEO4J_URI`, `TEST_DBOS_NEO4J_PASSWORD` select
@@ -110,3 +110,34 @@ bounded by the business queue and domain reservations; queue capacity bounds
 accepted backlog. Large-backlog metadata throughput/storage need deployment
 sizing. API state_version is the delivered event cursor; the Neo4j archive
 run_state_version is retry generation + 1, preventing late older projections.
+
+
+## Retry authorization and execution versions
+
+The final-review fix uses application version `dbos-phase4-v2`. Run initialization
+adds the nullable `por_domain.retries.outcome` authorization payload and a unique
+index on `(run_id, generation)` through the existing `--initialize-only` command.
+This is additive domain control data, not another execution queue or checkpoint.
+Do not run v2 code against a pending v1 Finalizer journal: drain/reconcile v1 with
+its matching release and Executor identity first, as for other version changes.
+
+The HTTP retry endpoint only atomically records a grant and its native message.
+Repeating a key/version acknowledges that original request and never rewinds.
+A new grant requires a settled safe failure and delivery of that generation's
+terminal event, binding the observed cursor to a new failure. Each grant records
+the source generation, application version, and exact failed native target/journal
+versions. Only the durable Finalizer applies it, with native rewind APIs.
+
+The Finalizer ignores stale, duplicate and unauthorized messages. A lost Step ACK
+is recovered by checking the original native execution versions; an already
+advanced target is never rewound again merely because it has failed again.
+`retry_applied` is a native command receipt containing `generation` and an outcome
+(`applied`, `superseded`, `cancelled`, or `blocked`); it does not declare research
+success. Run status remains native, and unsettled external effects remain held.
+Old History/SSE receipts never establish archive success for a new generation.
+Archive compensation continues after an invalid/old retry message and never
+restarts research. No HTTP-side recovery path is retained.
+
+Transient recovery storage failures are journaled as retryable Step result data,
+so replay does not depend on retaining a Python SQLAlchemy exception type. No
+application receipt acknowledges the grant until its native targets are checked.
