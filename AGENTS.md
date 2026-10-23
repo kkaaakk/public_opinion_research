@@ -22,8 +22,20 @@ summaries through the official input filter. See
 concurrency and external-service validation limits. Unknown model aliases use a
 32,768-token application window unless an explicit capacity is configured; this
 is not a provider capability claim. The default Runtime remains `legacy`.
-The selected target is OpenAI Agents SDK + deterministic Python workflow + the
-custom Research Graph Context Harness, without DBOS or LangGraph orchestration.
+Phase 3 established the explicit business orchestration. Phase 4 now replaces
+its custom SQL queue/worker/cursor with native DBOS Workflow/Step/Queue and
+PostgreSQL, following the user's formal DBOS integration decision. Read
+`docs/audits/openai-agents-phase4-dbos.md` and
+`docs/architecture/dbos-deployment.md` before changing execution ownership,
+resource reservations, external operation receipts, archive compensation or auth.
+DBOS status/journal is the execution authority; domain facts must not become a
+second scheduler, lease system or Run state machine. Never replay an interrupted
+Agent/tool step whose external effects are unknown. SDKAgentRuntime and the
+Context Harness keep the native SDK Runner as their only Agent loop.
+Legacy LangGraph remains for Phase 5; new durable Runs have one DBOS channel.
+Do not route old SQL Runs across engines. Their drain uses the original release.
+The selected target is DBOS business workflows + OpenAI Agents SDK + the custom
+Research Graph Context Harness. DBOSRunner turn-level replay is not production.
 Keep the agreed phases: 0 SDK feasibility; 1 four-role Runtime; 2 full Research
 Graph Context Harness integration; 3 deterministic Python Workflow; 4 Web/SSE/
 Session integration; 5 old Runtime retirement and dependency cleanup. Do not

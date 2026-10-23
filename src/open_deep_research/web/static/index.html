@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Public Opinion Research</title>
-    <link rel="stylesheet" href="/static/style.css?v=20261008-history-3">
+    <link rel="stylesheet" href="/static/style.css?v=20261021-runs-4">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
 </head>
@@ -87,7 +87,13 @@
                     <button id="stop-btn" class="btn-stop hidden" onclick="stopResearch()">
                         Stop
                     </button>
+                    <button id="resume-run-btn" class="btn-action hidden" type="button" onclick="startResearch(true)">恢复后台进度</button>
                 </div>
+            </div>
+            <div class="durable-controls">
+                <label><input id="durable-enabled" type="checkbox"> 后台研究（刷新后可恢复进度）</label>
+                <label><input id="require-approval" type="checkbox"> 开始研究前审批计划</label>
+                <span>后台研究需要配置运行存储及访问令牌。</span>
             </div>
             <div id="po-extra" style="margin-top:12px;padding:14px 16px;background:#f6f8fa;border-radius:8px;border:1px solid var(--border);">
                 <div style="margin-bottom:10px;">
@@ -117,6 +123,12 @@
             <span id="status-text"></span>
             <span id="status-timer" class="status-timer"></span>
         </div>
+        <section id="approval-panel" class="api-settings hidden" aria-labelledby="approval-title">
+            <h2 id="approval-title">研究计划待审批</h2>
+            <pre id="approval-plan"></pre>
+            <button id="approve-plan-btn" class="btn-action" type="button" onclick="decidePlan('approve')">批准并继续</button>
+            <button id="reject-plan-btn" class="btn-action" type="button" onclick="decidePlan('reject')">拒绝计划</button>
+        </section>
 
         <!-- 实时日志：显示研究节点产生的进度内容。 -->
         <section id="log-panel" class="log-panel hidden">
@@ -167,6 +179,6 @@
         </footer>
     </div>
 
-    <script src="/static/app.js?v=20261008-history-3"></script>
+    <script src="/static/app.js?v=20261021-runs-4"></script>
 </body>
 </html>

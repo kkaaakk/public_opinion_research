@@ -13,6 +13,11 @@ let historyRequestVersion = 0;
 let reportRequestVersion = 0;
 let historySearchTimer = null;
 let isImportingHistory = false;
+const DURABLE_STORAGE_KEY = 'public-opinion-pending-run-v1';
+let durableRun = readDurableRun();
+let durablePlanVersion = null;
+let durableCancelRequested = false;
+let approvalSubmitting = false;
 const HISTORY_PAGE_SIZE = 10;
 
 /* 缓存 DOM 引用，供事件处理和状态渲染复用。 */
@@ -74,9 +79,15 @@ function setTopic(text) {
 
 /* 研究启停：提交参数、消费 SSE 流并在退出时恢复页面操作。 */
 // 校验主题并启动一次研究；使用 AbortController 支持用户主动取消。
-async function startResearch() {
+async function startResearch(resumeDurable = false) {
     if (isResearchRunning) return;
-    const topic = topicInput.value.trim();
+    if (durableRun && !durableRun.finished && !resumeDurable) {
+        statusBar.classList.remove('hidden');
+        statusText.textContent = '已有后台研究，请先恢复进度。';
+        return;
+    }
+    if (durableRun?.finished && !resumeDurable) { durableRun = null; saveDurableRun(); }
+    const topic = resumeDurable && durableRun ? durableRun.request.topic : topicInput.value.trim();
     if (!topic) { topicInput.focus(); return; }
 
     abortController = new AbortController();
@@ -95,6 +106,13 @@ async function startResearch() {
         org_context: document.getElementById('org-context').value,
         rag_enabled: document.getElementById('rag-enabled')?.checked || false,
     };
+    if (resumeDurable && durableRun) activeResearchRequest = durableRun.request;
+    else if (document.getElementById('durable-enabled').checked) {
+        Object.assign(activeResearchRequest, {
+            workflow_backend: 'python', business_agent_runtime: 'openai_agents',
+            require_approval: document.getElementById('require-approval').checked,
+        });
+    }
     setHistorySelection(null);
     setHistoryActionsDisabled();
     reportMeta.textContent = truncate(topic, 180);
@@ -122,6 +140,10 @@ async function startResearch() {
     const body = JSON.stringify(activeResearchRequest);
 
     try {
+        if (activeResearchRequest.workflow_backend === 'python') {
+            await followDurableRun(activeResearchRequest);
+            return;
+        }
         const response = await fetch('/api/research', {
             method: 'POST',
             headers: apiHeaders({ 'Content-Type': 'application/json' }),
@@ -161,7 +183,17 @@ async function startResearch() {
 }
 
 // 中止当前 fetch 与响应流；统一退出处理由 startResearch 的 finally 执行。
-function stopResearch() {
+async function stopResearch() {
+    if (durableRun) {
+        durableCancelRequested = true;
+        if (durableRun.runId) {
+            try {
+                await durableRequest('/api/runs/' + durableRun.runId + '/cancel', { method: 'POST' });
+                statusText.textContent = '正在停止并清算…';
+            } catch (error) { addLog('error', error.message); }
+        }
+        return;
+    }
     if (abortController) abortController.abort();
 }
 
@@ -263,6 +295,147 @@ function resetUI() {
     stopBtn.classList.add('hidden');
     clearInterval(timerInterval);
     setHistoryActionsDisabled();
+    document.getElementById('resume-run-btn').classList.toggle('hidden', !durableRun);
+    startBtn.disabled = Boolean(durableRun && !durableRun.finished);
+}
+
+// Only a tab-local request identity/cursor is retained. Credentials stay in the
+// existing password input and must be entered again after a page reload.
+function readDurableRun() {
+    try {
+        const value = JSON.parse(sessionStorage.getItem(DURABLE_STORAGE_KEY));
+        if (value && typeof value.key === 'string' && typeof value.request?.topic === 'string'
+            && Number.isSafeInteger(value.cursor) && value.cursor >= 0
+            && (value.runId === null || /^[a-f0-9]{32}$/.test(value.runId))) return value;
+    } catch { /* Missing/invalid tab-local data never starts a request. */ }
+    return null;
+}
+
+function saveDurableRun() {
+    if (durableRun) sessionStorage.setItem(DURABLE_STORAGE_KEY, JSON.stringify(durableRun));
+    else sessionStorage.removeItem(DURABLE_STORAGE_KEY);
+}
+
+async function durableRequest(path, options = {}) {
+    const response = await fetch(path, { ...options, headers: apiHeaders({
+        'Content-Type': 'application/json', ...options.headers,
+    }), cache: 'no-store' });
+    if (!response.ok) {
+        const error = new Error(await apiError(response));
+        error.httpStatus = response.status;
+        throw error;
+    }
+    return response;
+}
+
+function showDurableState(state) {
+    const labels = { queued: '等待执行', running: '研究中', awaiting_approval: '等待计划审批',
+        cancelling: '正在停止并清算', completed: '已完成', failed: '运行失败',
+        cancelled: '已停止', interrupted: '运行中断，需要核对' };
+    statusText.textContent = labels[state.status] || state.status;
+    if (state.report && state.report !== reportMarkdown) handleEvent({ type: 'report', content: state.report });
+    renderUsage(state.usage || {});
+    if (state.history_id) handleEvent({ type: 'history_saved', id: state.history_id,
+        status: state.status, completed_at: state.terminated_at });
+    document.getElementById('approval-panel').classList.toggle('hidden', state.status !== 'awaiting_approval');
+    if (state.status === 'awaiting_approval') {
+        durablePlanVersion = state.plan.version;
+        document.getElementById('approval-plan').textContent = state.plan.brief + '\n\n'
+            + state.plan.sections.map(section => section.name + '\n' + section.description).join('\n\n');
+    }
+}
+
+async function followDurableRun(request) {
+    durableCancelRequested = false;
+    if (!durableRun) {
+        durableRun = { key: crypto.randomUUID(), request, runId: null, cursor: 0 };
+        // Persist before sending: an ambiguous HTTP response can safely retry
+        // this exact key/body after reload, without inventing a second Run.
+        saveDurableRun();
+    }
+    if (!durableRun.runId) {
+        try {
+            const response = await durableRequest('/api/runs', { method: 'POST',
+                headers: { 'Idempotency-Key': durableRun.key }, body: JSON.stringify(durableRun.request) });
+            durableRun.runId = (await response.json()).run_id;
+            saveDurableRun();
+        } catch (error) {
+            if ([400, 401].includes(error.httpStatus)) { durableRun = null; saveDurableRun(); }
+            throw error;
+        }
+    }
+    if (durableCancelRequested) await stopResearch();
+    let hydrate = true;
+    while (durableRun) {
+        const state = await (await durableRequest('/api/runs/' + durableRun.runId)).json();
+        showDurableState(state);
+        if (hydrate) {
+            for (const stage of state.role_reports || []) addLog(stage.role + '_agent', stage.content);
+            hydrate = false;
+        }
+        if (state.status === 'awaiting_approval') return;
+        if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status)) {
+            researchFailed = state.status !== 'completed';
+            if (state.archive_status === 'pending') {
+                reportNotice.textContent = '结果已保存到运行记录，历史归档等待后台补偿。';
+                reportNotice.classList.remove('hidden');
+            }
+            durableRun.finished = true;
+            saveDurableRun();
+            return;
+        }
+        try {
+            const response = await durableRequest('/api/runs/' + durableRun.runId + '/events', {
+                headers: { 'Last-Event-ID': String(durableRun.cursor) },
+            });
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                let end;
+                while ((end = buffer.indexOf('\n\n')) >= 0) {
+                    const frame = buffer.slice(0, end);
+                    buffer = buffer.slice(end + 2);
+                    const payload = frame.split('\n').filter(line => line.startsWith('data:'))
+                        .map(line => line.slice(5).trimStart()).join('\n');
+                    if (!payload) continue;
+                    const event = JSON.parse(payload);
+                    if (!Number.isSafeInteger(event.seq) || event.seq <= durableRun.cursor) continue;
+                    if (event.seq !== durableRun.cursor + 1) throw new Error('进度序号不连续，请恢复订阅。');
+                    handleEvent(event);
+                    durableRun.cursor = event.seq;
+                    saveDurableRun();
+                }
+            }
+        } catch (error) {
+            if ([401, 403, 404, 409].includes(error.httpStatus)) throw error;
+            statusText.textContent = '连接中断，正在恢复进度…';
+        }
+        // EOF alone cannot mean success. Query persisted state and reconnect;
+        // this loop never creates a Run or re-executes an Agent.
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+}
+
+async function decidePlan(decision) {
+    if (!durableRun?.runId || !durablePlanVersion || approvalSubmitting) return;
+    approvalSubmitting = true;
+    const buttons = ['approve-plan-btn', 'reject-plan-btn'].map(id => document.getElementById(id));
+    buttons.forEach(button => { button.disabled = true; });
+    try {
+        await durableRequest('/api/runs/' + durableRun.runId + '/approval', { method: 'POST',
+            body: JSON.stringify({ plan_version: durablePlanVersion, decision }) });
+        durablePlanVersion = null;
+        document.getElementById('approval-panel').classList.add('hidden');
+        await startResearch(true);
+    } catch (error) { statusText.textContent = error.message; }
+    finally {
+        approvalSubmitting = false;
+        buttons.forEach(button => { button.disabled = false; });
+    }
 }
 
 // 展示本次运行的输入、输出、总令牌及模型调用次数。
@@ -543,6 +716,24 @@ reuseBtn.addEventListener('click', reuseHistoryParameters);
 loadHistory(0);
 const initialHistoryId = new URL(window.location.href).searchParams.get('history');
 if (initialHistoryId) openHistory(initialHistoryId);
+if (durableRun) {
+    topicInput.value = durableRun.request.topic;
+    modelSelect.value = durableRun.request.model;
+    searchSelect.value = durableRun.request.search_api;
+    modeSelect.value = durableRun.request.mode;
+    document.getElementById('org-context').value = durableRun.request.org_context;
+    document.getElementById('rag-enabled').checked = durableRun.request.rag_enabled;
+    document.getElementById('require-approval').checked = durableRun.request.require_approval;
+    document.getElementById('durable-enabled').checked = true;
+    document.getElementById('resume-run-btn').classList.remove('hidden');
+    startBtn.disabled = !durableRun.finished;
+    statusBar.classList.remove('hidden');
+    statusText.textContent = '发现后台研究。填写访问令牌后恢复进度。';
+}
+document.getElementById('require-approval').disabled = !document.getElementById('durable-enabled').checked;
+document.getElementById('durable-enabled').addEventListener('change', () => {
+    document.getElementById('require-approval').disabled = !document.getElementById('durable-enabled').checked;
+});
 
 /* 报告操作：下载原始 Markdown、复制内容和显示临时提示。 */
 // 通过临时 Blob URL 下载 Markdown，触发后立即释放 URL 资源。

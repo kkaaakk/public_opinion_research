@@ -27,9 +27,9 @@ def get_workflow(config=None):
 
     settings = Configuration.from_runnable_config(config)
     if settings.workflow_backend == "python":
-        from open_deep_research.workflow.python_workflow import PythonWorkflow
-
-        return PythonWorkflow()
+        raise ValueError(
+            "Use the durable Run API for DBOS execution; no in-process Python orchestrator"
+        )
     from open_deep_research.workflow.graph import deep_researcher
 
     return deep_researcher(config)

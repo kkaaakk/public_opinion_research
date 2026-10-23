@@ -1,6 +1,9 @@
 # OpenAI Agents SDK 迁移边界与实施准备
 
-准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-21 更新：**Phase 0–3 已完成；四角色 SDK Runtime 和 Research Graph Context Harness 已接入可显式选择的 Python 确定性 Workflow，LangGraph 与 Web/API 默认保持兼容**。实现、验证及限制分别见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)、[Phase 1 审计](../audits/openai-agents-phase1.md)、[Phase 2 审计](../audits/openai-agents-phase2.md) 和 [Phase 3 审计](../audits/openai-agents-phase3.md)。Phase 4/5 尚未实施。
+> 2026-10-23 架构更新：根据正式迁移请求，Phase 4 在独立替代分支改为 DBOS 原生 Workflow/Step + 原生 SDK Runner；本页原 SQL Worker 设计保留为历史背景，当前实现和验收以 [DBOS 审计](../audits/openai-agents-phase4-dbos.md) 为准。Phase 5 不在本次范围。
+
+
+准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-21 更新：**Phase 0–4 已完成；四角色 SDK Runtime 和 Research Graph Context Harness 已接入 Python 确定性 Workflow，并提供显式启用的持久 Run、SQL Worker、Web/SSE、审批及安全恢复。LangGraph 与 Web/API 默认保持兼容**。实现、验证及限制分别见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)、[Phase 1 审计](../audits/openai-agents-phase1.md)、[Phase 2 审计](../audits/openai-agents-phase2.md)、[Phase 3 审计](../audits/openai-agents-phase3.md) 和 [Phase 4 审计](../audits/openai-agents-phase4.md)。Phase 5 尚未实施；单操作员 Token 不等于多租户身份，恢复限已提交安全步骤，未知工具效果不自动重放。
 
 后续同日已补做真实 DeepSeek 基础调用、非思考/思考模式 SDK 并行工具与 Producer/Consumer 验证，发现并修正窄边界问题；实测范围、用量和 557 项离线回归见验证记录第10节。该补验没有进入 Phase 1。
 
@@ -157,7 +160,7 @@ Phase 2 在原接缝上完成批次阶段保留/补清算、四角色证据交�
 作用域与刷新，以及兼容 SDK 原生工具/reasoning 协议的应用侧滚动摘要。Graph 模式
 的策略角色另外接收有界上游风险分析，风险报告不作为原始证据入图。
 预算与失败/取消限制及真实存储验收见 Phase 2 审计。以下蓝图继续表示最终目标，
-不是全部已经部署的能力。Phase 3 已完成 Python 进程内编排、状态显式汇合与取消收尾；Phase 4 Web/SSE/Session、审批和耐久执行尚未完成。
+不是全部已经部署的能力。Phase 3 完成 Python 进程内编排、状态显式汇合与取消收尾；Phase 4 已提供显式启用的 Web/SSE/SDK Session、SQL Worker、审批与安全步骤恢复。多租户身份、任意工具位置恢复和生产多机吞吐/HA 并未因此完成，实际边界见 Phase 4 审计。
 
 延续 `src/open_deep_research/` 包名，优先在已有目录内明确边界。下列是正式迁移时的职责建议；Phase 0 仅新增少量 SDK 适配文件，未按蓝图批量创建模块或空目录。
 
@@ -232,7 +235,7 @@ flowchart TD
 | ADR-P05 模型供应商 | 保留本项目模型名称/端点策略；在单一 adapter seam 迁移 | 直接套 LangChain wrapper 或为所有 provider 增加一层万能代理会掩盖差异 | 每条实际 provider 路径通过 tools/vision/schema/usage/error smoke |
 | ADR-P06 业务/轨迹 | 保留 DSH 的协议/投影成果，重写其采集适配；原生 SDK tracing 与轨迹分工 | 整分支合并会带 LangChain callback/执行管理；只靠 tracing 无持久会话 UI | live/replay fixture 等价，记录故障不重跑研究，观测无额外模型调用 |
 
-ADR-P01 的单角色 SDK loop 在 Phase 1 以显式 Runtime 配置落地，其业务合同验证见 Phase 1 审计；工作流替换已在 Phase 3 作为显式 Python API 路径完成，原默认入口保留。其他未实施部分保持 Proposed，不把耐久组件等部署备选写成已接受选型，也不提前引入新框架。正式迁移评审可直接使用本文合同，无需先落地所有目录。
+ADR-P01 的单角色 SDK loop 在 Phase 1 以显式 Runtime 配置落地，工作流替换在 Phase 3 完成，原默认入口保留。Phase 4 已落实 Run/Session/证据/档案分工及数据库任务队列；接受的选型、并发/恢复保证和替代方案详见 Phase 4 审计中的 ADR-P4-01–04。其余未实施部分保持 Proposed，不把观测/多租户等未来能力写成已完成，也不引入新的业务编排框架。
 
 ## 5. 旧 LangGraph Agent Server 审计的迁移待办
 
@@ -294,7 +297,7 @@ PR #12 的 RAG 配置整合作为独立参考保留，不因此提前整体合�
 | Phase 1 | 四业务 Agent Runtime 全部使用可选择的 SDK Agent/Runner；保留旧 Runtime、LangGraph Workflow 和 Web/API 默认 | 已完成，见 Phase 1 审计 |
 | Phase 2 | 完整 Research Graph Context Harness：工具批次、四角色证据交接、Working Context 更新、压缩和终止清算全链路 | 已完成；真实 Runner/编译 LangGraph 离线全链路、本地 MCP stdio 与 Neo4j 受控 smoke，范围及限制见 Phase 2 审计 |
 | Phase 3 | 确定性 Python Workflow 接替 LangGraph；保留双研究并行、汇合、Review/Gap 循环和 State 业务合同 | 已完成；显式 Python API、真实 SDK Runner 离线对照、失败/超时/取消清算及本地 MCP/Neo4j 合成验证，见 [Phase 3 审计](../audits/openai-agents-phase3.md)。默认入口未切换 |
-| Phase 4 | Web/SSE/Session、Run 生命周期、身份/审批、取消/恢复、事件与档案补偿的生产集成和故障验证 | 待执行 |
+| Phase 4 | Web/SSE/Session、Run 生命周期、身份/审批、取消/恢复、事件与档案补偿的生产集成和故障验证 | 已完成；SQLAlchemy/MySQL 队列与本地 SQLite、独立 Worker、持久 Run/事件/审批/回执、真实进程 kill/restart 与 TCP 重连验证。仅显式启用，单操作员身份；恢复范围与外部服务限制见 [Phase 4 审计](../audits/openai-agents-phase4.md) |
 | Phase 5 | 旧 Runtime 退役及依赖清理，完成必要观测适配和兼容入口验收 | 待执行；不整分支合并 DSH |
 
 不引入 DBOS、Temporal 或新的工作流框架，不把跨仓调用链简化或独立分支开发混入 Runtime 迁移。LangChain 在工具、报告服务、RAG loaders/vector/document 等非 Agent loop 的使用在本阶段保留。

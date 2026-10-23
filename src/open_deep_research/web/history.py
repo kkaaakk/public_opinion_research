@@ -53,6 +53,9 @@ class HistoryRecord(BaseModel):
     role_reports: list[HistoryStage] = Field(default_factory=list)
     error_message: str = ""
     failed_stage: str = ""
+    owner: str = ""
+    research_session_id: str = ""
+    run_state_version: int = 0
 
 
 # 将时间规范为 UTC 字符串，便于排序及浏览器时区转换。
@@ -218,6 +221,13 @@ class Neo4jHistoryStore:
             WITH row, existing IS NULL AS is_new
             MERGE (h:ResearchHistory {id: row.id})
             ON CREATE SET h += row
+            SET h._por_archive_lock = true
+            REMOVE h._por_archive_lock
+            WITH h, row, is_new,
+                row.source IN ['python_worker', 'dbos'] AND row.owner = h.owner
+                  AND row.run_state_version > coalesce(h.run_state_version, 0) AS newer_run
+            WHERE is_new OR NOT (row.source IN ['python_worker', 'dbos']) OR newer_run
+            FOREACH (_ IN CASE WHEN newer_run THEN [1] ELSE [] END | SET h += row)
             WITH h, row, is_new,
                 coalesce(h.report, '') = '' AND row.report <> '' AS add_report,
                 coalesce(h.stage_count, 0) < row.stage_count AS add_stages
@@ -240,7 +250,12 @@ class Neo4jHistoryStore:
 
     # 按搜索词和分页返回运行摘要，不加载完整报告正文。
     def list(
-        self, *, query: str = "", limit: int = 10, offset: int = 0
+        self,
+        *,
+        query: str = "",
+        limit: int = 10,
+        offset: int = 0,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         """Return completed and failed run summaries without full report bodies."""
         # Aggregate the total separately inside the same database statement so
@@ -248,11 +263,13 @@ class Neo4jHistoryStore:
         result = self._query(
             """
             MATCH (h:ResearchHistory)
-            WHERE $query = '' OR toLower(coalesce(h.search_text, h.topic + '\\n' + h.report)) CONTAINS $query
+            WHERE (coalesce(h.owner, '') = '' OR h.owner = $owner)
+              AND ($query = '' OR toLower(coalesce(h.search_text, h.topic + '\\n' + h.report)) CONTAINS $query)
             WITH count(h) AS total
             CALL () {
                 MATCH (h:ResearchHistory)
-                WHERE $query = '' OR toLower(coalesce(h.search_text, h.topic + '\\n' + h.report)) CONTAINS $query
+                WHERE (coalesce(h.owner, '') = '' OR h.owner = $owner)
+                  AND ($query = '' OR toLower(coalesce(h.search_text, h.topic + '\\n' + h.report)) CONTAINS $query)
                 WITH h ORDER BY h.completed_at DESC, h.id DESC
                 SKIP $offset LIMIT $limit
                 RETURN collect(h { .id, .run_id, .topic, .started_at,
@@ -266,6 +283,7 @@ class Neo4jHistoryStore:
             query=query.strip().lower(),
             limit=limit,
             offset=offset,
+            owner=owner,
         )
         return {
             "items": [self._decode(item) for item in result[0]["items"]],
@@ -276,11 +294,14 @@ class Neo4jHistoryStore:
         }
 
     # 读取单条归档，并仅统计该运行自身的证据规模。
-    def get(self, history_id: str) -> dict[str, Any] | None:
+    def get(
+        self, history_id: str, *, owner: str | None = None
+    ) -> dict[str, Any] | None:
         """Reopen an archive and count only evidence from its own run."""
         rows = self._query(
             """
             MATCH (h:ResearchHistory {id: $id})
+            WHERE coalesce(h.owner, '') = '' OR h.owner = $owner
             OPTIONAL MATCH (n:ResearchNode {run_id: h.run_id})
             RETURN properties(h) AS record,
                 count(CASE WHEN n:Source THEN 1 END) AS sources,
@@ -289,6 +310,7 @@ class Neo4jHistoryStore:
             """,
             read=True,
             id=history_id,
+            owner=owner,
         )
         if not rows:
             return None

@@ -69,3 +69,70 @@ jobs:
 
       - name: Run deterministic offline tests
         run: uv run python -m pytest
+
+      - name: Set up Node for the browser controller contracts
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify durable browser request and replay behavior
+        run: node --test tests/durable_frontend.test.cjs
+  dbos-integration:
+    name: dbos-postgresql-contracts
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_USER: por_execution
+          POSTGRES_PASSWORD: ci-dbos-test-only
+          POSTGRES_DB: por_execution
+        ports: ["5432:5432"]
+        options: >-
+          --label por-integration=dbos-phase4
+          --health-cmd "pg_isready -U por_execution -d por_execution"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      neo4j:
+        image: neo4j:5.26.31
+        env:
+          NEO4J_AUTH: neo4j/ci-neo4j-test-only
+        ports: ["7687:7687"]
+    env:
+      PYTHON_DOTENV_DISABLED: "1"
+      OPENAI_AGENTS_DISABLE_TRACING: "1"
+      LANGSMITH_TRACING: "false"
+      TEST_DBOS_DATABASE_URL: postgresql+psycopg://por_execution:ci-dbos-test-only@127.0.0.1:5432/por_execution
+      TEST_DBOS_NEO4J_URI: bolt://127.0.0.1:7687
+      TEST_DBOS_NEO4J_PASSWORD: ci-neo4j-test-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev --locked
+      - name: Await isolated Neo4j
+        run: |
+          uv run python - <<'PY'
+          import time
+          from neo4j import GraphDatabase
+          driver=GraphDatabase.driver('bolt://127.0.0.1:7687',auth=('neo4j','ci-neo4j-test-only'))
+          for attempt in range(60):
+              try:
+                  driver.verify_connectivity()
+                  break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise RuntimeError('Neo4j did not become ready')
+          driver.close()
+          PY
+      - name: Native workflows, SDK contracts and real process faults
+        env:
+          TEST_DBOS_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: >-
+          uv run python -m pytest -m integration
+          tests/test_dbos_contracts.py tests/test_dbos_process.py tests/test_dbos_retry.py
+          --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1
