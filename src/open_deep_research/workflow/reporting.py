@@ -54,7 +54,7 @@ from open_deep_research.time_utils import get_today_str
 
 # Initialize a configurable model that we will use throughout the agent
 from open_deep_research.workflow import shared
-from open_deep_research.workflow.execution import gather_owned
+from open_deep_research.workflow.execution import execution_effect, gather_owned
 from open_deep_research.workflow.state_utils import (
     business_context,
     report_state,
@@ -329,7 +329,8 @@ async def _persist_report(
 ) -> None:
     """Preserve report costs if the existing memory write fails; never replay it."""
     try:
-        await maybe_persist_chat_memory(state, config, report)
+        async with execution_effect():
+            await maybe_persist_chat_memory(state, config, report)
     except BaseException as exc:
         setattr(
             exc,

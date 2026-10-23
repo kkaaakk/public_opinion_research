@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 
@@ -12,6 +13,10 @@ from typing import Any
 execution_observer: ContextVar[Callable[..., Awaitable[Any]] | None] = ContextVar(
     "execution_observer", default=None
 )
+
+
+class ExecutionControlError(RuntimeError):
+    """Abort SDK execution when durable permission/storage cannot be confirmed."""
 
 
 async def observe_execution(kind: str, **data: Any) -> Any:
@@ -85,3 +90,36 @@ async def gather_owned(calls: Mapping[str, Coroutine[Any, Any, Any]]) -> dict[st
         setattr(failure, "parallel_errors", ordered_errors)
         raise failure
     return ordered_results
+
+
+async def owned_io(operation, *args, **kwargs):
+    """Drain a real control commit even if its asyncio awaiter is cancelled."""
+    task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    cancellation = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancellation = cancellation or exc
+    result = task.result()
+    return result, cancellation
+
+
+@asynccontextmanager
+async def execution_effect():
+    """Hold an optional business permission across a Graph/Memory commit."""
+    guard = await observe_execution("effect_guard")
+    if guard is not None:
+        _, cancelled = await owned_io(guard.__enter__)
+        if cancelled is not None:
+            try:
+                await owned_io(guard.__exit__, None, None, None)
+            finally:
+                raise cancelled
+    try:
+        yield
+    finally:
+        if guard is not None:
+            _, cancelled = await owned_io(guard.__exit__, None, None, None)
+            if cancelled is not None:
+                raise cancelled

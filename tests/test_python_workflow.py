@@ -6,6 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
+from reference_workflow import (
+    PythonWorkflow,
+    WorkflowExecutionError,
+    failure_kind,
+)
 
 from open_deep_research.budget import (
     ModelBudgetExceeded,
@@ -20,11 +25,6 @@ from open_deep_research.workflow.python_state import (
     copy_state,
     merge_research_patches,
     role_snapshot,
-)
-from open_deep_research.workflow.python_workflow import (
-    PythonWorkflow,
-    WorkflowExecutionError,
-    failure_kind,
 )
 
 ROLES = ("public_signal", "internal_knowledge", "risk_assessment", "response_strategy")
@@ -168,7 +168,7 @@ def test_true_parallel_join_order_and_private_state(monkeypatch, slower):
         state = initial()
         saved = deepcopy(state)
         with budget_capture() as usage:
-            result = await get_workflow(config()).ainvoke(
+            result = await PythonWorkflow().ainvoke(
                 state, config(), start_at="research"
             )
         assert state == saved
@@ -510,7 +510,8 @@ def test_backend_selection_keeps_default_native_graph():
     from langgraph.pregel import Pregel
 
     assert isinstance(get_workflow({}), Pregel)
-    assert isinstance(get_workflow(config()), PythonWorkflow)
+    with pytest.raises(ValueError, match="durable Run API"):
+        get_workflow(config())
     assert Configuration.from_runnable_config({}).business_agent_runtime == "legacy"
     with pytest.raises(ValueError):
         Configuration(workflow_backend="unknown")

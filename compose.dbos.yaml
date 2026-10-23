@@ -1,0 +1,33 @@
+name: por-dbos-phase4
+services:
+  postgres:
+    image: postgres:17.6
+    labels:
+      por-integration: dbos-phase4
+    environment:
+      POSTGRES_DB: por_execution
+      POSTGRES_USER: por_execution
+      POSTGRES_PASSWORD: ${DBOS_POSTGRES_PASSWORD:-local-dbos-development-only}
+    ports:
+      - "127.0.0.1:${DBOS_POSTGRES_PORT:-15434}:5432"
+    volumes:
+      - dbos-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U por_execution -d por_execution"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  neo4j-test:
+    image: neo4j:5.26.31
+    profiles: [test]
+    labels:
+      por-integration: dbos-phase4
+    environment:
+      NEO4J_AUTH: neo4j/local-dbos-test-only
+    ports:
+      - "127.0.0.1:17689:7687"
+    volumes:
+      - dbos-neo4j-test:/data
+volumes:
+  dbos-postgres:
+  dbos-neo4j-test:

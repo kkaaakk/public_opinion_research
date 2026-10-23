@@ -30,6 +30,10 @@ from open_deep_research.budget import merge_budget_usage
 from open_deep_research.research_graph.compaction import micro_compact_messages
 from open_deep_research.research_graph.schema import stable_id
 from open_deep_research.research_graph.workspace import ResearchWorkspace, ToolBatchItem
+from open_deep_research.workflow.execution import (
+    ExecutionControlError,
+    execution_effect,
+)
 
 ToolStatus = Literal["running", "succeeded", "failed", "cancelled", "unobserved"]
 DEFAULT_EVIDENCE_TOOLS = frozenset({"web_search", "rag_search"})
@@ -255,6 +259,9 @@ class SDKContextHarness(RunHooks):
                 self._record(context, "cancelled", None, error_type="CancelledError")
                 raise
             except Exception as exc:
+                if isinstance(exc, ExecutionControlError):
+                    self._record(context, "failed", None, error_type=type(exc).__name__)
+                    raise
                 output = (
                     error_formatter(context, exc)
                     if error_formatter is not None
@@ -464,19 +471,20 @@ class SDKContextHarness(RunHooks):
         )
         call_ids = {result.tool_call_id for result in evidence}
         try:
-            outcome = await self.workspace.ingest(
-                self._message_view(),
-                [
-                    ToolBatchItem(
-                        result.tool_name,
-                        result.graph_call_id,
-                        result.args,
-                        result.observation,
-                        True,
-                    )
-                    for result in evidence
-                ],
-            )
+            async with execution_effect():
+                outcome = await self.workspace.ingest(
+                    self._message_view(),
+                    [
+                        ToolBatchItem(
+                            result.tool_name,
+                            result.graph_call_id,
+                            result.args,
+                            result.observation,
+                            True,
+                        )
+                        for result in evidence
+                    ],
+                )
             if not outcome.succeeded:
                 self._batch_errors.update(
                     {

@@ -1,5 +1,8 @@
 # OpenAI Agents SDK 迁移边界与实施准备
 
+> 2026-10-23 架构更新：根据正式迁移请求，Phase 4 在独立替代分支改为 DBOS 原生 Workflow/Step + 原生 SDK Runner；本页原 SQL Worker 设计保留为历史背景，当前实现和验收以 [DBOS 审计](../audits/openai-agents-phase4-dbos.md) 为准。Phase 5 不在本次范围。
+
+
 准备基线日期：2026-10-16（Asia/Shanghai）。2026-10-21 更新：**Phase 0–4 已完成；四角色 SDK Runtime 和 Research Graph Context Harness 已接入 Python 确定性 Workflow，并提供显式启用的持久 Run、SQL Worker、Web/SSE、审批及安全恢复。LangGraph 与 Web/API 默认保持兼容**。实现、验证及限制分别见 [Phase 0 验证记录](../audits/openai-agents-phase0.md)、[Phase 1 审计](../audits/openai-agents-phase1.md)、[Phase 2 审计](../audits/openai-agents-phase2.md)、[Phase 3 审计](../audits/openai-agents-phase3.md) 和 [Phase 4 审计](../audits/openai-agents-phase4.md)。Phase 5 尚未实施；单操作员 Token 不等于多租户身份，恢复限已提交安全步骤，未知工具效果不自动重放。
 
 后续同日已补做真实 DeepSeek 基础调用、非思考/思考模式 SDK 并行工具与 Producer/Consumer 验证，发现并修正窄边界问题；实测范围、用量和 557 项离线回归见验证记录第10节。该补验没有进入 Phase 1。

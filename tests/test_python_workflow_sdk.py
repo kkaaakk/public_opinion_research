@@ -11,6 +11,10 @@ from agents.exceptions import ModelBehaviorError
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from langchain_core.runnables import RunnableLambda
 from openai.types.responses import ResponseReasoningItem
+from reference_workflow import (
+    PythonWorkflow,
+    WorkflowExecutionError,
+)
 from test_python_workflow import ROLES, config, initial
 from test_sdk_context import _payload
 from test_sdk_phase2_integration import Services, run_workflow_fixture
@@ -31,10 +35,6 @@ from open_deep_research.state import (
     Sections,
 )
 from open_deep_research.workflow import shared
-from open_deep_research.workflow.python_workflow import (
-    PythonWorkflow,
-    WorkflowExecutionError,
-)
 
 
 def test_fixed_fixture_langgraph_and_python_business_contracts_match(

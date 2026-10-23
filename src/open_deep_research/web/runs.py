@@ -14,13 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.configuration import DEFAULT_PUBLIC_OPINION_AGENTS
-from open_deep_research.web.run_store import (
+from open_deep_research.web.durable import get_run_client
+from open_deep_research.web.run_data import (
     TERMINAL,
     RunConflict,
     RunNotFound,
     public_run,
 )
-from open_deep_research.web.worker import get_run_store
 
 router = APIRouter(prefix="/api/runs")
 
@@ -39,8 +39,8 @@ def trusted_owner(request: Request) -> str:
 
 def _store():
     try:
-        return get_run_store()
-    except (RunConflict, SQLAlchemyError):
+        return get_run_client()
+    except (ValueError, SQLAlchemyError):
         raise HTTPException(503, "Durable Run storage is unavailable.") from None
 
 
@@ -214,7 +214,7 @@ def retry(run_id: str, body: Retry, raw: Request) -> dict:
 
 
 async def event_stream(store, run_id: str, owner: str, after: int, raw: Request):
-    """Replay the ordered SQL outbox; subscribing never claims or executes work."""
+    """Replay the ordered DBOS Stream; subscribing never claims or executes work."""
     while True:
         if await raw.is_disconnected():
             return
@@ -224,9 +224,15 @@ async def event_stream(store, run_id: str, owner: str, after: int, raw: Request)
                 after = item["seq"]
                 yield f"id: {after}\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
             run = await asyncio.to_thread(store.get, run_id, owner)
-            if (
-                run["status"] in TERMINAL or run["status"] == "awaiting_approval"
-            ) and after >= run["seq"]:
+            terminal_delivered = (
+                run["status"] in TERMINAL
+                and run["settlement"] != "pending"
+                and run["events_complete"]
+            )
+            approval_delivered = (
+                run["status"] == "awaiting_approval" and run["events_paused"]
+            )
+            if (terminal_delivered or approval_delivered) and after >= run["seq"]:
                 return
             if not events:
                 yield ": keep-alive\n\n"

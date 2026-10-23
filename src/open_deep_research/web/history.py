@@ -221,9 +221,12 @@ class Neo4jHistoryStore:
             WITH row, existing IS NULL AS is_new
             MERGE (h:ResearchHistory {id: row.id})
             ON CREATE SET h += row
+            SET h._por_archive_lock = true
+            REMOVE h._por_archive_lock
             WITH h, row, is_new,
-                row.source = 'python_worker' AND row.owner = h.owner
+                row.source IN ['python_worker', 'dbos'] AND row.owner = h.owner
                   AND row.run_state_version > coalesce(h.run_state_version, 0) AS newer_run
+            WHERE is_new OR NOT (row.source IN ['python_worker', 'dbos']) OR newer_run
             FOREACH (_ IN CASE WHEN newer_run THEN [1] ELSE [] END | SET h += row)
             WITH h, row, is_new,
                 coalesce(h.report, '') = '' AND row.report <> '' AS add_report,

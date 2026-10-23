@@ -430,7 +430,7 @@ def run_workflow_fixture(monkeypatch, tmp_path, backend="langgraph"):
             )
         ]
         if backend == "python":
-            from open_deep_research.workflow.python_workflow import PythonWorkflow
+            from reference_workflow import PythonWorkflow
 
             result = await PythonWorkflow().ainvoke(state, config, start_at="research")
         else:

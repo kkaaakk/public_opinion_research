@@ -83,9 +83,9 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         await asyncio.to_thread(close_history_store)
-        from open_deep_research.web.worker import close_run_store
+        from open_deep_research.web.durable import close_run_client
 
-        await asyncio.to_thread(close_run_store)
+        await asyncio.to_thread(close_run_client)
 
 
 app = FastAPI(
@@ -281,7 +281,7 @@ def list_history(
 ) -> JSONResponse:
     """List and search completed reports from the existing Neo4j database."""
     _require_authorization(raw)
-    from open_deep_research.web.run_store import public_payload
+    from open_deep_research.web.run_data import public_payload
 
     data = get_history_store().list(
         query=q,
@@ -312,7 +312,7 @@ def read_history(history_id: str, raw: Request) -> JSONResponse:
     )
     if record is None:
         raise HTTPException(status_code=404, detail="研究历史不存在。")
-    from open_deep_research.web.run_store import public_payload
+    from open_deep_research.web.run_data import public_payload
 
     return JSONResponse(
         content=public_payload(record), headers={"Cache-Control": "no-store"}

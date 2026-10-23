@@ -1,4 +1,4 @@
-"""Run the existing public-opinion business workflow with Python asyncio."""
+"""Frozen Phase 3/4 behavioral oracle; NEVER a production execution path."""
 
 from __future__ import annotations
 
