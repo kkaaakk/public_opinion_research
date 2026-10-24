@@ -10,6 +10,7 @@ import os
 from typing import Any
 
 import dotenv
+import pytest
 
 
 # 在测试中禁用仓库环境文件自动加载，保持测试配置可控。
@@ -28,3 +29,15 @@ os.environ.setdefault("LANGSMITH_PROJECT", "public-opinion-research")
 
 # Native execution fixtures are lazy; integration selection controls service use.
 pytest_plugins = ["dbos_support"]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    """Anchor the project benchmark default before its storage plugin starts."""
+    if (
+        config.getoption("benchmark_storage", default=None)
+        == "file://./.tmp/benchmarks"
+    ):
+        config.option.benchmark_storage = "file://" + str(
+            config.rootpath / ".tmp" / "benchmarks"
+        )
