@@ -1,18 +1,21 @@
 # 🔬 Public Opinion Research
 
-基于 LangGraph、RAG、MCP 和多 Agent 协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒体监控、长期记忆等能力。
+基于 DBOS、OpenAI Agents SDK、RAG、MCP 和四角色协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒体监控、长期记忆等能力。
 
-## 当前开发方向（2026-10-23）
+## 当前架构（2026-10-24）
 
-Phase 4 迁移分支采用 DBOS 原生业务 Workflow/Step/Queue + OpenAI Agents SDK 原生 Runner + Research Graph Context Harness。
-现有 Web/Runtime 默认兼容；显式后台研究保留计划审批、刷新恢复、SSE 游标和取消清算。
-新 durable Runs 使用 PostgreSQL `DBOS_DATABASE_URL`，独立启动
-`python -m open_deep_research.web.executor --executor-id <unique-id>`。
-原 MySQL Memory、Neo4j Graph/History 保持各自职责；旧 SQL Run 由原发行版受控排空，不能跨引擎重投。
-详见 [DBOS 部署](docs/architecture/dbos-deployment.md) 和 [Phase 4 DBOS 审计](docs/audits/openai-agents-phase4-dbos.md)。
-单操作员 Token 不等于多租户身份；自动多机失活恢复需额外协调；Phase 5 的旧 LangGraph/Runtime 退役尚未实施。
-DeerFlow 已退役，其他分支中的 RAG 配置和 DSH 轨迹成果保留。
-历史过程见 [准备记录](docs/audits/pre-openai-sdk-cleanup.md)、[SDK 迁移计划](docs/architecture/openai-agents-sdk-migration-plan.md) 和 [原 Phase 4 审计](docs/audits/openai-agents-phase4.md)。
+正式执行链为 **FastAPI / CLI → DBOS 3.3.0 Workflow/Step/Queue → OpenAI Agents SDK 0.24.0 → Research Graph Context Harness → 业务工具**。
+新研究默认使用持久 Run，浏览器刷新只重新订阅，停止操作会请求取消并等待清算。
+两个 Producer 并行汇合，经 Review/Gap 定向补查，再顺序执行 Risk → Strategy 和报告生成。
+原 LangGraph Server、业务 Graph 和手写 Agent Loop 已退役。
+
+PostgreSQL 保存 DBOS journal 和领域事实；Neo4j 保存研究证据及 History；现有长期记忆保持独立。
+部署需要 `DBOS_DATABASE_URL`、操作员访问令牌及独立 DBOS Executor，详见 [部署说明](docs/architecture/dbos-deployment.md)。
+旧 SQL 任务及旧版本 DBOS 任务须在匹配的发行版受控排空，不能跨引擎重投。
+历史记录继续读取和导入。单操作员令牌不等于多租户身份；跨主机自动接管需要额外协调。
+
+迁移结果、完整调用链和验证范围见 [Phase 5 审计](docs/audits/openai-agents-phase5.md)。
+DeerFlow 已退役；独立 RAG 配置及 DSH 分支资产保持原状。
 
 ## 🆕 扩展功能
 
@@ -73,51 +76,46 @@ cp .env.example .env
 # 编辑 .env，填入你的 API Key
 ```
 
-### 4. 启动 LangGraph 开发服务器
+### 4. 启动 DBOS 与 Web
 
-完成 `uv sync` 后，Unix/macOS 可直接运行：
-
-```bash
-uv run langgraph dev --allow-blocking
-```
-
-Windows 若遇到 `uv` trampoline 或独立工具环境无法解析项目依赖，请使用已同步的虚拟环境：
+按 [DBOS 部署说明](docs/architecture/dbos-deployment.md) 准备 PostgreSQL 并初始化，然后在两个终端分别运行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m langgraph_cli dev --allow-blocking
+.venv/Scripts/python.exe -m open_deep_research.web.executor --executor-id workstation-1
+.venv/Scripts/python.exe -m open_deep_research.web.server
 ```
 
-项目的 `pyproject.toml` 包含 `mcp>=1.9.4` 的 uv dependency override；因此不建议使用无法应用该 override 的独立 `uvx` 环境作为唯一启动方式。
+访问 [研究页面](http://127.0.0.1:8000) 和 [API 文档](http://127.0.0.1:8000/docs)。
+所有新研究需要 `PUBLIC_OPINION_API_TOKEN`；页面访问设置填写该操作员令牌。
+SDK Web 路径支持现有 OpenAI/DeepSeek 适配器和本地 Tavily 工具，其他供应商/原生搜索明确拒绝，不自动降级。
 
-访问：
-- 🚀 API: http://127.0.0.1:2024
-- 🎨 Studio UI: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
-- 📚 API Docs: http://127.0.0.1:2024/docs
+CLI 通过同一 Run API 创建、查询、订阅和控制任务：
 
-## 🔭 可观测性：LangSmith + budget.py
+```powershell
+.venv/Scripts/python.exe -m open_deep_research.web.cli create '品牌召回舆情' --key request-20261024-001
+.venv/Scripts/python.exe -m open_deep_research.web.cli get RUN_ID
+.venv/Scripts/python.exe -m open_deep_research.web.cli events RUN_ID --after 0
+```
 
-项目只有两套观测职责，不再有其他遥测系统：
+同一请求的网络重发须保持 key 和 body。安全重试还要求新的 key 与最新失败代次的 `state_version`。
+旧选择字段仅允许 `workflow_backend=python/dbos` 和 `business_agent_runtime=openai_agents` 输入别名，随后丢弃；
+`langgraph`、`legacy` 及未知值明确拒绝，环境变量同样处理。
 
-- **LangSmith（执行链路观测）**：通过官方 `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` /
-  `LANGSMITH_PROJECT` 环境变量开启。LangGraph / LangChain 原生 auto-tracing 覆盖
-  Root trace、Graph node、Agent、LLM、Tool、MCP；本地 RAG 内部阶段（query rewrite、
-  vector/bm25 retrieval、rerank 等）通过 `src/open_deep_research/observability/`
-  的薄层 `trace_span` 记录，不重复包装 LLM/Tool 调用。
-- **budget.py（Token / Usage / Budget）**：基于 LangChain 官方 callback
-  （`ModelAttemptCounter` + `UsageMetadataCallbackHandler` + `add_usage`）统计
-  model calls、input/output tokens、cache tokens，并执行预算策略。token 只记录
-  provider 实际上报值，不做估算。
+## 🔭 可观测性与预算
 
-LangSmith tracing 默认关闭；未配置 API key 时自动归一化为关闭状态，业务行为不受影响。
-详见 `docs/architecture/observability.md`。
+DBOS journal/Step/Stream 记录持久执行、阶段、错误和重试。Run ID 与证据、工具操作回执、History 关联。
+SDK hooks 提供角色调用事实和实际 usage；SDK Trace 当前禁用且不包含敏感输入。
+LangSmith 可选保留在 RAG、报告等 LangChain 单次服务调用和业务 span；它不再提供 Graph 根执行权。
+`budget.py` 汇合 SDK/provider usage 与业务服务实际尝试，未知 token 不猜测，费用不因 SSE 重连重复累计。
+详见 [观测说明](docs/architecture/observability.md)。
 
 ## 🧩 模块结构
 
 ```
 src/open_deep_research/
-├── deep_researcher.py          # 主 LangGraph 流程入口
+├── deep_researcher.py          # 业务服务兼容导出；执行使用 Run API
 ├── configuration.py            # 配置管理
-├── state.py                    # 图状态定义
+├── state.py                    # 五个业务状态域与消息
 ├── prompts.py                  # 系统提示词
 ├── utils.py                    # 工具函数
 ├── budget.py                   # 预算守卫
@@ -276,14 +274,14 @@ Research Graph 与页面的 **Enable RAG** 是独立功能：前者管理本次�
 
 ### 启动页面
 
-启动独立的 FastAPI Demo 页面：
+先按上文部署 PostgreSQL 和 DBOS Executor，再启动 FastAPI 页面：
 
 ```bash
 python -m open_deep_research.web.server
 ```
 
 默认只绑定 `127.0.0.1:8000`。如果通过反向代理或其他方式对外提供服务，
-请设置强随机的 `PUBLIC_OPINION_API_TOKEN`，并在代理层启用 HTTPS 和认证；
+必须配置 `PUBLIC_OPINION_API_TOKEN` 才能接纳研究；对外服务请使用强随机令牌，并在代理层启用 HTTPS 和认证；
 不要直接将未认证的 Demo 服务暴露到公网。客户端只能选择服务端允许的模型，
 研究请求也有输入大小和并发保护。
 
@@ -298,7 +296,7 @@ python -m open_deep_research.web.server
 `RESEARCH_GRAPH_PASSWORD` 和 `RESEARCH_GRAPH_DATABASE`，无需配置另一套数据库。
 完整报告保存在独立的 `ResearchHistory` 节点中，以研究 `run_id` 对应同次研究的证据图。
 每次网页研究结束或中断后自动归档，历史列表展示运行状态和时间，详情保留参数、
-已有 token 用量及原始阶段报告。阶段输出从子图逐条保存，后续 Agent 失败不会让
+已有 token 用量及原始阶段报告。阶段输出从 DBOS 业务单元清算结果保存，后续 Agent 失败不会让
 已完成的采集或评估报告从历史记录中消失。
 即使关闭研究图构建，已配置的 Neo4j 仍可用于报告归档。
 

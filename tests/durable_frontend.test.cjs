@@ -91,6 +91,21 @@ test('ambiguous create response survives reload with the same key and request', 
     assert.ok(!saved.getItem(storageKey).includes('private-token'));
 });
 
+test('a fresh page always creates a durable Run without execution selectors', async () => {
+    const view = page(storage(), path => path === '/api/runs'
+        ? response({ run_id: runId }) : response(state('completed', { report: 'default report' })));
+    view.element('durable-enabled').checked = false;
+    await view.call('startResearch()');
+    const submitted = view.calls.filter(call => call.options.method === 'POST');
+    assert.equal(submitted.length, 1);
+    assert.equal(submitted[0].path, '/api/runs');
+    const request = JSON.parse(submitted[0].options.body);
+    assert.equal(request.workflow_backend, undefined);
+    assert.equal(request.business_agent_runtime, undefined);
+    assert.ok(submitted[0].options.headers['Idempotency-Key']);
+    assert.ok(!view.calls.some(call => call.path === '/api/research'));
+});
+
 test('known Run reload only subscribes and deduplicates durable event sequences', async () => {
     const saved = storage({ key: 'key', request: body, runId, cursor: 7 });
     let reads = 0;
@@ -143,4 +158,23 @@ test('nonterminal EOF reconnects and never starts another execution', async () =
     assert.equal(view.calls.filter(call => call.path.endsWith('/events')).length, 2);
     assert.ok(view.calls.every(call => call.options.method !== 'POST'));
     assert.equal(view.element('status-text').textContent, '已完成');
+});
+
+test('terminal native status waits for settlement and displays final usage', async () => {
+    const saved = storage({ key: 'key', request: body, runId, cursor: 0 });
+    let reads = 0;
+    const view = page(saved, path => {
+        if (path.endsWith('/events')) return stream([]);
+        reads += 1;
+        return response(reads === 1
+            ? state('interrupted', { settlement: 'pending', usage: { total_tokens: 3 } })
+            : state('failed', { settlement: 'settled', usage: { total_tokens: 12 } }));
+    });
+    await view.call('startResearch(true)');
+    assert.equal(reads, 2, 'a terminal status cannot end observation before settlement');
+    assert.equal(view.calls.filter(call => call.path.endsWith('/events')).length, 1);
+    assert.ok(view.calls.every(call => call.options.method !== 'POST'));
+    assert.equal(view.element('usage-total').textContent, '12');
+    assert.equal(view.element('status-text').textContent, '运行失败');
+    assert.equal(JSON.parse(saved.getItem(storageKey)).finished, true);
 });

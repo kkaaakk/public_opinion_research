@@ -5,7 +5,7 @@ import asyncio
 import logging
 import sys
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -14,7 +14,6 @@ from langchain_core.messages import (
     get_buffer_string,
 )
 from langchain_core.runnables import RunnableConfig
-from langgraph.types import Command, interrupt
 
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
@@ -429,47 +428,6 @@ async def section_plan_step(
         },
         needs_plan_feedback=True,
     )
-
-
-async def clarify_with_user(
-    state: AgentState, config: RunnableConfig
-) -> Command[Literal["write_research_brief", "__end__"]]:
-    """Adapt the clarification decision to the original graph entrypoint."""
-    decision = await clarification_step(state, config)
-    return Command(goto=decision.goto, update=decision.update)
-
-
-async def write_research_brief(
-    state: AgentState, config: RunnableConfig
-) -> Command[Literal["plan_report_sections", "research_phase"]]:
-    """Adapt the research brief decision to the original graph entrypoint."""
-    decision = await research_brief_step(state, config)
-    return Command(goto=decision.goto, update=decision.update)
-
-
-async def plan_report_sections(
-    state: AgentState, config: RunnableConfig
-) -> Command[Literal["plan_report_sections", "research_phase"]]:
-    """Keep the existing LangGraph approval and feedback contract."""
-    decision = await section_plan_step(state, config)
-    if (
-        decision.needs_plan_feedback
-        and Configuration.from_runnable_config(config).allow_plan_feedback
-    ):
-        update = decision.update or {}
-        sections = update["report"]["sections"]
-        feedback = interrupt({"sections": [s.model_dump() for s in sections]})
-        if feedback is True:
-            pass
-        elif isinstance(feedback, str):
-            decision.goto = "plan_report_sections"
-            update["report"] = {"plan_feedback": [feedback]}
-        else:
-            raise TypeError(
-                f"Expected resume value to be True (bool) or str, got {type(feedback).__name__}. "
-                f"Value: {feedback!r}"
-            )
-    return Command(goto=decision.goto, update=decision.update)
 
 
 # Public-opinion role names for validation

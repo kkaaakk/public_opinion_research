@@ -2,46 +2,38 @@
 
 ## Current architecture and migration boundary
 
-The preparation baseline is `codex/openai-agents-migration` at
-`2c876398639a11c9b2a66232419da8374e187e83`, descended from `backup/pre-deerflow`
-/ `41cbc134f748750ffbfc7c7dde65c7552ace6296`.
-Phase 0 installs `openai-agents==0.24.0` and validates the adapter in
-`runtime/sdk_context.py` and `models/sdk.py`. The Phase 1 branch
-`codex/openai-agents-phase1` starts from merged Phase 0 at `7a72aadc`.
-All four business roles now have an executable, offline-tested SDK Agent/Runner
-path in `runtime/sdk_runtime.py`, selected with
-`configurable.business_agent_runtime="openai_agents"` (or the corresponding
-`BUSINESS_AGENT_RUNTIME` environment variable). The default remains `legacy`.
-LangGraph still owns parallel research, join, review/gap loops, risk/strategy
-ordering and state reducers; Web/API entrypoints are unchanged.
-Phase 2 integrates the Research Graph Context Harness across all four SDK roles:
-completed tool batches use staged persistence/receipt/context settlement,
-Consumers refresh committed evidence, and SDK-native history uses bounded rolling
-summaries through the official input filter. See
-[the Phase 2 audit](docs/audits/openai-agents-phase2.md) for provider, budget,
-concurrency and external-service validation limits. Unknown model aliases use a
-32,768-token application window unless an explicit capacity is configured; this
-is not a provider capability claim. The default Runtime remains `legacy`.
-Phase 3 established the explicit business orchestration. Phase 4 now replaces
-its custom SQL queue/worker/cursor with native DBOS Workflow/Step/Queue and
-PostgreSQL, following the user's formal DBOS integration decision. Read
+Phase 5 retires the LangGraph business workflow and handwritten Agent loop.
+The only new research chain is FastAPI/CLI Run API -> native DBOS 3.3.0
+Workflow/Step/Queue -> SDKAgentRuntime -> OpenAI Agents SDK 0.24.0 Runner ->
+Research Graph Context Harness -> existing business tools.
+
+Read `docs/audits/openai-agents-phase5.md`, the migration plan,
 `docs/audits/openai-agents-phase4-dbos.md` and
 `docs/architecture/dbos-deployment.md` before changing execution ownership,
 resource reservations, external operation receipts, archive compensation or auth.
-DBOS status/journal is the execution authority; domain facts must not become a
+DBOS journal/status is the execution authority. Domain facts must not become a
 second scheduler, lease system or Run state machine. Never replay an interrupted
-Agent/tool step whose external effects are unknown. SDKAgentRuntime and the
-Context Harness keep the native SDK Runner as their only Agent loop.
-Legacy LangGraph remains for Phase 5; new durable Runs have one DBOS channel.
-Do not route old SQL Runs across engines. Their drain uses the original release.
-The selected target is DBOS business workflows + OpenAI Agents SDK + the custom
-Research Graph Context Harness. DBOSRunner turn-level replay is not production.
-Keep the agreed phases: 0 SDK feasibility; 1 four-role Runtime; 2 full Research
-Graph Context Harness integration; 3 deterministic Python Workflow; 4 Web/SSE/
-Session integration; 5 old Runtime retirement and dependency cleanup. Do not
-advance later phases as incidental cleanup. Phase 1 reuses Phase 0 collection,
-input filtering and exit settlement; Phase 2 extends those same seams without
-replacing LangGraph or introducing another Agent Loop.
+Agent/tool unit with unknown external effects. Only the durable Finalizer applies
+retry grants; an old key cannot authorize another failure generation.
+
+Runtime/backend selectors are no longer Configuration fields. Input aliases
+`python`/`dbos` and `openai_agents` are validated and discarded; retired
+`langgraph`/`legacy` values fail closed, including environment configuration.
+There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
+stub for old callers; use the durable Run API or `deep-research` CLI.
+Application version is `dbos-phase5-v1`, SDK runtime version `sdk-phase5-v1`.
+Pending Phase 4 DBOS journals must drain on their matching release/Executor.
+Old SQL Runs also drain on their original release; no migration/replay is implied.
+Legacy report archives retain their owner policy and read/import support.
+
+The SDK owns all four business Agent loops. Planning, intake, review, report,
+extraction/compaction and memory model calls remain bounded single-purpose
+LangChain business services. They do not execute an Agent/tool loop. RAG and
+Research Graph retain separate ownership. Unknown model aliases use a 32,768-token
+application window unless explicitly configured; this is not a provider claim.
+DBOSRunner turn-level replay, a new workflow engine, multi-tenant identity and
+cross-service exactly-once guarantees are outside this migration.
+
 DeerFlow is retired. Its local environments, Docker deployment, branch
 `codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's
 request. The original opinion project backup and `v1-pre-deerflow` remain.
@@ -63,8 +55,8 @@ in the migration plan, which links to the original Git evidence.
 ## Source ownership
 
 - `src/open_deep_research/workflow/`: intake, planning, research orchestration,
-  reporting and current LangGraph construction.
-- `runtime/`: current agent loop and role assembly; `public_opinion_agents/`:
+  reporting and native DBOS workflows; pure State reducers remain explicit.
+- `runtime/`: SDK Runner integration, Harness and role assembly; `public_opinion_agents/`:
   the four business roles and their prompts, contracts and tool policies.
 - `social_media/domain.py` and `social_media/records.py`: shared domain rules
   and record helpers. `social_media_mcp.py` and `social_media_apify_api.py` own
@@ -74,8 +66,8 @@ in the migration plan, which links to the original Git evidence.
   data ownership separate.
 - `memory/`: long-term business memory, independently of conversation sessions,
   checkpoints and report archives. `web/history.py` owns report history.
-- `models/`, `llm/`, `mcp/`, `tools/`, `security/`: provider adapters, invocation,
-  protocol clients, tool admission and authentication.
+- `models/`, `llm/`, `mcp/`, `tools/`: provider adapters, invocation,
+  protocol clients and tool admission. `web/runs.py` owns Run authentication.
 - `web/`: FastAPI and the existing static UI; `evaluation/` and `tests/`:
   evaluation assets and offline contracts. Root `package.json` is docs tooling.
 
@@ -92,7 +84,7 @@ Use the root dependency lock and root `.venv`:
 uv sync --extra dev --locked --python 3.11
 .venv/Scripts/python.exe -m pytest
 .venv/Scripts/python.exe -m ruff check --select E,F,I --ignore E501 src/open_deep_research tests/conftest.py tests/test_*.py
-.venv/Scripts/python.exe -m compileall -q src/open_deep_research src/security
+.venv/Scripts/python.exe -m compileall -q src/open_deep_research
 ```
 
 PowerShell does not expand the final Ruff glob; pass

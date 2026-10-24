@@ -1,5 +1,7 @@
 # OpenAI Agents SDK 迁移边界与实施准备
 
+> 2026-10-24 Phase 5：当前默认链路已统一为 DBOS + SDK + Harness，旧 Graph/Agent Loop 和 LangGraph 依赖退役。当前行为、残留引用及验收以 [Phase 5 审计](../audits/openai-agents-phase5.md)、[执行架构](agent-loop.md) 和 [部署说明](dbos-deployment.md) 为准。下文保留准备阶段及 Phase 0–4 的历史决策，不作为新入口或运行命令。
+
 > 2026-10-23 架构更新：根据正式迁移请求，Phase 4 在独立替代分支改为 DBOS 原生 Workflow/Step + 原生 SDK Runner；本页原 SQL Worker 设计保留为历史背景，当前实现和验收以 [DBOS 审计](../audits/openai-agents-phase4-dbos.md) 为准。Phase 5 不在本次范围。
 
 

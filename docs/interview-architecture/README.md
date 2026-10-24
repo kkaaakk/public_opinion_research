@@ -1,5 +1,7 @@
 # Public Opinion Research 架构面试版
 
+> 历史材料：保留原取证提交与图表，不代表 Phase 5 运行架构。当前调用链见 [业务执行](../architecture/agent-loop.md) 和 [Phase 5 审计](../audits/openai-agents-phase5.md)。
+
 本目录保存独立的面试型架构深挖材料。它不替代 `docs/project-learning/` 的源码学习手册，重点回答：
 
 - 核心调用链和并发点在哪里。

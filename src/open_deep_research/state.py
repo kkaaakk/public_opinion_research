@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from langgraph.graph import MessagesState
+from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -376,13 +376,15 @@ def runtime_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
 
 
 # 保留 LangGraph 原生消息输入通道。
-class AgentInputState(MessagesState):
-    """External input remains LangGraph's native messages channel."""
+class AgentInputState(TypedDict):
+    """Serializable message input; normalization is owned by python_state."""
+
+    messages: list[BaseMessage]
 
 
 # 组合原生消息及流程、角色、研究、报告、运行统计五个状态域。
-class DeepResearchState(MessagesState):
-    """Top-level graph state: five owned domains plus native messages."""
+class DeepResearchState(AgentInputState):
+    """Business state: five owned domains plus messages."""
 
     workflow: Annotated[WorkflowState, workflow_reducer]
     agents: Annotated[dict[str, AgentRoleState], agents_reducer]

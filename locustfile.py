@@ -30,16 +30,16 @@ import os
 import random
 import time
 from enum import Enum
+from uuid import uuid4
 
 from locust import HttpUser, between, events, task
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Environment-configurable knobs
 # ═══════════════════════════════════════════════════════════════════════════
 
 SKIP_RESEARCH = os.environ.get("SKIP_RESEARCH_LOAD", "0") == "1"
-RESEARCH_MODE = os.environ.get("RESEARCH_MODE", "fast")   # fast | normal | deep | all
+RESEARCH_MODE = os.environ.get("RESEARCH_MODE", "fast")  # fast | normal | deep | all
 RESEARCH_WEIGHT = int(os.environ.get("RESEARCH_WEIGHT", "1"))
 RESEARCH_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "600"))
 
@@ -61,11 +61,9 @@ ORG_CONTEXTS = [
     "A Fortune 500 technology company with global consumer brand presence. "
     "Key stakeholders: C-suite, investors, regulators in US/EU/China. "
     "Product lines: cloud services, AI platforms, consumer devices.",
-
     "A multinational financial services firm with retail and institutional clients. "
     "Regulated by SEC, FCA, and EU authorities. "
     "Recent focus on AI-driven trading and digital banking expansion.",
-
     "A pharmaceutical company with vaccine and oncology drug portfolios. "
     "FDA/EMA regulated. Public scrutiny around drug pricing and clinical trial transparency. "
     "Operations in 40+ countries.",
@@ -77,16 +75,17 @@ ORG_CONTEXTS = [
 
 MODELS = [
     "deepseek:deepseek-flash",
-    "openai:gpt-4o-mini",
-    "anthropic:claude-sonnet-4-6",
+    "openai:gpt-4o",
+    "openai:gpt-4.1",
 ]
 
-SEARCH_APIS = ["tavily", "openai", "anthropic"]
+SEARCH_APIS = ["tavily"]  # Admitted SDK profile; no legacy fallback
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Research profile — a complete parameter set for one request
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 # 保存压测场景的请求参数与预期行为。
 class Scenario(str, Enum):
@@ -104,7 +103,6 @@ def _build_profile(scenario: Scenario, mode: str) -> dict:
         "model": random.choice(MODELS),
         "search_api": random.choice(SEARCH_APIS),
         "mode": mode,
-        "scenario": scenario.value,
         "org_context": org_context,
         "rag_enabled": False,  # requires local infra — opt-in via env if needed
     }
@@ -113,6 +111,7 @@ def _build_profile(scenario: Scenario, mode: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 # SSE event consumer — validates the research endpoint's streaming contract
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 # 逐行解析 SSE 事件并记录观察到的节点与完成状态。
 class SSEValidator:
@@ -124,6 +123,7 @@ class SSEValidator:
         self.events: list[dict] = []
         self.report_content: str | None = None
         self.usage: dict | None = None
+        self.done_status: str | None = None
         self.error: str | None = None
         self.start_time: float | None = None
         self.first_status_time: float | None = None
@@ -151,6 +151,8 @@ class SSEValidator:
 
         if etype == "status":
             self.nodes_seen.add("status")
+        elif etype == "step_started":
+            self.nodes_seen.add(event["step"])
         elif etype == "stream":
             node = event.get("node", "")
             if node:
@@ -163,7 +165,7 @@ class SSEValidator:
         elif etype == "error":
             self.error = event.get("message", "unknown")
         elif etype == "done":
-            pass
+            self.done_status = event.get("status")
 
     # 返回当前流是否符合场景要求及失败原因。
     def is_valid(self, scenario: Scenario) -> tuple[bool, str]:
@@ -175,7 +177,9 @@ class SSEValidator:
             return False, "no final report received"
 
         # Check that key nodes ran
-        expected = {"write_research_brief", "final_report_generation"}
+        if self.done_status != "completed":
+            return False, "missing successful durable terminal event"
+        expected = {"write_research_brief", "compile_final_report"}
 
         missing = expected - self.nodes_seen
         if missing:
@@ -191,6 +195,7 @@ class SSEValidator:
 # Locust task sets
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 # 定义服务健康和页面路由的轻量检查任务。
 class SmokeChecks:
     """Lightweight baseline — verify the server process is alive and routing."""
@@ -198,7 +203,9 @@ class SmokeChecks:
     # 请求健康检查接口并记录响应结果。
     @task(3)
     def health(self):
-        with self.client.get("/api/health", catch_response=True, name="GET /api/health") as r:
+        with self.client.get(
+            "/api/health", catch_response=True, name="GET /api/health"
+        ) as r:
             if r.status_code == 200 and r.json().get("status") == "ok":
                 r.success()
             else:
@@ -226,7 +233,9 @@ class ResearchPublicOpinion:
     # 执行常规舆情研究场景。
     @task(1)
     def public_opinion_normal(self):
-        self._run(mode="normal", name="POST /api/research [public_opinion_risk / normal]")
+        self._run(
+            mode="normal", name="POST /api/research [public_opinion_risk / normal]"
+        )
 
     # 发送研究请求，消费 SSE 并按预期节点和结束状态判定成功。
     def _run(self, mode: str, name: str):
@@ -236,6 +245,15 @@ class ResearchPublicOpinion:
         with self.client.post(
             "/api/research",
             json=payload,
+            headers={
+                "Authorization": "Bearer "
+                + (
+                    os.environ.get("PUBLIC_OPINION_API_TOKEN")
+                    or os.environ.get("WEB_API_TOKEN")
+                    or ""
+                ),
+                "Idempotency-Key": uuid4().hex,
+            },
             catch_response=True,
             stream=True,
             timeout=RESEARCH_TIMEOUT,
@@ -263,6 +281,7 @@ class ResearchPublicOpinion:
 # User classes — assembled from the task-set building blocks above
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 # 按权重混合页面健康检查与研究请求，模拟实际用户访问。
 class ResearchUser(HttpUser):
     """Simulates real users: health checks + public-opinion research.
@@ -271,6 +290,7 @@ class ResearchUser(HttpUser):
         ~75%  smoke checks (health + index)
         ~25%  public_opinion_risk (fast > normal)
     """
+
     wait_time = between(5, 15)
 
     tasks = {
@@ -282,6 +302,7 @@ class ResearchUser(HttpUser):
 # 只执行健康与首页检查，适合不产生模型调用的基线压测。
 class ReadOnlyUser(HttpUser):
     """Safe baseline — only health / index, zero LLM cost."""
+
     wait_time = between(2, 5)
     tasks = [SmokeChecks]
 
@@ -300,6 +321,7 @@ else:
 # Custom event hooks — emit metrics for downstream analysis
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 # 在压测开始时输出运行设置与场景提示。
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
@@ -313,7 +335,8 @@ def on_test_start(environment, **kwargs):
 
 # 记录研究请求失败及诊断信息。
 @events.request.add_listener
-def log_research_failure(request_type, name, response_time, response_length,
-                         exception, **kwargs):
+def log_research_failure(
+    request_type, name, response_time, response_length, exception, **kwargs
+):
     if exception and "research" in name.lower():
         print(f"[locust] FAIL  [{name}]  {exception}")

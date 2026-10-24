@@ -21,6 +21,52 @@ from open_deep_research.workflow.run_facts import facts
 pytestmark = pytest.mark.integration
 
 
+def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
+    native_case, monkeypatch
+):
+    """Force the relay/read interleaving that previously dropped the final done."""
+    from open_deep_research.web.runs import event_stream
+
+    case = native_case
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    end = result["seq"]
+    before = len(case.models)
+    original = case.client.client.get_event
+    reads = []
+
+    def raced(workflow_id, key, **kwargs):
+        value = original(workflow_id, key, **kwargs)
+        if workflow_id == run["run_id"] + ":events" and key == "cursor":
+            reads.append(value)
+            # read_events and the initial Run projection both precede the
+            # last cursor commit; the subsequent done/history reads observe it.
+            if len(reads) <= 2:
+                return end - 1
+        return value
+
+    class Subscription:
+        async def is_disconnected(self):
+            return False
+
+    monkeypatch.setattr(case.client.client, "get_event", raced)
+
+    async def receive():
+        return [
+            frame
+            async for frame in event_stream(
+                case.client, run["run_id"], "alice", end - 1, Subscription()
+            )
+        ]
+
+    frames = asyncio.run(receive())
+    assert len(reads) >= 3
+    assert any(
+        f"id: {end}\n" in frame and '"type": "done"' in frame for frame in frames
+    )
+    assert len(case.models) == before == 4
+
+
 @pytest.mark.parametrize(
     "native_case", ["normal", "complete", "rolling"], indirect=True
 )
@@ -242,7 +288,10 @@ def test_tool_operation_identity_never_authorizes_unknown_replay(pg_database):
         repo.operation(unit, permit, identity, "returned")
 
 
-def test_api_contract_create_auth_cancel_and_sse(native_case, monkeypatch):
+@pytest.mark.parametrize("entrypoint", ["/api/runs", "/api/research", "cli"])
+def test_api_contract_create_auth_cancel_and_sse(
+    native_case, monkeypatch, entrypoint, capsys
+):
     from open_deep_research.web import runs, server
 
     case = native_case
@@ -288,15 +337,66 @@ def test_api_contract_create_auth_cancel_and_sse(native_case, monkeypatch):
     with TestClient(server.app) as http:
         body = dict(
             topic="brand recall",
-            workflow_backend="python",
-            business_agent_runtime="openai_agents",
             model="openai:gpt-4.1",
         )
-        assert http.post("/api/runs", json=body).status_code == 401
+        path = "/api/runs" if entrypoint == "cli" else entrypoint
+        assert http.post(path, json=body).status_code == 401
         headers = {"Authorization": "Bearer test-db-os-token", "Idempotency-Key": "api"}
-        response = http.post("/api/runs", json=body, headers=headers)
-        assert response.status_code == 202, response.text
-        run = response.json()
+        if entrypoint == "cli":
+            import json
+
+            import httpx
+
+            from open_deep_research.web import cli
+
+            original = httpx.Client
+            accepted = []
+
+            def bridge(request):
+                result = http.request(
+                    request.method,
+                    str(request.url),
+                    content=request.content,
+                    headers=dict(request.headers),
+                )
+                accepted.append(result.status_code)
+                return httpx.Response(result.status_code, json=result.json())
+
+            monkeypatch.setenv("PUBLIC_OPINION_API_TOKEN", "test-db-os-token")
+            monkeypatch.setattr(
+                cli.httpx,
+                "Client",
+                lambda **kw: original(transport=httpx.MockTransport(bridge), **kw),
+            )
+            capsys.readouterr()
+            assert (
+                cli.main(
+                    [
+                        "--url",
+                        "http://testserver",
+                        "create",
+                        "brand recall",
+                        "--model",
+                        "openai:gpt-4.1",
+                        "--key",
+                        "api",
+                    ]
+                )
+                == 0
+            )
+            run = json.loads(capsys.readouterr().out)
+            assert accepted == [202]
+        else:
+            response = http.post(entrypoint, json=body, headers=headers)
+            assert response.status_code == (
+                202 if entrypoint == "/api/runs" else 200
+            ), response.text
+            if entrypoint == "/api/research":
+                assert '"type": "done"' in response.text
+                assert '"type": "report"' in response.text
+                run = case.client.get(response.headers["x-run-id"], "operator")
+            else:
+                run = response.json()
         assert http.post("/api/runs", json=body, headers=headers).status_code == 200
         case.wait(dict(run, owner="operator"), lambda r: r["archive_status"] == "saved")
         replay = http.get("/api/runs/" + run["run_id"] + "/events", headers=headers)

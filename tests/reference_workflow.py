@@ -192,7 +192,12 @@ class PythonWorkflow:
         """Run once; optionally accept an already-prepared brief and section plan."""
         config = config or {}
         settings = Configuration.from_runnable_config(config)
-        if settings.business_agent_runtime != "openai_agents":
+        if (
+            config.get("configurable", {}).get(
+                "business_agent_runtime", "openai_agents"
+            )
+            != "openai_agents"
+        ):
             raise ValueError(
                 "Python Workflow requires business_agent_runtime=openai_agents"
             )

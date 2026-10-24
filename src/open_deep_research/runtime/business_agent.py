@@ -23,7 +23,6 @@ from open_deep_research.llm.errors import is_token_limit_exceeded
 from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
 from open_deep_research.models import configurable_chat_model, get_api_key_for_model
 from open_deep_research.models.sdk import sdk_model
-from open_deep_research.observability import agent_metadata
 from open_deep_research.prompts import (
     compress_research_simple_human_message,
     compress_research_system_prompt,
@@ -35,8 +34,7 @@ from open_deep_research.research_graph import (
     create_context_strategy,
 )
 from open_deep_research.research_graph.schema import stable_id
-from open_deep_research.runtime.agent_runtime import AgentRuntime, AgentRuntimeResult
-from open_deep_research.runtime.sdk_runtime import SDKAgentRuntime
+from open_deep_research.runtime.sdk_runtime import AgentRuntimeResult, SDKAgentRuntime
 from open_deep_research.social_media.tools import get_social_media_tools
 from open_deep_research.state import DeepResearchState
 from open_deep_research.time_utils import get_today_str
@@ -516,30 +514,11 @@ async def run_business_agent(
         execute_tool=_execute_tool_safely,
         compress_report=compress_report,
     )
-    if configurable.business_agent_runtime == "openai_agents":
-        # Disable opaque HTTP retries: one SDK start is one provider attempt.
-        # No failure falls back to legacy and repeats a business tool.
-        async with sdk_model(
-            configurable.research_model, config=config, max_retries=0
-        ) as model:
-            result = await SDKAgentRuntime(model=model, **runtime_args).run(assignment)
-    else:
-        model_config = {
-            "model": configurable.research_model,
-            "max_tokens": configurable.research_model_max_tokens,
-            "api_key": get_api_key_for_model(configurable.research_model, config),
-            "tags": ["langsmith:nostream"],
-            "metadata": {
-                **agent_metadata(getattr(spec, "node_name", f"{role}_agent"), role),
-                "research_round": research_round,
-            },
-        }
-        model = (
-            _CONFIGURABLE_MODEL.bind_tools(tools)
-            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-            .with_config(model_config)
-        )
-        result = await AgentRuntime(model=model, **runtime_args).run(assignment)
+    # One SDK start is one provider attempt. Errors never select another engine.
+    async with sdk_model(
+        configurable.research_model, config=config, max_retries=0
+    ) as model:
+        result = await SDKAgentRuntime(model=model, **runtime_args).run(assignment)
     return _build_state_patch(
         role=role,
         state=state,

@@ -20,13 +20,11 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
-from langgraph.config import get_store
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.domain_filter import tag_tools_with_domain
@@ -41,9 +39,11 @@ try:
     from langchain_mcp_adapters.client import MultiServerMCPClient  # noqa: F811
 
     from mcp import McpError  # noqa: F811
+
     MCP_AVAILABLE = True
 except (ImportError, AttributeError) as _mcp_import_err:
     import logging as _logging
+
     _logging.getLogger(__name__).warning(
         "MCP adapters unavailable (%s). MCP tools will be skipped.", _mcp_import_err
     )
@@ -79,7 +79,9 @@ def _check_node_version() -> str | None:
             ["node", "--version"], capture_output=True, text=True, timeout=10
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        logger.warning("Node.js not found — DBHub MCP server requires Node.js >= 22.5.0")
+        logger.warning(
+            "Node.js not found — DBHub MCP server requires Node.js >= 22.5.0"
+        )
         return None
 
     version_str = result.stdout.strip().lstrip("v")
@@ -141,50 +143,14 @@ async def get_mcp_access_token(
 
 
 # 从配置存储读取令牌，并检查有效期。
-async def get_tokens(config: RunnableConfig) -> dict[str, Any] | None:
-    """Retrieve stored MCP tokens, validating expiration."""
-    store = get_store()
-    thread_id = config.get("configurable", {}).get("thread_id")
-    if not thread_id:
-        return None
-    user_id = config.get("metadata", {}).get("owner")
-    if not user_id:
-        return None
-
-    tokens = await store.aget((user_id, "tokens"), "data")
-    if not tokens:
-        return None
-
-    expires_in = tokens.value.get("expires_in")
-    created_at = tokens.created_at
-    current_time = datetime.now(timezone.utc)
-    expiration_time = created_at + timedelta(seconds=expires_in)
-    if current_time > expiration_time:
-        await store.adelete((user_id, "tokens"), "data")
-        return None
-    return tokens.value
 
 
 # 把 MCP 令牌保存到当前运行配置对应的存储。
-async def set_tokens(config: RunnableConfig, tokens: dict[str, Any]) -> None:
-    """Persist MCP tokens into the configuration store."""
-    store = get_store()
-    thread_id = config.get("configurable", {}).get("thread_id")
-    if not thread_id:
-        return
-    user_id = config.get("metadata", {}).get("owner")
-    if not user_id:
-        return
-    await store.aput((user_id, "tokens"), "data", tokens)
 
 
 # 复用有效令牌，必要时通过 Supabase 凭据获取或刷新令牌。
 async def fetch_tokens(config: RunnableConfig) -> dict[str, Any] | None:
-    """Fetch / refresh MCP tokens, exchanging a Supabase token if needed."""
-    current_tokens = await get_tokens(config)
-    if current_tokens:
-        return current_tokens
-
+    """Exchange a trusted Supabase token without an engine-owned token store."""
     supabase_token = config.get("configurable", {}).get("x-supabase-access-token")
     if not supabase_token:
         return None
@@ -197,7 +163,6 @@ async def fetch_tokens(config: RunnableConfig) -> dict[str, Any] | None:
     if not mcp_tokens:
         return None
 
-    await set_tokens(config, mcp_tokens)
     return mcp_tokens
 
 
@@ -389,7 +354,10 @@ def _build_feishu_config(configurable: Configuration) -> dict[str, Any] | None:
     ]
 
     # Lark international domain
-    if configurable.feishu_domain and configurable.feishu_domain != "https://open.feishu.cn":
+    if (
+        configurable.feishu_domain
+        and configurable.feishu_domain != "https://open.feishu.cn"
+    ):
         args.extend(["--domain", configurable.feishu_domain])
 
     # OAuth / user-access-token mode
@@ -439,7 +407,9 @@ async def load_mcp_tools(
             if dbhub_cfg:
                 servers["dbhub"] = dbhub_cfg
         except Exception:
-            logger.warning("Failed to build DBHub config — DBHub disabled.", exc_info=True)
+            logger.warning(
+                "Failed to build DBHub config — DBHub disabled.", exc_info=True
+            )
 
     # 3) Microsoft MarkItDown
     if configurable.markitdown_enabled:

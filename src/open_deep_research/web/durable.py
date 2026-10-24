@@ -92,13 +92,6 @@ class RunClient:
                 effective = Configuration.from_runnable_config(cfg).model_dump(
                     mode="json"
                 )
-                if (
-                    effective["workflow_backend"] != "python"
-                    or effective["business_agent_runtime"] != "openai_agents"
-                ):
-                    raise RunConflict(
-                        "Durable Runs require python/openai_agents selection"
-                    )
                 run_id = uuid4().hex
                 session_id = session_id or uuid4().hex
                 cfg["configurable"].update(
@@ -262,6 +255,14 @@ class RunClient:
         current = next(
             (u["name"] for u in reversed(units) if u["artifact"] is None), ""
         )
+        # Native receipts are published after their stream cursor. Reading done
+        # or history may cross a relay commit after our first cursor read. Fence
+        # the projection after those receipts so SSE cannot acknowledge an unseen
+        # terminal event using an older cursor. This remains a native read.
+        cursor = max(
+            cursor,
+            self.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0,
+        )
         return {
             "generation": generation,
             "retry_requested": generation > applied,
@@ -281,7 +282,7 @@ class RunClient:
             "seq": cursor,
             "current_step": current,
             "completed_steps": [u["name"] for u in units if u["artifact"]],
-            "workflow_backend": "python",
+            "workflow_backend": "dbos",
             "business_agent_runtime": "openai_agents",
             "execution_engine": "dbos",
             "workflow_version": VERSION,

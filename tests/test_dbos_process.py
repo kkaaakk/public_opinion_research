@@ -20,6 +20,100 @@ from open_deep_research.workflow.run_facts import facts
 pytestmark = pytest.mark.integration
 
 
+def test_actual_neo4j_outage_keeps_report_and_compensates_without_sdk_replay(
+    native_case, monkeypatch
+):
+    import json
+
+    from fastapi.testclient import TestClient
+    from neo4j import GraphDatabase
+
+    from open_deep_research.web import server
+    from open_deep_research.web.history import Neo4jHistoryStore
+
+    container = os.environ.get(
+        "TEST_DBOS_NEO4J_CONTAINER", "por-dbos-phase4-neo4j-test-1"
+    )
+    inspected = json.loads(
+        subprocess.check_output(["docker", "inspect", container], text=True)
+    )[0]
+    assert inspected["Config"]["Labels"].get("por-integration") == "dbos-phase4"
+    assert not any(m["Type"] == "bind" for m in inspected["Mounts"])
+    owned_id = inspected["Id"]
+    case = native_case
+    original_history = case.history
+    bounded = Neo4jHistoryStore(
+        GraphDatabase.driver(
+            NEO4J,
+            auth=("neo4j", NEO4J_PASSWORD),
+            connection_timeout=1,
+            connection_acquisition_timeout=2,
+            max_transaction_retry_time=0.1,
+        )
+    )
+    case.history = bounded
+    monkeypatch.setattr(server, "get_history_store", lambda: bounded)
+    monkeypatch.setattr(server, "WEB_API_TOKEN", "neo4j-outage-test-token")
+    stopped = False
+    try:
+        subprocess.run(
+            ["docker", "stop", "--time", "1", owned_id], check=True, capture_output=True
+        )
+        stopped = True
+        run = case.create(owner="operator")
+        completed = case.wait(run)
+        assert completed["status"] == "completed"
+        assert completed["report"]
+        case.wait(
+            run,
+            lambda r: any(
+                e["type"] == "archive_pending"
+                for e in case.client.read_events(run["run_id"], "operator", 0, 1000)
+            ),
+        )
+        assert case.client.get(run["run_id"], "operator")["archive_status"] == "pending"
+        with TestClient(server.app) as http:
+            unavailable = http.get(
+                "/api/history",
+                headers={"Authorization": "Bearer neo4j-outage-test-token"},
+            )
+            assert unavailable.status_code == 503
+            assert "local-dbos-test-only" not in unavailable.text
+        before = len(case.models)
+        assert before == 4
+        subprocess.run(["docker", "start", owned_id], check=True, capture_output=True)
+        stopped = False
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                bounded.driver.verify_connectivity()
+                break
+            except Exception:
+                time.sleep(0.5)
+        else:
+            raise AssertionError("Isolated Neo4j did not restart")
+        saved = case.wait(run, lambda r: r["archive_status"] == "saved", timeout=60)
+        record = bounded.get(saved["history_id"], owner="operator")
+        assert record["report"] == saved["report"] == completed["report"]
+        assert saved["usage"] == completed["usage"]
+        assert record["usage"] == {
+            k: saved["usage"][k]
+            for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+        }
+        assert len(case.models) == before
+        assert any(
+            e["type"] == "history_saved"
+            for e in case.client.read_events(run["run_id"], "operator", 0, 1000)
+        )
+    finally:
+        if stopped:
+            subprocess.run(
+                ["docker", "start", owned_id], check=True, capture_output=True
+            )
+        case.history = original_history
+        bounded.close()
+
+
 def start(directory, executor, scenario="normal", *, queues=None):
     output = (directory / (executor + ".log")).open("w", encoding="utf-8")
     env = {

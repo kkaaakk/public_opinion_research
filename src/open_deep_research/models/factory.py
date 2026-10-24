@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
-from langchain.chat_models import init_chat_model
+from langchain_classic.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI

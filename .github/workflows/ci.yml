@@ -40,12 +40,7 @@ jobs:
         run: uv run python -m compileall -q src/open_deep_research
 
       - name: Import public runtime boundaries
-        run: >-
-          uv run python -c "import open_deep_research;
-          import open_deep_research.deep_researcher;
-          import open_deep_research.runtime;
-          import open_deep_research.rag;
-          import open_deep_research.social_media_mcp"
+        run: uv run python scripts/phase5_import_smoke.py
 
   tests:
     name: tests
@@ -68,7 +63,9 @@ jobs:
         run: uv sync --extra dev --locked
 
       - name: Run deterministic offline tests
-        run: uv run python -m pytest
+        run: >-
+          uv run python -m pytest
+          --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1
 
       - name: Set up Node for the browser controller contracts
         uses: actions/setup-node@v4
@@ -97,6 +94,7 @@ jobs:
         env:
           NEO4J_AUTH: neo4j/ci-neo4j-test-only
         ports: ["7687:7687"]
+        options: --label por-integration=dbos-phase4
     env:
       PYTHON_DOTENV_DISABLED: "1"
       OPENAI_AGENTS_DISABLE_TRACING: "1"
@@ -132,7 +130,9 @@ jobs:
       - name: Native workflows, SDK contracts and real process faults
         env:
           TEST_DBOS_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          TEST_DBOS_NEO4J_CONTAINER: ${{ job.services.neo4j.id }}
         run: >-
           uv run python -m pytest -m integration
           tests/test_dbos_contracts.py tests/test_dbos_process.py tests/test_dbos_retry.py
+          tests/test_web_history.py tests/test_p1_fixes.py
           --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1

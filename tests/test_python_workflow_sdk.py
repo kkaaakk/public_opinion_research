@@ -37,7 +37,7 @@ from open_deep_research.state import (
 from open_deep_research.workflow import shared
 
 
-def test_fixed_fixture_langgraph_and_python_business_contracts_match(
+def test_fixed_fixture_repeated_sdk_runs_preserve_context_and_evidence(
     monkeypatch, tmp_path
 ):
     original_init = sdk_context.SDKContextHarness.__init__

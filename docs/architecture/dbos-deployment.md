@@ -1,7 +1,9 @@
-# DBOS Phase 4 execution
+# DBOS production execution — Phase 5
 
-New durable Runs use PostgreSQL + DBOS. The existing `python/openai_agents`
-request selector remains an API compatibility alias; it now selects DBOS.
+All new research uses PostgreSQL + DBOS. Web, `/api/runs`, `/api/research` and
+`deep-research` CLI share the durable Run API. No LangGraph Server is started.
+The former `python`/`openai_agents` request values are validated input aliases
+only; Configuration no longer contains runtime/backend selection fields.
 `Runner.run()` and the Context Harness remain the single SDK execution path.
 
 ## Local setup
@@ -76,7 +78,7 @@ Runs have been settled/exported. This new release never reads/claims the old SQL
 queue. Do not copy an old Run into a new DBOS workflow or replay its tools.
 Legacy archives keep their stable IDs and owner policy. Rollback stops new DBOS
 admission and retains the matching Executor version for its existing Runs;
-never send a DBOS Run to the old Worker. No Phase5 retirement is included.
+never send a DBOS Run to the old Worker. The old Worker and Graph Server are absent from Phase 5.
 
 Unknown business outcomes retain global/owner/session reservations. Releasing a
 reservation requires confirming the old process is stopped, checking external
@@ -98,9 +100,12 @@ docker compose -p por-dbos-phase4 -f compose.dbos.yaml up -d postgres neo4j-test
 ```
 
 `TEST_DBOS_DATABASE_URL`, `TEST_DBOS_NEO4J_URI`, `TEST_DBOS_NEO4J_PASSWORD` select
-isolated test services. Contract tests create uniquely named `por_test_<uuid>`
+isolated test services. `TEST_DBOS_POSTGRES_CONTAINER` and
+`TEST_DBOS_NEO4J_CONTAINER` identify the labeled test containers for physical
+outage contracts; only those exact containers are stopped/restarted.
+Contract tests create uniquely named `por_test_<uuid>`
 databases and drop only those exact databases. They must not target production.
-Process tests exercise real kill/restart and journal recovery. CI runs the same
+Process tests exercise real kill/restart and journal recovery, plus actual isolated PostgreSQL and Neo4j container outages. CI runs the same
 native contract suite with service containers. See the audit for actual results,
 remaining limitations and the old-to-new acceptance mapping.
 
@@ -141,3 +146,69 @@ restarts research. No HTTP-side recovery path is retained.
 Transient recovery storage failures are journaled as retryable Step result data,
 so replay does not depend on retaining a Python SQLAlchemy exception type. No
 application receipt acknowledges the grant until its native targets are checked.
+
+## Phase 5 cutover and compatibility
+
+Application version is `dbos-phase5-v1`; SDK runtime version is `sdk-phase5-v1`.
+The role runtime no longer inherits or contains a handwritten Agent loop.
+The removed files include `runtime/agent_runtime.py`, `workflow/graph.py`,
+`langgraph.json` and the Supabase Auth hooks that only served Graph Server.
+The FastAPI operator Token, owner checks and immutable approval rules remain.
+
+Before switching an installation:
+
+1. Stop admission on the old API. Inventory queued, executing, paused, unknown and
+   archive-pending Runs with its original APIs/native DBOS catalog. Keep the
+   matching old API and Executor identity/version available to finish approvals,
+   cancel, settle and compensate archives. Do this for old SQL and Phase 4 DBOS
+   deployments separately; none of these are new Phase 5 tasks.
+2. Resolve unknown external operations using authoritative receipts. Do not copy
+   a SQL row, approval, old retry grant or opaque SDK unit into a new workflow.
+   Preserve all old databases/journals and historical archives.
+3. Deploy the root lock, run `--initialize-only`, configure PostgreSQL and the
+   existing trusted business services, then start uniquely identified Phase 5
+   Executors and FastAPI. No LangGraph/Studio service, Redis or old SQL Worker is
+   needed. Pending old-version DBOS journals require their matching old release;
+   the new release does not silently adopt them.
+4. Verify `/api/health`, Executor `--health`, a bounded admitted request, its
+   `X-Run-ID`/Run status, SSE cursor and eventual History. A report may be delivered
+   before independent History compensation completes; only `archive_status=saved`
+   acknowledges successful archive of the current generation.
+
+`PUBLIC_OPINION_API_TOKEN` (or existing `WEB_API_TOKEN`) is mandatory for admission
+and all Run controls. It identifies one trusted operator, not multiple tenants.
+History-only local reads keep the original optional-token policy; when a Token is
+configured, owner filtering remains enforced. Legacy unowned records are not
+silently assigned to the operator.
+
+Remove old runtime-selector settings from deployment configuration yourself;
+this migration does not edit `.env`. Supported input aliases are
+`workflow_backend=python/dbos` and `business_agent_runtime=openai_agents`; they
+are discarded before creating new requests. `langgraph`, `legacy` and unknown
+values fail closed, including old environment values. Old request fingerprints
+may conflict with normalized Phase 5 payloads: reconcile through the old release,
+never mint a replacement key to disguise an existing request.
+
+The SDK model adapter still supports OpenAI/DeepSeek and local Tavily tools.
+Other Web model/search selections explicitly fail validation; they cannot enter
+an old runtime. LangChain provider adapters remain available for single-call
+RAG/report/intake services. MCP OAuth token exchange remains supported through
+trusted configuration, with no global cache or retired Graph Server token store.
+
+CLI examples (the API and Executor must already be running):
+
+```powershell
+.venv/Scripts/python.exe -m open_deep_research.web.cli create 'brand recall' --key research-001 --approval
+.venv/Scripts/python.exe -m open_deep_research.web.cli get RUN_ID
+.venv/Scripts/python.exe -m open_deep_research.web.cli approve RUN_ID --plan-version SHA256 --decision approve
+.venv/Scripts/python.exe -m open_deep_research.web.cli events RUN_ID --after 20
+.venv/Scripts/python.exe -m open_deep_research.web.cli cancel RUN_ID
+.venv/Scripts/python.exe -m open_deep_research.web.cli retry RUN_ID --key retry-002 --state-version 42
+```
+
+A lost create response is retried with exactly the same body/key. An old retry key
+only acknowledges its original authorization; another safe failure needs a new
+observed state version/key. An SSE disconnect does not cancel execution. The CLI
+prints no credentials, and its events command subscribes without claiming work.
+Rollback stops new admission and preserves Executors for already accepted Phase 5
+Runs; it does not redeliver those Runs into the previous engine or version.

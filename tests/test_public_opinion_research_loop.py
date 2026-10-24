@@ -4,13 +4,13 @@
 import asyncio
 
 from langchain_core.runnables import RunnableLambda
-from langgraph.types import Send
+from reference_workflow import PythonWorkflow
 
-import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.runtime.business_agent as business_agent_module
 import open_deep_research.workflow.research as workflow_research
 import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.state import ResearchReview, ResearchTask, agents_reducer
+from open_deep_research.workflow import reporting
 
 
 # 构造启用指定研究轮数的隔离配置。
@@ -104,8 +104,13 @@ def _initial_state() -> dict:
     """Build the complete public-opinion state input used by the graph."""
     return {
         "messages": [],
-        "workflow": {"brief": "brand risk fixture", "round": 1, "review": None,
-                     "pending_tasks": [], "completed_tasks": []},
+        "workflow": {
+            "brief": "brand risk fixture",
+            "round": 1,
+            "review": None,
+            "pending_tasks": [],
+            "completed_tasks": [],
+        },
         "agents": {},
         "research": {"run_id": "fixture-run", "working_contexts": {}},
         "report": {},
@@ -129,10 +134,17 @@ def _invoke_with_fixtures(
         "run_business_agent",
         _fake_agent(calls),
     )
+
+    async def no_report(*args, **kwargs):
+        return {}
+
+    for name in ("section_writer", "write_final_sections", "compile_final_report"):
+        monkeypatch.setattr(reporting, name, no_report)
     result = asyncio.run(
-        deep_researcher_module.public_opinion_subgraph.ainvoke(
+        PythonWorkflow().ainvoke(
             _initial_state(),
             _config(max_research_rounds=max_rounds),
+            start_at="research",
         )
     )
     return result, calls, reviewer
@@ -180,7 +192,9 @@ def test_public_only_followup_returns_to_review_and_merges_reports(monkeypatch) 
         "public-baseline"
     ]
     assert "public_signal initial report" in result["agents"]["public_signal"]["report"]
-    assert "public_signal followup report" in result["agents"]["public_signal"]["report"]
+    assert (
+        "public_signal followup report" in result["agents"]["public_signal"]["report"]
+    )
 
 
 # 验证内部缺口只调度内部知识角色。
@@ -220,8 +234,7 @@ def test_both_followups_are_joined_before_the_next_review(monkeypatch) -> None:
     assert {
         (role, mode)
         for role, mode, _ in calls
-        if role in {"public_signal", "internal_knowledge"}
-        and mode == "followup"
+        if role in {"public_signal", "internal_knowledge"} and mode == "followup"
     } == {
         ("public_signal", "followup"),
         ("internal_knowledge", "followup"),
@@ -236,21 +249,25 @@ def test_both_followups_are_joined_before_the_next_review(monkeypatch) -> None:
 def test_multiple_same_role_tasks_are_batched_into_one_send() -> None:
     """Three public tasks result in one public-agent Send with three tasks."""
     tasks = [_task(f"public-{index}", "public_signal") for index in range(3)]
-    sends = deep_researcher_module.route_after_research_review(
+    sends = workflow_research.followup_assignments(
         {
-            "workflow": {"round": 1, "review": ResearchReview(
-                research_complete=False,
-                next_tasks=tasks,
-            ),
-            "completed_tasks": []},
+            "workflow": {
+                "round": 1,
+                "review": ResearchReview(
+                    research_complete=False,
+                    next_tasks=tasks,
+                ),
+                "completed_tasks": [],
+            },
         },
         _config(),
     )
 
     assert len(sends) == 1
-    assert isinstance(sends[0], Send)
-    assert sends[0].node == "public_signal_agent"
-    assert [task["task_id"] for task in sends[0].arg["workflow"]["pending_tasks"]] == [
+    assert set(sends) == {"public_signal"}
+    assert [
+        task["task_id"] for task in sends["public_signal"]["workflow"]["pending_tasks"]
+    ] == [
         "public-0",
         "public-1",
         "public-2",
@@ -261,17 +278,20 @@ def test_multiple_same_role_tasks_are_batched_into_one_send() -> None:
 def test_completed_task_and_max_round_prevent_another_loop(monkeypatch) -> None:
     """Completed tasks and the workflow safety limit both stop re-planning."""
     task = _task("already-done", "public_signal")
-    completed_route = deep_researcher_module.route_after_research_review(
+    completed_route = workflow_research.followup_assignments(
         {
-            "workflow": {"round": 1, "review": ResearchReview(
-                research_complete=False,
-                next_tasks=[task],
-            ),
-            "completed_tasks": [task]},
+            "workflow": {
+                "round": 1,
+                "review": ResearchReview(
+                    research_complete=False,
+                    next_tasks=[task],
+                ),
+                "completed_tasks": [task],
+            },
         },
         _config(),
     )
-    assert completed_route == ["risk_assessment_agent"]
+    assert completed_route == {}
 
     _result, calls, reviewer = _invoke_with_fixtures(
         monkeypatch,
@@ -286,24 +306,28 @@ def test_completed_task_and_max_round_prevent_another_loop(monkeypatch) -> None:
 def test_budget_usage_does_not_change_review_routing() -> None:
     """Budget counters remain observational and do not suppress a valid Send."""
     task = _task("budget-independent-gap", "public_signal")
-    sends = deep_researcher_module.route_after_research_review(
+    sends = workflow_research.followup_assignments(
         {
-            "workflow": {"round": 1, "review": ResearchReview(
-                research_complete=False,
-                next_tasks=[task],
-            ),
-            "completed_tasks": []},
-            "runtime": {"budget": {
-                "model_calls": 999,
-                "tool_calls": 999,
-                "search_calls": 999,
-            }},
+            "workflow": {
+                "round": 1,
+                "review": ResearchReview(
+                    research_complete=False,
+                    next_tasks=[task],
+                ),
+                "completed_tasks": [],
+            },
+            "runtime": {
+                "budget": {
+                    "model_calls": 999,
+                    "tool_calls": 999,
+                    "search_calls": 999,
+                }
+            },
         },
         _config(),
     )
 
-    assert isinstance(sends[0], Send)
-    assert sends[0].node == "public_signal_agent"
+    assert set(sends) == {"public_signal"}
 
 
 # 验证报告合并保留首轮与补充轮次证据。

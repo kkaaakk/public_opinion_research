@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.graph.message import add_messages
 from pydantic import ValidationError
 
 from open_deep_research.configuration import Configuration
@@ -18,6 +17,7 @@ from open_deep_research.rag.loaders import query_images as query_image_loader
 from open_deep_research.rag.loaders.knowledge import extract_image_bytes_vision_text
 from open_deep_research.rag.service import build_rag_pipeline_config
 from open_deep_research.workflow import intake
+from open_deep_research.workflow.python_state import copy_state
 
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZxkAAAAASUVORK5CYII="
@@ -29,7 +29,9 @@ VISION_SETTINGS = {
     "max_images": 3,
     "max_bytes": 5_000_000,
 }
-RECOGNIZED_TEXT = "Uploaded screenshot shows public complaints about delayed deliveries."
+RECOGNIZED_TEXT = (
+    "Uploaded screenshot shows public complaints about delayed deliveries."
+)
 
 
 def _data_url(image_bytes=PNG_BYTES, mime_type="image/png"):
@@ -86,7 +88,9 @@ def test_valid_image_uses_one_shared_vision_content_call(entrypoint, vision_runt
     assert "Reason:" not in context
 
 
-def test_user_images_never_use_features_ocr_or_classification(monkeypatch, vision_runtime):
+def test_user_images_never_use_features_ocr_or_classification(
+    monkeypatch, vision_runtime
+):
     forbidden_names = (
         "analyze_image_features",
         "analyze_image_bytes_features",
@@ -101,7 +105,9 @@ def test_user_images_never_use_features_ocr_or_classification(monkeypatch, visio
         "classify_image_with_vision",
         "classify_image_bytes_with_vision",
     )
-    forbidden = {name: Mock(side_effect=AssertionError(name)) for name in forbidden_names}
+    forbidden = {
+        name: Mock(side_effect=AssertionError(name)) for name in forbidden_names
+    }
     for name, function in forbidden.items():
         monkeypatch.setattr(knowledge, name, function)
 
@@ -120,7 +126,9 @@ def test_multiple_images_respect_call_limit(max_images, vision_runtime):
     assert context.count("User image ") == max_images
 
 
-@pytest.mark.parametrize("result", [AIMessage(content="  "), RuntimeError("unavailable")])
+@pytest.mark.parametrize(
+    "result", [AIMessage(content="  "), RuntimeError("unavailable")]
+)
 def test_empty_and_failed_recognition_still_count_toward_limit(result, vision_runtime):
     model, _ = vision_runtime
     model.invoke.side_effect = [result, AIMessage(content="Must not be requested")]
@@ -177,33 +185,46 @@ def test_existing_message_image_formats(input_format, vision_runtime):
     if input_format == "text":
         content = f"Please analyze this image: {data_url}"
     elif input_format == "base64":
-        content = [{
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": base64.b64encode(PNG_BYTES).decode("ascii"),
-            },
-        }]
+        content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64.b64encode(PNG_BYTES).decode("ascii"),
+                },
+            }
+        ]
     else:
         content = [{"type": input_format, "image_url": data_url}]
 
     assert RECOGNIZED_TEXT in _context([{"role": "user", "content": content}])
-    sent_url = vision_runtime[0].invoke.call_args.args[0][0].content[1]["image_url"]["url"]
+    sent_url = (
+        vision_runtime[0].invoke.call_args.args[0][0].content[1]["image_url"]["url"]
+    )
     assert sent_url == data_url
 
 
 @pytest.mark.parametrize(
     ("extension", "mime_type"),
-    [(".png", "image/png"), (".jpg", "image/jpeg"), (".webp", "image/webp"),
-     (".bmp", "image/bmp"), (".tiff", "image/tiff")],
+    [
+        (".png", "image/png"),
+        (".jpg", "image/jpeg"),
+        (".webp", "image/webp"),
+        (".bmp", "image/bmp"),
+        (".tiff", "image/tiff"),
+    ],
 )
-def test_local_image_mime_type_is_preserved(extension, mime_type, tmp_path, vision_runtime):
+def test_local_image_mime_type_is_preserved(
+    extension, mime_type, tmp_path, vision_runtime
+):
     path = tmp_path / f"image{extension}"
     path.write_bytes(PNG_BYTES)
 
     assert RECOGNIZED_TEXT in _context([{"content": [{"image_path": str(path)}]}])
-    sent_url = vision_runtime[0].invoke.call_args.args[0][0].content[1]["image_url"]["url"]
+    sent_url = (
+        vision_runtime[0].invoke.call_args.args[0][0].content[1]["image_url"]["url"]
+    )
     assert sent_url == _data_url(mime_type=mime_type)
 
 
@@ -220,16 +241,23 @@ def test_local_image_text_and_file_uri(input_format, tmp_path, vision_runtime):
     vision_runtime[0].invoke.assert_called_once()
 
 
-@pytest.mark.parametrize("messages", [[], [HumanMessage(content="Research brand sentiment.")]])
+@pytest.mark.parametrize(
+    "messages", [[], [HumanMessage(content="Research brand sentiment.")]]
+)
 def test_no_images_do_not_call_vision(messages, vision_runtime):
     assert asyncio.run(intake.enrich_query_images({"messages": messages}, {})) == {}
     vision_runtime[1].assert_not_called()
 
 
-def test_vision_failure_keeps_workflow_running_and_processes_remaining_images(vision_runtime):
+def test_vision_failure_keeps_workflow_running_and_processes_remaining_images(
+    vision_runtime,
+):
     model, _ = vision_runtime
     state = {"messages": [_image_message(_data_url(), _data_url())]}
-    model.invoke.side_effect = [RuntimeError("Vision unavailable"), AIMessage(content=RECOGNIZED_TEXT)]
+    model.invoke.side_effect = [
+        RuntimeError("Vision unavailable"),
+        AIMessage(content=RECOGNIZED_TEXT),
+    ]
 
     result = asyncio.run(intake.enrich_query_images(state, {}))
     assert RECOGNIZED_TEXT in result["messages"][0].content
@@ -238,7 +266,11 @@ def test_vision_failure_keeps_workflow_running_and_processes_remaining_images(vi
     model.invoke.side_effect = RuntimeError("Vision unavailable")
     result = asyncio.run(intake.enrich_query_images(state, {}))
     assert result == {}
-    command = asyncio.run(intake.clarify_with_user(state, {"configurable": {"allow_clarification": False}}))
+    command = asyncio.run(
+        intake.clarification_step(
+            state, {"configurable": {"allow_clarification": False}}
+        )
+    )
     assert command.goto == "write_research_brief"
 
 
@@ -250,35 +282,62 @@ def test_query_image_switch_disables_recognition(vision_runtime):
     vision_runtime[1].assert_not_called()
 
 
-def test_context_reaches_clarification_and_brief_without_rag_enabled(monkeypatch, vision_runtime):
-    config = {"configurable": {
-        "rag_enabled": False,
-        "rag_multimodal_enabled": False,
-        "rag_multimodal_provider": "disabled",
-        "rag_vision_enabled": False,
-        "rag_query_image_enabled": True,
-        "rag_vision_model": VISION_SETTINGS["vision_model"],
-        "rag_query_image_prompt": VISION_SETTINGS["vision_prompt"],
-        "rag_vision_max_tokens": 123,
-        "allow_clarification": True,
-    }}
+def test_context_reaches_clarification_and_brief_without_rag_enabled(
+    monkeypatch, vision_runtime
+):
+    config = {
+        "configurable": {
+            "rag_enabled": False,
+            "rag_multimodal_enabled": False,
+            "rag_multimodal_provider": "disabled",
+            "rag_vision_enabled": False,
+            "rag_query_image_enabled": True,
+            "rag_vision_model": VISION_SETTINGS["vision_model"],
+            "rag_query_image_prompt": VISION_SETTINGS["vision_prompt"],
+            "rag_vision_max_tokens": 123,
+            "allow_clarification": True,
+        }
+    }
     persist = Mock()
     monkeypatch.setattr(memory_writer, "persist_conversation_memory", persist)
     monkeypatch.setattr(intake.shared, "configurable_model", Mock())
     monkeypatch.setattr(intake, "structured_output_chain", Mock())
-    invoke = AsyncMock(side_effect=[
-        ({"parsed": SimpleNamespace(need_clarification=False, verification="Clear")}, {}),
-        ({"parsed": SimpleNamespace(research_brief="Research delivery complaints")}, {}),
-    ])
+    invoke = AsyncMock(
+        side_effect=[
+            (
+                {
+                    "parsed": SimpleNamespace(
+                        need_clarification=False, verification="Clear"
+                    )
+                },
+                {},
+            ),
+            (
+                {
+                    "parsed": SimpleNamespace(
+                        research_brief="Research delivery complaints"
+                    )
+                },
+                {},
+            ),
+        ]
+    )
     monkeypatch.setattr(intake, "ainvoke_model_with_budget", invoke)
     original_messages = [_image_message(_data_url())]
+    original_messages[0].id = "user-image-input"
 
-    update = asyncio.run(intake.enrich_query_images({"messages": original_messages}, config))
+    update = asyncio.run(
+        intake.enrich_query_images({"messages": original_messages}, config)
+    )
     assert update["messages"][0].additional_kwargs["rag_query_image_context"] is True
-    state = {"messages": add_messages(original_messages, update["messages"])}
+    state = {
+        "messages": copy_state({"messages": [*original_messages, *update["messages"]]})[
+            "messages"
+        ]
+    }
     assert asyncio.run(intake.enrich_query_images(state, config)) == {}
-    clarification = asyncio.run(intake.clarify_with_user(state, config))
-    brief = asyncio.run(intake.write_research_brief(state, config))
+    clarification = asyncio.run(intake.clarification_step(state, config))
+    brief = asyncio.run(intake.research_brief_step(state, config))
 
     assert clarification.goto == "write_research_brief"
     assert brief.update["workflow"]["brief"] == "Research delivery complaints"
@@ -287,10 +346,18 @@ def test_context_reaches_clarification_and_brief_without_rag_enabled(monkeypatch
         assert RECOGNIZED_TEXT in call.args[1][0].content
     vision_runtime[0].invoke.assert_called_once()
     vision_runtime[1].assert_called_once_with(
-        model=VISION_SETTINGS["vision_model"], max_tokens=123, tags=["langsmith:nostream"]
+        model=VISION_SETTINGS["vision_model"],
+        max_tokens=123,
+        tags=["langsmith:nostream"],
     )
-    assert vision_runtime[0].invoke.call_args.args[0][0].content[0]["text"] == VISION_SETTINGS["vision_prompt"]
-    assert memory_writer._messages_without_query_image_context(state["messages"]) == original_messages
+    assert (
+        vision_runtime[0].invoke.call_args.args[0][0].content[0]["text"]
+        == VISION_SETTINGS["vision_prompt"]
+    )
+    assert (
+        memory_writer._messages_without_query_image_context(state["messages"])
+        == original_messages
+    )
     persist.assert_not_called()
 
 
@@ -298,9 +365,13 @@ def test_context_reaches_clarification_and_brief_without_rag_enabled(monkeypatch
     ("field", "value"),
     [("rag_vision_model", ""), ("rag_vision_max_tokens", 0)],
 )
-def test_query_images_validate_shared_vision_settings_with_rag_vision_disabled(field, value):
+def test_query_images_validate_shared_vision_settings_with_rag_vision_disabled(
+    field, value
+):
     with pytest.raises(ValidationError, match=field):
-        Configuration(rag_vision_enabled=False, rag_query_image_enabled=True, **{field: value})
+        Configuration(
+            rag_vision_enabled=False, rag_query_image_enabled=True, **{field: value}
+        )
 
 
 def test_disabled_query_and_rag_vision_allow_unused_vision_settings():
@@ -314,9 +385,13 @@ def test_disabled_query_and_rag_vision_allow_unused_vision_settings():
     )
 
 
-@pytest.mark.parametrize("query_prompt", [None, "Read all visible details for the user."])
+@pytest.mark.parametrize(
+    "query_prompt", [None, "Read all visible details for the user."]
+)
 @pytest.mark.parametrize("rag_prompt", [None, "Extract concise searchable knowledge."])
-def test_user_and_rag_images_use_independent_prompts(query_prompt, rag_prompt, monkeypatch, vision_runtime):
+def test_user_and_rag_images_use_independent_prompts(
+    query_prompt, rag_prompt, monkeypatch, vision_runtime
+):
     overrides = {}
     if query_prompt is not None:
         overrides["rag_query_image_prompt"] = query_prompt
@@ -325,18 +400,32 @@ def test_user_and_rag_images_use_independent_prompts(query_prompt, rag_prompt, m
     configurable = Configuration(**overrides)
     pipeline_config = build_rag_pipeline_config(configurable)
     assert configurable.rag_query_image_prompt != configurable.rag_vision_prompt
-    assert pipeline_config.vision_prompt == (rag_prompt or knowledge.DEFAULT_RAG_VISION_PROMPT)
+    assert pipeline_config.vision_prompt == (
+        rag_prompt or knowledge.DEFAULT_RAG_VISION_PROMPT
+    )
 
-    result = asyncio.run(intake.enrich_query_images(
-        {"messages": [_image_message(_data_url())]},
-        {"configurable": configurable.model_dump()},
-    ))
+    result = asyncio.run(
+        intake.enrich_query_images(
+            {"messages": [_image_message(_data_url())]},
+            {"configurable": configurable.model_dump()},
+        )
+    )
     assert RECOGNIZED_TEXT in result["messages"][0].content
 
-    monkeypatch.setattr(knowledge, "analyze_image_bytes_features", Mock(return_value={
-        "edge_density": 0.05, "color_count": 200, "entropy": 6.0,
-    }))
-    monkeypatch.setattr(knowledge, "quick_ocr_probe_image_bytes_text", Mock(return_value=""))
+    monkeypatch.setattr(
+        knowledge,
+        "analyze_image_bytes_features",
+        Mock(
+            return_value={
+                "edge_density": 0.05,
+                "color_count": 200,
+                "entropy": 6.0,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        knowledge, "quick_ocr_probe_image_bytes_text", Mock(return_value="")
+    )
     rag_text, metadata = knowledge.extract_routed_image_bytes_text(
         PNG_BYTES,
         provider=pipeline_config.multimodal_provider,
@@ -354,22 +443,36 @@ def test_user_and_rag_images_use_independent_prompts(query_prompt, rag_prompt, m
     assert calls[1].args[0][0].content[0]["text"] == configurable.rag_vision_prompt
 
 
-def test_query_image_prompt_can_be_configured_from_environment(monkeypatch, vision_runtime):
-    monkeypatch.setenv("RAG_QUERY_IMAGE_PROMPT", "Describe the uploaded image in detail.")
+def test_query_image_prompt_can_be_configured_from_environment(
+    monkeypatch, vision_runtime
+):
+    monkeypatch.setenv(
+        "RAG_QUERY_IMAGE_PROMPT", "Describe the uploaded image in detail."
+    )
     monkeypatch.setenv("RAG_VISION_PROMPT", "Extract searchable knowledge.")
     configurable = Configuration.from_runnable_config({})
 
-    asyncio.run(intake.enrich_query_images({"messages": [_image_message(_data_url())]}, {}))
+    asyncio.run(
+        intake.enrich_query_images({"messages": [_image_message(_data_url())]}, {})
+    )
     vision_runtime[0].invoke.assert_called_once()
-    assert vision_runtime[0].invoke.call_args.args[0][0].content[0]["text"] == configurable.rag_query_image_prompt
-    assert build_rag_pipeline_config(configurable).vision_prompt == "Extract searchable knowledge."
+    assert (
+        vision_runtime[0].invoke.call_args.args[0][0].content[0]["text"]
+        == configurable.rag_query_image_prompt
+    )
+    assert (
+        build_rag_pipeline_config(configurable).vision_prompt
+        == "Extract searchable knowledge."
+    )
 
 
 @pytest.mark.parametrize("query_enabled", [False, True])
 @pytest.mark.parametrize("rag_enabled", [False, True])
 @pytest.mark.parametrize("field", ["rag_query_image_prompt", "rag_vision_prompt"])
 @pytest.mark.parametrize("empty_prompt", ["", " \n "])
-def test_each_prompt_is_validated_only_for_its_enabled_path(query_enabled, rag_enabled, field, empty_prompt):
+def test_each_prompt_is_validated_only_for_its_enabled_path(
+    query_enabled, rag_enabled, field, empty_prompt
+):
     settings = {
         "rag_query_image_enabled": query_enabled,
         "rag_vision_enabled": rag_enabled,
@@ -384,7 +487,9 @@ def test_each_prompt_is_validated_only_for_its_enabled_path(query_enabled, rag_e
 
 
 @pytest.mark.parametrize("route", ["ocr", "ocr_vision", "vision", "disabled"])
-def test_rag_pdf_preserves_text_extraction_and_scanned_page_routing(route, monkeypatch, tmp_path):
+def test_rag_pdf_preserves_text_extraction_and_scanned_page_routing(
+    route, monkeypatch, tmp_path
+):
     fitz = pytest.importorskip("fitz")
     pdf_path = tmp_path / "knowledge.pdf"
     with fitz.open() as document:
@@ -392,11 +497,13 @@ def test_rag_pdf_preserves_text_extraction_and_scanned_page_routing(route, monke
         document.new_page()
         document.save(pdf_path)
 
-    features = Mock(return_value={
-        "edge_density": 0.25 if route == "ocr_vision" else 0.05,
-        "color_count": 32 if route == "ocr_vision" else 200,
-        "entropy": 6.0,
-    })
+    features = Mock(
+        return_value={
+            "edge_density": 0.25 if route == "ocr_vision" else 0.05,
+            "color_count": 32 if route == "ocr_vision" else 200,
+            "entropy": 6.0,
+        }
+    )
     probe = Mock(return_value="Scanned document text " * 8 if route == "ocr" else "")
     ocr = Mock(return_value="Scanned OCR text")
     vision = Mock(return_value="Scanned Vision description")

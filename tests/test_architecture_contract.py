@@ -1,77 +1,77 @@
-# 固定主图、研究子图与模块边界的架构契约，防止重构造成拓扑漂移。
-"""Stable graph structure and module ownership contracts."""
+"""Native workflow ownership and retired execution boundary contracts."""
 
 import ast
 from pathlib import Path
 
-from open_deep_research.deep_researcher import deep_researcher_builder
-from open_deep_research.workflow.research import public_opinion_builder
-
-SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "open_deep_research"
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = ROOT / "src/open_deep_research"
 
 
-# 验证主研究图包含约定节点和连接。
-def test_main_graph_contract() -> None:
-    """The top-level graph keeps its checkpoint-visible node and edge names."""
-    assert set(deep_researcher_builder.nodes) == {
+def test_main_graph_contract():
+    tree = ast.parse(
+        (SOURCE_ROOT / "workflow/dbos_workflow.py").read_text(encoding="utf-8")
+    )
+    workflows = {
+        kw.value.value
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        if isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr == "workflow"
+        for kw in decorator.keywords
+        if kw.arg == "name"
+    }
+    assert workflows == {
+        "por.run",
+        "por.plan",
+        "por.research",
+        "por.role",
+        "por.events",
+        "por.finalize",
+    }
+
+
+def test_research_subgraph_contract():
+    from open_deep_research.workflow.dbos_workflow import OPERATIONS
+    from open_deep_research.workflow.python_state import RESEARCH_ROLES
+
+    assert RESEARCH_ROLES == ("public_signal", "internal_knowledge")
+    assert set(OPERATIONS) == {
         "enrich_query_images",
         "clarify_with_user",
         "write_research_brief",
         "plan_report_sections",
-        "research_phase",
+        "research_review",
         "section_writer",
         "write_final_sections",
         "compile_final_report",
     }
-    assert set(deep_researcher_builder.edges) == {
-        ("__start__", "enrich_query_images"),
-        ("enrich_query_images", "clarify_with_user"),
-        ("research_phase", "section_writer"),
-        ("section_writer", "write_final_sections"),
-        ("write_final_sections", "compile_final_report"),
-        ("compile_final_report", "__end__"),
-    }
+    source = (SOURCE_ROOT / "workflow/dbos_workflow.py").read_text(encoding="utf-8")
+    assert 'for role in ("risk_assessment", "response_strategy"):' in source
+    assert source.index("merge_research_patches(state, patches)") < source.index(
+        'round_ = state["workflow"]["round"]'
+    )
+    assert "DBOS.wait_first_async" in source
+    assert "DBOS.cancel_workflow_async" in source
 
 
-# 验证舆情研究子图的角色拓扑与复核路径。
-def test_research_subgraph_contract() -> None:
-    """Parallel producers, review routing, and final agents stay connected."""
-    assert set(public_opinion_builder.nodes) == {
-        "public_signal_agent",
-        "internal_knowledge_agent",
-        "research_review",
-        "risk_assessment_agent",
-        "response_strategy_agent",
-    }
-    assert set(public_opinion_builder.edges) == {
-        ("__start__", "public_signal_agent"),
-        ("__start__", "internal_knowledge_agent"),
-        ("risk_assessment_agent", "response_strategy_agent"),
-        ("response_strategy_agent", "__end__"),
-    }
-    assert {source: set(branches) for source, branches in public_opinion_builder.branches.items()} == {
-        "public_signal_agent": {"route_after_research_agent"},
-        "internal_knowledge_agent": {"route_after_research_agent"},
-        "research_review": {"route_after_research_review"},
-    }
-    assert public_opinion_builder.branches["research_review"]["route_after_research_review"].ends == {
-        "public_signal_agent": "public_signal_agent",
-        "internal_knowledge_agent": "internal_knowledge_agent",
-        "risk_assessment_agent": "risk_assessment_agent",
-    }
-
-
-# 验证图入口和工具兼容层保持明确的模块职责。
-def test_graph_and_utils_keep_their_module_boundaries() -> None:
-    """Graph assembly and compatibility exports cannot regain implementation."""
-    graph = ast.parse((SOURCE_ROOT / "workflow" / "graph.py").read_text(encoding="utf-8"))
-    imports = {
-        node.module
-        for node in graph.body
-        if isinstance(node, ast.ImportFrom)
-    }
-    assert not any(module and set(module.split(".")) & {"search", "rag", "mcp", "memory"} for module in imports)
-
+def test_graph_and_utils_keep_their_module_boundaries():
     shim = ast.parse((SOURCE_ROOT / "utils.py").read_text(encoding="utf-8"))
-    assert all(isinstance(node, (ast.Expr, ast.ImportFrom, ast.Assign)) for node in shim.body)
-    assert not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in shim.body)
+    assert all(
+        isinstance(node, (ast.Expr, ast.ImportFrom, ast.Assign)) for node in shim.body
+    )
+    assert not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        for node in shim.body
+    )
+    for path in SOURCE_ROOT.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8-sig"))):
+            if isinstance(node, ast.ImportFrom):
+                assert not (node.module or "").startswith(
+                    (
+                        "langgraph",
+                        "open_deep_research.runtime.agent_runtime",
+                        "open_deep_research.workflow.graph",
+                    )
+                ), path

@@ -14,6 +14,7 @@ from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
 from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as MCPTool
 from openai import AsyncOpenAI, InternalServerError
+from reference_workflow import PythonWorkflow
 from test_public_opinion_research_loop import _initial_state, _ReviewModel
 from test_sdk_context import _GraphModel, _payload, _Store
 from test_sdk_models import _reply
@@ -25,7 +26,7 @@ from open_deep_research.public_opinion_agents import get_public_opinion_agent_sp
 from open_deep_research.research_graph import ResearchWorkspace, create_context_strategy
 from open_deep_research.runtime import business_agent
 from open_deep_research.state import ResearchReview, ResearchTask
-from open_deep_research.workflow import research, shared
+from open_deep_research.workflow import reporting, shared
 
 
 @pytest.mark.parametrize("is_error", [False, True])
@@ -188,7 +189,7 @@ def test_four_sdk_roles_reuse_phase0_graph_and_keep_report_override(
     assert role in update["research"]["working_contexts"]
 
 
-def test_unchanged_langgraph_parallel_join_review_followup_risk_strategy_with_sdk(
+def test_reference_parallel_join_review_followup_risk_strategy_with_sdk(
     monkeypatch,
 ):
     async def scenario():
@@ -274,7 +275,13 @@ def test_unchanged_langgraph_parallel_join_review_followup_risk_strategy_with_sd
             "output_tokens": 7,
             "total_tokens": 77,
         }
-        result = await research.public_opinion_subgraph.ainvoke(
+
+        async def no_report(*args, **kwargs):
+            return {}
+
+        for name in ("section_writer", "write_final_sections", "compile_final_report"):
+            monkeypatch.setattr(reporting, name, no_report)
+        result = await PythonWorkflow().ainvoke(
             state,
             {
                 "configurable": {
@@ -285,6 +292,7 @@ def test_unchanged_langgraph_parallel_join_review_followup_risk_strategy_with_sd
                     "max_research_rounds": 2,
                 }
             },
+            start_at="research",
         )
         assert Counter(started) == Counter(
             {
@@ -313,50 +321,27 @@ def test_unchanged_langgraph_parallel_join_review_followup_risk_strategy_with_sd
 
 
 @pytest.mark.parametrize("role", ROLES)
-def test_legacy_business_assembly_still_executes_original_loop(monkeypatch, role):
-    name = "web_search" if role == "public_signal" else "rag_search"
+def test_legacy_business_assembly_is_rejected_before_model_or_tool_loading(
+    monkeypatch, role
+):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("retired selector must fail before SDK or tools")
 
-    class LegacyModel(FakeMessagesListChatModel):
-        def bind_tools(self, tools, **kwargs):
-            return self
-
-    model = LegacyModel(
-        responses=[
-            AIMessage(
-                content="",
-                tool_calls=[{"name": name, "id": "legacy", "args": {"query": "brand"}}],
-            ),
-            AIMessage(content="legacy analysis"),
-            AIMessage(content="legacy synthesized report"),
-        ]
-    )
-
-    async def tools(config, selected_role, spec):
-        return [_tool(selected_role)]
-
-    def unexpected_sdk(*args, **kwargs):
-        pytest.fail("Legacy selection must not open an SDK model")
-
-    monkeypatch.setattr(business_agent, "_CONFIGURABLE_MODEL", model)
-    monkeypatch.setattr(business_agent, "_business_agent_tools", tools)
-    monkeypatch.setattr(business_agent, "sdk_model", unexpected_sdk)
-    patch = asyncio.run(
-        business_agent.run_business_agent(
-            role=role,
-            state=_initial_state(),
-            config={
-                "configurable": {
-                    "business_agent_runtime": "legacy",
-                    "research_graph_enabled": False,
-                    "research_model": "openai:fixture",
-                    "enabled_business_agents": list(ROLES),
-                }
-            },
+    monkeypatch.setattr(business_agent, "sdk_model", unexpected)
+    monkeypatch.setattr(business_agent, "_business_agent_tools", unexpected)
+    with pytest.raises(ValueError, match="business_agent_runtime"):
+        asyncio.run(
+            business_agent.run_business_agent(
+                role=role,
+                state=_initial_state(),
+                config={
+                    "configurable": {
+                        "business_agent_runtime": "legacy",
+                        "enabled_business_agents": list(ROLES),
+                    }
+                },
+            )
         )
-    )
-    assert "legacy synthesized report" in patch["agents"][role]["report"]
-    assert patch["runtime"]["budget"]["model_calls"] == 3
-    assert patch["runtime"]["budget"]["tool_calls"] == 1
 
 
 @pytest.mark.parametrize("role", ROLES)

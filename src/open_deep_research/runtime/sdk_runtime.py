@@ -1,7 +1,7 @@
 """Execute business AgentSpecs with the official SDK, retaining business results.
 
 Only Runner owns the model/tool loop. The harness adds business admission and SDK
-usage to the Phase 0 collector; report services and LangGraph stay in place.
+usage to the collector; DBOS owns durable business orchestration.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,11 +42,27 @@ from open_deep_research.llm.context import get_model_token_limit
 from open_deep_research.mcp.domain_filter import get_tool_domain
 from open_deep_research.research_graph.compaction import summarize_compactable_history
 from open_deep_research.research_graph.workspace import ResearchWorkspace
-from open_deep_research.runtime.agent_runtime import AgentRuntime, AgentRuntimeResult
 from open_deep_research.runtime.sdk_context import SDKContextHarness
 from open_deep_research.workflow.execution import observe_execution
 
-SDK_RUNTIME_VERSION = "sdk-phase4-v1"
+SDK_RUNTIME_VERSION = "sdk-phase5-v1"
+
+ToolExecutor = Callable[..., Awaitable[tuple[str, dict[str, Any], bool]]]
+CompressionCallback = Callable[
+    [list[Any], str, str, dict[str, Any]],
+    Awaitable[tuple[str, list[str], dict[str, Any]]],
+]
+
+
+@dataclass
+class AgentRuntimeResult:
+    """Serializable business result of one SDK role invocation."""
+
+    report: str
+    memory: dict[str, Any]
+    rolling_summary: str
+    budget: dict[str, Any] = field(default_factory=dict)
+    replace_report: bool = False
 
 
 class SDKContextLimitExceeded(RuntimeError):
@@ -326,15 +343,118 @@ class _BusinessAgentHarness(SDKContextHarness):
         await observe_execution("model_completed", role=self.scope.role)
 
 
-class SDKAgentRuntime(AgentRuntime):
+class SDKAgentRuntime:
     """Map all four AgentSpecs to SDK Agents and run each exactly once.
 
-    Inherit only the existing assembly arguments, report envelope and private
-    memory helpers. No legacy model/tool loop is called from this path.
+    Own assembly, the report envelope and private memory. Runner is the only
+    model/tool loop; no alternate runtime can execute a role.
     """
 
     run_budget: _RunBudget
     harness: _BusinessAgentHarness
+
+    def __init__(
+        self,
+        *,
+        role: str,
+        spec: Any,
+        agent_state: Mapping[str, Any],
+        workspace: ResearchWorkspace,
+        config: Any,
+        runtime_config: Any,
+        model: Any,
+        system_prompt: str,
+        tools: list[Any],
+        initial_budget: Mapping[str, Any],
+        execute_tool: ToolExecutor,
+        compress_report: CompressionCallback,
+    ) -> None:
+        """Bind one AgentSpec to its SDK model, tools and ResearchWorkspace."""
+        self.role = role
+        self.spec = spec
+        self.agent_state = dict(agent_state or {})
+        self.workspace = workspace
+        self.config = config
+        self.runtime_config = runtime_config
+        self.model = model
+        self.system_prompt = system_prompt
+        self.tools = tools
+        self.initial_budget = dict(initial_budget or {})
+        self.execute_tool = execute_tool
+        self.compress_report = compress_report
+        self.rolling_summary = str(self.agent_state.get("rolling_summary") or "")
+        self.workspace.rolling_summary = self.rolling_summary
+
+    @staticmethod
+    def format_private_memory(agent_state: Mapping[str, Any]) -> str:
+        """Render only this role's private memory for dynamic model context."""
+        memories = list(agent_state.get("memory", []) or [])[-5:]
+        if not memories:
+            return "No private memory has been recorded for this agent yet."
+        entries = []
+        for index, memory in enumerate(memories, start=1):
+            if isinstance(memory, Mapping):
+                title = str(memory.get("title") or f"Memory {index}")
+                content = str(memory.get("content") or "")
+                source = str(memory.get("source") or "agent_private_memory")
+                entries.append(f"{index}. {title} [{source}]\n{content}")
+            else:
+                entries.append(f"{index}. {memory}")
+        return "\n\n".join(entries)
+
+    @staticmethod
+    def build_private_memory(
+        role: str, report: str, raw_notes: list[str]
+    ) -> dict[str, Any]:
+        """Create the bounded private-memory record owned by one role."""
+        content = str(report or "").strip()
+        if len(content) > 1800:
+            content = content[:1800].rstrip() + "\n[truncated]"
+        return {
+            "title": f"{role} completed role report",
+            "content": content or "No report content was produced.",
+            "source": "current_public_opinion_run",
+            "raw_note_count": len(raw_notes or []),
+        }
+
+    async def _finish(
+        self, task: str, messages: list[Any], budget_update: dict[str, Any]
+    ) -> AgentRuntimeResult:
+        """Preserve the business report and private-memory contract for SDK roles."""
+        research_round = self.workspace.scope.research_round
+        mode = "followup" if research_round > 1 else "initial"
+        graph_final = await self.workspace.finalize(messages, self.spec.expected_output)
+        if graph_final is not None:
+            budget_update = merge_budget_usage(budget_update, graph_final.budget_usage)
+            body = graph_final.report
+            raw_notes = graph_final.raw_notes
+            replace_report = True
+            strategy_line = f"Context strategy: {self.workspace.strategy.name}\n"
+        else:
+            body, raw_notes, compression_budget = await self.compress_report(
+                messages,
+                task,
+                self.spec.expected_output,
+                merge_budget_usage(self.initial_budget, budget_update),
+            )
+            budget_update = merge_budget_usage(budget_update, compression_budget)
+            replace_report = False
+            strategy_line = ""
+        report = (
+            f"Agent role: {self.role}\n"
+            f"Agent name: {self.spec.display_name}\n"
+            f"Research round: {research_round}\n"
+            f"Research mode: {mode}\n"
+            f"{strategy_line}"
+            f"Expected output: {self.spec.expected_output}\n\n{body}"
+        )
+        return AgentRuntimeResult(
+            report=report,
+            memory=self.build_private_memory(self.role, report, raw_notes),
+            rolling_summary=self.workspace.rolling_summary,
+            budget=budget_update,
+            replace_report=replace_report,
+        )
 
     def projected_budget(self) -> dict[str, Any]:
         """Return cumulative business usage for admission, without submitting it."""

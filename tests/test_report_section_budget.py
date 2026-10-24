@@ -20,9 +20,7 @@ from open_deep_research.workflow import intake, reporting, shared
 @pytest.fixture
 def fake_model(monkeypatch):
     model = GenericFakeChatModel(
-        messages=iter(
-            AIMessage(content="written section") for _ in range(30)
-        )
+        messages=iter(AIMessage(content="written section") for _ in range(30))
     )
     monkeypatch.setattr(shared, "configurable_model", model)
     return model
@@ -54,18 +52,20 @@ def _state(sections, used_calls=0):
 
 
 def _config(**overrides):
-    return {"configurable": {
-        "planner_model": "fixture:model",
-        "section_writer_model": "fixture:model",
-        "final_report_model": "fixture:model",
-        "research_graph_enabled": False,
-        "rag_memory_write_enabled": False,
-        "allow_plan_feedback": False,
-        "budget_enabled": True,
-        "max_model_calls": 10,
-        "reserve_final_report_call": True,
-        **overrides,
-    }}
+    return {
+        "configurable": {
+            "planner_model": "fixture:model",
+            "section_writer_model": "fixture:model",
+            "final_report_model": "fixture:model",
+            "research_graph_enabled": False,
+            "rag_memory_write_enabled": False,
+            "allow_plan_feedback": False,
+            "budget_enabled": True,
+            "max_model_calls": 10,
+            "reserve_final_report_call": True,
+            **overrides,
+        }
+    }
 
 
 def _stub_plan(monkeypatch, sections):
@@ -73,28 +73,30 @@ def _stub_plan(monkeypatch, sections):
     monkeypatch.setattr(
         intake,
         "structured_output_chain",
-        lambda model, schema, **kwargs: model | RunnableLambda(
-            lambda response: {"parsed": Sections(sections=sections)}
-        ),
+        lambda model, schema, **kwargs: model
+        | RunnableLambda(lambda response: {"parsed": Sections(sections=sections)}),
     )
 
 
 @pytest.mark.parametrize("research_count", [3, 5, 7])
-@pytest.mark.parametrize("budget_options", [
-    {"budget_enabled": False, "max_model_calls": 1},
-    {"budget_enabled": True, "max_model_calls": None},
-    # Exactly one call remains for the planner before the final-report reserve.
-    {"budget_enabled": True, "max_model_calls": 4},
-])
+@pytest.mark.parametrize(
+    "budget_options",
+    [
+        {"budget_enabled": False, "max_model_calls": 1},
+        {"budget_enabled": True, "max_model_calls": None},
+        # Exactly one call remains for the planner before the final-report reserve.
+        {"budget_enabled": True, "max_model_calls": 4},
+    ],
+)
 def test_planner_preserves_every_section(
     monkeypatch, fake_model, research_count, budget_options
 ):
     sections = _sections(research_count)
     _stub_plan(monkeypatch, sections)
 
-    command = asyncio.run(intake.plan_report_sections(
-        _state([], used_calls=2), _config(**budget_options)
-    ))
+    command = asyncio.run(
+        intake.section_plan_step(_state([], used_calls=2), _config(**budget_options))
+    )
 
     assert command.goto == "research_phase"
     assert command.update["report"]["sections"] == sections
@@ -105,25 +107,18 @@ def test_planner_preserves_every_section(
 def test_plan_feedback_receives_the_complete_plan(monkeypatch, fake_model):
     sections = _sections()
     _stub_plan(monkeypatch, sections)
-    feedback_payloads = []
-
-    def approve(payload):
-        feedback_payloads.append(payload)
-        return True
-
-    monkeypatch.setattr(intake, "interrupt", approve)
-    command = asyncio.run(intake.plan_report_sections(
-        _state([]), _config(allow_plan_feedback=True)
-    ))
-
-    assert feedback_payloads == [{"sections": [s.model_dump() for s in sections]}]
+    command = asyncio.run(
+        intake.section_plan_step(_state([]), _config(allow_plan_feedback=True))
+    )
+    assert command.needs_plan_feedback is True
+    assert [s.model_dump() for s in command.update["report"]["sections"]] == [
+        s.model_dump() for s in sections
+    ]
     assert command.update["report"]["sections"] == sections
 
 
 def test_planner_still_falls_back_when_no_call_is_available(fake_model):
-    command = asyncio.run(intake.plan_report_sections(
-        _state([], used_calls=9), _config()
-    ))
+    command = asyncio.run(intake.section_plan_step(_state([], used_calls=9), _config()))
 
     assert command.goto == "research_phase"
     assert len(command.update["report"]["sections"]) == 1
@@ -151,25 +146,28 @@ def test_remaining_model_calls_matches_single_call_guard(
     )
     usage = {"model_calls": used}
 
-    assert remaining_model_calls(
-        config, usage, reserve_final_report_call=True
-    ) == expected
-    assert can_spend_model_call(
-        config, usage, reserve_final_report_call=True
-    ) == (expected is None or expected > 0)
+    assert (
+        remaining_model_calls(config, usage, reserve_final_report_call=True) == expected
+    )
+    assert can_spend_model_call(config, usage, reserve_final_report_call=True) == (
+        expected is None or expected > 0
+    )
     assert remaining_model_calls(config, usage) == (
         None if expected is None else max(0, limit - used)
     )
 
 
-@pytest.mark.parametrize("options,used,expected_calls", [
-    ({}, 7, 2),
-    ({"reserve_final_report_call": False}, 7, 3),
-    ({}, 9, 0),
-    ({}, 12, 0),
-    ({"budget_enabled": False, "max_model_calls": 1}, 7, 5),
-    ({"max_model_calls": None}, 7, 5),
-])
+@pytest.mark.parametrize(
+    "options,used,expected_calls",
+    [
+        ({}, 7, 2),
+        ({"reserve_final_report_call": False}, 7, 3),
+        ({}, 9, 0),
+        ({}, 12, 0),
+        ({"budget_enabled": False, "max_model_calls": 1}, 7, 5),
+        ({"max_model_calls": None}, 7, 5),
+    ],
+)
 def test_research_writer_limits_parallel_calls_and_keeps_all_sections(
     fake_model, options, used, expected_calls
 ):
@@ -183,29 +181,38 @@ def test_research_writer_limits_parallel_calls_and_keeps_all_sections(
     assert [s.name for s in completed] == [s.name for s in sections if s.research]
     assert all(s.status == "done" and s.content for s in completed)
     assert all(s.content == "written section" for s in completed[:expected_calls])
-    assert all("collected public evidence" in s.content for s in completed[expected_calls:])
+    assert all(
+        "collected public evidence" in s.content for s in completed[expected_calls:]
+    )
     assert all(s.status == "pending" for s in sections if not s.research)
 
 
-@pytest.mark.parametrize("options,used,expected_calls", [
-    ({}, 8, 1),
-    ({"reserve_final_report_call": False}, 8, 2),
-    ({}, 9, 0),
-    ({}, 12, 0),
-    ({"budget_enabled": False, "max_model_calls": 1}, 8, 2),
-    ({"max_model_calls": None}, 8, 2),
-])
+@pytest.mark.parametrize(
+    "options,used,expected_calls",
+    [
+        ({}, 8, 1),
+        ({"reserve_final_report_call": False}, 8, 2),
+        ({}, 9, 0),
+        ({}, 12, 0),
+        ({"budget_enabled": False, "max_model_calls": 1}, 8, 2),
+        ({"max_model_calls": None}, 8, 2),
+    ],
+)
 def test_final_section_writer_limits_parallel_calls(
     fake_model, options, used, expected_calls
 ):
     sections = _sections()
-    result = asyncio.run(reporting.write_final_sections(
-        _state(sections, used_calls=used), _config(**options)
-    ))
+    result = asyncio.run(
+        reporting.write_final_sections(
+            _state(sections, used_calls=used), _config(**options)
+        )
+    )
 
     completed = result.get("report", {}).get("completed_sections", [])
     assert result["runtime"]["budget"]["model_calls"] == expected_calls
-    assert [s.name for s in completed] == ["Introduction", "Conclusion"][:expected_calls]
+    assert [s.name for s in completed] == ["Introduction", "Conclusion"][
+        :expected_calls
+    ]
     assert all(s.status == "done" for s in completed)
     assert all(s.status == "pending" for s in sections if s.research)
     if expected_calls < 2:
@@ -221,11 +228,13 @@ def test_reporting_uses_post_research_usage_and_preserves_final_call(
     config = _config(max_model_calls=12)
 
     async def run_stages():
-        command = await intake.plan_report_sections(state, config)
+        command = await intake.section_plan_step(state, config)
         state["report"] = report_reducer(state["report"], command.update["report"])
         state["runtime"] = runtime_reducer(state["runtime"], command.update["runtime"])
         # Research is shared by all sections and consumes budget after planning.
-        state["runtime"] = runtime_reducer(state["runtime"], {"budget": {"model_calls": 4}})
+        state["runtime"] = runtime_reducer(
+            state["runtime"], {"budget": {"model_calls": 4}}
+        )
         assert state["runtime"]["budget"]["model_calls"] == 8
 
         result = await reporting.section_writer(state, config)
@@ -236,7 +245,9 @@ def test_reporting_uses_post_research_usage_and_preserves_final_call(
         assert len(state["report"]["completed_sections"]) == 5
 
         final_sections_result = await reporting.write_final_sections(state, config)
-        state["runtime"] = runtime_reducer(state["runtime"], final_sections_result["runtime"])
+        state["runtime"] = runtime_reducer(
+            state["runtime"], final_sections_result["runtime"]
+        )
         assert final_sections_result["runtime"]["budget"]["model_calls"] == 0
 
         final_result = await reporting.compile_final_report(state, config)
