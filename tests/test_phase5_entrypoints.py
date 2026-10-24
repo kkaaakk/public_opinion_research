@@ -215,6 +215,33 @@ def test_authenticated_mcp_is_not_connected_when_exchange_fails(monkeypatch):
 
 
 @pytest.mark.parametrize("path", ["/api/runs", "/api/research"])
+@pytest.mark.parametrize("field", ["workflow_backend", "business_agent_runtime"])
+@pytest.mark.parametrize("value", [[], {}])
+def test_selector_containers_return_validation_error_before_storage(
+    monkeypatch, path, field, value
+):
+    monkeypatch.setattr(server, "WEB_API_TOKEN", "invalid-selector-test-token")
+    monkeypatch.setattr(
+        runs,
+        "_store",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("invalid selector reached storage")
+        ),
+    )
+    with TestClient(server.app, raise_server_exceptions=False) as client:
+        response = client.post(
+            path,
+            json={"topic": "brand", field: value},
+            headers={
+                "Authorization": "Bearer invalid-selector-test-token",
+                "Idempotency-Key": "invalid-selector",
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid research request."
+
+
+@pytest.mark.parametrize("path", ["/api/runs", "/api/research"])
 def test_retired_operator_environment_rejects_before_storage(monkeypatch, path):
     monkeypatch.setattr(server, "WEB_API_TOKEN", "migration-test-token")
     monkeypatch.setenv("BUSINESS_AGENT_RUNTIME", "legacy")

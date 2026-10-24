@@ -4632,10 +4632,10 @@
         "sloc": 9
       },
       "after": {
-        "physical": 33,
-        "sloc": 21
+        "physical": 34,
+        "sloc": 22
       },
-      "sloc_delta": 12
+      "sloc_delta": 13
     },
     {
       "path": "src/open_deep_research/configuration.py",
@@ -4866,6 +4866,6 @@
       "sloc_delta": -100
     }
   ],
-  "net_production_sloc": -803,
-  "net_production_physical": -992
+  "net_production_sloc": -802,
+  "net_production_physical": -991
 }

@@ -103,6 +103,8 @@ Planning、Intake、Review、Report 中的 LangChain 调用分别为澄清、bri
 
 `test_sse_terminal_receipt_cannot_close_over_an_older_cursor` 在真实 DBOS/PG 中强制前两次 cursor 读取落后，done/history 读取观察新回执，断言最后一个 done 仍交付且模型次数不增加。修复后与 Web/API/CLI 三入口真实 SDK E2E **4 passed / 41.43s**。随后重新执行完整 84 项原生矩阵并另验真实 Neo4j 停启，最终结果见验证表。
 
+最终输入类型回归另实际复现 8 个 500：旧选择字段传数组/对象时，set membership 先触发 TypeError。已先验证字符串类型，再判断允许别名，两个 API 均在访问存储前返回 400。保留新增断言；25 项入口定向合同和最终 804 项完整离线回归通过。该校验不改变有效请求的执行/恢复语义；85 项原生合同及全部 CI 仍以最终提交重跑为准。
+
 Phase 4 的 retry grant 仍绑定失败代次、观察版本及 native target/journal 版本；重复旧 key 只确认旧请求。仅 Finalizer 可执行 rewind，丢 ACK 不成为再次授权。此修复没有增加 HTTP 恢复路径或放宽授权 CAS。
 
 ## 4. 业务合同与验证口径
@@ -124,7 +126,7 @@ Phase 4 的 retry grant 仍绑定失败代次、观察版本及 native target/jo
 | 检查 | 实际结果 |
 | --- | --- |
 | 删除前全量离线 | 786 passed / 80 deselected，100.10s |
-| 最终全量离线 | **796 passed / 91 deselected，59.05s**，socket guard；没有 paid model/API 调用 |
+| 最终全量离线 | **804 passed / 91 deselected，53.60s**，socket guard；没有 paid model/API 调用 |
 | P1 前完整真实本地矩阵 | 82 passed / 25 deselected，962.99s；后续复验仍发现并修复上述竞态，不能以此旧结果作为最终验收 |
 | P1 后 targeted 原生回归 | 4 passed，41.43s：确定性游标竞态 + `/api/runs`、`/api/research`、CLI 的实际 SDK/DBOS E2E |
 | P1 后最终完整原生矩阵 | **84 passed / 25 deselected，947.39s**；另真实 Neo4j 停启合同 **1 passed / 60.26s**，合计 **85 个不同原生合同 / 0 skipped / 0 xfailed**。CI 选择相同文件并一次运行这 85 项；另 6 项外部环境/历史集成测试不计入 |
@@ -157,9 +159,9 @@ node --test tests/durable_frontend.test.cjs
 
 ## 5. 代码净变化与维护复杂度
 
-与固定 main 对比，完整生产 Python `src/**/*.py` **净减少 803 SLOC / 992 物理行**，包含新 CLI、SDK 助手迁移和 P1 修复。SLOC 排除空白、独立注释及 docstring；不是仅统计删除文件。20 个生产 Python 文件的逐文件前后值见 inventory。静态 UI 另为 JavaScript **净 -39 物理行**，HTML 行数不变；测试、脚本、文档和锁文件另计。
+与固定 main 对比，完整生产 Python `src/**/*.py` **净减少 802 SLOC / 991 物理行**，包含新 CLI、SDK 助手迁移和 P1 修复。SLOC 排除空白、独立注释及 docstring；不是仅统计删除文件。20 个生产 Python 文件的逐文件前后值见 inventory。静态 UI 另为 JavaScript **净 -39 物理行**，HTML 行数不变；测试、脚本、文档和锁文件另计。
 
-核心变化：旧 Runtime -365 SLOC、旧 Graph -80、旧 Auth -100、Web server -246、研究装配 -120、Intake 适配 -33；SDK Runtime +107、新 CLI +82、迁移校验 +12，其他修改和 P1 读取修复均包含在总净值中。
+核心变化：旧 Runtime -365 SLOC、旧 Graph -80、旧 Auth -100、Web server -246、研究装配 -120、Intake 适配 -33；SDK Runtime +107、新 CLI +82、迁移校验 +13，其他修改和 P1 读取修复均包含在总净值中。
 
 | 真实维护面 | 基线 → Phase 5 |
 | --- | --- |

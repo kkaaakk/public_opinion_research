@@ -13,7 +13,8 @@ def without_retired_execution_selectors(values):
         ("business_agent_runtime", {"openai_agents"}),
     ):
         if name in result:
-            if result.pop(name) not in allowed:
+            value = result.pop(name)
+            if not isinstance(value, str) or value not in allowed:
                 raise ValueError(
                     f"{name} selects a retired or unsupported engine; use the DBOS Run API with SDK roles."
                 )
