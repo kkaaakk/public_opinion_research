@@ -1,0 +1,4871 @@
+{
+  "baseline": "a8574f61d0adba4b07ec860d5c6d7de0a0041e76",
+  "historical_note": "historical note: removed integrations can appear in immutable baseline import edges and negative regression guard filenames; these references do not describe current runtime integrations.",
+  "scope": "All tracked textual references, Python import edges; all src Python SLOC excluding blanks/comments/docstrings",
+  "references_before": [
+    {
+      "path": ".env.example",
+      "symbols": [
+        "LANGSMITH",
+        "LangSmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "symbols": [
+        "LANGSMITH",
+        "deep_researcher"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "AGENTS.md",
+      "symbols": [
+        "AgentRuntime",
+        "BUSINESS_AGENT_RUNTIME",
+        "LangChain",
+        "LangGraph",
+        "business_agent_runtime"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "CLAUDE.md",
+      "symbols": [
+        "LangChain",
+        "LangGraph",
+        "deep_researcher",
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "README.md",
+      "symbols": [
+        "Callback",
+        "LANGSMITH",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "callback",
+        "deep_researcher",
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "docs/adr/0001-research-graph-context-harness.md",
+      "symbols": [
+        "LangGraph"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "docs/adr/001-domain-owned-research-state.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangGraph"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "docs/architecture/agent-loop.md",
+      "symbols": [
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "StateGraph",
+        "deep_researcher"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "docs/architecture/memory.md",
+      "symbols": [
+        "deep_researcher"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "docs/architecture/observability.md",
+      "symbols": [
+        "Callback",
+        "LANGSMITH",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "callback",
+        "deep_researcher",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "docs/architecture/openai-agents-sdk-migration-plan.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "StateGraph",
+        "agent_runtime",
+        "business_agent_runtime",
+        "callback",
+        "deep_researcher",
+        "langchain",
+        "langgraph",
+        "langsmith",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "docs/architecture/rag-design-rationale.md",
+      "symbols": [
+        "LangChain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "docs/architecture/rag.md",
+      "symbols": [
+        "LangChain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "docs/architecture/tools.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangChain",
+        "LangGraph",
+        "agent_runtime"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "docs/audits/openai-agents-phase0.md",
+      "symbols": [
+        "LANGCHAIN",
+        "LANGSMITH",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "agent_runtime",
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/audits/openai-agents-phase1.md",
+      "symbols": [
+        "AgentRuntime",
+        "BUSINESS_AGENT_RUNTIME",
+        "LANGCHAIN",
+        "LANGSMITH",
+        "LangChain",
+        "LangGraph",
+        "StateGraph",
+        "business_agent_runtime",
+        "langchain"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/audits/openai-agents-phase2.md",
+      "symbols": [
+        "AgentRuntime",
+        "LANGCHAIN",
+        "LANGSMITH",
+        "LangChain",
+        "LangGraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/audits/openai-agents-phase3.md",
+      "symbols": [
+        "AgentRuntime",
+        "LANGCHAIN",
+        "LANGSMITH",
+        "LangGraph",
+        "StateGraph",
+        "WORKFLOW_BACKEND",
+        "business_agent_runtime",
+        "callback",
+        "deep_researcher",
+        "langgraph",
+        "workflow_backend"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/audits/openai-agents-phase4-dbos.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangChain",
+        "LangGraph",
+        "workflow_backend"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/audits/openai-agents-phase4.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangChain",
+        "LangGraph",
+        "business_agent_runtime",
+        "workflow_backend"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/audits/pre-openai-sdk-cleanup.md",
+      "symbols": [
+        "LANGCHAIN",
+        "LANGSMITH",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "agent_runtime",
+        "deep_researcher",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/audits/pre-openai-sdk-inventory.json",
+      "symbols": [
+        "Callback",
+        "StateGraph",
+        "agent_runtime",
+        "callback",
+        "deep_researcher",
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/audits/research-graph-duplicate-url-receipts.md",
+      "symbols": [
+        "AgentRuntime",
+        "LANGCHAIN",
+        "LANGSMITH"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/guide/social-media-skill.md",
+      "symbols": [
+        "LangChain",
+        "LangGraph"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "docs/interview-architecture/README.md",
+      "symbols": [
+        "LangGraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/interview-architecture/architecture-decisions.md",
+      "symbols": [
+        "LangGraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/interview-architecture/code-graph-analysis.json",
+      "symbols": [
+        "AgentRuntime",
+        "agent_runtime",
+        "deep_researcher",
+        "langchain",
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/interview-architecture/code-graph.graphml",
+      "symbols": [
+        "AgentRuntime",
+        "agent_runtime",
+        "deep_researcher",
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/interview-architecture/interview-question-bank.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangGraph",
+        "agent_runtime",
+        "deep_researcher"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/interview-architecture/interview-source-map.md",
+      "symbols": [
+        "AgentRuntime",
+        "agent_runtime",
+        "deep_researcher",
+        "langsmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/interview-architecture/risk-register.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangGraph",
+        "deep_researcher"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/README.md",
+      "symbols": [
+        "LangChain",
+        "LangSmith",
+        "deep_researcher",
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/diagrams/architecture.svg",
+      "symbols": [
+        "AgentRuntime",
+        "LangGraph",
+        "LangSmith",
+        "deep_researcher"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/diagrams/evolution.svg",
+      "symbols": [
+        "AgentRuntime",
+        "LangSmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/diagrams/langgraph.svg",
+      "symbols": [
+        "LangGraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/diagrams/mcp.svg",
+      "symbols": [
+        "AgentRuntime"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/diagrams/observability.svg",
+      "symbols": [
+        "LangChain",
+        "LangGraph",
+        "LangSmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/diagrams/request-flow.svg",
+      "symbols": [
+        "AgentRuntime",
+        "deep_researcher"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/slide-outline.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangGraph",
+        "LangSmith",
+        "agent_runtime",
+        "deep_researcher",
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/source-learning-index.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangGraph",
+        "LangSmith",
+        "agent_runtime",
+        "deep_researcher",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/project-learning/sources.md",
+      "symbols": [
+        "AgentRuntime",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "agent_runtime",
+        "deep_researcher",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "docs/research-graph-context-harness.md",
+      "symbols": [
+        "LangGraph"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "evaluation/cost_profile/ROUND2_VERIFICATION_REPORT.md",
+      "symbols": [
+        "agent_runtime",
+        "deep_researcher"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/after_cost_profile.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/after_v4flash_cost_profile.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/before_cost_profile.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/probe_models.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/render_cost_profile.py",
+      "symbols": [
+        "LangGraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/round2_checkpoint.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/round2_cost_profile.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/round2_full_cost_profile.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/run_after_v4flash.py",
+      "symbols": [
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/run_cost_profile.py",
+      "symbols": [
+        "LangGraph",
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/cost_profile/run_round2_profile.py",
+      "symbols": [
+        "LangGraph",
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/PLAN_EXECUTE_AB_COMPARISON.md",
+      "symbols": [
+        "LangGraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_before.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_before_2.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_before_3.json",
+      "symbols": [
+        "deep_researcher",
+        "langchain",
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_final_before.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_gemma_before.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_google31lite_before.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_google35_before.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_google_before.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_google_latest_before.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/results/smoke_serial_before.json",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "evaluation/plan_execute_ab/run_benchmark.py",
+      "symbols": [
+        "LangChain",
+        "LangGraph",
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "langgraph.json",
+      "symbols": [
+        "deep_researcher"
+      ],
+      "disposition": "1_delete_engine_only"
+    },
+    {
+      "path": "pyproject.toml",
+      "symbols": [
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "scripts/audit_repository.py",
+      "symbols": [
+        "langchain",
+        "langgraph"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "scripts/model_provider_smoke.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "scripts/neo4j_local.py",
+      "symbols": [
+        "LANGSMITH"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "scripts/sdk_context_smoke.py",
+      "symbols": [
+        "Callback",
+        "callback",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "scripts/sdk_phase2_smoke.py",
+      "symbols": [
+        "LANGCHAIN",
+        "LANGSMITH",
+        "LangChain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/budget.py",
+      "symbols": [
+        "Callback",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "callback",
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/configuration.py",
+      "symbols": [
+        "business_agent_runtime",
+        "langchain",
+        "langgraph",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/deep_researcher.py",
+      "symbols": [
+        "LangGraph",
+        "deep_researcher"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/llm/context.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/mcp/domain_filter.py",
+      "symbols": [
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/mcp/tool_wrapper.py",
+      "symbols": [
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/mcp/tools.py",
+      "symbols": [
+        "LangChain",
+        "LangSmith",
+        "langchain",
+        "langgraph"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/memory/context.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/memory/writer.py",
+      "symbols": [
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/models/__init__.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/models/factory.py",
+      "symbols": [
+        "LANGCHAIN",
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/models/sdk.py",
+      "symbols": [
+        "LangChain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/observability/__init__.py",
+      "symbols": [
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "callback",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/observability/langsmith.py",
+      "symbols": [
+        "LANGCHAIN",
+        "LANGSMITH",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "callback",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/rag/code_languages.py",
+      "symbols": [
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/rag/loaders/knowledge.py",
+      "symbols": [
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/rag/query_rewriter.py",
+      "symbols": [
+        "LangChain",
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/rag/retriever.py",
+      "symbols": [
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/rag/service.py",
+      "symbols": [
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/rag/splitter.py",
+      "symbols": [
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/research_graph/compaction.py",
+      "symbols": [
+        "AgentRuntime",
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/research_graph/context_manager.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/research_graph/extractor.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/research_graph/models.py",
+      "symbols": [
+        "LangGraph"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/research_graph/retriever.py",
+      "symbols": [
+        "LangGraph",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/research_graph/strategy.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/research_graph/workspace.py",
+      "symbols": [
+        "AgentRuntime"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/runtime/__init__.py",
+      "symbols": [
+        "AgentRuntime",
+        "agent_runtime"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/runtime/agent_runtime.py",
+      "symbols": [
+        "AgentRuntime",
+        "Callback",
+        "langchain"
+      ],
+      "disposition": "1_delete_engine_only"
+    },
+    {
+      "path": "src/open_deep_research/runtime/business_agent.py",
+      "symbols": [
+        "AgentRuntime",
+        "LangGraph",
+        "agent_runtime",
+        "business_agent_runtime",
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/runtime/sdk_context.py",
+      "symbols": [
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/runtime/sdk_runtime.py",
+      "symbols": [
+        "AgentRuntime",
+        "LangChain",
+        "LangGraph",
+        "agent_runtime",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/search/tavily.py",
+      "symbols": [
+        "LangSmith",
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/social_media/tools.py",
+      "symbols": [
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/state.py",
+      "symbols": [
+        "LangGraph",
+        "langgraph"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/tools/rag_tool.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/tools/registry.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/web/durable.py",
+      "symbols": [
+        "business_agent_runtime",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/web/history.py",
+      "symbols": [
+        "LANGSMITH",
+        "LangChain",
+        "LangGraph",
+        "LangSmith",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/web/run_data.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/web/runs.py",
+      "symbols": [
+        "business_agent_runtime",
+        "langchain",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/web/server.py",
+      "symbols": [
+        "LangChain",
+        "LangSmith",
+        "business_agent_runtime",
+        "deep_researcher",
+        "langchain",
+        "langgraph",
+        "langsmith",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/web/static/app.js",
+      "symbols": [
+        "LangSmith",
+        "business_agent_runtime",
+        "langsmith",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/workflow/__init__.py",
+      "symbols": [
+        "deep_researcher",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/workflow/business_steps.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/workflow/graph.py",
+      "symbols": [
+        "LangGraph",
+        "LangSmith",
+        "StateGraph",
+        "deep_researcher",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "1_delete_engine_only"
+    },
+    {
+      "path": "src/open_deep_research/workflow/intake.py",
+      "symbols": [
+        "LangGraph",
+        "deep_researcher",
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/workflow/python_state.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/workflow/reporting.py",
+      "symbols": [
+        "deep_researcher",
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/workflow/research.py",
+      "symbols": [
+        "LangGraph",
+        "LangSmith",
+        "StateGraph",
+        "deep_researcher",
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "src/open_deep_research/workflow/shared.py",
+      "symbols": [
+        "LangSmith",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/open_deep_research/workflow/state_utils.py",
+      "symbols": [
+        "LangChain",
+        "LangGraph",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "src/security/auth.py",
+      "symbols": [
+        "LangGraph",
+        "langgraph"
+      ],
+      "disposition": "1_delete_engine_only"
+    },
+    {
+      "path": "tests/conftest.py",
+      "symbols": [
+        "LANGSMITH",
+        "LangSmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/dbos_process_fixture.py",
+      "symbols": [
+        "LANGCHAIN",
+        "LANGSMITH",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/dbos_support.py",
+      "symbols": [
+        "BUSINESS_AGENT_RUNTIME",
+        "WORKFLOW_BACKEND"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/debug_run.py",
+      "symbols": [
+        "deep_researcher",
+        "langgraph"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/durable_frontend.test.cjs",
+      "symbols": [
+        "business_agent_runtime",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/evaluators.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/expt_results/deep_research_bench_claude4-sonnet.jsonl",
+      "symbols": [
+        "LangChain"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "tests/expt_results/deep_research_bench_gpt-5.jsonl",
+      "symbols": [
+        "callback"
+      ],
+      "disposition": "4_historical_reference"
+    },
+    {
+      "path": "tests/extract_langsmith_data.py",
+      "symbols": [
+        "LANGSMITH",
+        "LangSmith",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/pairwise_evaluation.py",
+      "symbols": [
+        "langchain",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/reference_workflow.py",
+      "symbols": [
+        "business_agent_runtime",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/run_evaluate.py",
+      "symbols": [
+        "deep_researcher",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_architecture_contract.py",
+      "symbols": [
+        "deep_researcher"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_budget.py",
+      "symbols": [
+        "Callback",
+        "LangChain",
+        "callback",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/test_dbos_contracts.py",
+      "symbols": [
+        "business_agent_runtime",
+        "langchain",
+        "langgraph",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_dbos_unit.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/test_general_mode_removal.py",
+      "symbols": [
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_graph_consumer_without_rag.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_langgraph_runtime_compat.py",
+      "symbols": [
+        "LangGraph",
+        "deep_researcher",
+        "langgraph"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_langsmith_integration.py",
+      "symbols": [
+        "LANGCHAIN",
+        "LANGSMITH",
+        "LangChain",
+        "LangSmith",
+        "StateGraph",
+        "deep_researcher",
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_model_factory.py",
+      "symbols": [
+        "LangChain",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/test_no_agent_observer.py",
+      "symbols": [
+        "LANGSMITH",
+        "LangChain",
+        "LangSmith",
+        "callback",
+        "langsmith"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/test_p1_fixes.py",
+      "symbols": [
+        "LangChain",
+        "callback",
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_public_opinion_agents.py",
+      "symbols": [
+        "AgentRuntime",
+        "deep_researcher"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_public_opinion_research_loop.py",
+      "symbols": [
+        "deep_researcher",
+        "langchain",
+        "langgraph"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_python_workflow.py",
+      "symbols": [
+        "LangGraph",
+        "StateGraph",
+        "business_agent_runtime",
+        "langchain",
+        "langgraph",
+        "workflow_backend"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_python_workflow_sdk.py",
+      "symbols": [
+        "AgentRuntime",
+        "langchain",
+        "langgraph"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_query_images.py",
+      "symbols": [
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_rag.py",
+      "symbols": [
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/test_report_section_budget.py",
+      "symbols": [
+        "callback",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_repository_audit.py",
+      "symbols": [
+        "langgraph"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/test_research_graph_context_harness.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_role_reports_propagation.py",
+      "symbols": [
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_sdk_business_integration.py",
+      "symbols": [
+        "LangChain",
+        "business_agent_runtime",
+        "langchain",
+        "langgraph"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_sdk_context.py",
+      "symbols": [
+        "langchain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/test_sdk_phase2_integration.py",
+      "symbols": [
+        "LangChain",
+        "LangGraph",
+        "StateGraph",
+        "business_agent_runtime",
+        "callback",
+        "langchain",
+        "langgraph"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_sdk_runtime.py",
+      "symbols": [
+        "AgentRuntime",
+        "business_agent_runtime",
+        "callback",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_social_media_skill.py",
+      "symbols": [
+        "LangChain"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "tests/test_state_architecture.py",
+      "symbols": [
+        "AgentRuntime",
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_token_accounting.py",
+      "symbols": [
+        "AgentRuntime",
+        "Callback",
+        "LangChain",
+        "agent_runtime",
+        "callback",
+        "deep_researcher",
+        "langchain"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_web_history.py",
+      "symbols": [
+        "LangGraph",
+        "LangSmith",
+        "StateGraph",
+        "deep_researcher",
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tests/test_web_research.py",
+      "symbols": [
+        "deep_researcher"
+      ],
+      "disposition": "2_migrated_consumer"
+    },
+    {
+      "path": "tools/code_graph_analysis.py",
+      "symbols": [
+        "AgentRuntime",
+        "agent_runtime",
+        "deep_researcher",
+        "langgraph"
+      ],
+      "disposition": "3_retained_business_or_contract"
+    },
+    {
+      "path": "uv.lock",
+      "symbols": [
+        "langchain",
+        "langgraph",
+        "langsmith"
+      ],
+      "disposition": "2_migrated_consumer"
+    }
+  ],
+  "imports_before": {
+    "evaluation/cost_profile/probe_models.py": [
+      "asyncio",
+      "dotenv",
+      "langchain.chat_models",
+      "os",
+      "pathlib",
+      "pydantic"
+    ],
+    "evaluation/cost_profile/render_cost_profile.py": [
+      "__future__",
+      "argparse",
+      "collections.abc",
+      "json",
+      "pathlib",
+      "typing"
+    ],
+    "evaluation/cost_profile/run_after_v4flash.py": [
+      "__future__",
+      "agent_observer.sdk",
+      "argparse",
+      "asyncio",
+      "dotenv",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.observability.agent_observer",
+      "os",
+      "pathlib",
+      "run_cost_profile",
+      "sys",
+      "time",
+      "traceback"
+    ],
+    "evaluation/cost_profile/run_cost_profile.py": [
+      "__future__",
+      "argparse",
+      "asyncio",
+      "collections.abc",
+      "datetime",
+      "dotenv",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.runtime.business_agent",
+      "os",
+      "pathlib",
+      "re",
+      "render_cost_profile",
+      "subprocess",
+      "sys",
+      "time",
+      "traceback",
+      "typing",
+      "uuid"
+    ],
+    "evaluation/cost_profile/run_round2_profile.py": [
+      "__future__",
+      "agent_observer.sdk",
+      "argparse",
+      "asyncio",
+      "dotenv",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.observability.agent_observer",
+      "open_deep_research.runtime.business_agent",
+      "os",
+      "pathlib",
+      "re",
+      "run_cost_profile",
+      "sys",
+      "time",
+      "traceback"
+    ],
+    "evaluation/plan_execute_ab/run_benchmark.py": [
+      "__future__",
+      "argparse",
+      "asyncio",
+      "collections.abc",
+      "compare_results",
+      "datetime",
+      "dotenv",
+      "evaluate_results",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.runtime.business_agent",
+      "os",
+      "pathlib",
+      "re",
+      "subprocess",
+      "sys",
+      "time",
+      "traceback",
+      "typing",
+      "uuid"
+    ],
+    "scripts/audit_repository.py": [
+      "__future__",
+      "argparse",
+      "ast",
+      "collections",
+      "hashlib",
+      "io",
+      "json",
+      "pathlib",
+      "subprocess",
+      "typing"
+    ],
+    "scripts/model_provider_smoke.py": [
+      "__future__",
+      "argparse",
+      "dotenv",
+      "langchain_core.messages",
+      "langchain_core.tools",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.models",
+      "open_deep_research.state",
+      "os",
+      "pathlib"
+    ],
+    "scripts/neo4j_local.py": [
+      "__future__",
+      "argparse",
+      "dotenv",
+      "neo4j.exceptions",
+      "open_deep_research.configuration",
+      "open_deep_research.public_opinion_agents.registry",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.store",
+      "open_deep_research.research_graph.strategy",
+      "open_deep_research.research_graph.workspace",
+      "os",
+      "pathlib",
+      "re",
+      "secrets",
+      "uuid"
+    ],
+    "scripts/sdk_context_smoke.py": [
+      "__future__",
+      "agents",
+      "argparse",
+      "asyncio",
+      "collections",
+      "dotenv",
+      "json",
+      "langchain_core.callbacks",
+      "logging",
+      "open_deep_research.configuration",
+      "open_deep_research.models.factory",
+      "open_deep_research.models.sdk",
+      "open_deep_research.research_graph",
+      "open_deep_research.research_graph.workspace",
+      "open_deep_research.runtime.sdk_context",
+      "pathlib",
+      "re",
+      "typing",
+      "uuid"
+    ],
+    "scripts/sdk_phase2_smoke.py": [
+      "agents.testing",
+      "argparse",
+      "asyncio",
+      "dotenv",
+      "json",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.research_graph.store",
+      "open_deep_research.runtime.business_agent",
+      "os",
+      "pathlib",
+      "socket",
+      "sys",
+      "test_sdk_phase2_integration",
+      "test_sdk_runtime",
+      "uuid"
+    ],
+    "src/open_deep_research/budget.py": [
+      "__future__",
+      "contextlib",
+      "contextvars",
+      "langchain_core.callbacks",
+      "langchain_core.messages",
+      "langchain_core.messages.ai",
+      "langchain_core.messages.utils",
+      "langchain_core.runnables",
+      "langchain_core.runnables.config",
+      "logging",
+      "open_deep_research.configuration",
+      "open_deep_research.observability.langsmith",
+      "typing"
+    ],
+    "src/open_deep_research/configuration.py": [
+      "enum",
+      "json",
+      "langchain_core.runnables",
+      "os",
+      "pathlib",
+      "pydantic",
+      "typing",
+      "warnings"
+    ],
+    "src/open_deep_research/deep_researcher.py": [
+      "open_deep_research.memory.writer",
+      "open_deep_research.rag",
+      "open_deep_research.workflow.graph",
+      "open_deep_research.workflow.intake",
+      "open_deep_research.workflow.reporting",
+      "open_deep_research.workflow.research",
+      "open_deep_research.workflow.shared"
+    ],
+    "src/open_deep_research/llm/context.py": [
+      "langchain_core.messages"
+    ],
+    "src/open_deep_research/mcp/domain_filter.py": [
+      "__future__",
+      "collections.abc",
+      "dataclasses",
+      "langchain_core.tools",
+      "logging"
+    ],
+    "src/open_deep_research/mcp/tool_wrapper.py": [
+      "__future__",
+      "langchain_core.tools",
+      "logging"
+    ],
+    "src/open_deep_research/mcp/tools.py": [
+      "__future__",
+      "aiohttp",
+      "datetime",
+      "langchain_core.runnables",
+      "langchain_core.tools",
+      "langchain_mcp_adapters.client",
+      "langgraph.config",
+      "logging",
+      "mcp",
+      "open_deep_research.configuration",
+      "open_deep_research.mcp.domain_filter",
+      "open_deep_research.mcp.tool_wrapper",
+      "re",
+      "subprocess",
+      "typing"
+    ],
+    "src/open_deep_research/memory/context.py": [
+      "langchain_core.runnables",
+      "typing"
+    ],
+    "src/open_deep_research/memory/writer.py": [
+      "asyncio",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "logging",
+      "open_deep_research.configuration",
+      "open_deep_research.memory.context",
+      "open_deep_research.memory.extractor",
+      "open_deep_research.memory.store",
+      "open_deep_research.rag.service",
+      "open_deep_research.state",
+      "open_deep_research.time_utils",
+      "threading",
+      "typing"
+    ],
+    "src/open_deep_research/models/__init__.py": [
+      "langchain_core.runnables",
+      "open_deep_research.models.factory"
+    ],
+    "src/open_deep_research/models/factory.py": [
+      "__future__",
+      "dataclasses",
+      "langchain.chat_models",
+      "langchain_core.language_models",
+      "langchain_deepseek",
+      "langchain_openai",
+      "os",
+      "typing",
+      "urllib.parse"
+    ],
+    "src/open_deep_research/models/sdk.py": [
+      "__future__",
+      "agents",
+      "collections.abc",
+      "contextlib",
+      "open_deep_research.models.factory",
+      "openai",
+      "os",
+      "typing",
+      "urllib.parse"
+    ],
+    "src/open_deep_research/observability/__init__.py": [
+      "open_deep_research.observability.langsmith"
+    ],
+    "src/open_deep_research/observability/langsmith.py": [
+      "__future__",
+      "collections.abc",
+      "hashlib",
+      "langsmith",
+      "langsmith.client",
+      "langsmith.run_helpers",
+      "logging",
+      "os",
+      "typing",
+      "uuid"
+    ],
+    "src/open_deep_research/rag/code_languages.py": [
+      "langchain_text_splitters"
+    ],
+    "src/open_deep_research/rag/loaders/knowledge.py": [
+      "PIL",
+      "base64",
+      "cv2",
+      "fitz",
+      "hashlib",
+      "io",
+      "json",
+      "langchain_core.messages",
+      "logging",
+      "numpy",
+      "open_deep_research.models",
+      "open_deep_research.rag.code_languages",
+      "open_deep_research.rag.types",
+      "pathlib",
+      "pytesseract",
+      "typing"
+    ],
+    "src/open_deep_research/rag/query_rewriter.py": [
+      "collections.abc",
+      "json",
+      "langchain_core.messages",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.models",
+      "open_deep_research.observability.langsmith",
+      "re",
+      "typing"
+    ],
+    "src/open_deep_research/rag/retriever.py": [
+      "collections",
+      "collections.abc",
+      "math",
+      "open_deep_research.observability.langsmith",
+      "open_deep_research.rag.graph",
+      "open_deep_research.rag.graph_terms",
+      "open_deep_research.rag.metadata",
+      "open_deep_research.rag.types",
+      "open_deep_research.rag.vectorstore",
+      "re",
+      "typing"
+    ],
+    "src/open_deep_research/rag/service.py": [
+      "collections.abc",
+      "hashlib",
+      "json",
+      "langchain_core.runnables",
+      "open_deep_research.configuration",
+      "open_deep_research.memory.context",
+      "open_deep_research.memory.types",
+      "open_deep_research.observability.langsmith",
+      "open_deep_research.rag.citations",
+      "open_deep_research.rag.config",
+      "open_deep_research.rag.indexer",
+      "open_deep_research.rag.loaders",
+      "open_deep_research.rag.reranker",
+      "open_deep_research.rag.types",
+      "pathlib",
+      "pydantic",
+      "threading",
+      "typing"
+    ],
+    "src/open_deep_research/rag/splitter.py": [
+      "dataclasses",
+      "hashlib",
+      "json",
+      "langchain_text_splitters",
+      "open_deep_research.rag.code_languages",
+      "open_deep_research.rag.types",
+      "re",
+      "typing"
+    ],
+    "src/open_deep_research/research_graph/compaction.py": [
+      "__future__",
+      "collections.abc",
+      "dataclasses",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.budget",
+      "open_deep_research.research_graph.models",
+      "typing"
+    ],
+    "src/open_deep_research/research_graph/context_manager.py": [
+      "__future__",
+      "collections.abc",
+      "dataclasses",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.budget",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.retriever",
+      "typing"
+    ],
+    "src/open_deep_research/research_graph/extractor.py": [
+      "__future__",
+      "collections.abc",
+      "dataclasses",
+      "datetime",
+      "json",
+      "langchain_core.messages",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.schema",
+      "typing"
+    ],
+    "src/open_deep_research/research_graph/models.py": [
+      "__future__",
+      "pydantic",
+      "typing"
+    ],
+    "src/open_deep_research/research_graph/retriever.py": [
+      "__future__",
+      "open_deep_research.observability.langsmith",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.store",
+      "typing"
+    ],
+    "src/open_deep_research/research_graph/strategy.py": [
+      "__future__",
+      "collections.abc",
+      "dataclasses",
+      "langchain_core.messages",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.research_graph.compaction",
+      "open_deep_research.research_graph.context_manager",
+      "open_deep_research.research_graph.extractor",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.retriever",
+      "open_deep_research.research_graph.schema",
+      "open_deep_research.research_graph.store",
+      "open_deep_research.research_graph.workspace",
+      "sys",
+      "time",
+      "typing"
+    ],
+    "src/open_deep_research/research_graph/workspace.py": [
+      "__future__",
+      "collections.abc",
+      "dataclasses",
+      "open_deep_research.budget",
+      "open_deep_research.research_graph.compaction",
+      "open_deep_research.research_graph.context_manager",
+      "open_deep_research.research_graph.metrics",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.retriever",
+      "open_deep_research.research_graph.schema",
+      "open_deep_research.research_graph.store",
+      "open_deep_research.research_graph.transcript",
+      "time",
+      "typing"
+    ],
+    "src/open_deep_research/runtime/__init__.py": [
+      "open_deep_research.runtime.agent_runtime",
+      "open_deep_research.runtime.business_agent",
+      "open_deep_research.runtime.sdk_runtime"
+    ],
+    "src/open_deep_research/runtime/agent_runtime.py": [
+      "__future__",
+      "asyncio",
+      "collections.abc",
+      "dataclasses",
+      "langchain_core.messages",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.llm.context",
+      "open_deep_research.llm.native_search",
+      "open_deep_research.research_graph",
+      "open_deep_research.research_graph.compaction",
+      "typing"
+    ],
+    "src/open_deep_research/runtime/business_agent.py": [
+      "__future__",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.llm.context",
+      "open_deep_research.llm.errors",
+      "open_deep_research.mcp.domain_filter",
+      "open_deep_research.models",
+      "open_deep_research.models.sdk",
+      "open_deep_research.observability",
+      "open_deep_research.prompts",
+      "open_deep_research.public_opinion_agents",
+      "open_deep_research.research_graph",
+      "open_deep_research.research_graph.schema",
+      "open_deep_research.runtime.agent_runtime",
+      "open_deep_research.runtime.sdk_runtime",
+      "open_deep_research.social_media.tools",
+      "open_deep_research.state",
+      "open_deep_research.time_utils",
+      "open_deep_research.tools.registry",
+      "open_deep_research.workflow.state_utils",
+      "typing"
+    ],
+    "src/open_deep_research/runtime/sdk_context.py": [
+      "__future__",
+      "agents",
+      "agents.exceptions",
+      "agents.items",
+      "agents.mcp",
+      "agents.memory",
+      "agents.result",
+      "agents.run",
+      "agents.tool",
+      "agents.tool_context",
+      "asyncio",
+      "collections.abc",
+      "copy",
+      "dataclasses",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.budget",
+      "open_deep_research.research_graph.compaction",
+      "open_deep_research.research_graph.schema",
+      "open_deep_research.research_graph.workspace",
+      "open_deep_research.workflow.execution",
+      "typing",
+      "uuid"
+    ],
+    "src/open_deep_research/runtime/sdk_runtime.py": [
+      "__future__",
+      "agents",
+      "agents.exceptions",
+      "agents.retry",
+      "agents.run",
+      "agents.tool_context",
+      "asyncio",
+      "dataclasses",
+      "json",
+      "jsonschema.validators",
+      "langchain_core.messages",
+      "langchain_core.tools",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.llm.context",
+      "open_deep_research.mcp.domain_filter",
+      "open_deep_research.research_graph.compaction",
+      "open_deep_research.research_graph.workspace",
+      "open_deep_research.runtime.agent_runtime",
+      "open_deep_research.runtime.sdk_context",
+      "open_deep_research.workflow.execution",
+      "re",
+      "typing"
+    ],
+    "src/open_deep_research/search/tavily.py": [
+      "asyncio",
+      "datetime",
+      "json",
+      "langchain_core.language_models",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "langchain_core.tools",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.models",
+      "open_deep_research.prompts",
+      "open_deep_research.state",
+      "open_deep_research.time_utils",
+      "os",
+      "tavily",
+      "typing"
+    ],
+    "src/open_deep_research/social_media/tools.py": [
+      "__future__",
+      "json",
+      "langchain_core.tools",
+      "open_deep_research",
+      "typing"
+    ],
+    "src/open_deep_research/state.py": [
+      "__future__",
+      "collections.abc",
+      "langgraph.graph",
+      "open_deep_research.budget",
+      "open_deep_research.research_graph.metrics",
+      "pydantic",
+      "typing",
+      "typing_extensions"
+    ],
+    "src/open_deep_research/tools/rag_tool.py": [
+      "asyncio",
+      "langchain_core.runnables",
+      "langchain_core.tools",
+      "open_deep_research.configuration",
+      "open_deep_research.rag.query_rewriter",
+      "open_deep_research.rag.service"
+    ],
+    "src/open_deep_research/tools/registry.py": [
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "langchain_core.tools",
+      "open_deep_research.config_values",
+      "open_deep_research.configuration",
+      "open_deep_research.mcp",
+      "open_deep_research.mcp.domain_filter",
+      "open_deep_research.search.tavily",
+      "open_deep_research.state",
+      "open_deep_research.tools.rag_tool",
+      "typing"
+    ],
+    "src/open_deep_research/web/durable.py": [
+      "__future__",
+      "functools",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.runtime.sdk_runtime",
+      "open_deep_research.web.run_data",
+      "open_deep_research.workflow.business_steps",
+      "open_deep_research.workflow.dbos_config",
+      "open_deep_research.workflow.python_state",
+      "open_deep_research.workflow.run_facts",
+      "sqlalchemy",
+      "uuid"
+    ],
+    "src/open_deep_research/web/history.py": [
+      "__future__",
+      "datetime",
+      "functools",
+      "json",
+      "langsmith",
+      "neo4j",
+      "open_deep_research.configuration",
+      "open_deep_research.observability.langsmith",
+      "open_deep_research.research_graph.schema",
+      "os",
+      "pydantic",
+      "threading",
+      "typing"
+    ],
+    "src/open_deep_research/web/run_data.py": [
+      "__future__",
+      "datetime",
+      "dbos",
+      "hashlib",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.state",
+      "os",
+      "pydantic",
+      "re",
+      "typing"
+    ],
+    "src/open_deep_research/web/runs.py": [
+      "__future__",
+      "asyncio",
+      "fastapi",
+      "fastapi.responses",
+      "json",
+      "langchain_core.messages",
+      "open_deep_research.configuration",
+      "open_deep_research.web",
+      "open_deep_research.web.durable",
+      "open_deep_research.web.run_data",
+      "open_deep_research.web.server",
+      "pydantic",
+      "re",
+      "sqlalchemy.exc",
+      "typing"
+    ],
+    "src/open_deep_research/web/server.py": [
+      "__future__",
+      "asyncio",
+      "contextlib",
+      "dotenv",
+      "fastapi",
+      "fastapi.exceptions",
+      "fastapi.responses",
+      "fastapi.staticfiles",
+      "json",
+      "langchain_core.messages",
+      "logging",
+      "open_deep_research.configuration",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.observability",
+      "open_deep_research.web.durable",
+      "open_deep_research.web.history",
+      "open_deep_research.web.run_data",
+      "open_deep_research.web.runs",
+      "os",
+      "pathlib",
+      "pydantic",
+      "secrets",
+      "typing",
+      "uuid",
+      "uvicorn"
+    ],
+    "src/open_deep_research/workflow/__init__.py": [
+      "open_deep_research.configuration",
+      "open_deep_research.workflow.graph",
+      "open_deep_research.workflow.state_utils"
+    ],
+    "src/open_deep_research/workflow/business_steps.py": [
+      "__future__",
+      "asyncio",
+      "collections.abc",
+      "copy",
+      "langchain_core.runnables",
+      "open_deep_research.budget",
+      "open_deep_research.state",
+      "open_deep_research.workflow.execution",
+      "typing"
+    ],
+    "src/open_deep_research/workflow/graph.py": [
+      "langgraph.graph",
+      "open_deep_research.configuration",
+      "open_deep_research.observability",
+      "open_deep_research.observability.langsmith",
+      "open_deep_research.state",
+      "open_deep_research.workflow.intake",
+      "open_deep_research.workflow.reporting",
+      "open_deep_research.workflow.research",
+      "typing"
+    ],
+    "src/open_deep_research/workflow/intake.py": [
+      "asyncio",
+      "dataclasses",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "langgraph.types",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.llm.errors",
+      "open_deep_research.models",
+      "open_deep_research.prompts",
+      "open_deep_research.rag",
+      "open_deep_research.state",
+      "open_deep_research.time_utils",
+      "open_deep_research.workflow",
+      "open_deep_research.workflow.state_utils",
+      "sys",
+      "typing"
+    ],
+    "src/open_deep_research/workflow/python_state.py": [
+      "__future__",
+      "collections.abc",
+      "copy",
+      "langchain_core.messages",
+      "open_deep_research.state",
+      "typing",
+      "uuid"
+    ],
+    "src/open_deep_research/workflow/reporting.py": [
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.llm.context",
+      "open_deep_research.llm.errors",
+      "open_deep_research.memory.writer",
+      "open_deep_research.models",
+      "open_deep_research.prompts",
+      "open_deep_research.research_graph",
+      "open_deep_research.runtime",
+      "open_deep_research.state",
+      "open_deep_research.time_utils",
+      "open_deep_research.workflow",
+      "open_deep_research.workflow.execution",
+      "open_deep_research.workflow.state_utils",
+      "sys",
+      "typing"
+    ],
+    "src/open_deep_research/workflow/research.py": [
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "langgraph.graph",
+      "langgraph.types",
+      "logging",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.models",
+      "open_deep_research.observability.langsmith",
+      "open_deep_research.prompts",
+      "open_deep_research.research_graph",
+      "open_deep_research.runtime",
+      "open_deep_research.state",
+      "open_deep_research.workflow",
+      "open_deep_research.workflow.shared",
+      "open_deep_research.workflow.state_utils",
+      "typing"
+    ],
+    "src/open_deep_research/workflow/shared.py": [
+      "collections.abc",
+      "langchain_core.runnables",
+      "open_deep_research.models",
+      "open_deep_research.observability",
+      "typing"
+    ],
+    "src/open_deep_research/workflow/state_utils.py": [
+      "__future__",
+      "collections.abc",
+      "langchain_core.runnables",
+      "open_deep_research.state",
+      "typing",
+      "uuid"
+    ],
+    "src/security/auth.py": [
+      "asyncio",
+      "langgraph_sdk",
+      "langgraph_sdk.auth.types",
+      "logging",
+      "os",
+      "supabase",
+      "typing"
+    ],
+    "tests/conftest.py": [
+      "dotenv",
+      "os",
+      "typing"
+    ],
+    "tests/dbos_process_fixture.py": [
+      "__future__",
+      "agents.testing",
+      "argparse",
+      "asyncio",
+      "contextlib",
+      "dbos",
+      "dbos_support",
+      "dotenv",
+      "langchain_core.runnables",
+      "neo4j",
+      "open_deep_research.budget",
+      "open_deep_research.runtime",
+      "open_deep_research.state",
+      "open_deep_research.web",
+      "open_deep_research.web.durable",
+      "open_deep_research.web.executor",
+      "open_deep_research.web.run_data",
+      "open_deep_research.workflow",
+      "open_deep_research.workflow.dbos_workflow",
+      "open_deep_research.workflow.run_facts",
+      "os",
+      "pathlib",
+      "pytest",
+      "socket",
+      "sqlalchemy.exc",
+      "sqlite3",
+      "test_python_workflow",
+      "test_python_workflow_sdk",
+      "test_sdk_context",
+      "test_sdk_runtime",
+      "time"
+    ],
+    "tests/dbos_support.py": [
+      "__future__",
+      "copy",
+      "dbos",
+      "neo4j",
+      "open_deep_research.web",
+      "open_deep_research.web.durable",
+      "open_deep_research.web.executor",
+      "open_deep_research.web.history",
+      "open_deep_research.workflow.dbos_config",
+      "open_deep_research.workflow.run_facts",
+      "os",
+      "pathlib",
+      "pytest",
+      "sqlalchemy",
+      "sqlalchemy.engine",
+      "test_python_workflow_sdk",
+      "time",
+      "uuid"
+    ],
+    "tests/debug_run.py": [
+      "asyncio",
+      "dotenv",
+      "langgraph.checkpoint.memory",
+      "open_deep_research.deep_researcher",
+      "uuid"
+    ],
+    "tests/evaluators.py": [
+      "langchain_anthropic",
+      "langchain_openai",
+      "open_deep_research.time_utils",
+      "pydantic",
+      "tests.prompts",
+      "typing"
+    ],
+    "tests/extract_langsmith_data.py": [
+      "argparse",
+      "dotenv",
+      "json",
+      "langsmith",
+      "os"
+    ],
+    "tests/pairwise_evaluation.py": [
+      "langchain_anthropic",
+      "langsmith.evaluation",
+      "pydantic"
+    ],
+    "tests/reference_workflow.py": [
+      "__future__",
+      "asyncio",
+      "collections.abc",
+      "copy",
+      "functools",
+      "langchain_core.runnables",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.state",
+      "open_deep_research.workflow",
+      "open_deep_research.workflow.execution",
+      "open_deep_research.workflow.python_state",
+      "open_deep_research.workflow.state_utils",
+      "typing"
+    ],
+    "tests/run_evaluate.py": [
+      "asyncio",
+      "dotenv",
+      "langgraph.checkpoint.memory",
+      "langsmith",
+      "open_deep_research.deep_researcher",
+      "tests.evaluators",
+      "uuid"
+    ],
+    "tests/test_architecture_contract.py": [
+      "ast",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.workflow.research",
+      "pathlib"
+    ],
+    "tests/test_budget.py": [
+      "asyncio",
+      "langchain_core.language_models.fake_chat_models",
+      "langchain_core.messages",
+      "langchain_core.messages.ai",
+      "langchain_core.tools",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.state",
+      "pytest",
+      "types"
+    ],
+    "tests/test_dbos_contracts.py": [
+      "__future__",
+      "agents.testing",
+      "asyncio",
+      "concurrent.futures",
+      "contextlib",
+      "dbos",
+      "fastapi.testclient",
+      "langchain_core.runnables",
+      "open_deep_research.budget",
+      "open_deep_research.runtime",
+      "open_deep_research.state",
+      "open_deep_research.web",
+      "open_deep_research.web.durable",
+      "open_deep_research.web.history",
+      "open_deep_research.web.run_data",
+      "open_deep_research.workflow",
+      "open_deep_research.workflow.dbos_config",
+      "open_deep_research.workflow.run_facts",
+      "pytest",
+      "reference_workflow",
+      "sqlalchemy",
+      "sqlalchemy.exc",
+      "sqlite3",
+      "test_python_workflow",
+      "test_python_workflow_sdk",
+      "test_sdk_runtime",
+      "threading",
+      "time",
+      "uuid"
+    ],
+    "tests/test_dbos_unit.py": [
+      "ast",
+      "asyncio",
+      "fastapi.testclient",
+      "langchain_core.messages",
+      "open_deep_research.state",
+      "open_deep_research.web",
+      "open_deep_research.web.run_data",
+      "open_deep_research.workflow.dbos_config",
+      "open_deep_research.workflow.execution",
+      "pathlib",
+      "pytest",
+      "threading"
+    ],
+    "tests/test_general_mode_removal.py": [
+      "importlib",
+      "open_deep_research.configuration",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.prompts",
+      "open_deep_research.state",
+      "pathlib",
+      "pytest",
+      "sys",
+      "types"
+    ],
+    "tests/test_graph_consumer_without_rag.py": [
+      "asyncio",
+      "langchain_core.messages",
+      "open_deep_research.configuration",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.store",
+      "open_deep_research.runtime",
+      "pytest",
+      "types"
+    ],
+    "tests/test_langgraph_runtime_compat.py": [
+      "json",
+      "langgraph.pregel",
+      "open_deep_research.deep_researcher",
+      "pathlib",
+      "pytest"
+    ],
+    "tests/test_langsmith_integration.py": [
+      "__future__",
+      "asyncio",
+      "contextlib",
+      "langchain_core.language_models.fake_chat_models",
+      "langchain_core.messages",
+      "langchain_core.tools",
+      "langgraph.graph",
+      "open_deep_research.budget",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.observability.langsmith",
+      "open_deep_research.rag",
+      "open_deep_research.rag.retriever",
+      "open_deep_research.rag.service",
+      "open_deep_research.rag.types",
+      "open_deep_research.rag.vectorstore",
+      "pytest",
+      "typing",
+      "typing_extensions"
+    ],
+    "tests/test_model_factory.py": [
+      "__future__",
+      "langchain_core.language_models",
+      "open_deep_research.configuration",
+      "open_deep_research.models",
+      "open_deep_research.state",
+      "pytest",
+      "typing"
+    ],
+    "tests/test_no_agent_observer.py": [
+      "__future__",
+      "open_deep_research.observability",
+      "pathlib",
+      "re"
+    ],
+    "tests/test_p1_fixes.py": [
+      "asyncio",
+      "langchain_core.language_models.chat_models",
+      "langchain_core.messages",
+      "langchain_core.outputs",
+      "open_deep_research.configuration",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.rag",
+      "open_deep_research.rag.config",
+      "open_deep_research.rag.indexer",
+      "open_deep_research.rag.service",
+      "open_deep_research.rag.types",
+      "open_deep_research.runtime.business_agent",
+      "open_deep_research.state",
+      "open_deep_research.web",
+      "open_deep_research.workflow.shared",
+      "pathlib",
+      "pydantic",
+      "pytest",
+      "starlette.requests"
+    ],
+    "tests/test_public_opinion_agents.py": [
+      "asyncio",
+      "open_deep_research.configuration",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.public_opinion_agents",
+      "open_deep_research.runtime",
+      "open_deep_research.state",
+      "open_deep_research.workflow.shared",
+      "types"
+    ],
+    "tests/test_public_opinion_research_loop.py": [
+      "asyncio",
+      "langchain_core.runnables",
+      "langgraph.types",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.runtime.business_agent",
+      "open_deep_research.state",
+      "open_deep_research.workflow.research",
+      "open_deep_research.workflow.shared"
+    ],
+    "tests/test_python_workflow.py": [
+      "asyncio",
+      "copy",
+      "langchain_core.messages",
+      "langgraph.graph",
+      "langgraph.pregel",
+      "langgraph.types",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.state",
+      "open_deep_research.workflow",
+      "open_deep_research.workflow.python_state",
+      "pytest",
+      "reference_workflow",
+      "types"
+    ],
+    "tests/test_python_workflow_sdk.py": [
+      "agents.exceptions",
+      "agents.testing",
+      "asyncio",
+      "collections",
+      "contextlib",
+      "json",
+      "langchain_core.runnables",
+      "langchain_mcp_adapters.tools",
+      "mcp",
+      "mcp.client.stdio",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.research_graph.store",
+      "open_deep_research.runtime",
+      "open_deep_research.runtime.sdk_runtime",
+      "open_deep_research.state",
+      "open_deep_research.workflow",
+      "openai.types.responses",
+      "pytest",
+      "reference_workflow",
+      "sys",
+      "test_python_workflow",
+      "test_sdk_context",
+      "test_sdk_phase2_integration",
+      "test_sdk_runtime"
+    ],
+    "tests/test_query_images.py": [
+      "asyncio",
+      "base64",
+      "langchain_core.messages",
+      "langgraph.graph.message",
+      "open_deep_research.configuration",
+      "open_deep_research.memory",
+      "open_deep_research.rag",
+      "open_deep_research.rag.loaders",
+      "open_deep_research.rag.loaders.knowledge",
+      "open_deep_research.rag.service",
+      "open_deep_research.workflow",
+      "pydantic",
+      "pytest",
+      "types",
+      "unittest.mock"
+    ],
+    "tests/test_rag.py": [
+      "asyncio",
+      "json",
+      "langchain_core.messages",
+      "langchain_text_splitters",
+      "open_deep_research",
+      "open_deep_research.configuration",
+      "open_deep_research.rag",
+      "open_deep_research.rag.config",
+      "open_deep_research.rag.graph",
+      "open_deep_research.rag.loaders",
+      "open_deep_research.rag.mysql_memory",
+      "open_deep_research.rag.query_rewriter",
+      "open_deep_research.rag.reranker",
+      "open_deep_research.rag.retriever",
+      "open_deep_research.rag.service",
+      "open_deep_research.rag.splitter",
+      "open_deep_research.rag.types",
+      "open_deep_research.rag.vectorstore",
+      "open_deep_research.tools.registry",
+      "pytest",
+      "sys",
+      "textwrap",
+      "types"
+    ],
+    "tests/test_report_section_budget.py": [
+      "asyncio",
+      "langchain_core.language_models.fake_chat_models",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.state",
+      "open_deep_research.workflow",
+      "pytest"
+    ],
+    "tests/test_repository_audit.py": [
+      "importlib.util",
+      "pathlib"
+    ],
+    "tests/test_research_graph_context_harness.py": [
+      "asyncio",
+      "json",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.public_opinion_agents",
+      "open_deep_research.research_graph",
+      "open_deep_research.research_graph.extractor",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.schema",
+      "open_deep_research.runtime.business_agent",
+      "open_deep_research.search.tavily",
+      "open_deep_research.state",
+      "pytest",
+      "re",
+      "types"
+    ],
+    "tests/test_role_reports_propagation.py": [
+      "asyncio",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "open_deep_research.configuration",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.runtime.business_agent",
+      "open_deep_research.state",
+      "open_deep_research.workflow.research",
+      "open_deep_research.workflow.shared",
+      "types"
+    ],
+    "tests/test_sdk_business_integration.py": [
+      "agents.testing",
+      "asyncio",
+      "collections",
+      "contextlib",
+      "httpx2",
+      "json",
+      "langchain_core.language_models.fake_chat_models",
+      "langchain_core.messages",
+      "langchain_mcp_adapters.tools",
+      "mcp.types",
+      "open_deep_research.configuration",
+      "open_deep_research.models.sdk",
+      "open_deep_research.public_opinion_agents",
+      "open_deep_research.research_graph",
+      "open_deep_research.runtime",
+      "open_deep_research.state",
+      "open_deep_research.workflow",
+      "openai",
+      "pytest",
+      "test_public_opinion_research_loop",
+      "test_sdk_context",
+      "test_sdk_models",
+      "test_sdk_runtime"
+    ],
+    "tests/test_sdk_context.py": [
+      "agents",
+      "agents.exceptions",
+      "agents.mcp",
+      "agents.testing",
+      "agents.tool_context",
+      "asyncio",
+      "json",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "mcp.types",
+      "open_deep_research.configuration",
+      "open_deep_research.research_graph",
+      "open_deep_research.research_graph.workspace",
+      "open_deep_research.runtime.sdk_context",
+      "openai.types.responses",
+      "pytest",
+      "re"
+    ],
+    "tests/test_sdk_phase2_integration.py": [
+      "agents.testing",
+      "asyncio",
+      "collections",
+      "contextlib",
+      "httpx2",
+      "json",
+      "langchain_core.language_models.fake_chat_models",
+      "langchain_core.messages",
+      "langchain_core.runnables",
+      "langchain_mcp_adapters.tools",
+      "langgraph.graph",
+      "mcp",
+      "mcp.client.stdio",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.models.sdk",
+      "open_deep_research.public_opinion_agents",
+      "open_deep_research.research_graph",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.research_graph.store",
+      "open_deep_research.research_graph.workspace",
+      "open_deep_research.runtime",
+      "open_deep_research.runtime.sdk_context",
+      "open_deep_research.runtime.sdk_runtime",
+      "open_deep_research.state",
+      "open_deep_research.workflow",
+      "openai",
+      "openai.types.responses",
+      "pytest",
+      "re",
+      "reference_workflow",
+      "sys",
+      "test_public_opinion_research_loop",
+      "test_sdk_context",
+      "test_sdk_models",
+      "test_sdk_runtime"
+    ],
+    "tests/test_sdk_runtime.py": [
+      "agents",
+      "agents.exceptions",
+      "agents.testing",
+      "agents.usage",
+      "asyncio",
+      "contextlib",
+      "gc",
+      "json",
+      "langchain_core.language_models.chat_models",
+      "langchain_core.language_models.fake_chat_models",
+      "langchain_core.messages",
+      "langchain_core.tools",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.public_opinion_agents",
+      "open_deep_research.research_graph",
+      "open_deep_research.runtime",
+      "open_deep_research.runtime.sdk_runtime",
+      "pydantic",
+      "pytest",
+      "threading",
+      "weakref"
+    ],
+    "tests/test_social_media_skill.py": [
+      "collections",
+      "open_deep_research.social_media.tools",
+      "open_deep_research.social_media_apify_api",
+      "open_deep_research.social_media_mcp"
+    ],
+    "tests/test_state_architecture.py": [
+      "asyncio",
+      "langchain_core.messages",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.memory.writer",
+      "open_deep_research.public_opinion_agents",
+      "open_deep_research.runtime",
+      "open_deep_research.runtime.business_agent",
+      "open_deep_research.state"
+    ],
+    "tests/test_token_accounting.py": [
+      "asyncio",
+      "langchain_core.callbacks",
+      "langchain_core.language_models.chat_models",
+      "langchain_core.messages",
+      "langchain_core.outputs",
+      "langchain_core.tools",
+      "open_deep_research.budget",
+      "open_deep_research.configuration",
+      "open_deep_research.deep_researcher",
+      "open_deep_research.llm.errors",
+      "open_deep_research.research_graph.compaction",
+      "open_deep_research.research_graph.context_manager",
+      "open_deep_research.research_graph.extractor",
+      "open_deep_research.research_graph.metrics",
+      "open_deep_research.research_graph.models",
+      "open_deep_research.runtime.agent_runtime",
+      "open_deep_research.search.tavily",
+      "open_deep_research.state",
+      "open_deep_research.workflow.shared",
+      "pytest",
+      "types",
+      "typing"
+    ],
+    "tests/test_web_history.py": [
+      "asyncio",
+      "datetime",
+      "fastapi.testclient",
+      "json",
+      "langgraph.graph",
+      "open_deep_research.web",
+      "pytest",
+      "types",
+      "typing_extensions",
+      "unittest.mock"
+    ],
+    "tests/test_web_research.py": [
+      "fastapi.testclient",
+      "json",
+      "open_deep_research.configuration",
+      "open_deep_research.runtime",
+      "open_deep_research.web",
+      "pytest"
+    ],
+    "tools/code_graph_analysis.py": [
+      "__future__",
+      "ast",
+      "collections",
+      "json",
+      "networkx",
+      "pathlib"
+    ]
+  },
+  "import_consumers_before": {
+    "asyncio": [
+      "evaluation/cost_profile/probe_models.py",
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/sdk_context_smoke.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/tools/rag_tool.py",
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/security/auth.py",
+      "tests/dbos_process_fixture.py",
+      "tests/debug_run.py",
+      "tests/reference_workflow.py",
+      "tests/run_evaluate.py",
+      "tests/test_budget.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_dbos_unit.py",
+      "tests/test_graph_consumer_without_rag.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_public_opinion_agents.py",
+      "tests/test_public_opinion_research_loop.py",
+      "tests/test_python_workflow.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_query_images.py",
+      "tests/test_rag.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_state_architecture.py",
+      "tests/test_token_accounting.py",
+      "tests/test_web_history.py"
+    ],
+    "dotenv": [
+      "evaluation/cost_profile/probe_models.py",
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/model_provider_smoke.py",
+      "scripts/neo4j_local.py",
+      "scripts/sdk_context_smoke.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/web/server.py",
+      "tests/conftest.py",
+      "tests/dbos_process_fixture.py",
+      "tests/debug_run.py",
+      "tests/extract_langsmith_data.py",
+      "tests/run_evaluate.py"
+    ],
+    "langchain.chat_models": [
+      "evaluation/cost_profile/probe_models.py",
+      "src/open_deep_research/models/factory.py"
+    ],
+    "os": [
+      "evaluation/cost_profile/probe_models.py",
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/model_provider_smoke.py",
+      "scripts/neo4j_local.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/configuration.py",
+      "src/open_deep_research/models/factory.py",
+      "src/open_deep_research/models/sdk.py",
+      "src/open_deep_research/observability/langsmith.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/web/history.py",
+      "src/open_deep_research/web/run_data.py",
+      "src/open_deep_research/web/server.py",
+      "src/security/auth.py",
+      "tests/conftest.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/extract_langsmith_data.py"
+    ],
+    "pathlib": [
+      "evaluation/cost_profile/probe_models.py",
+      "evaluation/cost_profile/render_cost_profile.py",
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/audit_repository.py",
+      "scripts/model_provider_smoke.py",
+      "scripts/neo4j_local.py",
+      "scripts/sdk_context_smoke.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/configuration.py",
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/web/server.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/test_architecture_contract.py",
+      "tests/test_dbos_unit.py",
+      "tests/test_general_mode_removal.py",
+      "tests/test_langgraph_runtime_compat.py",
+      "tests/test_no_agent_observer.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_repository_audit.py",
+      "tools/code_graph_analysis.py"
+    ],
+    "pydantic": [
+      "evaluation/cost_profile/probe_models.py",
+      "src/open_deep_research/configuration.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/research_graph/models.py",
+      "src/open_deep_research/state.py",
+      "src/open_deep_research/web/history.py",
+      "src/open_deep_research/web/run_data.py",
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "tests/evaluators.py",
+      "tests/pairwise_evaluation.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_query_images.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "__future__": [
+      "evaluation/cost_profile/render_cost_profile.py",
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/audit_repository.py",
+      "scripts/model_provider_smoke.py",
+      "scripts/neo4j_local.py",
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/budget.py",
+      "src/open_deep_research/mcp/domain_filter.py",
+      "src/open_deep_research/mcp/tool_wrapper.py",
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/models/factory.py",
+      "src/open_deep_research/models/sdk.py",
+      "src/open_deep_research/observability/langsmith.py",
+      "src/open_deep_research/research_graph/compaction.py",
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/models.py",
+      "src/open_deep_research/research_graph/retriever.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/social_media/tools.py",
+      "src/open_deep_research/state.py",
+      "src/open_deep_research/web/durable.py",
+      "src/open_deep_research/web/history.py",
+      "src/open_deep_research/web/run_data.py",
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/python_state.py",
+      "src/open_deep_research/workflow/state_utils.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/reference_workflow.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_model_factory.py",
+      "tests/test_no_agent_observer.py",
+      "tools/code_graph_analysis.py"
+    ],
+    "argparse": [
+      "evaluation/cost_profile/render_cost_profile.py",
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/audit_repository.py",
+      "scripts/model_provider_smoke.py",
+      "scripts/neo4j_local.py",
+      "scripts/sdk_context_smoke.py",
+      "scripts/sdk_phase2_smoke.py",
+      "tests/dbos_process_fixture.py",
+      "tests/extract_langsmith_data.py"
+    ],
+    "collections.abc": [
+      "evaluation/cost_profile/render_cost_profile.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "src/open_deep_research/mcp/domain_filter.py",
+      "src/open_deep_research/models/sdk.py",
+      "src/open_deep_research/observability/langsmith.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/rag/retriever.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/research_graph/compaction.py",
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/state.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/python_state.py",
+      "src/open_deep_research/workflow/shared.py",
+      "src/open_deep_research/workflow/state_utils.py",
+      "tests/reference_workflow.py"
+    ],
+    "json": [
+      "evaluation/cost_profile/render_cost_profile.py",
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/audit_repository.py",
+      "scripts/sdk_context_smoke.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/configuration.py",
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/rag/splitter.py",
+      "src/open_deep_research/research_graph/compaction.py",
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/social_media/tools.py",
+      "src/open_deep_research/web/history.py",
+      "src/open_deep_research/web/run_data.py",
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "tests/extract_langsmith_data.py",
+      "tests/test_langgraph_runtime_compat.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_rag.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_web_history.py",
+      "tests/test_web_research.py",
+      "tools/code_graph_analysis.py"
+    ],
+    "typing": [
+      "evaluation/cost_profile/render_cost_profile.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/audit_repository.py",
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/budget.py",
+      "src/open_deep_research/configuration.py",
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/memory/context.py",
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/models/factory.py",
+      "src/open_deep_research/models/sdk.py",
+      "src/open_deep_research/observability/langsmith.py",
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/rag/retriever.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/rag/splitter.py",
+      "src/open_deep_research/research_graph/compaction.py",
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/models.py",
+      "src/open_deep_research/research_graph/retriever.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/social_media/tools.py",
+      "src/open_deep_research/state.py",
+      "src/open_deep_research/tools/registry.py",
+      "src/open_deep_research/web/history.py",
+      "src/open_deep_research/web/run_data.py",
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/graph.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/python_state.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "src/open_deep_research/workflow/shared.py",
+      "src/open_deep_research/workflow/state_utils.py",
+      "src/security/auth.py",
+      "tests/conftest.py",
+      "tests/evaluators.py",
+      "tests/reference_workflow.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_model_factory.py",
+      "tests/test_token_accounting.py"
+    ],
+    "agent_observer.sdk": [
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_round2_profile.py"
+    ],
+    "langchain_core.messages": [
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/model_provider_smoke.py",
+      "src/open_deep_research/budget.py",
+      "src/open_deep_research/llm/context.py",
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/research_graph/compaction.py",
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/tools/registry.py",
+      "src/open_deep_research/web/run_data.py",
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/python_state.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/test_budget.py",
+      "tests/test_dbos_unit.py",
+      "tests/test_graph_consumer_without_rag.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_python_workflow.py",
+      "tests/test_query_images.py",
+      "tests/test_rag.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_state_architecture.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.deep_researcher": [
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "src/open_deep_research/web/server.py",
+      "tests/debug_run.py",
+      "tests/run_evaluate.py",
+      "tests/test_architecture_contract.py",
+      "tests/test_general_mode_removal.py",
+      "tests/test_langgraph_runtime_compat.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_public_opinion_agents.py",
+      "tests/test_public_opinion_research_loop.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_state_architecture.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.observability.agent_observer": [
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_round2_profile.py"
+    ],
+    "run_cost_profile": [
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_round2_profile.py"
+    ],
+    "sys": [
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "tests/test_general_mode_removal.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_rag.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "time": [
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "traceback": [
+      "evaluation/cost_profile/run_after_v4flash.py",
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py"
+    ],
+    "datetime": [
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/web/history.py",
+      "src/open_deep_research/web/run_data.py",
+      "tests/test_web_history.py"
+    ],
+    "open_deep_research.budget": [
+      "evaluation/cost_profile/run_cost_profile.py",
+      "scripts/model_provider_smoke.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/research_graph/compaction.py",
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/state.py",
+      "src/open_deep_research/web/durable.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/dbos_process_fixture.py",
+      "tests/reference_workflow.py",
+      "tests/test_budget.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_python_workflow.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.configuration": [
+      "evaluation/cost_profile/run_cost_profile.py",
+      "scripts/neo4j_local.py",
+      "scripts/sdk_context_smoke.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/budget.py",
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/tools/rag_tool.py",
+      "src/open_deep_research/tools/registry.py",
+      "src/open_deep_research/web/durable.py",
+      "src/open_deep_research/web/history.py",
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "src/open_deep_research/workflow/__init__.py",
+      "src/open_deep_research/workflow/graph.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/reference_workflow.py",
+      "tests/test_budget.py",
+      "tests/test_general_mode_removal.py",
+      "tests/test_graph_consumer_without_rag.py",
+      "tests/test_model_factory.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_public_opinion_agents.py",
+      "tests/test_python_workflow.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_query_images.py",
+      "tests/test_rag.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_token_accounting.py",
+      "tests/test_web_research.py"
+    ],
+    "open_deep_research.runtime.business_agent": [
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/runtime/__init__.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_public_opinion_research_loop.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_state_architecture.py"
+    ],
+    "re": [
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/cost_profile/run_round2_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/neo4j_local.py",
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/rag/retriever.py",
+      "src/open_deep_research/rag/splitter.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/web/run_data.py",
+      "src/open_deep_research/web/runs.py",
+      "tests/test_no_agent_observer.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "render_cost_profile": [
+      "evaluation/cost_profile/run_cost_profile.py"
+    ],
+    "subprocess": [
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/audit_repository.py",
+      "src/open_deep_research/mcp/tools.py"
+    ],
+    "uuid": [
+      "evaluation/cost_profile/run_cost_profile.py",
+      "evaluation/plan_execute_ab/run_benchmark.py",
+      "scripts/neo4j_local.py",
+      "scripts/sdk_context_smoke.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/observability/langsmith.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/web/durable.py",
+      "src/open_deep_research/web/server.py",
+      "src/open_deep_research/workflow/python_state.py",
+      "src/open_deep_research/workflow/state_utils.py",
+      "tests/dbos_support.py",
+      "tests/debug_run.py",
+      "tests/run_evaluate.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "compare_results": [
+      "evaluation/plan_execute_ab/run_benchmark.py"
+    ],
+    "evaluate_results": [
+      "evaluation/plan_execute_ab/run_benchmark.py"
+    ],
+    "ast": [
+      "scripts/audit_repository.py",
+      "tests/test_architecture_contract.py",
+      "tests/test_dbos_unit.py",
+      "tools/code_graph_analysis.py"
+    ],
+    "collections": [
+      "scripts/audit_repository.py",
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/rag/retriever.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_social_media_skill.py",
+      "tools/code_graph_analysis.py"
+    ],
+    "hashlib": [
+      "scripts/audit_repository.py",
+      "src/open_deep_research/observability/langsmith.py",
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/rag/splitter.py",
+      "src/open_deep_research/web/run_data.py"
+    ],
+    "io": [
+      "scripts/audit_repository.py",
+      "src/open_deep_research/rag/loaders/knowledge.py"
+    ],
+    "langchain_core.tools": [
+      "scripts/model_provider_smoke.py",
+      "src/open_deep_research/mcp/domain_filter.py",
+      "src/open_deep_research/mcp/tool_wrapper.py",
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/social_media/tools.py",
+      "src/open_deep_research/tools/rag_tool.py",
+      "src/open_deep_research/tools/registry.py",
+      "tests/test_budget.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_token_accounting.py"
+    ],
+    "logging": [
+      "scripts/model_provider_smoke.py",
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/budget.py",
+      "src/open_deep_research/mcp/domain_filter.py",
+      "src/open_deep_research/mcp/tool_wrapper.py",
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/observability/langsmith.py",
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/web/server.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "src/security/auth.py"
+    ],
+    "open_deep_research.models": [
+      "scripts/model_provider_smoke.py",
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "src/open_deep_research/workflow/shared.py",
+      "tests/test_model_factory.py"
+    ],
+    "open_deep_research.state": [
+      "scripts/model_provider_smoke.py",
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/tools/registry.py",
+      "src/open_deep_research/web/run_data.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/graph.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/python_state.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "src/open_deep_research/workflow/state_utils.py",
+      "tests/dbos_process_fixture.py",
+      "tests/reference_workflow.py",
+      "tests/test_budget.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_dbos_unit.py",
+      "tests/test_general_mode_removal.py",
+      "tests/test_model_factory.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_public_opinion_agents.py",
+      "tests/test_public_opinion_research_loop.py",
+      "tests/test_python_workflow.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_state_architecture.py",
+      "tests/test_token_accounting.py"
+    ],
+    "neo4j.exceptions": [
+      "scripts/neo4j_local.py"
+    ],
+    "open_deep_research.public_opinion_agents.registry": [
+      "scripts/neo4j_local.py"
+    ],
+    "open_deep_research.research_graph.models": [
+      "scripts/neo4j_local.py",
+      "src/open_deep_research/research_graph/compaction.py",
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/retriever.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "tests/test_graph_consumer_without_rag.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.research_graph.store": [
+      "scripts/neo4j_local.py",
+      "scripts/sdk_phase2_smoke.py",
+      "src/open_deep_research/research_graph/retriever.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "tests/test_graph_consumer_without_rag.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "open_deep_research.research_graph.strategy": [
+      "scripts/neo4j_local.py"
+    ],
+    "open_deep_research.research_graph.workspace": [
+      "scripts/neo4j_local.py",
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "secrets": [
+      "scripts/neo4j_local.py",
+      "src/open_deep_research/web/server.py"
+    ],
+    "agents": [
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/models/sdk.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "langchain_core.callbacks": [
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/budget.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.models.factory": [
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/models/__init__.py",
+      "src/open_deep_research/models/sdk.py"
+    ],
+    "open_deep_research.models.sdk": [
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "open_deep_research.research_graph": [
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "open_deep_research.runtime.sdk_context": [
+      "scripts/sdk_context_smoke.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "agents.testing": [
+      "scripts/sdk_phase2_smoke.py",
+      "tests/dbos_process_fixture.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "socket": [
+      "scripts/sdk_phase2_smoke.py",
+      "tests/dbos_process_fixture.py"
+    ],
+    "test_sdk_phase2_integration": [
+      "scripts/sdk_phase2_smoke.py",
+      "tests/test_python_workflow_sdk.py"
+    ],
+    "test_sdk_runtime": [
+      "scripts/sdk_phase2_smoke.py",
+      "tests/dbos_process_fixture.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "contextlib": [
+      "src/open_deep_research/budget.py",
+      "src/open_deep_research/models/sdk.py",
+      "src/open_deep_research/web/server.py",
+      "tests/dbos_process_fixture.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "contextvars": [
+      "src/open_deep_research/budget.py"
+    ],
+    "langchain_core.messages.ai": [
+      "src/open_deep_research/budget.py",
+      "tests/test_budget.py"
+    ],
+    "langchain_core.messages.utils": [
+      "src/open_deep_research/budget.py"
+    ],
+    "langchain_core.runnables": [
+      "src/open_deep_research/budget.py",
+      "src/open_deep_research/configuration.py",
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/memory/context.py",
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/models/__init__.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/tools/rag_tool.py",
+      "src/open_deep_research/tools/registry.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "src/open_deep_research/workflow/shared.py",
+      "src/open_deep_research/workflow/state_utils.py",
+      "tests/dbos_process_fixture.py",
+      "tests/reference_workflow.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_public_opinion_research_loop.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "langchain_core.runnables.config": [
+      "src/open_deep_research/budget.py"
+    ],
+    "open_deep_research.observability.langsmith": [
+      "src/open_deep_research/budget.py",
+      "src/open_deep_research/observability/__init__.py",
+      "src/open_deep_research/rag/query_rewriter.py",
+      "src/open_deep_research/rag/retriever.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/research_graph/retriever.py",
+      "src/open_deep_research/web/history.py",
+      "src/open_deep_research/workflow/graph.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/test_langsmith_integration.py"
+    ],
+    "enum": [
+      "src/open_deep_research/configuration.py"
+    ],
+    "warnings": [
+      "src/open_deep_research/configuration.py"
+    ],
+    "open_deep_research.memory.writer": [
+      "src/open_deep_research/deep_researcher.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "tests/test_state_architecture.py"
+    ],
+    "open_deep_research.rag": [
+      "src/open_deep_research/deep_researcher.py",
+      "src/open_deep_research/workflow/intake.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_query_images.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.workflow.graph": [
+      "src/open_deep_research/deep_researcher.py",
+      "src/open_deep_research/workflow/__init__.py"
+    ],
+    "open_deep_research.workflow.intake": [
+      "src/open_deep_research/deep_researcher.py",
+      "src/open_deep_research/workflow/graph.py"
+    ],
+    "open_deep_research.workflow.reporting": [
+      "src/open_deep_research/deep_researcher.py",
+      "src/open_deep_research/workflow/graph.py"
+    ],
+    "open_deep_research.workflow.research": [
+      "src/open_deep_research/deep_researcher.py",
+      "src/open_deep_research/workflow/graph.py",
+      "tests/test_architecture_contract.py",
+      "tests/test_public_opinion_research_loop.py",
+      "tests/test_role_reports_propagation.py"
+    ],
+    "open_deep_research.workflow.shared": [
+      "src/open_deep_research/deep_researcher.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_public_opinion_agents.py",
+      "tests/test_public_opinion_research_loop.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_token_accounting.py"
+    ],
+    "dataclasses": [
+      "src/open_deep_research/mcp/domain_filter.py",
+      "src/open_deep_research/models/factory.py",
+      "src/open_deep_research/rag/splitter.py",
+      "src/open_deep_research/research_graph/compaction.py",
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/workflow/intake.py"
+    ],
+    "aiohttp": [
+      "src/open_deep_research/mcp/tools.py"
+    ],
+    "langchain_mcp_adapters.client": [
+      "src/open_deep_research/mcp/tools.py"
+    ],
+    "langgraph.config": [
+      "src/open_deep_research/mcp/tools.py"
+    ],
+    "mcp": [
+      "src/open_deep_research/mcp/tools.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "open_deep_research.mcp.domain_filter": [
+      "src/open_deep_research/mcp/tools.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/tools/registry.py"
+    ],
+    "open_deep_research.mcp.tool_wrapper": [
+      "src/open_deep_research/mcp/tools.py"
+    ],
+    "open_deep_research.memory.context": [
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/rag/service.py"
+    ],
+    "open_deep_research.memory.extractor": [
+      "src/open_deep_research/memory/writer.py"
+    ],
+    "open_deep_research.memory.store": [
+      "src/open_deep_research/memory/writer.py"
+    ],
+    "open_deep_research.rag.service": [
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/tools/rag_tool.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_query_images.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.time_utils": [
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "tests/evaluators.py"
+    ],
+    "threading": [
+      "src/open_deep_research/memory/writer.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/web/history.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_dbos_unit.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "langchain_core.language_models": [
+      "src/open_deep_research/models/factory.py",
+      "src/open_deep_research/search/tavily.py",
+      "tests/test_model_factory.py"
+    ],
+    "langchain_deepseek": [
+      "src/open_deep_research/models/factory.py"
+    ],
+    "langchain_openai": [
+      "src/open_deep_research/models/factory.py",
+      "tests/evaluators.py"
+    ],
+    "urllib.parse": [
+      "src/open_deep_research/models/factory.py",
+      "src/open_deep_research/models/sdk.py"
+    ],
+    "openai": [
+      "src/open_deep_research/models/sdk.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "langsmith": [
+      "src/open_deep_research/observability/langsmith.py",
+      "src/open_deep_research/web/history.py",
+      "tests/extract_langsmith_data.py",
+      "tests/run_evaluate.py"
+    ],
+    "langsmith.client": [
+      "src/open_deep_research/observability/langsmith.py"
+    ],
+    "langsmith.run_helpers": [
+      "src/open_deep_research/observability/langsmith.py"
+    ],
+    "langchain_text_splitters": [
+      "src/open_deep_research/rag/code_languages.py",
+      "src/open_deep_research/rag/splitter.py",
+      "tests/test_rag.py"
+    ],
+    "PIL": [
+      "src/open_deep_research/rag/loaders/knowledge.py"
+    ],
+    "base64": [
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "tests/test_query_images.py"
+    ],
+    "cv2": [
+      "src/open_deep_research/rag/loaders/knowledge.py"
+    ],
+    "fitz": [
+      "src/open_deep_research/rag/loaders/knowledge.py"
+    ],
+    "numpy": [
+      "src/open_deep_research/rag/loaders/knowledge.py"
+    ],
+    "open_deep_research.rag.code_languages": [
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/splitter.py"
+    ],
+    "open_deep_research.rag.types": [
+      "src/open_deep_research/rag/loaders/knowledge.py",
+      "src/open_deep_research/rag/retriever.py",
+      "src/open_deep_research/rag/service.py",
+      "src/open_deep_research/rag/splitter.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_rag.py"
+    ],
+    "pytesseract": [
+      "src/open_deep_research/rag/loaders/knowledge.py"
+    ],
+    "math": [
+      "src/open_deep_research/rag/retriever.py"
+    ],
+    "open_deep_research.rag.graph": [
+      "src/open_deep_research/rag/retriever.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.rag.graph_terms": [
+      "src/open_deep_research/rag/retriever.py"
+    ],
+    "open_deep_research.rag.metadata": [
+      "src/open_deep_research/rag/retriever.py"
+    ],
+    "open_deep_research.rag.vectorstore": [
+      "src/open_deep_research/rag/retriever.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.memory.types": [
+      "src/open_deep_research/rag/service.py"
+    ],
+    "open_deep_research.rag.citations": [
+      "src/open_deep_research/rag/service.py"
+    ],
+    "open_deep_research.rag.config": [
+      "src/open_deep_research/rag/service.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.rag.indexer": [
+      "src/open_deep_research/rag/service.py",
+      "tests/test_p1_fixes.py"
+    ],
+    "open_deep_research.rag.loaders": [
+      "src/open_deep_research/rag/service.py",
+      "tests/test_query_images.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.rag.reranker": [
+      "src/open_deep_research/rag/service.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.research_graph.retriever": [
+      "src/open_deep_research/research_graph/context_manager.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py"
+    ],
+    "open_deep_research.research_graph.schema": [
+      "src/open_deep_research/research_graph/extractor.py",
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/web/history.py",
+      "tests/test_research_graph_context_harness.py"
+    ],
+    "open_deep_research.research_graph.compaction": [
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.research_graph.context_manager": [
+      "src/open_deep_research/research_graph/strategy.py",
+      "src/open_deep_research/research_graph/workspace.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.research_graph.extractor": [
+      "src/open_deep_research/research_graph/strategy.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.research_graph.metrics": [
+      "src/open_deep_research/research_graph/workspace.py",
+      "src/open_deep_research/state.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.research_graph.transcript": [
+      "src/open_deep_research/research_graph/workspace.py"
+    ],
+    "open_deep_research.runtime.agent_runtime": [
+      "src/open_deep_research/runtime/__init__.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.runtime.sdk_runtime": [
+      "src/open_deep_research/runtime/__init__.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/web/durable.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "open_deep_research.llm.context": [
+      "src/open_deep_research/runtime/agent_runtime.py",
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/workflow/reporting.py"
+    ],
+    "open_deep_research.llm.native_search": [
+      "src/open_deep_research/runtime/agent_runtime.py"
+    ],
+    "open_deep_research.llm.errors": [
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.observability": [
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/web/server.py",
+      "src/open_deep_research/workflow/graph.py",
+      "src/open_deep_research/workflow/shared.py",
+      "tests/test_no_agent_observer.py"
+    ],
+    "open_deep_research.prompts": [
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/search/tavily.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/test_general_mode_removal.py"
+    ],
+    "open_deep_research.public_opinion_agents": [
+      "src/open_deep_research/runtime/business_agent.py",
+      "tests/test_public_opinion_agents.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_state_architecture.py"
+    ],
+    "open_deep_research.social_media.tools": [
+      "src/open_deep_research/runtime/business_agent.py",
+      "tests/test_social_media_skill.py"
+    ],
+    "open_deep_research.tools.registry": [
+      "src/open_deep_research/runtime/business_agent.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.workflow.state_utils": [
+      "src/open_deep_research/runtime/business_agent.py",
+      "src/open_deep_research/workflow/__init__.py",
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/reference_workflow.py"
+    ],
+    "agents.exceptions": [
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "agents.items": [
+      "src/open_deep_research/runtime/sdk_context.py"
+    ],
+    "agents.mcp": [
+      "src/open_deep_research/runtime/sdk_context.py",
+      "tests/test_sdk_context.py"
+    ],
+    "agents.memory": [
+      "src/open_deep_research/runtime/sdk_context.py"
+    ],
+    "agents.result": [
+      "src/open_deep_research/runtime/sdk_context.py"
+    ],
+    "agents.run": [
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py"
+    ],
+    "agents.tool": [
+      "src/open_deep_research/runtime/sdk_context.py"
+    ],
+    "agents.tool_context": [
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "tests/test_sdk_context.py"
+    ],
+    "copy": [
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/python_state.py",
+      "tests/dbos_support.py",
+      "tests/reference_workflow.py",
+      "tests/test_python_workflow.py"
+    ],
+    "open_deep_research.workflow.execution": [
+      "src/open_deep_research/runtime/sdk_context.py",
+      "src/open_deep_research/runtime/sdk_runtime.py",
+      "src/open_deep_research/workflow/business_steps.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "tests/reference_workflow.py",
+      "tests/test_dbos_unit.py"
+    ],
+    "agents.retry": [
+      "src/open_deep_research/runtime/sdk_runtime.py"
+    ],
+    "jsonschema.validators": [
+      "src/open_deep_research/runtime/sdk_runtime.py"
+    ],
+    "tavily": [
+      "src/open_deep_research/search/tavily.py"
+    ],
+    "open_deep_research": [
+      "src/open_deep_research/social_media/tools.py",
+      "tests/test_rag.py"
+    ],
+    "langgraph.graph": [
+      "src/open_deep_research/state.py",
+      "src/open_deep_research/workflow/graph.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_python_workflow.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_web_history.py"
+    ],
+    "typing_extensions": [
+      "src/open_deep_research/state.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_web_history.py"
+    ],
+    "open_deep_research.rag.query_rewriter": [
+      "src/open_deep_research/tools/rag_tool.py",
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.config_values": [
+      "src/open_deep_research/tools/registry.py"
+    ],
+    "open_deep_research.mcp": [
+      "src/open_deep_research/tools/registry.py"
+    ],
+    "open_deep_research.search.tavily": [
+      "src/open_deep_research/tools/registry.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_token_accounting.py"
+    ],
+    "open_deep_research.tools.rag_tool": [
+      "src/open_deep_research/tools/registry.py"
+    ],
+    "functools": [
+      "src/open_deep_research/web/durable.py",
+      "src/open_deep_research/web/history.py",
+      "tests/reference_workflow.py"
+    ],
+    "open_deep_research.web.run_data": [
+      "src/open_deep_research/web/durable.py",
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "tests/dbos_process_fixture.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_dbos_unit.py"
+    ],
+    "open_deep_research.workflow.business_steps": [
+      "src/open_deep_research/web/durable.py"
+    ],
+    "open_deep_research.workflow.dbos_config": [
+      "src/open_deep_research/web/durable.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_dbos_unit.py"
+    ],
+    "open_deep_research.workflow.python_state": [
+      "src/open_deep_research/web/durable.py",
+      "tests/reference_workflow.py",
+      "tests/test_python_workflow.py"
+    ],
+    "open_deep_research.workflow.run_facts": [
+      "src/open_deep_research/web/durable.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "sqlalchemy": [
+      "src/open_deep_research/web/durable.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "neo4j": [
+      "src/open_deep_research/web/history.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py"
+    ],
+    "dbos": [
+      "src/open_deep_research/web/run_data.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "fastapi": [
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py"
+    ],
+    "fastapi.responses": [
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py"
+    ],
+    "open_deep_research.web": [
+      "src/open_deep_research/web/runs.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_dbos_unit.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_web_history.py",
+      "tests/test_web_research.py"
+    ],
+    "open_deep_research.web.durable": [
+      "src/open_deep_research/web/runs.py",
+      "src/open_deep_research/web/server.py",
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "open_deep_research.web.server": [
+      "src/open_deep_research/web/runs.py"
+    ],
+    "sqlalchemy.exc": [
+      "src/open_deep_research/web/runs.py",
+      "tests/dbos_process_fixture.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "fastapi.exceptions": [
+      "src/open_deep_research/web/server.py"
+    ],
+    "fastapi.staticfiles": [
+      "src/open_deep_research/web/server.py"
+    ],
+    "open_deep_research.web.history": [
+      "src/open_deep_research/web/server.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "open_deep_research.web.runs": [
+      "src/open_deep_research/web/server.py"
+    ],
+    "uvicorn": [
+      "src/open_deep_research/web/server.py"
+    ],
+    "langgraph.types": [
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/test_public_opinion_research_loop.py",
+      "tests/test_python_workflow.py"
+    ],
+    "open_deep_research.workflow": [
+      "src/open_deep_research/workflow/intake.py",
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/dbos_process_fixture.py",
+      "tests/reference_workflow.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_python_workflow.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_query_images.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "open_deep_research.runtime": [
+      "src/open_deep_research/workflow/reporting.py",
+      "src/open_deep_research/workflow/research.py",
+      "tests/dbos_process_fixture.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_graph_consumer_without_rag.py",
+      "tests/test_public_opinion_agents.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_state_architecture.py",
+      "tests/test_web_research.py"
+    ],
+    "langgraph_sdk": [
+      "src/security/auth.py"
+    ],
+    "langgraph_sdk.auth.types": [
+      "src/security/auth.py"
+    ],
+    "supabase": [
+      "src/security/auth.py"
+    ],
+    "dbos_support": [
+      "tests/dbos_process_fixture.py"
+    ],
+    "open_deep_research.web.executor": [
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py"
+    ],
+    "open_deep_research.workflow.dbos_workflow": [
+      "tests/dbos_process_fixture.py"
+    ],
+    "pytest": [
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/test_budget.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_dbos_unit.py",
+      "tests/test_general_mode_removal.py",
+      "tests/test_graph_consumer_without_rag.py",
+      "tests/test_langgraph_runtime_compat.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_model_factory.py",
+      "tests/test_p1_fixes.py",
+      "tests/test_python_workflow.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_query_images.py",
+      "tests/test_rag.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_token_accounting.py",
+      "tests/test_web_history.py",
+      "tests/test_web_research.py"
+    ],
+    "sqlite3": [
+      "tests/dbos_process_fixture.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "test_python_workflow": [
+      "tests/dbos_process_fixture.py",
+      "tests/test_dbos_contracts.py",
+      "tests/test_python_workflow_sdk.py"
+    ],
+    "test_python_workflow_sdk": [
+      "tests/dbos_process_fixture.py",
+      "tests/dbos_support.py",
+      "tests/test_dbos_contracts.py"
+    ],
+    "test_sdk_context": [
+      "tests/dbos_process_fixture.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "sqlalchemy.engine": [
+      "tests/dbos_support.py"
+    ],
+    "langgraph.checkpoint.memory": [
+      "tests/debug_run.py",
+      "tests/run_evaluate.py"
+    ],
+    "langchain_anthropic": [
+      "tests/evaluators.py",
+      "tests/pairwise_evaluation.py"
+    ],
+    "tests.prompts": [
+      "tests/evaluators.py"
+    ],
+    "langsmith.evaluation": [
+      "tests/pairwise_evaluation.py"
+    ],
+    "tests.evaluators": [
+      "tests/run_evaluate.py"
+    ],
+    "langchain_core.language_models.fake_chat_models": [
+      "tests/test_budget.py",
+      "tests/test_langsmith_integration.py",
+      "tests/test_report_section_budget.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py",
+      "tests/test_sdk_runtime.py"
+    ],
+    "types": [
+      "tests/test_budget.py",
+      "tests/test_general_mode_removal.py",
+      "tests/test_graph_consumer_without_rag.py",
+      "tests/test_public_opinion_agents.py",
+      "tests/test_python_workflow.py",
+      "tests/test_query_images.py",
+      "tests/test_rag.py",
+      "tests/test_research_graph_context_harness.py",
+      "tests/test_role_reports_propagation.py",
+      "tests/test_token_accounting.py",
+      "tests/test_web_history.py"
+    ],
+    "concurrent.futures": [
+      "tests/test_dbos_contracts.py"
+    ],
+    "fastapi.testclient": [
+      "tests/test_dbos_contracts.py",
+      "tests/test_dbos_unit.py",
+      "tests/test_web_history.py",
+      "tests/test_web_research.py"
+    ],
+    "reference_workflow": [
+      "tests/test_dbos_contracts.py",
+      "tests/test_python_workflow.py",
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "importlib": [
+      "tests/test_general_mode_removal.py"
+    ],
+    "langgraph.pregel": [
+      "tests/test_langgraph_runtime_compat.py",
+      "tests/test_python_workflow.py"
+    ],
+    "open_deep_research.rag.retriever": [
+      "tests/test_langsmith_integration.py",
+      "tests/test_rag.py"
+    ],
+    "langchain_core.language_models.chat_models": [
+      "tests/test_p1_fixes.py",
+      "tests/test_sdk_runtime.py",
+      "tests/test_token_accounting.py"
+    ],
+    "langchain_core.outputs": [
+      "tests/test_p1_fixes.py",
+      "tests/test_token_accounting.py"
+    ],
+    "starlette.requests": [
+      "tests/test_p1_fixes.py"
+    ],
+    "langchain_mcp_adapters.tools": [
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "mcp.client.stdio": [
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "openai.types.responses": [
+      "tests/test_python_workflow_sdk.py",
+      "tests/test_sdk_context.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "langgraph.graph.message": [
+      "tests/test_query_images.py"
+    ],
+    "open_deep_research.memory": [
+      "tests/test_query_images.py"
+    ],
+    "open_deep_research.rag.loaders.knowledge": [
+      "tests/test_query_images.py"
+    ],
+    "unittest.mock": [
+      "tests/test_query_images.py",
+      "tests/test_web_history.py"
+    ],
+    "open_deep_research.rag.mysql_memory": [
+      "tests/test_rag.py"
+    ],
+    "open_deep_research.rag.splitter": [
+      "tests/test_rag.py"
+    ],
+    "textwrap": [
+      "tests/test_rag.py"
+    ],
+    "importlib.util": [
+      "tests/test_repository_audit.py"
+    ],
+    "httpx2": [
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "mcp.types": [
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_context.py"
+    ],
+    "test_public_opinion_research_loop": [
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "test_sdk_models": [
+      "tests/test_sdk_business_integration.py",
+      "tests/test_sdk_phase2_integration.py"
+    ],
+    "agents.usage": [
+      "tests/test_sdk_runtime.py"
+    ],
+    "gc": [
+      "tests/test_sdk_runtime.py"
+    ],
+    "weakref": [
+      "tests/test_sdk_runtime.py"
+    ],
+    "open_deep_research.social_media_apify_api": [
+      "tests/test_social_media_skill.py"
+    ],
+    "open_deep_research.social_media_mcp": [
+      "tests/test_social_media_skill.py"
+    ],
+    "networkx": [
+      "tools/code_graph_analysis.py"
+    ]
+  },
+  "dependency_retirement": {
+    "before_count": 317,
+    "after_count": 281,
+    "removed": [
+      "blockbuster",
+      "cloudpickle",
+      "deprecation",
+      "forbiddenfruit",
+      "gotrue",
+      "grpcio-health-checking",
+      "grpcio-tools",
+      "h2",
+      "hpack",
+      "hyperframe",
+      "importlib-metadata",
+      "jsonschema-rs",
+      "langchain",
+      "langchain-tavily",
+      "langgraph",
+      "langgraph-api",
+      "langgraph-checkpoint",
+      "langgraph-cli",
+      "langgraph-prebuilt",
+      "langgraph-runtime-inmem",
+      "langgraph-sdk",
+      "opentelemetry-api",
+      "opentelemetry-exporter-otlp-proto-common",
+      "opentelemetry-exporter-otlp-proto-http",
+      "opentelemetry-proto",
+      "opentelemetry-sdk",
+      "opentelemetry-semantic-conventions",
+      "ormsgpack",
+      "postgrest",
+      "realtime",
+      "storage3",
+      "strenum",
+      "structlog",
+      "supabase",
+      "supafunc",
+      "zipp"
+    ],
+    "remaining_langgraph": []
+  },
+  "historical_data_readers_retained": [
+    "src/open_deep_research/web/history.py",
+    "src/open_deep_research/observability/langsmith.py"
+  ],
+  "production_changes": [
+    {
+      "path": "src/open_deep_research/config_values.py",
+      "before": {
+        "physical": 14,
+        "sloc": 9
+      },
+      "after": {
+        "physical": 33,
+        "sloc": 21
+      },
+      "sloc_delta": 12
+    },
+    {
+      "path": "src/open_deep_research/configuration.py",
+      "before": {
+        "physical": 1873,
+        "sloc": 1772
+      },
+      "after": {
+        "physical": 1872,
+        "sloc": 1768
+      },
+      "sloc_delta": -4
+    },
+    {
+      "path": "src/open_deep_research/deep_researcher.py",
+      "before": {
+        "physical": 45,
+        "sloc": 37
+      },
+      "after": {
+        "physical": 41,
+        "sloc": 33
+      },
+      "sloc_delta": -4
+    },
+    {
+      "path": "src/open_deep_research/mcp/tools.py",
+      "before": {
+        "physical": 510,
+        "sloc": 324
+      },
+      "after": {
+        "physical": 480,
+        "sloc": 297
+      },
+      "sloc_delta": -27
+    },
+    {
+      "path": "src/open_deep_research/models/factory.py",
+      "before": {
+        "physical": 289,
+        "sloc": 211
+      },
+      "after": {
+        "physical": 289,
+        "sloc": 211
+      },
+      "sloc_delta": 0
+    },
+    {
+      "path": "src/open_deep_research/runtime/__init__.py",
+      "before": {
+        "physical": 18,
+        "sloc": 14
+      },
+      "after": {
+        "physical": 20,
+        "sloc": 13
+      },
+      "sloc_delta": -1
+    },
+    {
+      "path": "src/open_deep_research/runtime/agent_runtime.py",
+      "before": {
+        "physical": 432,
+        "sloc": 365
+      },
+      "after": {
+        "physical": 0,
+        "sloc": 0
+      },
+      "sloc_delta": -365
+    },
+    {
+      "path": "src/open_deep_research/runtime/business_agent.py",
+      "before": {
+        "physical": 552,
+        "sloc": 492
+      },
+      "after": {
+        "physical": 531,
+        "sloc": 472
+      },
+      "sloc_delta": -20
+    },
+    {
+      "path": "src/open_deep_research/runtime/sdk_runtime.py",
+      "before": {
+        "physical": 724,
+        "sloc": 631
+      },
+      "after": {
+        "physical": 844,
+        "sloc": 738
+      },
+      "sloc_delta": 107
+    },
+    {
+      "path": "src/open_deep_research/state.py",
+      "before": {
+        "physical": 427,
+        "sloc": 286
+      },
+      "after": {
+        "physical": 429,
+        "sloc": 287
+      },
+      "sloc_delta": 1
+    },
+    {
+      "path": "src/open_deep_research/web/cli.py",
+      "before": {
+        "physical": 0,
+        "sloc": 0
+      },
+      "after": {
+        "physical": 93,
+        "sloc": 82
+      },
+      "sloc_delta": 82
+    },
+    {
+      "path": "src/open_deep_research/web/durable.py",
+      "before": {
+        "physical": 603,
+        "sloc": 569
+      },
+      "after": {
+        "physical": 604,
+        "sloc": 566
+      },
+      "sloc_delta": -3
+    },
+    {
+      "path": "src/open_deep_research/web/runs.py",
+      "before": {
+        "physical": 272,
+        "sloc": 214
+      },
+      "after": {
+        "physical": 275,
+        "sloc": 217
+      },
+      "sloc_delta": 3
+    },
+    {
+      "path": "src/open_deep_research/web/server.py",
+      "before": {
+        "physical": 611,
+        "sloc": 473
+      },
+      "after": {
+        "physical": 327,
+        "sloc": 227
+      },
+      "sloc_delta": -246
+    },
+    {
+      "path": "src/open_deep_research/workflow/__init__.py",
+      "before": {
+        "physical": 56,
+        "sloc": 46
+      },
+      "after": {
+        "physical": 49,
+        "sloc": 41
+      },
+      "sloc_delta": -5
+    },
+    {
+      "path": "src/open_deep_research/workflow/dbos_config.py",
+      "before": {
+        "physical": 74,
+        "sloc": 62
+      },
+      "after": {
+        "physical": 74,
+        "sloc": 62
+      },
+      "sloc_delta": 0
+    },
+    {
+      "path": "src/open_deep_research/workflow/graph.py",
+      "before": {
+        "physical": 107,
+        "sloc": 80
+      },
+      "after": {
+        "physical": 0,
+        "sloc": 0
+      },
+      "sloc_delta": -80
+    },
+    {
+      "path": "src/open_deep_research/workflow/intake.py",
+      "before": {
+        "physical": 475,
+        "sloc": 361
+      },
+      "after": {
+        "physical": 433,
+        "sloc": 328
+      },
+      "sloc_delta": -33
+    },
+    {
+      "path": "src/open_deep_research/workflow/research.py",
+      "before": {
+        "physical": 434,
+        "sloc": 365
+      },
+      "after": {
+        "physical": 301,
+        "sloc": 245
+      },
+      "sloc_delta": -120
+    },
+    {
+      "path": "src/security/auth.py",
+      "before": {
+        "physical": 171,
+        "sloc": 100
+      },
+      "after": {
+        "physical": 0,
+        "sloc": 0
+      },
+      "sloc_delta": -100
+    }
+  ],
+  "net_production_sloc": -803,
+  "net_production_physical": -992
+}

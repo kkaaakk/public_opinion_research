@@ -36,7 +36,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from pathlib import Path
+from uuid import uuid4
 
 import httpx
 from dotenv import load_dotenv
@@ -91,6 +91,7 @@ class AgentResult:
 # Runner
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 # 批量运行智能体并收集结构化压力测试结果。
 class AgentStressTester:
     """Runs N agent invocations and collects structured results."""
@@ -111,19 +112,30 @@ class AgentStressTester:
             "model": model,
             "search_api": "tavily",
             "mode": mode,
-            "scenario": scenario,
             "org_context": ORG_CONTEXT,
             "rag_enabled": False,
         }
 
-        result = AgentResult(scenario=scenario, mode=mode, model=model, topic=topic)
+        result = AgentResult(
+            scenario=scenario, mode=mode, model=model, topic=topic, success=False
+        )
 
         t0 = time.time()
+        done_status = None
         try:
             with httpx.stream(
                 "POST",
                 f"{self.base_url}/api/research",
                 json=payload,
+                headers={
+                    "Authorization": "Bearer "
+                    + (
+                        os.environ.get("PUBLIC_OPINION_API_TOKEN")
+                        or os.environ.get("WEB_API_TOKEN")
+                        or ""
+                    ),
+                    "Idempotency-Key": uuid4().hex,
+                },
                 timeout=self.timeout,
             ) as resp:
                 if resp.status_code != 200:
@@ -135,12 +147,14 @@ class AgentStressTester:
                     if not line or not line.startswith("data:"):
                         continue
                     try:
-                        event = json.loads(line[len("data:"):].strip())
+                        event = json.loads(line[len("data:") :].strip())
                     except json.JSONDecodeError:
                         continue
 
                     etype = event.get("type")
-                    if etype == "stream":
+                    if etype == "step_started":
+                        result.nodes_visited.append(event["step"])
+                    elif etype == "stream":
                         node = event.get("node", "")
                         if node and node not in result.nodes_visited:
                             result.nodes_visited.append(node)
@@ -154,9 +168,13 @@ class AgentStressTester:
                     elif etype == "error":
                         result.error = event.get("message", "unknown")
                     elif etype == "done":
-                        pass
+                        done_status = event.get("status")
 
-                result.success = result.error is None and result.report_length > 0
+                result.success = (
+                    result.error is None
+                    and result.report_length > 0
+                    and done_status == "completed"
+                )
 
         except Exception as exc:
             result.error = f"{type(exc).__name__}: {exc}"
@@ -165,7 +183,9 @@ class AgentStressTester:
         return result
 
     # 串行执行多次请求，观察连续运行可靠性。
-    async def run_serial(self, runs: int, scenario: str, mode: str) -> list[AgentResult]:
+    async def run_serial(
+        self, runs: int, scenario: str, mode: str
+    ) -> list[AgentResult]:
         """Run sequentially — measures reliability over time."""
         results = []
         loop = asyncio.get_running_loop()
@@ -175,13 +195,16 @@ class AgentStressTester:
                 result = await loop.run_in_executor(pool, self.run_one, scenario, mode)
                 results.append(result)
                 status = "✅" if result.success else f"❌ {result.error}"
-                print(f"{status}  ({result.duration_s:.0f}s, {result.total_tokens} tok)")
+                print(
+                    f"{status}  ({result.duration_s:.0f}s, {result.total_tokens} tok)"
+                )
         self.results.extend(results)
         return results
 
     # 使用受限并发执行请求，检查竞争问题和吞吐。
-    async def run_concurrent(self, runs: int, scenario: str, mode: str,
-                             concurrency: int) -> list[AgentResult]:
+    async def run_concurrent(
+        self, runs: int, scenario: str, mode: str, concurrency: int
+    ) -> list[AgentResult]:
         """Run with bounded concurrency — finds race conditions."""
         sem = asyncio.Semaphore(concurrency)
         loop = asyncio.get_running_loop()
@@ -191,7 +214,9 @@ class AgentStressTester:
             async with sem:
                 print(f"  [{i + 1}/{runs}] {scenario}/{mode} … ", end="", flush=True)
                 with ThreadPoolExecutor(max_workers=1) as pool:
-                    result = await loop.run_in_executor(pool, self.run_one, scenario, mode)
+                    result = await loop.run_in_executor(
+                        pool, self.run_one, scenario, mode
+                    )
                 status = "✅" if result.success else f"❌ {result.error}"
                 print(f"{status}  ({result.duration_s:.0f}s)")
                 return result
@@ -205,6 +230,7 @@ class AgentStressTester:
 # ═══════════════════════════════════════════════════════════════════════════
 # Reporting
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 # 输出压力测试汇总和失败明细。
 def print_report(results: list[AgentResult]):
@@ -221,11 +247,13 @@ def print_report(results: list[AgentResult]):
     print("=" * 60)
 
     # 1. Completion rate
-    print(f"\n  Completion rate:  {len(success)}/{len(results)}  ({100 * len(success) / len(results):.0f}%)")
+    print(
+        f"\n  Completion rate:  {len(success)}/{len(results)}  ({100 * len(success) / len(results):.0f}%)"
+    )
 
     # 2. Latency
     if durations:
-        print(f"\n  Latency (seconds):")
+        print("\n  Latency (seconds):")
         print(f"    min  : {min(durations):.0f}")
         print(f"    p50  : {statistics.median(durations):.0f}")
         if len(durations) >= 5:
@@ -237,10 +265,12 @@ def print_report(results: list[AgentResult]):
     if success:
         tokens = [r.total_tokens for r in success if r.total_tokens > 0]
         if tokens:
-            print(f"\n  Token usage (per run):")
+            print("\n  Token usage (per run):")
             print(f"    median : {statistics.median(tokens):,}")
             print(f"    mean   : {statistics.mean(tokens):,.0f}")
-            print(f"    total  : {sum(tokens):,}  (across {len(tokens)} successful runs)")
+            print(
+                f"    total  : {sum(tokens):,}  (across {len(tokens)} successful runs)"
+            )
 
     # 4. Error taxonomy
     if failed:
@@ -258,7 +288,7 @@ def print_report(results: list[AgentResult]):
     print(f"\n  Graph nodes visited: {sorted(all_nodes)}")
 
     # 6. Per-scenario breakdown
-    print(f"\n  By scenario:")
+    print("\n  By scenario:")
     for scenario in SCENARIOS:
         subset = [r for r in results if r.scenario == scenario]
         if not subset:
@@ -273,23 +303,33 @@ def print_report(results: list[AgentResult]):
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 # 读取参数，运行选定压力模式并打印结果。
 async def main():
     parser = argparse.ArgumentParser(description="Agent stress/reliability test")
     parser.add_argument("--runs", type=int, default=1, help="Runs per combination")
     parser.add_argument("--scenario", choices=SCENARIOS, default="public_opinion_risk")
     parser.add_argument("--mode", choices=MODES, default="fast")
-    parser.add_argument("--concurrency", type=int, default=1,
-                        help="Parallel runs (finds race conditions)")
-    parser.add_argument("--full-matrix", action="store_true",
-                        help="Test all scenario × mode combinations")
-    parser.add_argument("--base-url", default=os.environ.get("TARGET_HOST", "http://localhost:8000"))
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Parallel runs (finds race conditions)",
+    )
+    parser.add_argument(
+        "--full-matrix",
+        action="store_true",
+        help="Test all scenario × mode combinations",
+    )
+    parser.add_argument(
+        "--base-url", default=os.environ.get("TARGET_HOST", "http://localhost:8000")
+    )
     parser.add_argument("--timeout", type=int, default=600)
     args = parser.parse_args()
 
     tester = AgentStressTester(base_url=args.base_url, timeout=args.timeout)
 
-    print(f"\n  Agent Stress Test")
+    print("\n  Agent Stress Test")
     print(f"  {'─' * 30}")
     print(f"  Target: {args.base_url}")
     print(f"  Runs:   {args.runs}")
@@ -302,7 +342,9 @@ async def main():
                 await tester.run_serial(args.runs, scenario, mode)
     elif args.concurrency > 1:
         print(f"\n── {args.scenario} / {args.mode} (concurrency={args.concurrency}) ──")
-        await tester.run_concurrent(args.runs, args.scenario, args.mode, args.concurrency)
+        await tester.run_concurrent(
+            args.runs, args.scenario, args.mode, args.concurrency
+        )
     else:
         print(f"\n── {args.scenario} / {args.mode} ──")
         await tester.run_serial(args.runs, args.scenario, args.mode)

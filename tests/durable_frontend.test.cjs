@@ -91,6 +91,21 @@ test('ambiguous create response survives reload with the same key and request', 
     assert.ok(!saved.getItem(storageKey).includes('private-token'));
 });
 
+test('a fresh page always creates a durable Run without execution selectors', async () => {
+    const view = page(storage(), path => path === '/api/runs'
+        ? response({ run_id: runId }) : response(state('completed', { report: 'default report' })));
+    view.element('durable-enabled').checked = false;
+    await view.call('startResearch()');
+    const submitted = view.calls.filter(call => call.options.method === 'POST');
+    assert.equal(submitted.length, 1);
+    assert.equal(submitted[0].path, '/api/runs');
+    const request = JSON.parse(submitted[0].options.body);
+    assert.equal(request.workflow_backend, undefined);
+    assert.equal(request.business_agent_runtime, undefined);
+    assert.ok(submitted[0].options.headers['Idempotency-Key']);
+    assert.ok(!view.calls.some(call => call.path === '/api/research'));
+});
+
 test('known Run reload only subscribes and deduplicates durable event sequences', async () => {
     const saved = storage({ key: 'key', request: body, runId, cursor: 7 });
     let reads = 0;

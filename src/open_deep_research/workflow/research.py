@@ -11,12 +11,10 @@ from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
-    diff_budget_usage,
     structured_output_chain,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.models import get_api_key_for_model
-from open_deep_research.observability.langsmith import node_metadata
 from open_deep_research.prompts import (
     research_review_prompt,
 )
@@ -28,8 +26,6 @@ from open_deep_research.research_graph import (
 )
 from open_deep_research.runtime import run_business_agent
 from open_deep_research.state import (
-    AgentState,
-    DeepResearchState,
     PublicOpinionState,
     ResearchReview,
     ResearchTask,
@@ -37,14 +33,11 @@ from open_deep_research.state import (
 
 # Initialize a configurable model that we will use throughout the agent
 from open_deep_research.workflow import shared
-from open_deep_research.workflow.shared import _with_correlation_metadata
 from open_deep_research.workflow.state_utils import (
-    agents_for_new_run,
     agents_state,
     coerce_research_review,
     coerce_research_task,
     coerce_research_tasks,
-    is_followup,
     report_state,
     research_state,
     research_task_identity,
@@ -266,25 +259,7 @@ def followup_assignments(
     }
 
 
-def route_after_research_review(
-    state: PublicOpinionState,
-    config: RunnableConfig | None = None,
-) -> list:
-    """Adapt the shared follow-up decision to legacy LangGraph Sends."""
-    from langgraph.types import Send
-
-    assignments = followup_assignments(state, config)
-    return [Send(f"{role}_agent", packet) for role, packet in assignments.items()] or [
-        "risk_assessment_agent"
-    ]
-
-
 # 仅让由补充 Send 启动的角色回到复核节点。
-def route_after_research_agent(state: PublicOpinionState) -> list[str]:
-    """Return to review only for agents launched by a follow-up Send."""
-    if is_followup(state):
-        return ["research_review"]
-    return []
 
 
 # 执行公众信号角色，收集新闻、社交、投诉、竞争与传播证据。
@@ -323,112 +298,4 @@ async def response_strategy_agent(
     )
 
 
-def __getattr__(name: str) -> Any:
-    """Build the compatibility graph only when a legacy caller requests it."""
-    if name not in {"public_opinion_builder", "public_opinion_subgraph"}:
-        raise AttributeError(name)
-    from langgraph.graph import END, START, StateGraph
-
-    builder = StateGraph(DeepResearchState, config_schema=Configuration)
-    builder.add_node(
-        "public_signal_agent",
-        public_signal_agent,
-        metadata=node_metadata("public_signal_agent", kind="agent"),
-    )
-    builder.add_node(
-        "internal_knowledge_agent",
-        internal_knowledge_agent,
-        metadata=node_metadata("internal_knowledge_agent", kind="agent"),
-    )
-    builder.add_node(
-        "research_review",
-        research_review,
-        metadata=node_metadata("research_review"),
-    )
-    builder.add_node(
-        "risk_assessment_agent",
-        risk_assessment_agent,
-        metadata=node_metadata("risk_assessment_agent", kind="agent"),
-    )
-    builder.add_node(
-        "response_strategy_agent",
-        response_strategy_agent,
-        metadata=node_metadata("response_strategy_agent", kind="agent"),
-    )
-
-    builder.add_edge(START, "public_signal_agent")
-    builder.add_edge(START, "internal_knowledge_agent")
-    builder.add_edge(
-        [
-            "public_signal_agent",
-            "internal_knowledge_agent",
-        ],
-        "research_review",
-    )
-    builder.add_conditional_edges(
-        "public_signal_agent",
-        route_after_research_agent,
-        path_map={"research_review": "research_review"},
-    )
-    builder.add_conditional_edges(
-        "internal_knowledge_agent",
-        route_after_research_agent,
-        path_map={"research_review": "research_review"},
-    )
-    builder.add_conditional_edges(
-        "research_review",
-        route_after_research_review,
-        path_map={
-            "public_signal_agent": "public_signal_agent",
-            "internal_knowledge_agent": "internal_knowledge_agent",
-            "risk_assessment_agent": "risk_assessment_agent",
-        },
-    )
-    builder.add_edge("risk_assessment_agent", "response_strategy_agent")
-    builder.add_edge("response_strategy_agent", END)
-    globals()["public_opinion_builder"] = builder
-    globals()["public_opinion_subgraph"] = builder.compile(name="public_opinion_agents")
-    return globals()[name]
-
-
 # 运行首轮及缺口驱动的研究子图，汇总结果交给报告阶段。
-async def research_phase(state: AgentState, config: RunnableConfig) -> dict:
-    """Run initial and gap-driven public-opinion research before report writing."""
-    input_budget = runtime_state(state).get("budget", {})
-    research_run_id = resolve_research_run_id(state, config)
-    # Bounded LangSmith correlation metadata for the multi-agent subgraph.  It
-    # never enters graph state or checkpoints; only the LangSmith run tree.
-    subgraph_config = _with_correlation_metadata(
-        config, {"research_run_id": research_run_id}
-    )
-    subgraph = globals().get("public_opinion_subgraph") or __getattr__(
-        "public_opinion_subgraph"
-    )
-    result = await subgraph.ainvoke(
-        {
-            "messages": state.get("messages", []),
-            "workflow": {
-                "brief": workflow_state(state).get("brief", ""),
-                "round": 1,
-                "review": None,
-                "pending_tasks": [],
-                "completed_tasks": [],
-            },
-            "agents": agents_for_new_run(state),
-            "research": {"run_id": research_run_id, "working_contexts": {}},
-            "report": report_state(state),
-            "runtime": {"budget": input_budget, "metrics": {}},
-        },
-        subgraph_config,
-    )
-    result_runtime = result.get("runtime", {}) or {}
-    budget_update = diff_budget_usage(result_runtime.get("budget", {}), input_budget)
-    return {
-        "workflow": {"type": "override", "value": result.get("workflow", {})},
-        "agents": {"type": "override", "value": result.get("agents", {})},
-        "research": {"type": "override", "value": result.get("research", {})},
-        "runtime": {
-            "budget": budget_update,
-            "metrics": result_runtime.get("metrics", {}),
-        },
-    }

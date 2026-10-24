@@ -1,4 +1,4 @@
-"""Exercise Phase 2 with the real SDK Runner and compiled LangGraph workflow."""
+"""Exercise the SDK Runner and Harness with the fixed business reference; native DBOS equivalence is tested separately."""
 
 import asyncio
 import json
@@ -11,7 +11,6 @@ from agents.testing import ModelStep, ScriptedModel, assistant_message, function
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
-from langgraph.graph import END, START, StateGraph
 from openai.types.responses import ResponseReasoningItem
 from test_public_opinion_research_loop import _initial_state
 from test_sdk_context import _payload, _Store
@@ -40,13 +39,12 @@ from open_deep_research.runtime import business_agent
 from open_deep_research.runtime.sdk_context import ResearchGraphSettlementError
 from open_deep_research.runtime.sdk_runtime import SDKContextLimitExceeded
 from open_deep_research.state import (
-    DeepResearchState,
     ResearchReview,
     ResearchTask,
     Section,
     research_reducer,
 )
-from open_deep_research.workflow import reporting, research, shared
+from open_deep_research.workflow import shared
 
 
 class Services:
@@ -222,7 +220,7 @@ def scripted_tool_runtime(
     )
 
 
-def run_workflow_fixture(monkeypatch, tmp_path, backend="langgraph"):
+def run_workflow_fixture(monkeypatch, tmp_path, backend="reference"):
     """Run identical inference/data through either real workflow implementation."""
 
     async def scenario():
@@ -400,16 +398,6 @@ def run_workflow_fixture(monkeypatch, tmp_path, backend="langgraph"):
                 "reserve_final_report_call": True,
             }
         }
-        builder = StateGraph(DeepResearchState)
-        builder.add_node("research", research.research_phase)
-        builder.add_node("sections", reporting.section_writer)
-        builder.add_node("final_sections", reporting.write_final_sections)
-        builder.add_node("final", reporting.compile_final_report)
-        builder.add_edge(START, "research")
-        builder.add_edge("research", "sections")
-        builder.add_edge("sections", "final_sections")
-        builder.add_edge("final_sections", "final")
-        builder.add_edge("final", END)
         state = _initial_state()
         state["research"]["run_id"] = run_id
         state["workflow"]["brief"] = "Investigate brand recall evidence"
@@ -429,12 +417,10 @@ def run_workflow_fixture(monkeypatch, tmp_path, backend="langgraph"):
                 agent_role=",".join(ROLES),
             )
         ]
-        if backend == "python":
-            from reference_workflow import PythonWorkflow
+        from reference_workflow import PythonWorkflow
 
-            result = await PythonWorkflow().ainvoke(state, config, start_at="research")
-        else:
-            result = await builder.compile().ainvoke(state, config)
+        assert backend in {"reference", "python"}
+        result = await PythonWorkflow().ainvoke(state, config, start_at="research")
         assert "FINAL brand recall report" in result["report"]["final"]
         assert role_calls == Counter(
             {
@@ -480,9 +466,7 @@ def run_workflow_fixture(monkeypatch, tmp_path, backend="langgraph"):
     return asyncio.run(scenario())
 
 
-def test_compiled_workflow_graph_handoff_gap_followup_and_final_report(
-    monkeypatch, tmp_path
-):
+def test_reference_harness_handoff_gap_followup_and_final_report(monkeypatch, tmp_path):
     run_workflow_fixture(monkeypatch, tmp_path)
 
 

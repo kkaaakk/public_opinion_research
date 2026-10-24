@@ -12,7 +12,7 @@ from open_deep_research.public_opinion_agents import (
     PUBLIC_OPINION_AGENT_SPECS,
     get_public_opinion_agent_spec,
 )
-from open_deep_research.runtime import AgentRuntime
+from open_deep_research.runtime import SDKAgentRuntime as AgentRuntime
 from open_deep_research.state import (
     Section,
     agents_reducer,
@@ -125,19 +125,26 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     full_report = "A" * 2_000 + "\nTAIL_EVIDENCE_MUST_REACH_SECTION_WRITER"
     compact_memory = full_report[:1_800] + "\n[truncated]"
     state = {
-        "report": {"sections": [Section(
-                name="Risk evidence",
-                description="Summarize risk evidence.",
-                research=True,
-                agent_role="public_signal",
-            )]},
+        "report": {
+            "sections": [
+                Section(
+                    name="Risk evidence",
+                    description="Summarize risk evidence.",
+                    research=True,
+                    agent_role="public_signal",
+                )
+            ]
+        },
         "agents": {
-            "public_signal": {"report": full_report, "memory": [
-                {
-                    "source": "current_public_opinion_run",
-                    "content": compact_memory,
-                }
-            ]}
+            "public_signal": {
+                "report": full_report,
+                "memory": [
+                    {
+                        "source": "current_public_opinion_run",
+                        "content": compact_memory,
+                    }
+                ],
+            }
         },
         "runtime": {"budget": {}},
     }
@@ -145,7 +152,12 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     asyncio.run(
         deep_researcher_module.section_writer(
             state,
-            {"configurable": {"section_writer_model": "fixture:model", "research_graph_enabled": False}},
+            {
+                "configurable": {
+                    "section_writer_model": "fixture:model",
+                    "research_graph_enabled": False,
+                }
+            },
         )
     )
 
@@ -169,7 +181,10 @@ def test_role_reports_override_previous_run() -> None:
     """A new research phase replaces prior formal reports instead of merging them."""
 
     merged = agents_reducer(
-        {"public_signal": {"report": "OLD_REPORT"}, "risk_assessment": {"report": "STALE_REPORT"}},
+        {
+            "public_signal": {"report": "OLD_REPORT"},
+            "risk_assessment": {"report": "STALE_REPORT"},
+        },
         {
             "type": "override",
             "value": {"public_signal": {"report": "NEW_REPORT"}},

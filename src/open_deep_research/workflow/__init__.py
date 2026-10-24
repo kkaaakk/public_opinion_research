@@ -22,17 +22,10 @@ from open_deep_research.workflow.state_utils import (
 
 
 def get_workflow(config=None):
-    """Select the explicit Python API backend without changing Web/CLI defaults."""
-    from open_deep_research.configuration import Configuration
-
-    settings = Configuration.from_runnable_config(config)
-    if settings.workflow_backend == "python":
-        raise ValueError(
-            "Use the durable Run API for DBOS execution; no in-process Python orchestrator"
-        )
-    from open_deep_research.workflow.graph import deep_researcher
-
-    return deep_researcher(config)
+    """Reject the retired in-process factory with an actionable migration error."""
+    raise ValueError(
+        "Use the durable Run API for DBOS execution; no in-process workflow factory"
+    )
 
 
 __all__ = [

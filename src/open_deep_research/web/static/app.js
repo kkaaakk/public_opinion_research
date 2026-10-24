@@ -1,5 +1,4 @@
 /* 页面状态：管理研究流、请求版本、历史选择和导入状态。 */
-let abortController = null;
 let reportMarkdown = '';
 let startTime = 0;
 let timerInterval = null;
@@ -90,7 +89,6 @@ async function startResearch(resumeDurable = false) {
     const topic = resumeDurable && durableRun ? durableRun.request.topic : topicInput.value.trim();
     if (!topic) { topicInput.focus(); return; }
 
-    abortController = new AbortController();
     reportMarkdown = '';
     startTime = Date.now();
     isResearchRunning = true;
@@ -107,9 +105,8 @@ async function startResearch(resumeDurable = false) {
         rag_enabled: document.getElementById('rag-enabled')?.checked || false,
     };
     if (resumeDurable && durableRun) activeResearchRequest = durableRun.request;
-    else if (document.getElementById('durable-enabled').checked) {
+    else {
         Object.assign(activeResearchRequest, {
-            workflow_backend: 'python', business_agent_runtime: 'openai_agents',
             require_approval: document.getElementById('require-approval').checked,
         });
     }
@@ -137,38 +134,8 @@ async function startResearch(resumeDurable = false) {
         statusTimer.textContent = elapsed + 's';
     }, 1000);
 
-    const body = JSON.stringify(activeResearchRequest);
-
     try {
-        if (activeResearchRequest.workflow_backend === 'python') {
-            await followDurableRun(activeResearchRequest);
-            return;
-        }
-        const response = await fetch('/api/research', {
-            method: 'POST',
-            headers: apiHeaders({ 'Content-Type': 'application/json' }),
-            body,
-            signal: abortController.signal,
-        });
-        if (!response.ok) throw new Error(await apiError(response));
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        // 网络数据块不一定以换行结束，保留末尾片段供下一块继续解析。
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try { handleEvent(JSON.parse(line.slice(6))); } catch (e) {}
-                }
-            }
-        }
+        await followDurableRun(activeResearchRequest);
     } catch (err) {
         if (err.name !== 'AbortError') {
             addLog('error', '⚠ ' + err.message);
@@ -194,7 +161,6 @@ async function stopResearch() {
         }
         return;
     }
-    if (abortController) abortController.abort();
 }
 
 /* 按 SSE 事件类型更新进度、日志、报告、用量和历史保存状态。 */
@@ -290,7 +256,6 @@ function addLog(node, text) {
 // 清理本轮运行标记、取消控制器和计时器，重新开放允许的操作。
 function resetUI() {
     isResearchRunning = false;
-    abortController = null;
     startBtn.disabled = false;
     stopBtn.classList.add('hidden');
     clearInterval(timerInterval);
@@ -724,16 +689,12 @@ if (durableRun) {
     document.getElementById('org-context').value = durableRun.request.org_context;
     document.getElementById('rag-enabled').checked = durableRun.request.rag_enabled;
     document.getElementById('require-approval').checked = durableRun.request.require_approval;
-    document.getElementById('durable-enabled').checked = true;
     document.getElementById('resume-run-btn').classList.remove('hidden');
     startBtn.disabled = !durableRun.finished;
     statusBar.classList.remove('hidden');
     statusText.textContent = '发现后台研究。填写访问令牌后恢复进度。';
 }
-document.getElementById('require-approval').disabled = !document.getElementById('durable-enabled').checked;
-document.getElementById('durable-enabled').addEventListener('change', () => {
-    document.getElementById('require-approval').disabled = !document.getElementById('durable-enabled').checked;
-});
+
 
 /* 报告操作：下载原始 Markdown、复制内容和显示临时提示。 */
 // 通过临时 Blob URL 下载 Markdown，触发后立即释放 URL 资源。

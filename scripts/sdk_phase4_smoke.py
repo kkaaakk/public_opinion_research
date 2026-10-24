@@ -25,6 +25,8 @@ def main():
             "tests/test_dbos_contracts.py",
             "tests/test_dbos_process.py",
             "tests/test_dbos_retry.py",
+            "tests/test_web_history.py",
+            "tests/test_p1_fixes.py",
             "--disable-socket",
             "--allow-unix-socket",
             "--allow-hosts=127.0.0.1,::1",

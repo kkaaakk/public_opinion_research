@@ -622,7 +622,8 @@ def test_business_assembly_selects_sdk_and_keeps_followup_state(monkeypatch, rol
 
 
 def test_runtime_configuration_default_and_invalid_values():
-    assert Configuration().business_agent_runtime == "legacy"
+    assert "business_agent_runtime" not in Configuration.model_fields
+    assert "workflow_backend" not in Configuration.model_fields
     with pytest.raises(ValueError, match="business_agent_runtime"):
         Configuration(business_agent_runtime="typo")
 

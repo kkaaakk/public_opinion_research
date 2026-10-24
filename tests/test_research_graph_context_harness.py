@@ -878,7 +878,6 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(
         def __init__(self, model_name="fixture", schema=None):
             self.model_name = model_name
             self.schema = schema
-            self.agent_calls = 0
 
         # 提供工具绑定测试接口，保留链式模型调用。
         def bind_tools(self, _tools):
@@ -945,42 +944,64 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(
                 messages[0].content
             ):
                 return SimpleNamespace(content="bounded graph report")
-            self.agent_calls += 1
-            if self.agent_calls <= (2 if duplicate_round else 1):
-                return AIMessage(
-                    content="search",
-                    tool_calls=[
-                        {
-                            "name": "web_search",
-                            "args": {"queries": ["brake"]},
-                            "id": f"call-graph-agent-{self.agent_calls}",
-                        }
-                    ],
-                )
-            if duplicate_round:
-                tool_messages = [
-                    message for message in messages if isinstance(message, ToolMessage)
-                ]
-                assert len(tool_messages) == 2
-                assert all(
-                    message.content.startswith("[Research result compacted.")
-                    for message in tool_messages
-                )
-                source_lines = [
-                    next(
-                        line
-                        for line in message.content.splitlines()
-                        if line.startswith("Sources:")
-                    )
-                    for message in tool_messages
-                ]
-                assert source_lines[0] == source_lines[1]
-                assert {message.tool_call_id for message in tool_messages} == {
-                    "call-graph-agent-1",
-                    "call-graph-agent-2",
-                }
-            return AIMessage(content="done")
+            raise AssertionError("Graph services must not execute an Agent loop")
 
+    from contextlib import asynccontextmanager
+
+    from agents.testing import (
+        ModelStep,
+        ScriptedModel,
+        assistant_message,
+        function_call,
+    )
+    from langchain_core.tools import StructuredTool
+
+    async def lookup(queries: list[str]):
+        return await FixtureTool().ainvoke({"queries": queries})
+
+    sdk_tool = StructuredTool.from_function(
+        coroutine=lookup,
+        name="web_search",
+        description="raw search",
+        metadata={"tool_domain": "web_search"},
+    )
+
+    @asynccontextmanager
+    async def offline_sdk(*args, **kwargs):
+        def finish(call):
+            outputs = [
+                item
+                for item in call.input
+                if item.get("type") == "function_call_output"
+            ]
+            assert len(outputs) == (2 if duplicate_round else 1)
+            assert all(
+                "Persisted to Research Graph" in item["output"] for item in outputs
+            )
+            assert {item["call_id"] for item in outputs} == {
+                f"call-graph-agent-{i}" for i in range(1, len(outputs) + 1)
+            }
+            if duplicate_round:
+                sources = [
+                    set(re.findall(r"SRC_[a-f0-9]{20}", item["output"]))
+                    for item in outputs
+                ]
+                assert sources[0] == sources[1] and sources[0]
+            return [assistant_message("done")]
+
+        steps = [
+            [
+                function_call(
+                    "web_search",
+                    {"queries": ["brake"]},
+                    call_id=f"call-graph-agent-{i}",
+                )
+            ]
+            for i in range(1, 3 if duplicate_round else 2)
+        ]
+        yield ScriptedModel([*steps, ModelStep.respond(finish)])
+
+    monkeypatch.setattr(business_agent_module, "sdk_model", offline_sdk)
     fixture_model = AgentFixtureModel()
     monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", fixture_model)
     store = InMemoryResearchGraphStore()
@@ -995,7 +1016,7 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(
     monkeypatch.setattr(
         business_agent_module,
         "_business_agent_tools",
-        lambda _config, _role, _spec=None: asyncio.sleep(0, result=[FixtureTool()]),
+        lambda _config, _role, _spec=None: asyncio.sleep(0, result=[sdk_tool]),
     )
 
     # 若图生产路径调用旧版全历史压缩则立即使测试失败。

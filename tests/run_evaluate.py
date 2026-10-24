@@ -1,86 +1,105 @@
 # 执行研究基准评估，将研究图输出交给报告质量评估器。
-from langsmith import Client
-from tests.evaluators import eval_overall_quality, eval_relevance, eval_structure, eval_correctness, eval_groundedness, eval_completeness
-from dotenv import load_dotenv
 import asyncio
-from open_deep_research.deep_researcher import deep_researcher_builder
-from langgraph.checkpoint.memory import MemorySaver
+import os
 import uuid
+
+import httpx
+from dotenv import load_dotenv
+from langsmith import Client
+
+from tests.evaluators import (
+    eval_completeness,
+    eval_correctness,
+    eval_groundedness,
+    eval_overall_quality,
+    eval_relevance,
+    eval_structure,
+)
 
 load_dotenv("../.env")
 
-client = Client()
 
 # NOTE: Configure the right dataset and evaluators
 dataset_name = "Deep Research Bench"
-evaluators = [eval_overall_quality, eval_relevance, eval_structure, eval_correctness, eval_groundedness, eval_completeness]
-# NOTE: Configure the right parameters for the experiment, these will be logged in the metadata
-max_structured_output_retries = 3
-allow_clarification = False
-search_api = "tavily" # NOTE: We use Tavily to stay consistent
-max_react_tool_calls = 10
-summarization_model = "openai:gpt-4.1-mini"
-summarization_model_max_tokens = 8192
-research_model = "openai:gpt-5" # "anthropic:claude-sonnet-4-20250514"
-research_model_max_tokens = 10000
-compression_model = "openai:gpt-4.1"
-compression_model_max_tokens = 10000
-final_report_model = "openai:gpt-4.1"
-final_report_model_max_tokens = 10000
+evaluators = [
+    eval_overall_quality,
+    eval_relevance,
+    eval_structure,
+    eval_correctness,
+    eval_groundedness,
+    eval_completeness,
+]
+# The API admits the model/search profile; operator budgets remain server-owned.
+search_api = "tavily"
+research_model = os.environ.get("EVALUATION_MODEL", "openai:gpt-4.1")
+
 
 # 运行单条评估输入并返回评估器需要的研究结果。
 async def target(
     inputs: dict,
 ):
-    graph = deep_researcher_builder.compile(checkpointer=MemorySaver())
-    config = {
-        "configurable": {
-            "thread_id": str(uuid.uuid4()),
-        }
-    }
-    # NOTE: Configure the right dataset and evaluators
-    config["configurable"]["max_structured_output_retries"] = max_structured_output_retries
-    config["configurable"]["allow_clarification"] = allow_clarification
-    config["configurable"]["search_api"] = search_api
-    config["configurable"]["max_react_tool_calls"] = max_react_tool_calls
-    config["configurable"]["summarization_model"] = summarization_model
-    config["configurable"]["summarization_model_max_tokens"] = summarization_model_max_tokens
-    config["configurable"]["research_model"] = research_model
-    config["configurable"]["research_model_max_tokens"] = research_model_max_tokens
-    config["configurable"]["compression_model"] = compression_model
-    config["configurable"]["compression_model_max_tokens"] = compression_model_max_tokens
-    config["configurable"]["final_report_model"] = final_report_model
-    config["configurable"]["final_report_model_max_tokens"] = final_report_model_max_tokens
-    # NOTE: We do not use MCP tools to stay consistent
-    final_state = await graph.ainvoke(
-        {"messages": [{"role": "user", "content": inputs["messages"][0]["content"]}]},
-        config
+    token = os.environ.get("PUBLIC_OPINION_API_TOKEN") or os.environ.get(
+        "WEB_API_TOKEN"
     )
-    return final_state
+    if not token:
+        raise RuntimeError(
+            "The durable evaluation runner requires PUBLIC_OPINION_API_TOKEN"
+        )
+    key = uuid.uuid4().hex
+    body = {
+        "topic": inputs["messages"][0]["content"],
+        "model": research_model,
+        "search_api": search_api,
+    }
+    async with httpx.AsyncClient(
+        base_url=os.environ.get("RESEARCH_API_URL", "http://127.0.0.1:8000"),
+        headers={"Authorization": "Bearer " + token},
+        timeout=30,
+    ) as api:
+        created = await api.post(
+            "/api/runs", json=body, headers={"Idempotency-Key": key}
+        )
+        created.raise_for_status()
+        run_id = created.json()["run_id"]
+        while True:
+            response = await api.get("/api/runs/" + run_id)
+            response.raise_for_status()
+            run = response.json()
+            if run["status"] in {
+                "completed",
+                "failed",
+                "interrupted",
+                "cancelled",
+                "awaiting_approval",
+            }:
+                break
+            await asyncio.sleep(1)
+    if run["status"] != "completed":
+        raise RuntimeError("Evaluation Run requires reconciliation: " + run_id)
+    return {
+        "final_report": run["report"],
+        "raw_notes": [stage["content"] for stage in run["role_reports"]],
+        "research_brief": run["plan"]["brief"] if run.get("plan") else body["topic"],
+    }
+
 
 # 配置数据集、目标函数和评估器后启动综合评估。
 async def main():
+    client = Client()
     return await client.aevaluate(
         target,
         data=dataset_name,
         evaluators=evaluators,
-        experiment_prefix=f"ODR GPT-5, Tavily Search",
+        experiment_prefix=f"DBOS {research_model}, Tavily Search",
         max_concurrency=10,
         metadata={
-            "max_structured_output_retries": max_structured_output_retries,
-            "allow_clarification": allow_clarification,
-            "search_api": search_api,
-            "max_react_tool_calls": max_react_tool_calls,
-            "summarization_model": summarization_model,
-            "summarization_model_max_tokens": summarization_model_max_tokens,
+            "execution_engine": "dbos",
             "research_model": research_model,
-            "research_model_max_tokens": research_model_max_tokens,
-            "compression_model": compression_model,
-            "compression_model_max_tokens": compression_model_max_tokens,
-            "final_report_model": final_report_model,
-            "final_report_model_max_tokens": final_report_model_max_tokens,
-        }
+            "search_api": search_api,
+            "grounding_context": "settled role reports; not raw tool observations",
+        },
     )
+
 
 if __name__ == "__main__":
     results = asyncio.run(main())

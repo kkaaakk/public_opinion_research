@@ -9,18 +9,17 @@ Covers:
 5. State: no ConductResearch or general-mode state fields
 """
 
+from pathlib import Path
+
 import pytest
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.deep_researcher import (
-    deep_researcher_graph,
-    public_opinion_builder,
-)
 from open_deep_research.state import (
     AgentState,
     PublicOpinionState,
     ResearchQuestion,
 )
+from open_deep_research.workflow.dbos_workflow import OPERATIONS
 
 # ── 1. Unique mode tests ──────────────────────────────────────────────
 
@@ -57,6 +56,7 @@ class TestUniqueMode:
     def test_general_research_not_in_business_agent_role(self):
         """BusinessAgentRole no longer contains general_research."""
         from open_deep_research.state import BusinessAgentRole
+
         # Literal type — extract allowed values
         allowed = set(BusinessAgentRole.__args__)
         assert "general_research" not in allowed
@@ -75,89 +75,54 @@ class TestUniqueMode:
 
 # 检查单一业务流程的节点和复核拓扑。
 class TestGraphStructure:
-    """Verify the main graph no longer contains general-mode nodes."""
+    """Native business topology preserves the single public-opinion workflow."""
 
-    # 验证主图不存在旧独立 supervisor 节点。
     def test_no_standalone_supervisor_node(self):
-        """Graph should not have a standalone 'supervisor' node (old general-mode).
+        assert "supervisor" not in OPERATIONS
+        assert "research_review" in OPERATIONS
 
-        The public-opinion subgraph is entered through the research_phase node;
-        there is no supervisor agent in the current workflow.
-        """
-        node_names = set(deep_researcher_graph.get_graph().nodes)
-        assert "supervisor" not in node_names
-        assert "research_phase" in node_names
-
-    # 验证主图不存在旧独立 researcher 节点。
     def test_no_standalone_researcher_node(self):
-        """Graph should not have a standalone 'researcher' node (old general-mode).
-        
-        The old general-mode had separate supervisor/researcher nodes.
-        Now research_phase delegates directly to public_opinion_subgraph.
-        """
-        node_names = set(deep_researcher_graph.get_graph().nodes)
-        assert "researcher" not in node_names
-        # No separate researcher node exists; PO agents run inside research_phase
+        assert "researcher" not in OPERATIONS
 
-    # 验证已移除按研究模式分流的路由器。
     def test_no_mode_router(self):
-        """Graph should not contain any mode-routing conditional edges."""
-        node_names = set(deep_researcher_graph.get_graph().nodes)
-        for name in node_names:
-            assert "route" not in str(name).lower() or "enrich" in str(name).lower()
+        assert not any("route" in name for name in OPERATIONS)
 
-    # 验证图中没有通用模式的条件分支。
     def test_no_general_mode_conditional_branching(self):
-        """Graph edges should not branch based on business_scenario/mode."""
-        edges = deep_researcher_graph.get_graph().edges
-        # The public-opinion research phase now hands its formal reports to the
-        # dedicated section_writer node before final-section writing.
-        for edge in edges:
-            if edge.source == "research_phase":
-                assert edge.target == "section_writer"
+        source = Path("src/open_deep_research/workflow/dbos_workflow.py").read_text(
+            encoding="utf-8"
+        )
+        assert "business_scenario" not in source
+        assert (
+            'for name in ("section_writer", "write_final_sections", "compile_final_report"):'
+            in source
+        )
 
-    # 验证约定舆情角色节点仍然存在。
     def test_public_opinion_nodes_exist(self):
-        """Graph should contain the public-opinion workflow nodes."""
-        node_names = set(deep_researcher_graph.get_graph().nodes)
-        expected = {
+        assert {
             "enrich_query_images",
             "clarify_with_user",
             "write_research_brief",
             "plan_report_sections",
-            "research_phase",
+            "research_review",
             "section_writer",
             "write_final_sections",
             "compile_final_report",
-        }
-        assert expected.issubset(node_names), f"Missing nodes: {expected - node_names}"
+        } == set(OPERATIONS)
 
-    # 验证研究阶段仅保留统一舆情封装入口。
     def test_research_phase_is_the_only_public_opinion_wrapper(self):
-        """The main graph exposes the state-conversion phase under its real name."""
-        node_names = set(deep_researcher_graph.get_graph().nodes)
-        assert "research_phase" in node_names
-        assert not {name for name in node_names if name.endswith("_supervisor")}
+        from open_deep_research.workflow.dbos_workflow import research_workflow
 
-    # 验证角色拓扑包含动态证据复核循环。
+        assert callable(research_workflow)
+        assert not any(name.endswith("_supervisor") for name in OPERATIONS)
+
     def test_public_opinion_agent_topology_has_dynamic_research_review(self):
-        """The subgraph has a review loop without a supervisor or dispatch node."""
-        edges = {
-            (edge.source, edge.target)
-            for edge in public_opinion_builder.compile().get_graph().edges
-        }
-        assert {
-            ("__start__", "public_signal_agent"),
-            ("__start__", "internal_knowledge_agent"),
-            ("public_signal_agent", "research_review"),
-            ("internal_knowledge_agent", "research_review"),
-            ("research_review", "public_signal_agent"),
-            ("research_review", "internal_knowledge_agent"),
-            ("research_review", "risk_assessment_agent"),
-            ("risk_assessment_agent", "response_strategy_agent"),
-            ("response_strategy_agent", "__end__"),
-        }.issubset(edges)
-        assert "dispatch_followup_research" not in public_opinion_builder.nodes
+        source = Path("src/open_deep_research/workflow/dbos_workflow.py").read_text(
+            encoding="utf-8"
+        )
+        assert "for role in RESEARCH_ROLES:" in source
+        assert 'packets = reviewed["followup"]' in source
+        assert 'for role in ("risk_assessment", "response_strategy"):' in source
+        assert "dispatch_followup_research" not in source
 
 
 # ── 3. Configuration tests ────────────────────────────────────────────
@@ -217,24 +182,28 @@ class TestStateCleanup:
     def test_no_conduct_research_class(self):
         """ConductResearch class should not exist in state module."""
         import open_deep_research.state as state_module
+
         assert not hasattr(state_module, "ConductResearch")
 
     # 验证旧 SupervisorState 不再导出。
     def test_no_supervisor_state(self):
         """SupervisorState should not exist."""
         import open_deep_research.state as state_module
+
         assert not hasattr(state_module, "SupervisorState")
 
     # 验证旧 ResearcherState 不再导出。
     def test_no_researcher_state(self):
         """ResearcherState should not exist."""
         import open_deep_research.state as state_module
+
         assert not hasattr(state_module, "ResearcherState")
 
     # 验证旧 ResearcherOutputState 不再导出。
     def test_no_researcher_output_state(self):
         """ResearcherOutputState should not exist."""
         import open_deep_research.state as state_module
+
         assert not hasattr(state_module, "ResearcherOutputState")
 
     # 验证主状态不再携带旧 relevant_domains 字段。
@@ -272,24 +241,28 @@ class TestPromptsCleanup:
     def test_no_lead_researcher_prompt(self):
         """lead_researcher_prompt (general supervisor) should not exist."""
         import open_deep_research.prompts as prompts_module
+
         assert not hasattr(prompts_module, "lead_researcher_prompt")
 
     # 验证旧通用研究系统提示词已移除。
     def test_no_research_system_prompt(self):
         """research_system_prompt (general researcher) should not exist."""
         import open_deep_research.prompts as prompts_module
+
         assert not hasattr(prompts_module, "research_system_prompt")
 
     # 验证旧最终报告提示词已移除。
     def test_no_final_report_generation_prompt(self):
         """final_report_generation_prompt (general) should not exist."""
         import open_deep_research.prompts as prompts_module
+
         assert not hasattr(prompts_module, "final_report_generation_prompt")
 
     # 验证舆情提示词属于各角色规范。
     def test_public_opinion_prompts_are_agent_owned(self):
         """The live public-opinion prompts are owned by the four agent specs."""
         import open_deep_research.prompts as prompts_module
+
         assert not hasattr(prompts_module, "public_opinion_supervisor_prompt")
         assert not hasattr(prompts_module, "public_opinion_researcher_prompt")
         assert hasattr(prompts_module, "public_opinion_final_report_generation_prompt")
@@ -298,12 +271,14 @@ class TestPromptsCleanup:
     def test_supervisor_prompt_builder_removed(self):
         """The main graph should not retain a dead coordinator prompt builder."""
         import open_deep_research.deep_researcher as deep_researcher_module
+
         assert not hasattr(deep_researcher_module, "_supervisor_system_prompt")
 
     # 验证需求转换提示词不再执行工具领域分类。
     def test_transform_prompt_no_domain_classifier(self):
         """transform_messages_into_research_topic_prompt should not reference domain_classifier_section."""
         import open_deep_research.prompts as prompts_module
+
         prompt = prompts_module.transform_messages_into_research_topic_prompt
         assert "{domain_classifier_section}" not in prompt
         assert "relevant_domains" not in prompt
@@ -328,7 +303,12 @@ def _load_domain_filter_module():
             saved[key] = sys.modules.pop(key)
     try:
         # Create a minimal mcp package stub that doesn't run __init__.py
-        mcp_dir = pathlib.Path(__file__).resolve().parent.parent / "src" / "open_deep_research" / "mcp"
+        mcp_dir = (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "src"
+            / "open_deep_research"
+            / "mcp"
+        )
         mcp_pkg = types.ModuleType("open_deep_research.mcp")
         mcp_pkg.__path__ = [str(mcp_dir)]
         mcp_pkg.__package__ = "open_deep_research.mcp"

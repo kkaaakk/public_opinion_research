@@ -18,8 +18,6 @@ import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
-from langgraph.graph import END, START, StateGraph
-from typing_extensions import TypedDict
 
 import open_deep_research.observability.langsmith as langsmith_module
 from open_deep_research.budget import ainvoke_model_with_budget
@@ -98,7 +96,9 @@ def _recording_trace(journal: list[dict[str, Any]]):
     # 创建并记录一次测试追踪上下文。
     def _trace(name: str, run_type: str = "chain", **kwargs: Any) -> _RecordingContext:
         run = _RecordingRun(name, run_type, kwargs.get("metadata"))
-        journal.append({"event": "request", "name": name, "run_type": run_type, "run": run})
+        journal.append(
+            {"event": "request", "name": name, "run_type": run_type, "run": run}
+        )
         return _RecordingContext(run, journal)
 
     return _trace
@@ -345,7 +345,9 @@ def test_rag_pipeline_emits_named_stage_spans(monkeypatch):
     vectorstore.add([chunk], [[1.0, 0.0]])
     pipeline.indexer.documents = [chunk]
     pipeline.indexer.chunks = [chunk]
-    pipeline.indexer.embedding_backend = type("E", (), {"embed_query": staticmethod(lambda _q: [1.0, 0.0])})()
+    pipeline.indexer.embedding_backend = type(
+        "E", (), {"embed_query": staticmethod(lambda _q: [1.0, 0.0])}
+    )()
     pipeline.indexer.retriever = HybridChunkRetriever(
         vectorstore=vectorstore,
         keyword_index=BM25Index([chunk]),
@@ -381,11 +383,14 @@ def test_rag_query_rewrite_records_bounded_lengths(monkeypatch):
         def invoke(self, payload, config=None):
             from langchain_core.messages import AIMessage
 
-            return AIMessage(content="battery warranty complaints", usage_metadata={
-                "input_tokens": 4,
-                "output_tokens": 3,
-                "total_tokens": 7,
-            })
+            return AIMessage(
+                content="battery warranty complaints",
+                usage_metadata={
+                    "input_tokens": 4,
+                    "output_tokens": 3,
+                    "total_tokens": 7,
+                },
+            )
 
     with _enabled_langsmith(monkeypatch, journal):
         rewritten = query_rewriter.rewrite_query_with_model(
@@ -456,111 +461,50 @@ def test_hybrid_retriever_does_not_execute_a_stage_twice(monkeypatch):
 
 
 # 验证图节点携带角色信息，并依赖原生子调用追踪。
-def test_graph_nodes_carry_agent_metadata_and_auto_trace_children(monkeypatch):
-    import open_deep_research.deep_researcher as deep_researcher_module
+def test_graph_nodes_carry_agent_metadata_and_auto_trace_children():
+    from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
 
-    journal: list[dict[str, Any]] = []
-
-    # 提供图节点追踪测试所需的聊天模型类型。
-    class _NodeModel(GenericFakeChatModel):
-        pass
-
-    # 创建返回固定消息的模型，隔离供应商服务。
-    def _model_messages(*_args, **_kwargs):
-        return GenericFakeChatModel(messages=iter(["hello"]))
-
-    monkeypatch.setenv("LANGSMITH_TRACING", "true")
-    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_pt_test-only")
-    monkeypatch.setenv("LANGSMITH_ENDPOINT", "http://127.0.0.1:9")
+    for role in (
+        "public_signal",
+        "internal_knowledge",
+        "risk_assessment",
+        "response_strategy",
+    ):
+        spec = get_public_opinion_agent_spec(role)
+        metadata = agent_metadata(spec.node_name, role)
+        assert metadata["agent_role"] == role
+        assert role in str(metadata)
 
 
-    monkeypatch.setattr(langsmith_module, "_ls_trace", _recording_trace(journal))
-    monkeypatch.setattr(
-        deep_researcher_module.public_opinion_subgraph,
-        "ainvoke",
-        _spy_subgraph_call(deep_researcher_module.public_opinion_subgraph, journal),
-    )
-
-    metadata_by_node = deep_researcher_module.public_opinion_subgraph.get_graph().nodes
-    assert metadata_by_node  # graph topology is rendered
-    # The builder attaches agent identity statically per node.
-    builder_nodes = {
-        node_name
-        for node_name in (
-            "public_signal_agent",
-            "internal_knowledge_agent",
-            "risk_assessment_agent",
-            "response_strategy_agent",
-        )
-    }
-    assert builder_nodes <= set(metadata_by_node)
-
-
-# 安装子图调用记录器，以检查传入配置。
-def _spy_subgraph_call(graph: Any, journal: list[dict[str, Any]]):
-    original = graph.ainvoke
-
-    # 记录子图调用配置后委托原实现。
-    async def spy(value: Any, config: Any = None, **kwargs: Any) -> Any:
-        journal.append({"event": "subgraph_call", "metadata": (config or {}).get("metadata")})
-        return await original(value, config, **kwargs)
-
-    return spy
-
-
-# 验证图关联元数据传递到子节点与工具调用。
 @pytest.mark.integration
 def test_graph_metadata_propagates_to_children(monkeypatch):
-    """Node metadata and config metadata must reach LLM/tool child runs."""
-    monkeypatch.setenv("LANGSMITH_TRACING", "true")
-    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_pt_test-only")
-    monkeypatch.setenv("LANGSMITH_ENDPOINT", "http://127.0.0.1:9")
+    """Business model/tool callbacks accept bounded correlation without an engine."""
+    calls = []
 
-    # 定义追踪传播测试使用的最小图状态。
-    class _State(TypedDict, total=False):
-        value: int
-
-    calls: list[dict[str, Any]] = []
-
-    # 记录测试工具调用，并返回固定成功结果。
-    def _search(query: str) -> str:
-        """fixture search"""
-        calls.append({"tool": "dbhub__execute_sql"})
+    async def search(query: str) -> str:
+        calls.append(query)
         return "ok"
 
     tool = StructuredTool.from_function(
-        _search,
+        coroutine=search,
         name="dbhub__execute_sql",
+        description="fixture read",
         metadata={"tool_domain": "database", "mcp_server": "dbhub"},
     )
 
-    # 在真实图节点内调用模型与工具，检查关联元数据向子调用传播。
-    async def node(state):
+    async def run():
+        cfg = {
+            "metadata": {
+                **node_metadata("public_signal_agent", kind="agent"),
+                "logical_run_id": "workflow_meta",
+            }
+        }
         model = GenericFakeChatModel(messages=iter(["hi"]))
-        await model.ainvoke([HumanMessage(content="x")])
-        await tool.ainvoke({"query": "x"})
-        return {"value": 1}
+        await model.ainvoke([HumanMessage(content="x")], config=cfg)
+        await tool.ainvoke({"query": "x"}, config=cfg)
 
-    builder = StateGraph(_State)
-    builder.add_node(
-        "public_signal_agent",
-        node,
-        metadata=node_metadata("public_signal_agent", kind="agent"),
-    )
-    builder.add_edge(START, "public_signal_agent")
-    builder.add_edge("public_signal_agent", END)
-    graph = builder.compile(name=WORKFLOW_NAME)
-
-    asyncio.run(
-        graph.ainvoke(
-            {"value": 0},
-            {
-                "configurable": {"thread_id": "thread-meta"},
-                "metadata": {"logical_run_id": "workflow_meta"},
-            },
-        )
-    )
-    assert calls == [{"tool": "dbhub__execute_sql"}]  # executed exactly once
+    asyncio.run(run())
+    assert calls == ["x"]
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@ from typing import Any, List, Optional
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from open_deep_research.config_values import without_retired_execution_selectors
+
 
 # 定义可选搜索供应商，供配置解析和工具注册使用。
 class SearchAPI(Enum):
@@ -168,14 +170,6 @@ class Configuration(BaseModel):
                 "description": "Maximum number of tool calling iterations to make in a single researcher step."
             }
         }
-    )
-    business_agent_runtime: str = Field(
-        default="legacy",
-        description="Business role runtime: legacy or openai_agents. Workflow and Web defaults remain legacy.",
-    )
-    workflow_backend: str = Field(
-        default="langgraph",
-        description="Explicit Python API workflow selection: langgraph or python. Web integration remains unchanged.",
     )
     workflow_step_timeout_seconds: float | None = Field(
         default=None,
@@ -1552,15 +1546,17 @@ class Configuration(BaseModel):
             return normalized_items or None
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_retired_execution(cls, values: Any) -> Any:
+        """Discard supported migration aliases and fail closed for old engines."""
+        return without_retired_execution_selectors(values) if isinstance(values, dict) else values
+
     # 检查分块、检索、模型预算等配置约束，并应用路径兼容规则。
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> "Configuration":
         """Validate local RAG chunking and budget settings."""
         _apply_rag_path_compatibility(self)
-        if self.business_agent_runtime not in {"legacy", "openai_agents"}:
-            raise ValueError("business_agent_runtime must be legacy or openai_agents.")
-        if self.workflow_backend not in {"langgraph", "python"}:
-            raise ValueError("workflow_backend must be langgraph or python.")
         if self.context_strategy.strip().lower() not in {
             "auto",
             "standard",
@@ -1735,7 +1731,12 @@ class Configuration(BaseModel):
         cls, config: Optional[RunnableConfig] = None
     ) -> "Configuration":
         """Create a Configuration instance from a RunnableConfig."""
-        configurable = config.get("configurable", {}) if config else {}
+        configurable = without_retired_execution_selectors(config.get("configurable", {}) if config else {})
+        without_retired_execution_selectors({
+            name: os.environ[name.upper()]
+            for name in ("workflow_backend", "business_agent_runtime")
+            if name.upper() in os.environ
+        })
         field_names = list(cls.model_fields.keys())
         values: dict[str, Any] = {
             field_name: os.environ.get(field_name.upper(), configurable.get(field_name))
@@ -1748,8 +1749,6 @@ class Configuration(BaseModel):
             # Credentials, service locations and resource/budget policy remain
             # operator-controlled. The legacy parsing order is unchanged.
             for field_name in (
-                "workflow_backend",
-                "business_agent_runtime",
                 "allow_plan_feedback",
                 "allow_clarification",
                 "research_model",

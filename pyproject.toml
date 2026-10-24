@@ -9,14 +9,13 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
-    "langgraph>=0.5.4",
     "langchain-core>=1.2.22,<2.0.0",
+    "langchain-classic>=1.0.0,<2.0.0",
     "langchain-community>=0.3.9",
     "langchain-openai>=0.3.28",
     "langchain-anthropic>=0.3.15",
     "langchain-mcp-adapters>=0.1.6",
     "langchain-deepseek>=0.1.2",
-    "langchain-tavily",
     "langchain-groq>=0.2.4",
     "openai>=1.99.2",
     "openai-agents==0.24.0",
@@ -28,11 +27,9 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "httpx>=0.24.0",
     "rich>=13.0.0",
-    "langgraph-cli[inmem]>=0.3.1",
     "langsmith>=0.3.37",
     "langchain-google-vertexai>=2.0.25",
     "langchain-google-genai>=2.1.5",
-    "supabase>=2.15.3",
     "mcp>=1.9.4",
     "markitdown-mcp>=0.0.1a4",
     "langchain-aws>=0.2.28",
@@ -51,7 +48,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest"]
+dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest", "pytest-socket>=0.7.0"]
 notebooks = ["ipykernel>=6.29.5"]
 web = ["fastapi>=0.115.0", "uvicorn[standard]>=0.34.0"]
 
@@ -59,6 +56,7 @@ web = ["fastapi>=0.115.0", "uvicorn[standard]>=0.34.0"]
 social-media-mcp = "open_deep_research.social_media_mcp:main"
 apify-social-api = "open_deep_research.social_media_apify_api:main"
 deep-research-web = "open_deep_research.web.server:main"
+deep-research = "open_deep_research.web.cli:main"
 deep-research-executor = "open_deep_research.web.executor:main"
 
 [build-system]
@@ -67,7 +65,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["open_deep_research*", "security*"]
+include = ["open_deep_research*"]
 exclude = ["*.tests", "*.tests.*"]
 namespaces = true
 

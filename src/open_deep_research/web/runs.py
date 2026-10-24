@@ -13,7 +13,10 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
-from open_deep_research.configuration import DEFAULT_PUBLIC_OPINION_AGENTS
+from open_deep_research.configuration import (
+    DEFAULT_PUBLIC_OPINION_AGENTS,
+    Configuration,
+)
 from open_deep_research.web.durable import get_run_client
 from open_deep_research.web.run_data import (
     TERMINAL,
@@ -71,8 +74,6 @@ def accepted_config(body: dict) -> dict:
     }[body["mode"]]
     return {
         "configurable": dict(
-            workflow_backend="python",
-            business_agent_runtime="openai_agents",
             research_model=body["model"],
             compression_model=body["model"],
             final_report_model=body["model"],
@@ -99,6 +100,7 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
     from open_deep_research.web.server import ResearchRequest
 
     owner = trusted_owner(raw)
+    key = _key(raw)
     permitted = {
         "topic",
         "model",
@@ -117,13 +119,6 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
         request = ResearchRequest.model_validate(body)
     except ValidationError:
         raise HTTPException(400, "Invalid research request.") from None
-    if (
-        request.workflow_backend != "python"
-        or request.business_agent_runtime != "openai_agents"
-    ):
-        raise HTTPException(
-            400, "Durable Runs require explicit python/openai_agents selection."
-        )
     # The SDK provider adapter currently supports these Web model families.
     if (
         not request.model.startswith(("openai:", "deepseek:"))
@@ -136,12 +131,20 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
     if session_id is not None and not re.fullmatch(r"[a-f0-9]{32}", str(session_id)):
         raise HTTPException(400, "Invalid research Session.")
     data = request.model_dump()
+    config = accepted_config(data)
+    try:
+        Configuration.from_runnable_config(config)
+    except ValueError:
+        raise HTTPException(
+            503,
+            "Research configuration is unavailable; migrate retired runtime settings to DBOS/SDK.",
+        ) from None
     return _call(
         _store().create,
         owner,
-        _key(raw),
+        key,
         data,
-        accepted_config(data),
+        config,
         {"messages": [HumanMessage(content=request.topic)]},
         session_id=session_id,
     )

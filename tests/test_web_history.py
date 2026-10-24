@@ -1,7 +1,6 @@
 # 验证报告归档、历史授权、分页导入及失败和取消运行的阶段输出恢复。
 """Verify report archiving, history authorization, and LangSmith imports."""
 
-import asyncio
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -35,75 +34,70 @@ def stream_events(response):
 
 
 # 验证报告交付前完成归档，并可重新打开。
-def test_report_is_archived_before_delivery_and_reopens(monkeypatch, store):
-    usage = {
-        "model_calls": 3,
-        "input_tokens": 120,
-        "output_tokens": 80,
-        "total_tokens": 200,
+@pytest.mark.integration
+def test_report_is_archived_before_delivery_and_reopens(native_case, monkeypatch):
+    case = native_case
+    run = case.create(owner="operator")
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    record = case.history.get(result["history_id"], owner="operator")
+    assert record["report"] == result["report"]
+    assert record["usage"] == {
+        k: result["usage"][k]
+        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
     }
-
-    # 为归档场景提供可控的图流事件与退出状态。
-    class Graph:
-        # 检查运行关联配置，并发出完整报告和用量事件。
-        async def astream(self, _state, config, **_kwargs):
-            self.run_id = config["configurable"]["thread_id"]
-            assert config["metadata"]["web_research_mode"] == "fast"
-            yield {
-                "final_report_generation": {
-                    "report": {"final": "# 完整报告\n研究结论"},
-                    "runtime": {"budget": usage},
-                }
-            }
-
-    graph = Graph()
-    monkeypatch.setattr(server, "_deep_researcher_factory", lambda _config: graph)
-    request = {
-        "topic": "品牌质量投诉",
-        "mode": "fast",
-        "org_context": "品牌背景",
-        "rag_enabled": True,
-    }
+    assert record["run_id"] == run["run_id"]
+    assert len(record["role_reports"]) == 4
+    monkeypatch.setattr(server, "get_history_store", lambda: case.history)
+    monkeypatch.setattr(server, "WEB_API_TOKEN", "history-test-token")
     with TestClient(server.app) as client:
-        response = client.post("/api/research", json=request)
-        events = stream_events(response)
-        record = store.save.call_args.args[0][0]
-        assert record.run_id == graph.run_id
-        assert record.topic == request["topic"]
-        assert record.request["org_context"] == "品牌背景"
-        assert record.request["rag_enabled"] is True
-        assert record.usage == usage
-        assert record.report == "# 完整报告\n研究结论"
-        assert any(
-            event["type"] == "history_saved" and event["id"] == record.id
-            for event in events
+        reopened = client.get(
+            "/api/history/" + record["id"],
+            headers={"Authorization": "Bearer history-test-token"},
         )
-        assert events[-1] == {"type": "done"}
-        store.get.return_value = record.model_dump()
-        reopened = client.get(f"/api/history/{record.id}")
         assert reopened.status_code == 200
-        assert reopened.json()["report"] == record.report
+        assert reopened.json()["report"] == record["report"]
         assert reopened.headers["cache-control"] == "no-store"
+    events = case.client.read_events(run["run_id"], "operator", 0, 1000)
+    assert any(e["type"] == "history_saved" for e in events)
+    assert any(e["type"] == "done" for e in events)
 
 
 # 验证归档失败不会丢失已生成报告。
-def test_archive_failure_keeps_the_report_available(monkeypatch, store):
-    store.save.side_effect = RuntimeError("SECRET_DSN=neo4j://password@internal")
+@pytest.mark.integration
+def test_archive_failure_keeps_the_report_available(native_case, monkeypatch):
+    import threading
 
-    # 为归档场景提供可控的图流事件与退出状态。
-    class Graph:
-        # 发出已生成报告，供归档失败后的交付检查。
-        async def astream(self, *_args, **_kwargs):
-            yield {"final_report_generation": {"report": {"final": "Generated report"}}}
+    case = native_case
+    outage = threading.Event()
+    outage.set()
+    original = case.history.save
 
-    monkeypatch.setattr(server, "_deep_researcher_factory", lambda _config: Graph())
-    with TestClient(server.app) as client:
-        response = client.post("/api/research", json={"topic": "品牌投诉"})
-    events = stream_events(response)
-    assert {"type": "report", "content": "Generated report"} in events
-    assert any(event["type"] == "warning" for event in events)
-    assert not any(event["type"] in {"error", "history_saved"} for event in events)
-    assert "SECRET_DSN" not in response.text
+    def save(records):
+        if outage.is_set():
+            raise history.HistoryUnavailable("SECRET_DSN=neo4j://password@internal")
+        return original(records)
+
+    monkeypatch.setattr(case.history, "save", save)
+    run = case.create()
+    result = case.wait(run)
+    assert result["status"] == "completed"
+    assert result["report"]
+    case.wait(
+        run,
+        lambda r: any(
+            e["type"] == "archive_pending"
+            for e in case.client.read_events(run["run_id"], "alice", 0, 1000)
+        ),
+    )
+    assert "SECRET_DSN" not in json.dumps(
+        case.client.read_events(run["run_id"], "alice", 0, 1000)
+    )
+    before = len(case.models)
+    outage.clear()
+    archived = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert archived["report"] == result["report"]
+    assert archived["usage"] == result["usage"]
+    assert len(case.models) == before == 4
 
 
 # 验证配置令牌后所有历史接口都执行授权。
@@ -384,131 +378,122 @@ def test_renamed_workflow_with_final_report_is_not_filtered_out():
 
 
 # 验证 SSE 运行失败后保留嵌套角色输出。
-def test_failed_sse_run_preserves_nested_role_outputs(monkeypatch, store):
-    # 为归档场景提供可控的图流事件与退出状态。
-    class Graph:
-        # 先产生嵌套角色报告再抛错，检查失败归档保留原始阶段。
-        async def astream(self, _state, _config, **kwargs):
-            assert kwargs["subgraphs"] is True
-            yield (
-                ("research_phase:1",),
-                {
-                    "public_signal_agent": {
-                        "agents": {
-                            "public_signal": {
-                                "report": {
-                                    "type": "override",
-                                    "value": "已完成的采集报告",
-                                }
-                            }
-                        }
-                    }
-                },
-            )
-            raise RuntimeError("SECRET_DSN")
+@pytest.mark.integration
+def test_failed_sse_run_preserves_nested_role_outputs(native_case, monkeypatch):
+    from open_deep_research.budget import capture_budget_usage
+    from open_deep_research.workflow import research
 
-    monkeypatch.setattr(server, "_deep_researcher_factory", lambda _config: Graph())
-    with TestClient(server.app) as client:
-        response = client.post("/api/research", json={"topic": "月饼研究"})
-    record = store.save.call_args.args[0][0]
-    assert record.status == "failed"
-    assert record.report == ""
-    assert record.role_reports[0].content == "已完成的采集报告"
-    assert record.usage == {}
-    events = stream_events(response)
-    assert any(event["type"] == "error" for event in events)
-    assert any(
-        event["type"] == "history_saved" and event["status"] == "failed"
-        for event in events
-    )
-    assert "SECRET_DSN" not in response.text
+    case = native_case
+
+    async def fail(*args):
+        capture_budget_usage({"model_calls": 1})
+        raise RuntimeError("SECRET_DSN")
+
+    monkeypatch.setattr(research, "risk_assessment_agent", fail)
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    record = case.history.get(result["history_id"], owner="alice")
+    assert record["status"] == "incomplete"
+    assert result["status"] == "interrupted"
+    assert result["settlement"] == "unresolved"
+    assert result["retry_safe"] is False
+    assert record["report"] == ""
+    assert {s["role"] for s in record["role_reports"]} == {
+        "public_signal",
+        "internal_knowledge",
+    }
+    assert record["usage"] == {
+        k: result["usage"][k]
+        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+    }
+    assert result["usage"]["model_calls"] == 22
+    events = case.client.read_events(run["run_id"], "alice", 0, 1000)
+    assert any(e["type"] == "error" for e in events)
+    assert any(e["type"] == "history_saved" for e in events)
+    assert "SECRET_DSN" not in json.dumps(events)
 
 
 # 验证没有最终报告时仍建立未完成历史记录。
-def test_no_final_report_still_creates_an_incomplete_history_record(monkeypatch, store):
-    # 为归档场景提供可控的图流事件与退出状态。
-    class Graph:
-        # 只产生角色报告而不输出最终报告，模拟未完成运行。
-        async def astream(self, *_args, **_kwargs):
-            yield {
-                "research_phase": {
-                    "agents": {"risk_assessment": {"report": "原始风险报告"}}
-                }
-            }
+@pytest.mark.integration
+def test_no_final_report_still_creates_an_incomplete_history_record(
+    native_case, monkeypatch
+):
+    from open_deep_research.workflow.dbos_workflow import OPERATIONS
 
-    monkeypatch.setattr(server, "_deep_researcher_factory", lambda _config: Graph())
-    with TestClient(server.app) as client:
-        client.post("/api/research", json={"topic": "月饼研究"})
-    record = store.save.call_args.args[0][0]
-    assert record.status == "incomplete"
-    assert record.role_reports[0].content == "原始风险报告"
+    case = native_case
+
+    async def fail(*args):
+        raise RuntimeError("Final report generation failed")
+
+    monkeypatch.setitem(OPERATIONS, "compile_final_report", fail)
+    result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
+    record = case.history.get(result["history_id"], owner="alice")
+    assert record["status"] == "incomplete"
+    assert result["status"] == "interrupted"
+    assert result["settlement"] == "unresolved"
+    assert result["retry_safe"] is False
+    assert not record["report"]
+    assert len(record["role_reports"]) == 4
+    assert record["usage"] == {
+        k: result["usage"][k]
+        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+    }
 
 
 # 验证用户取消研究后仍保存历史记录。
-def test_cancelled_run_still_creates_a_history_record(monkeypatch, store):
-    # 为归档场景提供可控的图流事件与退出状态。
-    class Graph:
-        # 模拟流中的取消异常，检查取消运行的归档行为。
-        async def astream(self, *_args, **_kwargs):
-            if False:
-                yield {}
-            raise asyncio.CancelledError()
+@pytest.mark.integration
+@pytest.mark.parametrize("native_case", ["cancel"], indirect=True)
+def test_cancelled_run_still_creates_a_history_record(native_case):
+    import time
 
-    monkeypatch.setattr(server, "_deep_researcher_factory", lambda _config: Graph())
-    with TestClient(server.app) as client:
-        response = client.post("/api/research", json={"topic": "月饼研究"})
-    assert store.save.call_args.args[0][0].status == "cancelled"
-    assert any(event["type"] == "history_saved" for event in stream_events(response))
+    case = native_case
+    run = case.create()
+    deadline = time.monotonic() + 15
+    while not case.blocked.is_set() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert case.blocked.is_set()
+    case.client.cancel(run["run_id"], "alice")
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    record = case.history.get(result["history_id"], owner="alice")
+    assert record["status"] == result["status"] == "cancelled"
+    assert record["usage"] == {
+        k: result["usage"][k]
+        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+    }
+    assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
+    assert any(
+        e["type"] == "history_saved"
+        for e in case.client.read_events(run["run_id"], "alice", 0, 1000)
+    )
 
 
 # 验证真实 LangGraph 嵌套失败时已完成阶段仍可恢复。
-def test_real_langgraph_nested_failure_retains_finished_stage(monkeypatch, store):
-    from langgraph.graph import END, START, StateGraph
-    from typing_extensions import TypedDict
+@pytest.mark.integration
+def test_real_dbos_nested_failure_retains_finished_stage(native_case, monkeypatch):
+    from open_deep_research.workflow import research
 
-    # 定义嵌套失败测试所需的最小 LangGraph 状态。
-    class State(TypedDict, total=False):
-        messages: list
-        agents: dict
+    case = native_case
 
-    # 返回已完成采集阶段的原始报告，供后续失败恢复。
-    async def collect_signal(_state):
-        return {
-            "agents": {
-                "public_signal": {
-                    "report": {"type": "override", "value": "真实子图阶段输出"}
-                }
-            }
-        }
+    async def fail(*args):
+        raise RuntimeError("Later strategy failure")
 
-    # 模拟后续策略角色失败，检查上游成功输出仍保留。
-    async def fail_strategy(_state):
-        raise RuntimeError("Later agent failure")
-
-    child = StateGraph(State)
-    child.add_node("public_signal_agent", collect_signal)
-    child.add_node("response_strategy_agent", fail_strategy)
-    child.add_edge(START, "public_signal_agent")
-    child.add_edge("public_signal_agent", "response_strategy_agent")
-    child.add_edge("response_strategy_agent", END)
-    child_graph = child.compile()
-
-    # 将状态和配置转发给真实测试子图。
-    async def research_phase(state, config):
-        return await child_graph.ainvoke(state, config)
-
-    parent = StateGraph(State)
-    parent.add_node("research_phase", research_phase)
-    parent.add_edge(START, "research_phase")
-    parent.add_edge("research_phase", END)
-    monkeypatch.setattr(
-        server, "_deep_researcher_factory", lambda _config: parent.compile()
-    )
-    with TestClient(server.app) as client:
-        client.post("/api/research", json={"topic": "月饼研究"})
-    record = store.save.call_args.args[0][0]
-    assert record.status == "failed"
-    assert record.role_reports[0].content == "真实子图阶段输出"
+    monkeypatch.setattr(research, "response_strategy_agent", fail)
+    result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
+    record = case.history.get(result["history_id"], owner="alice")
+    assert record["status"] == "incomplete"
+    assert result["status"] == "interrupted"
+    assert result["settlement"] == "unresolved"
+    assert result["retry_safe"] is False
+    assert {s["role"] for s in record["role_reports"]} == {
+        "public_signal",
+        "internal_knowledge",
+        "risk_assessment",
+    }
+    assert record["usage"] == {
+        k: result["usage"][k]
+        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+    }
+    assert len(case.models) == 3
 
 
 # 验证同批导入中的后续失败恢复不会掩盖已有完整报告。

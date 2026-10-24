@@ -1,5 +1,7 @@
 # 项目源码学习型 PPT
 
+> 历史材料：保留原取证提交与图表，不代表 Phase 5 运行架构。当前调用链见 [业务执行](../architecture/agent-loop.md) 和 [Phase 5 审计](../audits/openai-agents-phase5.md)。
+
 本目录保存 Public Opinion Research 的源码与架构学习手册。内容以默认主分支 `origin/main` 的代码树为基准；分析时默认主分支为 `origin/main`，提交为 `12e2f0e`。当前工作树 HEAD 为 `41f180b`，两者文件内容无差异，差别仅来自合并提交历史。
 
 ## 交付物

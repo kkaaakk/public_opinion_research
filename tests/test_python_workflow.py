@@ -506,13 +506,12 @@ def test_python_incompatible_paths_rejected_before_io(updates):
         asyncio.run(PythonWorkflow().ainvoke(initial(), config(**updates)))
 
 
-def test_backend_selection_keeps_default_native_graph():
-    from langgraph.pregel import Pregel
-
-    assert isinstance(get_workflow({}), Pregel)
-    with pytest.raises(ValueError, match="durable Run API"):
-        get_workflow(config())
-    assert Configuration.from_runnable_config({}).business_agent_runtime == "legacy"
+def test_backend_selection_rejects_retired_in_process_factory():
+    for cfg in ({}, config()):
+        with pytest.raises(ValueError, match="durable Run API"):
+            get_workflow(cfg)
+    assert "business_agent_runtime" not in Configuration.model_fields
+    assert "workflow_backend" not in Configuration.model_fields
     with pytest.raises(ValueError):
         Configuration(workflow_backend="unknown")
     with pytest.raises(ValueError):
@@ -532,16 +531,18 @@ def test_failure_kinds(error, kind):
 
 
 def test_python_workflow_does_not_compile_or_invoke_legacy_graph(monkeypatch):
-    from langgraph.graph import StateGraph
-    from langgraph.types import Send
+    import builtins
 
-    def forbidden(*args, **kwargs):
-        raise AssertionError("LangGraph scheduling entered Python path")
+    original = builtins.__import__
+
+    def guarded(name, *args, **kwargs):
+        if name.startswith("langgraph"):
+            raise AssertionError("retired engine import")
+        return original(name, *args, **kwargs)
 
     async def run():
         install_steps(monkeypatch)
-        monkeypatch.setattr(StateGraph, "compile", forbidden)
-        monkeypatch.setattr(Send, "__init__", forbidden)
+        monkeypatch.setattr(builtins, "__import__", guarded)
         assert (
             await PythonWorkflow().ainvoke(initial(), config(), start_at="research")
         )["report"]["final"]

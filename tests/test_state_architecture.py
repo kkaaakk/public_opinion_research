@@ -9,7 +9,7 @@ import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.memory.writer as memory_writer
 import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
-from open_deep_research.runtime import AgentRuntime
+from open_deep_research.runtime import SDKAgentRuntime as AgentRuntime
 from open_deep_research.state import (
     AgentState,
     DeepResearchState,
@@ -38,7 +38,12 @@ def _task(task_id: str, role: str = "public_signal") -> ResearchTask:
 def test_top_level_state_contains_only_owned_domains_and_messages() -> None:
     """The checkpoint schema exposes six stable top-level concepts."""
     assert set(DeepResearchState.__annotations__) == {
-        "messages", "workflow", "agents", "research", "report", "runtime"
+        "messages",
+        "workflow",
+        "agents",
+        "research",
+        "report",
+        "runtime",
     }
 
 
@@ -47,8 +52,8 @@ def test_state_aliases_share_one_schema_source_of_truth() -> None:
     """Main, subgraph, and compatibility names resolve to one schema object."""
     assert AgentState is DeepResearchState
     assert PublicOpinionState is DeepResearchState
-    assert deep_researcher_module.deep_researcher_builder.state_schema is DeepResearchState
-    assert deep_researcher_module.public_opinion_builder.state_schema is DeepResearchState
+    assert not hasattr(deep_researcher_module, "deep_researcher_builder")
+    assert not hasattr(deep_researcher_module, "public_opinion_builder")
 
 
 # 验证并行角色的报告、记忆和摘要不会互相覆盖。
@@ -90,9 +95,7 @@ def test_working_context_and_runtime_updates_merge_without_cross_role_loss() -> 
         {"budget": {"model_calls": 1}, "metrics": {"retrieved_nodes": 2}},
         {"budget": {"model_calls": 2}, "metrics": {"retrieved_nodes": 3}},
     )
-    assert set(research["working_contexts"]) == {
-        "public_signal", "internal_knowledge"
-    }
+    assert set(research["working_contexts"]) == {"public_signal", "internal_knowledge"}
     assert runtime["budget"]["model_calls"] == 3
     assert runtime["metrics"]["retrieved_nodes"] == 5
 
@@ -103,9 +106,11 @@ def test_followup_send_transports_domain_packets() -> None:
     task = _task("gap-1")
     state = {
         "messages": [],
-        "workflow": {"brief": "brief", "round": 1, "review": ResearchReview(
-            research_complete=False, next_tasks=[task]
-        )},
+        "workflow": {
+            "brief": "brief",
+            "round": 1,
+            "review": ResearchReview(research_complete=False, next_tasks=[task]),
+        },
         "agents": {"public_signal": {"report": "round one"}},
         "research": {"run_id": "run-1", "working_contexts": {}},
         "report": {},
@@ -113,7 +118,12 @@ def test_followup_send_transports_domain_packets() -> None:
     }
     payload = deep_researcher_module._build_followup_send_payload(state, [task], 2)
     assert set(payload) == {
-        "messages", "workflow", "agents", "research", "report", "runtime"
+        "messages",
+        "workflow",
+        "agents",
+        "research",
+        "report",
+        "runtime",
     }
     assert payload["workflow"]["pending_tasks"][0]["task_id"] == "gap-1"
     assert "research_mode" not in payload
@@ -144,7 +154,9 @@ def test_private_memory_has_one_dynamic_context_entry() -> None:
     )
     spec = get_public_opinion_agent_spec("public_signal")
     system_prompt = spec.format_system_prompt(
-        retrieval_tool_prompt="tools", mcp_prompt="", date="2026-09-12",
+        retrieval_tool_prompt="tools",
+        mcp_prompt="",
+        date="2026-09-12",
         organization_context="org",
     )
     dynamic_context = AgentRuntime.format_private_memory(

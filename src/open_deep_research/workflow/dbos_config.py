@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
 APP = "public-opinion-research"
-VERSION = "dbos-phase4-v2"
+VERSION = "dbos-phase5-v1"
 SDK_VERSION = "0.24.0"
 CONTROL = "por-control"
 BUSINESS = "por-business"

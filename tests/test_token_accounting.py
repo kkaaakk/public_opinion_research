@@ -13,15 +13,14 @@ from typing import Any
 import pytest
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain_core.tools import tool
 
 import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
     budget_from_model_accounting,
-    estimate_context_tokens,
+    empty_budget_usage,
     model_accounting_config,
     start_budget_capture,
     stop_budget_capture,
@@ -30,12 +29,10 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.research_graph.context_manager import ContextManager
 from open_deep_research.research_graph.extractor import GraphExtractor
-from open_deep_research.research_graph.metrics import ResearchGraphMetrics
 from open_deep_research.research_graph.models import (
     ResearchGraphScope,
     WorkingContext,
 )
-from open_deep_research.runtime.agent_runtime import AgentRuntime
 from open_deep_research.search.tavily import summarize_webpage
 
 LARGE_USAGE = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
@@ -128,7 +125,9 @@ def test_structured_raw_usage_is_preserved_and_parsed_still_works():
     chain = structured_output_chain(ScriptedChat(), ClarifyWithUser, max_attempts=2)
     handler = UsageMetadataCallbackHandler()
 
-    envelope = asyncio.run(chain.ainvoke([HumanMessage(content="hi")], config={"callbacks": [handler]}))
+    envelope = asyncio.run(
+        chain.ainvoke([HumanMessage(content="hi")], config={"callbacks": [handler]})
+    )
 
     assert envelope["raw"].usage_metadata == LARGE_USAGE
     assert envelope["parsed"].verification == "ok"
@@ -331,7 +330,9 @@ def test_boundary_preserves_base_exception_and_leaves_capture_balanced():
         token = start_budget_capture()
         try:
             with pytest.raises(FatalError):
-                await ainvoke_model_with_budget(FatalRunnable(), [HumanMessage(content="hi")])
+                await ainvoke_model_with_budget(
+                    FatalRunnable(), [HumanMessage(content="hi")]
+                )
         finally:
             captured = stop_budget_capture(token)
         return captured, stop_budget_capture(start_budget_capture())
@@ -436,7 +437,9 @@ def test_nested_retry_exhaustion_keeps_attempts_in_tool_capture():
 
 # 构造图用量测试的固定运行范围。
 def _scope() -> ResearchGraphScope:
-    return ResearchGraphScope(run_id="run-a", role="public_signal", research_round=1, task_id="t1")
+    return ResearchGraphScope(
+        run_id="run-a", role="public_signal", research_round=1, task_id="t1"
+    )
 
 
 # 验证图抽取器返回模型实际上报的用量。
@@ -458,7 +461,9 @@ def test_graph_extractor_reports_exact_usage():
     from open_deep_research.research_graph.models import RawResearchDocument
 
     documents = [
-        RawResearchDocument(source_id="SRC1", content="Official notice confirms a brake investigation.")
+        RawResearchDocument(
+            source_id="SRC1", content="Official notice confirms a brake investigation."
+        )
     ]
 
     result = asyncio.run(extractor.extract(documents, scope=_scope()))
@@ -587,245 +592,160 @@ def test_research_review_node_reports_structured_usage(monkeypatch):
 
 
 # 提供可控制上下文与压缩结果的工作区替身。
-class _CompactionWorkspace:
-    """Minimal workspace whose model_factory returns a scripted compactor."""
+def _sdk_compaction(config, *, instructions="system", tools=None):
+    from agents import Agent
+    from agents.run import ModelInputData
+    from test_sdk_runtime import _runtime as sdk_runtime
 
-    # 初始化工作区任务、受保护内容和调用状态。
-    def __init__(self, protected: str = "") -> None:
-        self.rolling_summary = ""
-        self.metrics = ResearchGraphMetrics()
-        self.transcript = None
-        self.scope = SimpleNamespace(research_round=1)
-        self.protected = protected
+    from open_deep_research.runtime.sdk_runtime import _BusinessAgentHarness, _RunBudget
 
-    # 返回压缩时必须保留的测试上下文。
-    def protected_context(self) -> str:
-        return self.protected
-
-    # 返回供压缩和研究调用使用的预设模型。
-    def model_factory(self, _model_name, _max_tokens):
-        return ScriptedChat()
-
-    # 构造下一次模型调用的测试上下文。
-    async def before_model(self, messages):
-        return list(messages)
-
-    # 提供工具批次接收接口，返回预设工作区结果。
-    async def ingest(self, messages, _batch):
-        return SimpleNamespace(messages=list(messages), budget_usage={})
-
-    # 提供角色收尾接口，返回测试最终结果。
-    async def finalize(self, _messages, _expected_output):
-        return None
-
-
-# 装配运行时及模型、工作区替身，供上下文压力测试。
-def _runtime(workspace, configurable: Configuration, *, model=None, system_prompt="system", tools=None):
-    # 返回固定压缩输出，隔离报告模型调用。
-    async def compress_report(_messages, _task, _contract, _budget):
-        return "compressed report", [], {}
-
-    return AgentRuntime(
-        role="public_signal",
-        spec=SimpleNamespace(expected_output="evidence", display_name="Public Signal"),
-        agent_state={},
-        workspace=workspace,
-        config=configurable,
-        runtime_config={},
-        model=model or ScriptedChat(),
-        system_prompt=system_prompt,
-        tools=tools or [],
-        initial_budget={},
-        execute_tool=None,
-        compress_report=compress_report,
+    runtime = sdk_runtime(role="risk_assessment", config=config)
+    runtime.workspace.model_factory = lambda *_: ScriptedChat()
+    harness = _BusinessAgentHarness(
+        workspace=runtime.workspace,
+        config=config,
+        budget=_RunBudget({}),
+        evidence_tools=frozenset(),
     )
-
-
-# 创建包含 AI 与配对工具消息的测试历史。
-def _history(steps: int) -> list:
-    messages: list = [HumanMessage(content="assignment")]
-    for index in range(steps):
-        messages.append(
-            AIMessage(
-                content=f"step {index}",
-                tool_calls=[{"name": "web_search", "args": {}, "id": f"call-{index}"}],
-            )
+    items = [{"role": "user", "content": "assignment"}]
+    for index in range(4):
+        call = {
+            "type": "function_call",
+            "call_id": f"c{index}",
+            "name": "lookup",
+            "arguments": "{}",
+        }
+        harness._response_starts.append(harness._item_key(call))
+        items.extend(
+            [
+                call,
+                {
+                    "type": "function_call_output",
+                    "call_id": f"c{index}",
+                    "output": "raw result " * 300,
+                },
+            ]
         )
-        messages.append(
-            ToolMessage(
-                content="raw result " * 100,
-                name="web_search",
-                tool_call_id=f"call-{index}",
-            )
-        )
-    return messages
+    data = ModelInputData(input=items, instructions=instructions)
+    agent = Agent(name="fixture", tools=tools or [])
+    return harness, data, agent
 
 
-# 构造一次滚动压缩的脚本响应。
-def _compaction_step(summary: str = "compacted history"):
-    return _tool_step("RollingCompactOutput", {"rolling_summary": summary})
+def _compact_sdk(harness, data, agent):
+    token = start_budget_capture()
+    try:
+        result = asyncio.run(harness._compact_history(data, agent))
+    finally:
+        usage = stop_budget_capture(token)
+    return result, usage
 
 
-# 验证高上下文占用会触发压缩。
 def test_high_context_pressure_triggers_compaction():
-    _script(_compaction_step())
-    runtime = _runtime(
-        _CompactionWorkspace(),
-        Configuration(
-            research_graph_context_capacity_tokens=300,
-            context_compaction_threshold_ratio=0.75,
-            context_warning_ratio=0.6,
-            recent_raw_steps=1,
-        ),
+    _script(
+        _tool_step("RollingCompactOutput", {"rolling_summary": "compacted history"})
     )
-    messages = _history(steps=4)
-    model_messages = [SystemMessage(content="system"), *messages]
-
-    compacted, budget = asyncio.run(runtime._compact_history(messages, model_messages))
-
+    harness, data, agent = _sdk_compaction(
+        Configuration(research_graph_context_capacity_tokens=1800, recent_raw_steps=1)
+    )
+    compacted, budget = _compact_sdk(harness, data, agent)
     assert budget["model_calls"] == 1
-    assert len(compacted) == 4
-    assert compacted[0].content == "assignment"
+    assert len(compacted.input) == 4
+    assert compacted.input[0] == data.input[0]
+    assert harness._compacted_turns == {0, 1, 2}
 
 
-# 验证低压力时保留原历史且不额外调用压缩模型。
 def test_low_context_pressure_skips_compaction():
     _script()
-    runtime = _runtime(
-        _CompactionWorkspace(),
-        Configuration(
-            research_graph_context_capacity_tokens=1_000_000,
-            context_compaction_threshold_ratio=0.75,
-        ),
+    harness, data, agent = _sdk_compaction(
+        Configuration(research_graph_context_capacity_tokens=1_000_000)
     )
-    messages = _history(steps=1)
-
-    compacted, budget = asyncio.run(runtime._compact_history(messages, messages))
-
-    assert compacted == messages
-    assert budget == {}
+    compacted, budget = _compact_sdk(harness, data, agent)
+    assert compacted.input == data.input
+    assert budget == empty_budget_usage()
+    assert harness._compacted_turns == set()
 
 
-# 验证系统提示词计入实际请求压力。
 def test_system_prompt_is_part_of_context_pressure():
-    """Small history + huge system prompt must trigger compaction."""
-    _script(_compaction_step())
-    runtime = _runtime(
-        _CompactionWorkspace(),
-        Configuration(
-            research_graph_context_capacity_tokens=500,
-            context_compaction_threshold_ratio=0.75,
-            context_warning_ratio=0.6,
-            recent_raw_steps=1,
-        ),
-        system_prompt="system policy " * 2000,
+    from open_deep_research.runtime.sdk_runtime import SDKContextLimitExceeded
+
+    _script(_tool_step("RollingCompactOutput", {"rolling_summary": "short"}))
+    harness, data, agent = _sdk_compaction(
+        Configuration(research_graph_context_capacity_tokens=1800),
+        instructions="system policy " * 3000,
     )
-    messages = _history(steps=2)
-    model_messages = [SystemMessage(content=runtime.system_prompt), *messages]
-
-    compacted, budget = asyncio.run(runtime._compact_history(messages, model_messages))
-
-    assert budget["model_calls"] == 1
-    assert len(compacted) < len(messages)
+    # Protected instructions cannot be discarded just to send an oversized call.
+    with pytest.raises(SDKContextLimitExceeded, match="cannot fit"):
+        _compact_sdk(harness, data, agent)
+    assert harness._compacted_turns == set()
 
 
-# 验证工具结构占用也影响压缩决策。
 def test_tools_are_part_of_context_pressure():
-    # 提供占用较大参数结构的工具，检查工具定义计入上下文压力。
-    @tool(description="huge schema " * 3000)
-    def huge_tool(query: str) -> str:
-        """A tool with a large schema."""
-        return ""
+    from agents import FunctionTool
 
-    messages = _history(steps=2)
-    model_messages = [SystemMessage(content="system"), *messages]
-    without_tools = estimate_context_tokens(model_messages)
-    with_tools = estimate_context_tokens(model_messages, tools=[huge_tool])
-    assert with_tools > without_tools
+    from open_deep_research.runtime.sdk_runtime import SDKContextLimitExceeded
 
-    _script(_compaction_step())
-    # Capacity chosen between the two estimates: only the tool schema triggers compaction.
-    capacity = max(1, int(with_tools / 0.75) - 10)
-    runtime = _runtime(
-        _CompactionWorkspace(),
-        Configuration(
-            research_graph_context_capacity_tokens=capacity,
-            context_compaction_threshold_ratio=0.75,
-            context_warning_ratio=0.6,
-            recent_raw_steps=1,
-        ),
-        tools=[huge_tool],
+    async def invoke(*args):
+        raise AssertionError("capacity rejection must precede tool execution")
+
+    huge = FunctionTool(
+        name="huge",
+        description="large schema",
+        params_json_schema={"type": "object", "description": "schema " * 8000},
+        on_invoke_tool=invoke,
     )
+    _script(_tool_step("RollingCompactOutput", {"rolling_summary": "short"}))
+    harness, data, agent = _sdk_compaction(
+        Configuration(research_graph_context_capacity_tokens=1800), tools=[huge]
+    )
+    assert harness._estimate(data, agent) > harness._estimate(
+        data, type(agent)(name="empty")
+    )
+    with pytest.raises(SDKContextLimitExceeded, match="cannot fit"):
+        _compact_sdk(harness, data, agent)
+    assert harness._compacted_turns == set()
 
-    compacted, budget = asyncio.run(runtime._compact_history(messages, model_messages))
 
-    assert budget["model_calls"] == 1
-    assert len(compacted) < len(messages)
-
-
-# 验证估算与真实请求使用同一消息结构。
 def test_pressure_estimation_uses_the_same_message_structure_as_the_call():
-    _script(_compaction_step())
-    capacity = 500
-    runtime = _runtime(
-        _CompactionWorkspace(),
-        Configuration(
-            research_graph_context_capacity_tokens=capacity,
-            context_compaction_threshold_ratio=0.75,
-            context_warning_ratio=0.6,
-            recent_raw_steps=1,
-        ),
-        system_prompt="system policy " * 2000,
+    import json
+
+    from open_deep_research.budget import estimate_text_tokens
+
+    harness, data, agent = _sdk_compaction(
+        Configuration(research_graph_context_capacity_tokens=1_000_000)
     )
-    messages = _history(steps=2)
-    model_messages = [SystemMessage(content=runtime.system_prompt), *messages]
-
-    asyncio.run(runtime._compact_history(messages, model_messages))
-
-    # The estimate the runtime used is exactly the official counter over model_messages.
-    assert estimate_context_tokens(model_messages) >= capacity * 0.75
-
-
-# 验证运行时在发送模型请求前完成上下文检查。
-def test_agent_runtime_checks_context_before_invoking_the_model():
-    events: list[str] = []
-    _script(_text_step("done"))
-
-    # 记录模型真实执行顺序，检查压力评估先于请求。
-    class _RecordingModel(ScriptedChat):
-        # 记录模型执行事件后委托原脚本生成器。
-        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-            events.append("model")
-            return super()._generate(messages, stop, run_manager, **kwargs)
-
-    workspace = _CompactionWorkspace()
-
-    # 记录请求构建步骤并保留原消息列表。
-    async def _before_model(messages):
-        events.append("build_request")
-        return list(messages)
-
-    workspace.before_model = _before_model
-    runtime = _runtime(
-        workspace,
-        Configuration(research_graph_context_capacity_tokens=10_000),
-        model=_RecordingModel(),
+    actual = json.dumps(
+        {"instructions": data.instructions, "input": data.input, "tools": []},
+        ensure_ascii=False,
+        default=str,
     )
+    assert harness._estimate(data, agent) == estimate_text_tokens(actual)
+    compacted, budget = _compact_sdk(harness, data, agent)
+    assert compacted.input == data.input
+    assert budget == empty_budget_usage()
 
-    original_compact = runtime._compact_history
 
-    # 记录上下文压力检查顺序后委托原压缩实现。
-    async def _record_compact(messages, model_messages):
+def test_agent_runtime_checks_context_before_invoking_the_model(monkeypatch):
+    from agents.testing import ModelStep, ScriptedModel, assistant_message
+    from test_sdk_runtime import _runtime as sdk_runtime
+
+    from open_deep_research.runtime.sdk_runtime import _BusinessAgentHarness
+
+    events = []
+    original = _BusinessAgentHarness._compact_history
+
+    async def compact(self, data, agent):
         events.append("pressure_check")
-        return await original_compact(messages, model_messages)
+        return await original(self, data, agent)
 
-    runtime._compact_history = _record_compact
+    def reply(call):
+        events.append("model")
+        assert "collect evidence" in str(call.input)
+        return [assistant_message("done")]
 
+    monkeypatch.setattr(_BusinessAgentHarness, "_compact_history", compact)
+    runtime = sdk_runtime(model=ScriptedModel([ModelStep.respond(reply)]))
     asyncio.run(runtime.run("collect evidence"))
-
-    # Pressure is estimated on the actual request structure, before the model is invoked.
-    assert events.index("build_request") < events.index("pressure_check")
-    assert events.index("pressure_check") < events.index("model")
+    assert events == ["pressure_check", "model"]
 
 
 # ---------------------------------------------------------------------------
@@ -918,7 +838,12 @@ def test_token_limit_exception_still_enters_context_recovery(monkeypatch):
 def test_token_limit_detection_is_specific_to_provider_errors():
     from open_deep_research.llm.errors import is_token_limit_exceeded
 
-    assert is_token_limit_exceeded(RuntimeError("provider unavailable"), "deepseek:deepseek-chat") is False
+    assert (
+        is_token_limit_exceeded(
+            RuntimeError("provider unavailable"), "deepseek:deepseek-chat"
+        )
+        is False
+    )
     assert is_token_limit_exceeded(_token_limit_error(), "openai:gpt-4.1") is True
 
 
@@ -965,14 +890,17 @@ def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
     result = asyncio.run(module._fallback_report_generation(state, config))
 
     assert "final report body" in result["report"]["final"]
-    assert "Truncated research findings to fit the remaining input token budget." in (
-        result["report"]["final"]
+    assert (
+        "Truncated research findings to fit the remaining input token budget."
+        in (result["report"]["final"])
     )
     assert len(captured["prompt"]) < len(huge_findings)
 
 
 # 验证最终报告超限恢复保留失败与成功请求的尝试次数。
-def test_final_report_context_recovery_counts_failed_and_successful_requests(monkeypatch):
+def test_final_report_context_recovery_counts_failed_and_successful_requests(
+    monkeypatch,
+):
     """A context-limit request plus the successful retry are both budgeted."""
     import open_deep_research.deep_researcher as module
 
