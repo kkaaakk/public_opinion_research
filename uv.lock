@@ -3434,6 +3434,7 @@ dependencies = [
 dev = [
     { name = "mypy" },
     { name = "pytest" },
+    { name = "pytest-benchmark" },
     { name = "pytest-socket" },
     { name = "pyyaml" },
     { name = "ruff" },
@@ -3479,6 +3480,7 @@ requires-dist = [
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "pytesseract", specifier = ">=0.3.10" },
     { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=5.2.3" },
     { name = "pytest-socket", marker = "extra == 'dev'", specifier = ">=0.7.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.2" },

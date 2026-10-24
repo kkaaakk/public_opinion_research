@@ -69,6 +69,28 @@ uv sync --locked
 开发与离线测试安装 `uv sync --extra dev --locked`；运行学习笔记本时增加
 `--extra notebooks`。评测脚本可能调用付费模型，请先阅读对应目录说明。
 
+开发工具默认将缓存统一写入项目 `.tmp/`，本地终端、Codex 和 CI 使用同一份 `pyproject.toml`：
+
+| 工具 | 默认位置 |
+| --- | --- |
+| pytest | `.tmp/pytest-cache/` |
+| pytest-benchmark | `.tmp/benchmarks/` |
+| Ruff | `.tmp/ruff-cache/` |
+| Mypy | `.tmp/mypy-cache/` |
+
+无需手动传缓存参数。pytest-benchmark 使用项目 `addopts`，测试配置钩子在插件初始化前将默认位置锚定到项目根目录；显式指定其他 benchmark storage 仍有效。Mypy 使用配置目录变量，避免从子目录运行时产生另一套缓存。缓存均被 `.gitignore` 排除。
+
+在项目根目录执行离线检查，例如：
+
+```powershell
+.venv/Scripts/python.exe -m pytest --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1
+.venv/Scripts/python.exe -m ruff check --select E,F,I --ignore E501 src/open_deep_research tests/conftest.py (Get-ChildItem tests/test_*.py | ForEach-Object { $_.FullName })
+$env:MYPYPATH = Join-Path (Get-Location) 'src'
+.venv/Scripts/python.exe -m mypy --explicit-package-bases --follow-imports=skip --ignore-missing-imports src/open_deep_research
+```
+
+Mypy 的既有错误基线仍会返回非零；缓存配置不改变检查规则或测试选择。配置语义可查阅官方 [pytest](https://docs.pytest.org/en/stable/reference/reference.html#confval-cache_dir)、[pytest-benchmark](https://pytest-benchmark.readthedocs.io/en/stable/usage.html)、[Ruff](https://docs.astral.sh/ruff/settings/#cache-dir) 和 [Mypy](https://mypy.readthedocs.io/en/stable/config_file.html#confval-cache_dir) 文档。
+
 ### 3. 配置环境变量
 
 ```bash

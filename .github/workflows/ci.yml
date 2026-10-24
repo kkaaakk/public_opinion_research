@@ -74,6 +74,12 @@ jobs:
 
       - name: Verify durable browser request and replay behavior
         run: node --test tests/durable_frontend.test.cjs
+      - name: Reject legacy root cache directories
+        run: >-
+          uv run python -c "from pathlib import Path;
+          old = ('.pytest_cache', '.benchmarks', '.ruff_cache', '.mypy_cache');
+          found = [name for name in old if Path(name).exists()];
+          assert not found, found"
   dbos-integration:
     name: dbos-postgresql-contracts
     runs-on: ubuntu-latest
