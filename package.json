@@ -1,8 +1,8 @@
 {
   "scripts": {
-    "md:format": "prettier --write \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
-    "md:lint": "markdownlint-cli2 \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
-    "md:fix": "markdownlint-cli2 --fix \"*.md\" \"docs/**/*.md\" \"examples/**/*.md\" \"data/knowledge/**/*.md\"",
+    "md:format": "prettier --write \"*.md\" \"docs/**/*.md\" \"data/knowledge/**/*.md\"",
+    "md:lint": "markdownlint-cli2 \"*.md\" \"docs/**/*.md\" \"data/knowledge/**/*.md\"",
+    "md:fix": "markdownlint-cli2 --fix \"*.md\" \"docs/**/*.md\" \"data/knowledge/**/*.md\"",
     "md:toc": "remark README.md --use remark-toc --output",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
@@ -12,8 +12,6 @@
     "markdownlint-cli2": "^0.22.1",
     "prettier": "^3.8.3",
     "remark-cli": "^12.0.1",
-    "remark-preset-lint-consistent": "^6.0.1",
-    "remark-preset-lint-recommended": "^7.0.1",
     "remark-toc": "^9.0.0",
     "vitepress": "^1.6.4"
   }

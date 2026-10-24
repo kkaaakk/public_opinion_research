@@ -117,46 +117,27 @@ src/open_deep_research/
 ├── configuration.py            # 配置管理
 ├── state.py                    # 五个业务状态域与消息
 ├── prompts.py                  # 系统提示词
-├── utils.py                    # 工具函数
+├── utils.py                    # 旧工具导入路径的兼容导出
 ├── budget.py                   # 预算守卫
-├── rag/                        # 🆕 RAG 知识库模块
-│   ├── graph.py                #   RAG 图流程
-│   ├── graph_adaptive.py       #   自适应检索
-│   ├── graph_scoring.py        #   检索评分
-│   ├── graph_structured.py     #   结构化检索
-│   ├── graph_terms.py          #   术语图检索
-│   ├── indexer.py              #   索引构建
-│   ├── query_rewriter.py       #   查询重写
-│   ├── memory.py / memory_writer.py  # 记忆管理
-│   ├── mcp_server.py           #   RAG MCP 服务
-│   ├── elasticsearch_bm25.py   #   BM25 检索
-│   ├── code_languages.py       #   代码语言支持
-│   └── loaders/                #   数据加载器
-├── public_opinion_agents/      # 🆕 舆情分析 Agent
-│   ├── registry.py             #   Agent 注册中心
-│   ├── base.py                 #   基类
-│   ├── risk_assessment.py      #   风险评估
-│   ├── public_signal.py        #   舆情信号
-│   ├── internal_knowledge.py   #   内部知识
-│   └── response_strategy.py    #   应对策略
-├── social_media/               # 🆕 社交媒媒体
-│   └── tools.py                #   社交媒媒体工具
-├── social_media_mcp.py         # 🆕 社交媒媒体 MCP Server
-├── social_media_apify_api.py   # 🆕 Apify 数据适配器
-├── memory/                     # 🆕 长期记忆系统
-│   ├── store.py                #   存储后端
-│   ├── extractor.py            #   记忆提取
-│   └── writer.py               #   记忆写入
-├── mcp/                        # 🆕 MCP 工具集
-│   ├── tools.py                #   通用 MCP 工具
-│   └── domain_filter.py        #   域名过滤
-├── web/                        # 🆕 Web 管理面板
-│   ├── server.py               #   FastAPI 服务
-│   └── static/                 #   前端静态资源
-├── tools/                      # 工具注册
-│   └── rag_tool.py             #   RAG 检索工具
-└── skills/                     # 🆕 技能模块
+├── workflow/                   # DBOS 编排、持久步骤、纯状态归并与业务服务
+├── runtime/                    # SDK Runner 装配与 Research Graph Context Harness
+├── public_opinion_agents/      # 四个业务角色、提示词、权限与输出合同
+├── research_graph/             # Run 范围的证据、来源、检索与上下文
+├── rag/                        # 知识加载、索引、向量/图检索、重排与 RAG MCP
+├── memory/                     # 文件/MySQL 长期记忆、抽取、索引与回查
+├── social_media/               # 共享领域规则与记录处理
+├── social_media_mcp.py         # 社媒 MCP Server
+├── social_media_apify_api.py   # Apify HTTP 适配器
+├── models/                     # SDK Model 与 LangChain 单次业务模型工厂
+├── llm/                        # 上下文窗口、错误与 provider 辅助函数
+├── search/                     # Tavily 搜索与网页摘要
+├── mcp/                        # 协议连接、工具命名和领域准入
+├── observability/              # 可选 LangSmith 业务观测
+├── tools/                      # 工具注册与 RAG 工具
+└── web/                        # FastAPI、Run/History/SSE、Executor、CLI 与静态 UI
 ```
+
+示例报告统一保存在 [docs/examples](docs/examples/arxiv.md)；`examples/rag_local_search.py` 是本地检索示例。历史迁移、评测基线和学习资料保留原有版本边界，清理范围见 [仓库审计](docs/audits/post-sdk-repository-cleanup.md)。
 
 ## ⚙️ 核心配置
 
@@ -169,13 +150,13 @@ src/open_deep_research/
 | Compression | `openai:gpt-4.1` | 研究内容压缩 |
 | Final Report | `openai:gpt-4.1` | 最终报告生成 |
 
-支持 OpenAI、Anthropic、Google、Groq、DeepSeek，以及通过 OpenAI 兼容接口接入的火山方舟。运行时代码统一通过 `open_deep_research.models.create_chat_model()` 创建 LangChain `BaseChatModel`；模型引用采用 `provider:model` 格式。
+模型引用采用 `provider:model` 格式。四角色 Agent 通过 `models.sdk.sdk_model()` 使用官方 SDK Model；当前 Web 准入支持 OpenAI/DeepSeek。规划、报告、RAG、抽取和记忆等单次业务服务通过 `open_deep_research.models.create_chat_model()` 创建 LangChain `BaseChatModel`，保留 Anthropic、Google、Groq 和火山方舟等适配器。两类模型对象分别用于各自调用边界。
 
 推荐的双模型路由是：网页摘要、RAG 查询改写、Research Graph 抽取、上下文管理和滚动压缩使用 `volcengine:doubao-seed-2-0-mini-260428`；研究 Agent、研究压缩和最终报告使用 `deepseek:deepseek-flash`。Volcengine 引用既支持预置 Model ID（如 `volcengine:doubao-seed-2-0-mini-260428`），也支持自定义 endpoint ID（如 `volcengine:ep-...`），工厂只剥离 provider 前缀。火山方舟需要 `ARK_API_KEY`，可用 `ARK_BASE_URL` 覆盖默认端点；DeepSeek 需要 `DEEPSEEK_API_KEY`。真实 API 冒烟测试仅在显式设置 `RUN_LIVE_MODEL_TESTS=1` 后运行，例如 `python scripts/model_provider_smoke.py --provider volcengine --model doubao-seed-2-0-mini-260428`。
 
 ### 搜索 API
 
-默认使用 [Tavily](https://tavily.com/)，同时支持 OpenAI/Anthropic 原生搜索、DuckDuckGo、Exa，以及完整 MCP 兼容。
+当前 Web 的 SDK 研究路径使用 [Tavily](https://tavily.com/) 或关闭联网搜索。MCP 工具经领域权限装配；底层保留的 provider 原生搜索声明不代表已获当前 Web 准入，也不会在 SDK 失败后启用其他执行器。
 
 ### RAG 配置示例
 

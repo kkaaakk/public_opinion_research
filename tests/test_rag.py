@@ -1421,7 +1421,10 @@ def test_split_documents_uses_recursive_language_splitter_for_code(monkeypatch):
 
 
 # 验证 JSON 加载保留原始结构供后续分块。
-def test_knowledge_json_loader_preserves_raw_json_for_structured_split(tmp_path):
+@pytest.mark.parametrize("json_text_fields", [None, ["faq.answer"], ["faq[0].answer"]])
+def test_knowledge_json_loader_preserves_raw_json_for_structured_split(
+    tmp_path, json_text_fields
+):
     json_path = tmp_path / "faq.json"
     json_path.write_text(
         json.dumps(
@@ -1431,14 +1434,19 @@ def test_knowledge_json_loader_preserves_raw_json_for_structured_split(tmp_path)
         encoding="utf-8",
     )
 
-    documents = loaders.load_documents_from_paths([str(json_path)])
+    documents = loaders.load_documents_from_paths(
+        [str(json_path)], json_text_fields=json_text_fields
+    )
     chunks = split_documents(documents, chunk_size=120, chunk_overlap=10)
 
-    assert documents[0].content.lstrip().startswith("{")
+    assert documents[0].content == json_path.read_text(encoding="utf-8")
     assert any(
         "$.faq[0].answer" in chunk.metadata.get("field_paths", [])
         for chunk in chunks
     )
+    if json_text_fields:
+        assert documents[0].metadata["json_text_fields"] == json_text_fields
+        assert all("question:" not in chunk.content for chunk in chunks)
 
 
 # 验证分块附带来源权威性与状态信息。

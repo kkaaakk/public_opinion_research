@@ -189,7 +189,7 @@ native business queue 配置 global_concurrency、owner partition_concurrency。
 
 ## 8. 实际代码量与维护复杂度
 
-统计脚本 [dbos_inventory.py](../../scripts/dbos_inventory.py) 对固定 Git SHA 与当前完整 `src/**/*.py` 比较，SLOC 排除空白、独立注释、docstring。同时报告物理行，测试/部署/文档另列；没有仅统计删除文件。
+统计脚本 [dbos_inventory.py](https://github.com/kkaaakk/public_opinion_research/blob/1f80b4819523d209e2eba92d9ab66d12f7259706/scripts/dbos_inventory.py) 对固定 Git SHA 与当前完整 `src/**/*.py` 比较，SLOC 排除空白、独立注释、docstring。同时报告物理行，测试/部署/文档另列；没有仅统计删除文件。
 
 | 生产模块 | 原SLOC | 最终SLOC | 净变化 |
 | --- | ---: | ---: | ---: |

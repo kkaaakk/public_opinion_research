@@ -107,13 +107,6 @@ class ResearchGraphStore(ABC):
         """Release external resources when the adapter owns any."""
 
 
-# 统一解析存储操作中的范围值。
-def _scope_value(scope: ResearchGraphScope | str, name: str, default: Any = "") -> Any:
-    if isinstance(scope, ResearchGraphScope):
-        return getattr(scope, name, default)
-    return scope if name == "run_id" else default
-
-
 # 提取节点可用于检索匹配的文本字段。
 def _node_text(node: GraphNode) -> str:
     return " ".join(

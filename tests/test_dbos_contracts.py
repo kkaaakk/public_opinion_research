@@ -676,16 +676,23 @@ def test_gap_loop_uses_native_role_children_and_original_reducer(
 
 @pytest.mark.parametrize(
     "pg_database",
-    [{"RUN_SDK_SESSION_PATH": ".tmp/dbos-sdk-sessions.sqlite"}],
+    [{"RUN_SDK_SESSION_PATH": "dbos-sdk-sessions.sqlite"}],
     indirect=True,
 )
-def test_sdk_session_is_private_to_role_invocation_not_workflow_recovery(native_case):
+def test_sdk_session_is_private_to_role_invocation_not_workflow_recovery(
+    native_case, tmp_path
+):
     import sqlite3
+    from pathlib import Path
+
+    from open_deep_research.workflow.dbos_config import settings
 
     case = native_case
     run = case.create()
     case.wait(run)
-    with sqlite3.connect(".tmp/dbos-sdk-sessions.sqlite") as db:
+    session_path = Path(settings().session_path)
+    assert session_path.is_relative_to(tmp_path)
+    with sqlite3.connect(session_path) as db:
         rows = db.execute(
             "SELECT session_id FROM agent_sessions WHERE session_id LIKE ?",
             (run["run_id"] + "%",),

@@ -45,6 +45,7 @@ docs/.obsidian/
 .coverage
 htmlcov/
 .pytest_cache/
+.mypy_cache/
 pytest-cache-files-*/
 .tox/
 
@@ -79,6 +80,12 @@ temp/
 .uv-cache/
 .tmp-*
 .tmp/runtime/transcripts/
+
+# Local operator tools and audit/session outputs (never source inputs)
+/.claude/
+/.codex-finalizer/
+/.playwright-mcp/
+/.tmp/
 data/runs/
 data/indexes/rag/*
 !data/indexes/rag/.gitkeep
