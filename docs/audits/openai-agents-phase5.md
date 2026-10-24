@@ -172,6 +172,10 @@ node --test tests/durable_frontend.test.cjs
 
 没有声称 DBOS 调用栈比旧请求内图更浅。native root/child/Step、许可、证据和归档边界继续承担恢复/失败责任；减少的是竞争执行路径、旧循环与适配维护，不是用包装层隐藏复杂度。
 
+另运行既有 `scripts/audit_repository.py --base-ref a8574f61d0adba4b07ec860d5c6d7de0a0041e76 --output .tmp/agents-phase5/final-repository-audit.json`，覆盖全部 Git 文件。该 AST 算法的静态 import cycles 从 4 降到 3，剩余为 Memory/MySQL loader、RAG indexer/service、Web runs/server 的关系；包含局部/类型导入的过估计，不等同于初始化死锁或调用栈层数。
+
+无静态导入者候选另有 `rag/memory_writer.py`、`rag/tooling.py`、`utils.py`。逐文件确认分别为 Memory 写入、RAG 工具和通用业务函数的公开兼容导出，没有旧引擎执行实现或 LangGraph import。仓库外直接导入消费者尚无法穷尽，按既有兼容约束保留，不把静态“无人导入”直接等同于可删除；旧 Graph/Agent Loop 的退役不依赖这些小型业务导出退出。Golden/历史输出/学习资产的分类数量均保持 52 项。
+
 ## 6. 观测、残留与限制
 
 Run ID = native 根 Workflow ID = Graph run scope = History 稳定身份输入。role child/unit ID、SDK Harness invocation ID、native tool call/操作回执和证据 ID 可关联。公开 Stream 使用 Run/generation/seq；参数只保存操作指纹，公开事件不复制原始上下文、私有记忆或工具载荷。
