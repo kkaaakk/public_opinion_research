@@ -130,7 +130,7 @@ Phase 4 的 retry grant 仍绑定失败代次、观察版本及 native target/jo
 | P1 前完整真实本地矩阵 | 82 passed / 25 deselected，962.99s；后续复验仍发现并修复上述竞态，不能以此旧结果作为最终验收 |
 | P1 后 targeted 原生回归 | 4 passed，41.43s：确定性游标竞态 + `/api/runs`、`/api/research`、CLI 的实际 SDK/DBOS E2E |
 | P1 后最终完整原生矩阵 | **84 passed / 25 deselected，947.39s**；另真实 Neo4j 停启合同 **1 passed / 60.26s**，合计 **85 个不同原生合同 / 0 skipped / 0 xfailed**。CI 选择相同文件并一次运行这 85 项；另 6 项外部环境/历史集成测试不计入 |
-| Node | **6 passed**，含新页面默认 durable；原 5 项刷新、重连、审批、取消合同保留 |
+| Node（首轮实现验收） | **6 passed**，含新页面默认 durable；原 5 项刷新、重连、审批、取消合同保留。最终 Review 为 7 项，见第 7 节 |
 | CI 口径 Ruff | **通过**：全活动源码、`tests/test_*.py`、conftest，另检查新 scripts/CLI/压测客户端；新 scripts/CLI 全启用规则通过 |
 | 格式 | **48 个新增/修改 Python 文件通过**；`configuration.py` 保持继承的整文件格式。全仓同口径 **68 个文件仍不符合格式**（基线 88），不是全仓格式通过 |
 | 全启用规则 Ruff | **422 errors**（基线 439）；CI 之外的既有 D/UP/T 等债务未整体重排或放宽规则 |
@@ -199,3 +199,46 @@ History 保留四个公开数值 usage 计数；Run 保留完整预算和 cache/
 Phase 5 的执行链、旧实现退役、必要兼容和本地业务验收以最终完整 native 结果及最新 PR CI 为门禁。继承质量债务与上述生产/外部服务边界不属于“全部已通过”的声明。
 
 接口核对使用固定安装包源码与离线合同，并参考 [OpenAI Agents SDK 官方说明](https://developers.openai.com/api/docs/guides/agents/sdk)。运行保证以固定版本实测为准，不将 Session/Trace 等同于 DBOS journal。
+
+## 7. 最终独立 Review 与合并门禁（2026-10-24）
+
+复核起点为 PR #28 的 `8004e14966a2d2c4d1ac5b6656e3da431c3e943b`，与固定 Phase 4 Merge `a8574f61d0adba4b07ec860d5c6d7de0a0041e76` 比较 Diff，并重新读取生产源码、测试、固定安装包实现。本节的结论来自本轮检查和重跑，不以第 1–6 节或旧 CI 的通过声明替代验证。
+
+### 发现与处置
+
+本轮新增 **P0 0 / P1 0 / P2 2**；一项 P2 修复，一项非阻塞待办保留。此前 Phase 5 的 SSE P1 是本次复核对象，不重复计为新发现。
+
+| 发现 | 位置、触发、影响与证据 | 处置 |
+| --- | --- | --- |
+| P2 R5-01：页面在清算前结束跟随 | `web/static/app.js:342`。Run 返回 `interrupted` 等终态且 `settlement=pending` 时，旧页面立即设置 finished，未订阅清算后的费用；后端仍执行清算/归档，未丢持久账目。新增 `tests/durable_frontend.test.cjs:163`：第一次 GET 为 interrupted/pending/3 tokens，清算后为 failed/settled/12 tokens；修复前只读一次，实际 **6 passed / 1 failed**（断言 1 != 2）。 | 已加 `settlement !== 'pending'` 结束条件；修复后 **7 passed**，核对最终费用、失败状态及没有新 POST。仅修页面观察条件，不改调度、Finalizer 或 SDK。 |
+| P2 R5-02：未使用的工具回调注入 | `runtime/business_agent.py:251,514` 与 `runtime/sdk_runtime.py:369,383`。角色装配传入 `_execute_tool_safely`，SDK 只将其存到 `self.execute_tool`，没有读取；实际调用为 `sdk_runtime.py:463` 的 `_register_tool → Harness.function_tool → tool.ainvoke`。全生产/测试/脚本 `rg` 的其他唯一消费者为 Runtime 测试夹具。 | 后续移除该私有 helper、构造参数及夹具参数；本次不改构造接口。它不提供循环、fallback 或第二条实际工具执行路径，不影响迁移验收。 |
+
+### 逐项执行语义核对
+
+- `server.research → runs.create_run/subscription`、`/api/runs` 和 `web/cli.py` 均进入同一 Run API；前端直接创建 `/api/runs`。`run_business_agent` 无条件使用 `sdk_model(max_retries=0)` 和 `SDKAgentRuntime`，无旧引擎降级。全活动源码无 LangGraph import，根锁无 LangGraph 包；32 入口缺旧引擎且禁联网的 smoke 重新通过。
+- 原生 `research_workflow` 用两个独立 role Workflow、`wait_first_async` 和固定 `RESEARCH_ROLES` 合并；失败取消兄弟并清算。Review 的分组补查决定在业务 Step 内冻结；Risk 等待结束后才启动 Strategy。`role_snapshot` 深拷贝并去除其他角色私有字段；Harness `_check` 绑定 run/role/task，批次持久化和压缩先后顺序保留。
+- `dbos_workflow.py`、`run_facts.py`、`execution.py`、`python_state.py`、四角色规范/提示词相对 Phase 4 **无 diff**。独立读取了准入事务、资源占位、许可旋转、工具指纹/回执、取消 drain、History 版本及补偿逻辑；没有以“无 diff”替代真实故障合同。
+- 幂等 create 与 native enqueue 在同一事务；Session 绑定 owner，API 身份来自 Token，拒绝客户端 owner/URL/凭据。审批在请求锁下消费精确 plan version；取消意图持久化后才发 native cancel。未知工具单元不能因 Executor 恢复而重新执行。
+- Retry endpoint 仅写失败代次授权和 native 消息；Finalizer 独占 `_rewind_safe` 调用。旧 key 只确认旧请求；原失败目标/journal 时间版本与 generation 均需匹配。丢 ACK、再次失败、旧消息、取消及 unknown 效果由原生合同复验。
+- SSE relay 顺序为 `write_stream → cursor → done/history receipt`，公开读取在回执之后再次读取 cursor；SSE 结束还要求清算完成、当前代次 done 和游标已送达。使用固定 Phase 4 的 `RunClient.get` 做测试进程内负对照（不改生产文件、不运行旧 Agent）：同一真实 SSE 回归 **1 failed / 19.95s**，仅两次 cursor 读取导致尾 done 未交付。当前投影的正对照结果另列验证表。
+- LangChain Classic 固定仍为基线的 **1.0.1**，不是本次新增升级。断网、移除真实凭据的构造探针实际创建 OpenAI、DeepSeek Chat、DeepSeek Flash 模型，并验证工具绑定与结构化输出 Runnable；原 factory/路由合同保留。未将构造探针记为供应商 API 或在线质量验收。
+
+### 本轮重新执行结果
+
+| 检查 | 结果 |
+| --- | --- |
+| 根锁离线同步 | `uv sync --extra dev --locked --offline --python 3.11` 通过，281 个锁包 / 216 个已安装包 |
+| 完整离线 pytest | **804 passed / 91 deselected / 146 warnings，65.80s**；禁 dotenv/tracing/外部 socket |
+| 完整真实原生矩阵 | **85 passed / 25 deselected / 0 skipped / 0 xfailed / 146 warnings，1126.06s**；实际 PostgreSQL/Neo4j、Executor 进程与物理故障，推理为离线 SDK Runner 夹具 |
+| SSE 正对照 | 当前实现 **1 passed / 18.48s**，尾 done 交付且模型次数不增加；负对照的预期失败不计入通过数 |
+| Node | 新回归先失败；修复后 **7 passed / 0 failed / 0 skipped** |
+| CI 质量口径 / 编译 / 入口 | Ruff E/F/I、compileall、32 个生产入口 import 通过，未改 CI 检查范围或 pytest 选择规则 |
+| 全启用 Ruff 对比 | 基线快照 195 个 Python/TOML 文件逐一与 Git 内容核对；**439 → 422 errors**。按文件/规则/消息比较、忽略行号漂移后，新增诊断 0；两次 exit code 均为 1，未算通过 |
+| 全仓格式对比 | 同口径 src/tests/scripts：**88 → 68** 个待格式化文件，新增待格式化文件 0；未宣称整仓格式通过 |
+| 依赖一致性 | `uv pip check` 仍只报 MarkItDown/MCP 继承冲突；两个锁版本与 Phase 4 完全相同（0.0.1a4 / 1.23.0），未修改 override 或删除消费者掩盖失败 |
+
+本轮代码修复仅一行前端观察条件，新增一个 Node 回归；生产 Python 仍净 **-802 SLOC / -991 物理行**，JS 仍净 **-39 物理行**。没有新增工作流引擎或修改四角色业务策略。
+
+合并要求为最终 Review 提交的 PR / Push CI quality、tests、dbos-postgresql-contracts 全部成功，无未解决 P0/P1；仅使用 **Merge Commit**，保留本地/远程开发分支。合并后核对两个 parent、四个 Phase 5 提交的祖先关系，以及 GitHub main、origin/main、本地 main 一致，再做必要回归并检查 main CI。实际合并 SHA 与最终 CI 链接以 PR #28 和最终交付为准，不能用合并前的绿勾替代。
+
+前述生产未验证事项继续适用：本地验证不代表生产旧任务已排空、HA/跨主机自动接管、远程 MCP 或跨服务 exactly-once。预算继续使用既有调用 guard 和累计账目，不宣称提供跨并行角色的事务性费用硬配额。P2 R5-02、全仓质量债务、MarkItDown 独立环境与生产部署均是明确后续事项；迁移开发完成不等于生产上线完成。

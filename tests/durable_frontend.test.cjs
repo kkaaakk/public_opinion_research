@@ -159,3 +159,22 @@ test('nonterminal EOF reconnects and never starts another execution', async () =
     assert.ok(view.calls.every(call => call.options.method !== 'POST'));
     assert.equal(view.element('status-text').textContent, '已完成');
 });
+
+test('terminal native status waits for settlement and displays final usage', async () => {
+    const saved = storage({ key: 'key', request: body, runId, cursor: 0 });
+    let reads = 0;
+    const view = page(saved, path => {
+        if (path.endsWith('/events')) return stream([]);
+        reads += 1;
+        return response(reads === 1
+            ? state('interrupted', { settlement: 'pending', usage: { total_tokens: 3 } })
+            : state('failed', { settlement: 'settled', usage: { total_tokens: 12 } }));
+    });
+    await view.call('startResearch(true)');
+    assert.equal(reads, 2, 'a terminal status cannot end observation before settlement');
+    assert.equal(view.calls.filter(call => call.path.endsWith('/events')).length, 1);
+    assert.ok(view.calls.every(call => call.options.method !== 'POST'));
+    assert.equal(view.element('usage-total').textContent, '12');
+    assert.equal(view.element('status-text').textContent, '运行失败');
+    assert.equal(JSON.parse(saved.getItem(storageKey)).finished, true);
+});

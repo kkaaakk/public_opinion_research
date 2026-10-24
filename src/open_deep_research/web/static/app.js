@@ -339,7 +339,7 @@ async function followDurableRun(request) {
             hydrate = false;
         }
         if (state.status === 'awaiting_approval') return;
-        if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status)) {
+        if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status) && state.settlement !== 'pending') {
             researchFailed = state.status !== 'completed';
             if (state.archive_status === 'pending') {
                 reportNotice.textContent = '结果已保存到运行记录，历史归档等待后台补偿。';
