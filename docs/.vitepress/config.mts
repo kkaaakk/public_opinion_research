@@ -1,14 +1,14 @@
 import { defineConfig } from "vitepress";
 
 export default defineConfig({
-  title: "Open Deep Research",
-  description: "Open Deep Research project documentation",
+  title: "Public Opinion Research",
+  description: "Public Opinion Research project documentation",
   cleanUrls: true,
   lastUpdated: true,
   themeConfig: {
     nav: [
       { text: "首页", link: "/" },
-      { text: "快速开始", link: "https://github.com/kkaaakk/public_opinion_research/blob/codex/openai-agents-migration/README.md" },
+      { text: "快速开始", link: "https://github.com/kkaaakk/public_opinion_research/blob/main/README.md" },
       { text: "架构", link: "/architecture/agent-loop" },
       { text: "RAG", link: "/architecture/rag" },
       { text: "评估", link: "/evaluation/rag-retrieval-test-records" },
@@ -20,7 +20,7 @@ export default defineConfig({
           text: "开始",
           items: [
             { text: "文档首页", link: "/" },
-            { text: "项目 README", link: "https://github.com/kkaaakk/public_opinion_research/blob/codex/openai-agents-migration/README.md" },
+            { text: "项目 README", link: "https://github.com/kkaaakk/public_opinion_research/blob/main/README.md" },
           ],
         },
         {
@@ -74,7 +74,7 @@ export default defineConfig({
       },
     },
     socialLinks: [
-      { icon: "github", link: "https://github.com/langchain-ai/open_deep_research" },
+      { icon: "github", link: "https://github.com/kkaaakk/public_opinion_research" },
     ],
   },
 });

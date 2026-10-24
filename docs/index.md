@@ -2,7 +2,7 @@
 layout: doc
 ---
 
-# Open Deep Research 文档站
+# Public Opinion Research 文档站
 
 当前生产链路为 DBOS + OpenAI Agents SDK + Research Graph Context Harness。见 [Phase 5 审计](./audits/openai-agents-phase5.md) 和 [部署说明](./architecture/dbos-deployment.md)。这里汇总模块文档、评估记录和历史样例。
 
@@ -17,7 +17,7 @@ layout: doc
 ## 推荐阅读路径
 
 1. 阅读 [项目 README](https://github.com/kkaaakk/public_opinion_research/blob/main/README.md)，完成环境准备和基础运行。
-2. 阅读 [模块与迁移边界](./architecture/openai-agents-sdk-migration-plan.md)，区分当前业务、未来 Runtime 和 Harness 职责。
+2. 阅读 [模块与迁移边界](./architecture/openai-agents-sdk-migration-plan.md)，区分当前 DBOS、SDK、业务服务和 Harness 职责。
 3. 阅读 [Agent Loop](./architecture/agent-loop.md)，掌握主流程如何进入 research phase、运行四个业务 Agent、使用 tools 并生成 final report。
 4. 阅读 [Tools 模块](./architecture/tools.md)，确认 web search、RAG、MCP 和控制工具如何装配。
 5. 阅读 [RAG 模块](./architecture/rag.md)，深入本地知识库、memory、hybrid retrieval、reranker 和 citation 链路。
@@ -51,7 +51,7 @@ flowchart TD
 | 评估         | [RAG 检索测试记录](./evaluation/rag-retrieval-test-records.md) | 历次检索指标、配置、未命中样本和说明   |
 | 示例         | [ArXiv 示例](./examples/arxiv.md)                              | 示例研究报告和输出样本                 |
 | 知识库       | [Team Handbook](./knowledge/team-handbook.md)                  | 本地知识库样例文档                     |
-| 项目参考     | [Agent Instructions](https://github.com/kkaaakk/public_opinion_research/blob/codex/openai-agents-migration/AGENTS.md)                      | 根目录规范开发规则        |
+| 项目参考     | [Agent Instructions](https://github.com/kkaaakk/public_opinion_research/blob/main/AGENTS.md)                      | 根目录规范开发规则        |
 
 ## 维护约定
 

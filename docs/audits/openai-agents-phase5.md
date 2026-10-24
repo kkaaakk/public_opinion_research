@@ -12,7 +12,7 @@
 
 删除前冻结结果：**786 passed / 80 deselected，100.10s**，禁 dotenv/tracing、拦截非 loopback socket；现有 CI 口径 Ruff E/F/I 通过；Node **5 passed**。全仓启用规则 Ruff 为 **439 errors**；`ruff format --check src tests scripts` 为 **88 个文件存在差异**，这些是检查结果，不算通过。
 
-文件级证据见 [可复现 inventory](openai-agents-phase5-inventory.json)，生成器为 [phase5_inventory.py](../../scripts/phase5_inventory.py)。它记录固定基线中 170 个引用文件、103 个 Python 文件的 AST import 及反向消费者、处置分类、36 个退出锁文件的包，以及全量 `src/**/*.py` 的前后 SLOC。静态边不代替动态入口验证；第三方可选探测、外部脚本和历史数据单独说明。
+文件级证据见 [可复现 inventory](openai-agents-phase5-inventory.json)，生成器为 [phase5_inventory.py](https://github.com/kkaaakk/public_opinion_research/blob/1f80b4819523d209e2eba92d9ab66d12f7259706/scripts/phase5_inventory.py)。它记录固定基线中 170 个引用文件、103 个 Python 文件的 AST import 及反向消费者、处置分类、36 个退出锁文件的包，以及全量 `src/**/*.py` 的前后 SLOC。静态边不代替动态入口验证；第三方可选探测、外部脚本和历史数据单独说明。
 
 | 分类 | 文件 / 消费链 | 处置 |
 | --- | --- | --- |

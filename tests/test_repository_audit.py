@@ -3,11 +3,25 @@
 import importlib.util
 from pathlib import Path
 
+import yaml
+
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "audit_repository.py"
 SPEC = importlib.util.spec_from_file_location("audit_repository", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 audit = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(audit)
+
+
+def test_dependabot_keeps_python_and_actions_update_jobs():
+    config = yaml.safe_load(
+        (MODULE_PATH.parents[1] / ".github" / "dependabot.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert {job["package-ecosystem"] for job in config["updates"]} == {
+        "pip",
+        "github-actions",
+    }
 
 
 def test_working_snapshot_does_not_walk_or_include_untracked_files(

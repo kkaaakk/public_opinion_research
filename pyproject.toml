@@ -26,14 +26,12 @@ dependencies = [
     "pymupdf>=1.25.3",
     "python-dotenv>=1.0.1",
     "httpx>=0.24.0",
-    "rich>=13.0.0",
     "langsmith>=0.3.37",
     "langchain-google-vertexai>=2.0.25",
     "langchain-google-genai>=2.1.5",
     "mcp>=1.9.4",
     "markitdown-mcp>=0.0.1a4",
     "langchain-aws>=0.2.28",
-    "pandas>=2.3.1",
     "sentence-transformers>=3.0.0",
     "pymilvus>=2.4.0",
     "faiss-cpu>=1.8.0",
@@ -48,9 +46,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest", "pytest-socket>=0.7.0"]
+dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest", "pytest-socket>=0.7.0", "pyyaml>=6.0.2"]
 notebooks = ["ipykernel>=6.29.5"]
-web = ["fastapi>=0.115.0", "uvicorn[standard]>=0.34.0"]
+# Keep the install extra; FastAPI and plain Uvicorn are already base requirements.
+web = ["uvicorn[standard]>=0.34.3"]
 
 [project.scripts]
 social-media-mcp = "open_deep_research.social_media_mcp:main"
