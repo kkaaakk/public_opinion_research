@@ -46,7 +46,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest", "pytest-socket>=0.7.0", "pyyaml>=6.0.2"]
+dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest", "pytest-benchmark>=5.2.3", "pytest-socket>=0.7.0", "pyyaml>=6.0.2"]
 notebooks = ["ipykernel>=6.29.5"]
 # Keep the install extra; FastAPI and plain Uvicorn are already base requirements.
 web = ["uvicorn[standard]>=0.34.3"]
@@ -72,6 +72,7 @@ namespaces = true
 "*" = ["py.typed"]
 
 [tool.ruff]
+cache-dir = ".tmp/ruff-cache"
 extend-exclude = ["*.ipynb"]
 lint.select = [
     "E",    # pycodestyle
@@ -98,10 +99,14 @@ convention = "google"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--strict-markers", "-m", "not integration"]
+cache_dir = ".tmp/pytest-cache"
+addopts = ["--strict-markers", "-m", "not integration", "--benchmark-storage=file://./.tmp/benchmarks"]
 markers = [
     "integration: requires network access, downloaded models, or external infrastructure",
 ]
+
+[tool.mypy]
+cache_dir = "${MYPY_CONFIG_FILE_DIR}/.tmp/mypy-cache"
 
 [tool.uv]
 # markitdown-mcp pins mcp~=1.8.0 but langchain-mcp-adapters needs mcp>=1.9.2.
