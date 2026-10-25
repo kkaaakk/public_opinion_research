@@ -965,39 +965,6 @@ def _text_signal_length(text: str) -> int:
     return len("".join(str(text or "").split()))
 
 
-def _extract_json_text(
-    data: Any,
-    json_text_fields: Sequence[str] | None = None,
-) -> tuple[str, list[str]]:
-    """从任意 JSON 结构中提取可索引文本和字段路径.
-
-    返回 `(text, field_paths)`：
-    - `text` 是用于后续切块和 embedding 的拼接文本。
-    - `field_paths` 是每段文本来源字段，最终会进入 citation metadata。
-    """
-    fragments: list[tuple[str, str]] = []
-
-    if json_text_fields:
-        for field_path in json_text_fields:
-            extracted_value = _extract_field_path(data, field_path)
-            fragments.extend(_collect_text_fragments(extracted_value, prefix=field_path))
-    else:
-        fragments.extend(_collect_text_fragments(data))
-
-    deduplicated_fragments = []
-    field_paths = []
-    seen_fragments = set()
-    for field_path, fragment in fragments:
-        normalized_fragment = fragment.strip()
-        if not normalized_fragment or normalized_fragment in seen_fragments:
-            continue
-        seen_fragments.add(normalized_fragment)
-        deduplicated_fragments.append(normalized_fragment)
-        field_paths.append(field_path)
-
-    return "\n\n".join(deduplicated_fragments), field_paths
-
-
 def _extract_json_title(data: Any) -> str | None:
     """从常见字段名推断 JSON document 标题."""
     if not isinstance(data, dict):
@@ -1007,54 +974,6 @@ def _extract_json_title(data: Any) -> str | None:
         if isinstance(title_value, str) and title_value.strip():
             return title_value.strip()
     return None
-
-
-def _extract_field_path(data: Any, field_path: str) -> Any:
-    """解析 JSON dotted path.
-
-    例如 `items.0.title` 会依次访问 dict 字段和 list 索引。
-    如果路径不存在或类型不匹配，返回 None。
-    """
-    current_value = data
-    for part in field_path.split("."):
-        if isinstance(current_value, list):
-            if part.isdigit():
-                index = int(part)
-                if 0 <= index < len(current_value):
-                    current_value = current_value[index]
-                    continue
-            return None
-        if not isinstance(current_value, dict):
-            return None
-        current_value = current_value.get(part)
-        if current_value is None:
-            return None
-    return current_value
-
-
-def _collect_text_fragments(value: Any, prefix: str = "$") -> list[tuple[str, str]]:
-    """递归收集 JSON 中可索引的标量片段.
-
-    返回值是 `(field_path, text)` 列表。数字和布尔值也会转成字符串，因为
-    很多配置、政策、指标类知识会以数字或布尔值形式存在。
-    """
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [(prefix, value)]
-    if isinstance(value, (int, float, bool)):
-        return [(prefix, str(value))]
-    if isinstance(value, list):
-        fragments: list[tuple[str, str]] = []
-        for index, item in enumerate(value):
-            fragments.extend(_collect_text_fragments(item, prefix=f"{prefix}.{index}"))
-        return fragments
-    if isinstance(value, dict):
-        fragments = []
-        for key, nested_value in value.items():
-            fragments.extend(_collect_text_fragments(nested_value, prefix=f"{prefix}.{key}"))
-        return fragments
-    return []
 
 
 def _guess_title(text: str, path: Path) -> str:

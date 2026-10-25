@@ -27,7 +27,7 @@ NEO4J_PASSWORD = os.environ.get("TEST_DBOS_NEO4J_PASSWORD", "local-dbos-test-onl
 
 
 @pytest.fixture
-def pg_database(monkeypatch, request):
+def pg_database(monkeypatch, request, tmp_path):
     url = make_url(BASE_URL)
     if url.host not in {"127.0.0.1", "localhost", "postgres"} or not url.database:
         raise AssertionError("Tests require an explicitly isolated local PostgreSQL")
@@ -54,8 +54,9 @@ def pg_database(monkeypatch, request):
     options = getattr(request, "param", {})
     for policy_name, value in options.items():
         if policy_name == "RUN_SDK_SESSION_PATH":
-            # A fresh CI checkout has no ignored runtime/log directories.
-            Path(value).parent.mkdir(parents=True, exist_ok=True)
+            # Inspectable test sessions must never append to an operator file.
+            value = tmp_path / "sdk-sessions" / Path(value).name
+            value.parent.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv(policy_name, str(value))
     settings.cache_clear()
     DBOS.migrate(isolated, schema="por_dbos")
