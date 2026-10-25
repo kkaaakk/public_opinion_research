@@ -1,0 +1,36 @@
+name: Execution Studio
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "src/open_deep_research/web/server.py"
+      - ".github/workflows/execution-studio.yml"
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install isolated frontend dependencies
+        run: npm install --no-audit --no-fund
+        working-directory: frontend
+      - name: Validate projection protocol
+        run: npm test
+        working-directory: frontend
+      - name: Typecheck and build Studio
+        run: npm run build
+        working-directory: frontend
+      - name: Validate built FastAPI assets
+        run: |
+          test -f src/open_deep_research/web/studio/index.html
+          test -n "$(find src/open_deep_research/web/studio -name '*.js' -print -quit)"
+      - name: Preserve UI build for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-studio-dist
+          path: src/open_deep_research/web/studio/
