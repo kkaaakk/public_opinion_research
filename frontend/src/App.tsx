@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactFlow, { Background, Controls, MiniMap, type Edge, type Node } from "@xyflow/react";
+import ReactFlow, { Background, Controls, MiniMap, Position, type Edge, type Node } from "@xyflow/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Activity, ArrowRight, Check, CircleAlert, CirclePause, Clock3, Copy, Download, FileText, History, Layers3, Play, Radio, RefreshCw, RotateCcw, Search, Settings2, ShieldCheck, Square, TerminalSquare, Workflow, X } from "lucide-react";
@@ -251,7 +251,7 @@ export default function App() {
     const state = projection.statuses[phase.id];
     return {
       id: phase.id, type: "default", position: POSITIONS[phase.id],
-      sourcePosition: 3, targetPosition: 1, draggable: false, selectable: true,
+      sourcePosition: Position.Bottom, targetPosition: Position.Top, draggable: false, selectable: true,
       className: "graph-node graph-" + state + (selectedPhase === phase.id ? " graph-selected" : ""),
       data: { label: (
         <div className="node-content">
