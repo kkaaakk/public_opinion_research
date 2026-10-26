@@ -5,6 +5,11 @@
 `codex/langfuse-otel`。没有合并 main、部署生产、修改 `.env` / `CLAUDE.md`、
 操作业务容器或删除本地资产。本次不调用真实付费模型，也不创建或写入密钥。
 
+最终 Review 更新：后续独立复核发现并修复 tracestate 出口、Provider 注册竞态和
+Agent 标签三个问题，并在官方本地 Langfuse 4.70.1 UI 完成真实验收。
+下文首次实现的数字与“未验 UI”保留为原始阶段记录；当前结论、隔离测试凭据处理、
+精确 HEAD 回归及合并门禁见 [最终 Review](langfuse-otel-final-review.md)。
+
 ## 1. 执行前审计与决策
 
 先读 AGENTS.md、准备/迁移/Phase 0–5 审计、DBOS 部署和 PR #31 的 Studio
@@ -145,7 +150,7 @@ loopback OTLP protobuf 接收器。安全检查点恢复后 parent trace 与原�
 部分 Windows 进程退出时有继承的 pyreadline3 析构告警；pytest 汇总和退出码分别核对，
 不将此告警当作另一个测试通过或失败。
 
-## 6. 仍未验证与回滚
+## 6. 首次实现时未验证的事项与回滚
 
 本次实际验证了 OTel/Langfuse SDK 的安全出口、标准 OTLP 传输、Span 层级、并行时间
 重叠、实际模型 usage、重试和恢复；**没有登录 Langfuse Cloud/自部署 UI，没有真实
@@ -161,4 +166,5 @@ Strategy 和报告；核对真实 generation 的 token、无 Prompt/工具内容
 `POR_TRACING_ENABLED` 并用兼容版本重启 API/Executor；保留原 DBOS journals、业务
 回执和 Graph。Trace 缺失不会触发业务补跑；旧 Phase 4 / pre-Studio 仍按原版本排空。
 
-交付为独立功能分支和未合并 Draft PR，最终提交及 CI 以 PR head/checks 为准。
+首次交付为独立功能分支和 Draft PR；后续最终验收/合并状态以最终 Review 和
+PR head/checks 的冻结记录为准。生产部署与凭据始终不在本次范围。

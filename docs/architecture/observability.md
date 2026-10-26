@@ -113,7 +113,9 @@ with no remote auth probe. Missing/invalid settings and initialization failures
 disable telemetry with a generic warning. An already-configured global OTel
 provider or Agents instrumentor also disables this pipeline: other exporters
 could bypass the privacy policy. Configure this single initializer first.
-Configuration changes require a process restart.
+The initializer verifies successful global Provider registration before enabling
+SDK tracing; losing registration to another initializer disables this pipeline
+and its DBOS tracing configuration. Configuration changes require a restart.
 
 ## Fixed versions and privacy
 
@@ -139,7 +141,11 @@ raw prompts/instructions, tool parameters/results, responses, private Memory,
 arbitrary metadata, auth/owner fields, resource/scope attributes, exception
 descriptions, stack traces and event payloads. Only DBOS native retry numbers
 survive as `dbos.step.retry` / `dbos.step.attempt`; the raw error is removed.
-Links retain only standard context. This is independent of SSE sanitization.
+Span, parent and Link contexts retain correlation IDs, remote flag and trace
+flags; arbitrary vendor `tracestate` and Link attributes are removed at egress.
+In-process/native DBOS propagation is unchanged. Agent display names rejected by
+the content allowlist use the existing safe `por.role` label, not raw name text.
+This is independent of SSE sanitization.
 There is no content-capture switch.
 
 ## Identity, retries and recovery
