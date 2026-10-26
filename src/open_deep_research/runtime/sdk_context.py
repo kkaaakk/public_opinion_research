@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -33,6 +34,7 @@ from open_deep_research.research_graph.workspace import ResearchWorkspace, ToolB
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
     execution_effect,
+    observe_execution,
 )
 
 ToolStatus = Literal["running", "succeeded", "failed", "cancelled", "unobserved"]
@@ -138,6 +140,21 @@ class SDKContextHarness(RunHooks):
         self._agent: Agent[Any] | None = None
         self._started = False
         self._closing = False
+        self._model_started_at: float | None = None
+        self._agent_started_at: float | None = None
+        self._tool_started_at: dict[str, float] = {}
+
+    async def _observe(self, kind: str, **metadata: Any) -> None:
+        """Send metadata at existing SDK/Harness seams; never send content."""
+        await observe_execution(
+            kind,
+            role=self.scope.role,
+            invocation_id=self.sdk_run_id,
+            task_id=self.scope.task_id,
+            research_round=self.scope.research_round,
+            model_turn=self.model_calls,
+            **metadata,
+        )
 
     def _check(self, context: Any) -> None:
         if (
@@ -336,6 +353,7 @@ class SDKContextHarness(RunHooks):
         if isinstance(context, ToolContext):
             self._start(context)
             self.events.append(("tool_start", context.tool_call_id))
+            self._tool_started_at[context.tool_call_id] = time.monotonic()
 
     async def on_tool_end(
         self,
@@ -350,6 +368,19 @@ class SDKContextHarness(RunHooks):
             if recorded.status == "running":
                 self._record(context, "unobserved", result)
             self.events.append(("tool_end", context.tool_call_id))
+            started = self._tool_started_at.pop(context.tool_call_id, None)
+            await self._observe(
+                "tool_result",
+                name=recorded.tool_name,
+                tool_call_id=recorded.tool_call_id,
+                graph_call_id=recorded.graph_call_id,
+                status=recorded.status,
+                **(
+                    {"duration_ms": (time.monotonic() - started) * 1000}
+                    if started is not None
+                    else {}
+                ),
+            )
 
     async def on_llm_start(
         self,
@@ -360,6 +391,8 @@ class SDKContextHarness(RunHooks):
     ) -> None:
         """Record the public lifecycle order of actual model requests."""
         self.events.append(("llm_start", str(self.model_calls)))
+        self._model_started_at = time.monotonic()
+        await self._observe("model_started")
 
     async def on_llm_end(
         self,
@@ -369,6 +402,22 @@ class SDKContextHarness(RunHooks):
     ) -> None:
         """Observe a model response without treating hosted items as local evidence."""
         self.events.append(("llm_end", str(self.model_calls)))
+        usage = response.usage
+        # SDK zero defaults do not prove a provider supplied token usage.
+        tokens = {
+            key: getattr(usage, key, None)
+            for key in ("input_tokens", "output_tokens", "total_tokens")
+        }
+        await self._observe(
+            "model_completed",
+            **({"usage": tokens} if any(tokens.values()) else {}),
+            **(
+                {"duration_ms": (time.monotonic() - self._model_started_at) * 1000}
+                if self._model_started_at is not None
+                else {}
+            ),
+        )
+        self._model_started_at = None
         items = response.to_input_items()
         if items:
             self._response_starts.append(self._item_key(items[0]))
@@ -379,12 +428,23 @@ class SDKContextHarness(RunHooks):
         """Confirm the invocation boundary before any model or local tool runs."""
         self._check(context.context)
         self.events.append(("agent_start", agent.name))
+        self._agent_started_at = time.monotonic()
+        await self._observe("agent_started")
 
     async def on_agent_end(
         self, context: RunContextWrapper[Any], agent: Agent[Any], output: Any
     ) -> None:
         """Observe final output; exit settlement remains the caller's responsibility."""
         self.events.append(("agent_end", agent.name))
+        await self._observe(
+            "agent_completed",
+            model_calls=self.model_calls,
+            **(
+                {"duration_ms": (time.monotonic() - self._agent_started_at) * 1000}
+                if self._agent_started_at is not None
+                else {}
+            ),
+        )
 
     def _message_view(self) -> list[Any]:
         """Build a LangChain view only for strategy compaction, never for the provider."""
@@ -465,6 +525,9 @@ class SDKContextHarness(RunHooks):
 
     async def _flush_evidence(self, evidence: list[ObservedToolResult]) -> bool:
         self.events.append(("batch_start", str(len(evidence))))
+        await self._observe(
+            "harness", stage="persist_batch", status="started", batch_size=len(evidence)
+        )
         previous_receipts = dict(self.workspace.receipts)
         context_calls_before = int(
             self.workspace.metrics.as_dict().get("context_manager_calls", 0) or 0
@@ -503,6 +566,12 @@ class SDKContextHarness(RunHooks):
                 self.workspace.receipts.clear()
                 self.workspace.receipts.update(previous_receipts)
                 self.events.append(("batch_failed", str(len(evidence))))
+                await self._observe(
+                    "harness",
+                    stage="persist_batch",
+                    status="failed",
+                    batch_size=len(evidence),
+                )
                 return False
         except BaseException:
             if (
@@ -528,6 +597,12 @@ class SDKContextHarness(RunHooks):
             self.workspace.receipts.clear()
             self.workspace.receipts.update(previous_receipts)
             self.events.append(("batch_recovery_incomplete", str(len(evidence))))
+            await self._observe(
+                "harness",
+                stage="persist_batch",
+                status="unresolved",
+                batch_size=len(evidence),
+            )
             return False
         self._needs_context_update.difference_update(call_ids)
         for call_id in call_ids:
@@ -537,6 +612,13 @@ class SDKContextHarness(RunHooks):
         for result in evidence:
             result.consumed = True
         self.events.append(("batch_end", str(len(evidence))))
+        await self._observe(
+            "harness",
+            stage="persist_batch",
+            status="completed",
+            batch_size=len(evidence),
+            compacted_calls=len(self._compacted),
+        )
         return True
 
     def _remember_compaction(self, messages: list[Any]) -> None:
@@ -581,9 +663,16 @@ class SDKContextHarness(RunHooks):
                 "Handoffs/nested roles require a separate SDKContextHarness."
             )
         self.events.append(("input_filter", str(self.model_calls + 1)))
+        await self._observe("harness", stage="input_filter", status="started")
         updated = await self._flush()
         if not self.workspace.strategy.graph_enabled:
             self.model_calls += 1
+            await self._observe(
+                "harness",
+                stage="input_filter",
+                status="completed",
+                reason="graph_disabled",
+            )
             return data.model_data
         # Business roles request per-turn refresh; standalone Phase 0 callers
         # retain the explicit refresh interval and retrieval-only default.
@@ -593,7 +682,15 @@ class SDKContextHarness(RunHooks):
             and self.model_calls % self.consumer_refresh_every == 0
         )
         if not self._context_text or updated or refresh_due:
+            await self._observe("harness", stage="context_retrieval", status="started")
             self.workspace.context_for(query_suffix="SDK current task")
+            await self._observe(
+                "harness",
+                stage="context_retrieval",
+                status="completed",
+                nodes=len(self.workspace.relevant_subgraph.nodes),
+                edges=len(self.workspace.relevant_subgraph.edges),
+            )
         signature = self.workspace.relevant_subgraph.model_dump_json(exclude={"query"})
         changed = signature != self._retrieved_signature
         refresh = changed or refresh_due
@@ -603,7 +700,9 @@ class SDKContextHarness(RunHooks):
             and self.workspace.relevant_subgraph.nodes
             and changed
         ):
+            await self._observe("harness", stage="working_context", status="started")
             await self.workspace.update_working_context([])
+            await self._observe("harness", stage="working_context", status="completed")
         self._retrieved_signature = signature
         if not self._context_text or updated or refresh:
             body = self.workspace.protected_context(include_summary=False)
@@ -637,6 +736,15 @@ class SDKContextHarness(RunHooks):
                 item = {**item, "output": self._compacted[item["call_id"]]}
             items.append(item)
         self.model_calls += 1
+        await self._observe(
+            "harness",
+            stage="context_ready",
+            status="completed",
+            context_chars=len(self._context_text),
+            compacted_calls=len(self._compacted),
+            nodes=len(self.workspace.relevant_subgraph.nodes),
+            edges=len(self.workspace.relevant_subgraph.edges),
+        )
         return ModelInputData(
             input=[{"role": "user", "content": self._context_text}, *items],
             instructions=data.model_data.instructions,
@@ -752,6 +860,15 @@ class SDKContextHarness(RunHooks):
         )
         self.last_settlement = settlement
         self.events.append(("settlement", reason))
+        await self._observe(
+            "harness",
+            stage="settlement",
+            reason=reason,
+            status="settled" if settlement.succeeded else "unresolved",
+            pending_calls=len(settlement.pending_call_ids),
+            in_flight_calls=len(settlement.in_flight_call_ids),
+            **({"error_type": settlement.error_type} if settlement.error_type else {}),
+        )
         if cancellation is not None:
             raise cancellation
         return settlement
@@ -826,6 +943,22 @@ class SDKContextHarness(RunHooks):
                     exc.add_note(
                         f"Context settlement interrupted: {type(cleanup_error).__name__}"
                     )
+            try:
+                if self._model_started_at is not None:
+                    await self._observe(
+                        "model_failed",
+                        status=reason,
+                        error_type=type(exc).__name__,
+                        duration_ms=(time.monotonic() - self._model_started_at) * 1000,
+                    )
+                await self._observe(
+                    "agent_failed",
+                    status=reason,
+                    error_type=type(exc).__name__,
+                )
+            except BaseException:
+                # Observability must not replace the original execution failure.
+                pass
             raise
         self._closing = True
         settlement = await self._settle_on_exit("completed")

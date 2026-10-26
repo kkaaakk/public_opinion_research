@@ -264,6 +264,14 @@ class RunClient:
             self.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0,
         )
         return {
+            "approval_required": bool(
+                req["data"]["config"]["configurable"].get("allow_plan_feedback")
+            ),
+            "request": {
+                key: value
+                for key, value in req["data"]["request"].items()
+                if key in {"topic", "model", "mode", "rag_enabled", "require_approval"}
+            },
             "generation": generation,
             "retry_requested": generation > applied,
             "cancel_requested": req["cancel_requested"],
@@ -330,6 +338,10 @@ class RunClient:
             )
             if item is not None:
                 result.append(public_payload(item))
+            else:
+                raise RunConflict(
+                    "Durable event prefix is not available; retain the current cursor"
+                )
         return result
 
     def approve(self, run_id, owner, plan_version, decision):

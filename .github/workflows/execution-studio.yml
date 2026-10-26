@@ -4,33 +4,119 @@ on:
   pull_request:
     paths:
       - "frontend/**"
-      - "src/open_deep_research/web/server.py"
+      - "src/open_deep_research/web/**"
+      - "src/open_deep_research/runtime/**"
+      - "src/open_deep_research/workflow/**"
+      - "tests/studio_browser_server.py"
+      - "tests/test_studio_observations.py"
+      - "tests/test_dbos_contracts.py"
+      - "pyproject.toml"
       - ".github/workflows/execution-studio.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install isolated frontend dependencies
-        run: npm install --no-audit --no-fund
-        working-directory: frontend
-      - name: Validate projection protocol
-        run: npm test
-        working-directory: frontend
-      - name: Typecheck and build Studio
-        run: npm run build
-        working-directory: frontend
-      - name: Validate built FastAPI assets
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - name: Validate FastAPI assets
         run: |
-          test -f src/open_deep_research/web/studio/index.html
-          test -n "$(find src/open_deep_research/web/studio -name '*.js' -print -quit)"
-      - name: Preserve UI build for review
-        uses: actions/upload-artifact@v4
+          test -f ../src/open_deep_research/web/studio/index.html
+          test -n "$(find ../src/open_deep_research/web/studio/assets -name '*.js' -print -quit)"
+      - uses: actions/upload-artifact@v4
         with:
           name: execution-studio-dist
           path: src/open_deep_research/web/studio/
+
+  browser:
+    name: studio-browser-native-chain
+    needs: frontend
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_USER: por_execution
+          POSTGRES_PASSWORD: studio-ci-test-only
+          POSTGRES_DB: por_execution
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U por_execution -d por_execution"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      neo4j:
+        image: neo4j:5.26.31
+        env:
+          NEO4J_AUTH: neo4j/studio-ci-test-only
+        ports: ["7687:7687"]
+    env:
+      PYTHON_DOTENV_DISABLED: "1"
+      OPENAI_AGENTS_DISABLE_TRACING: "1"
+      LANGSMITH_TRACING: "false"
+      TEST_DBOS_DATABASE_URL: postgresql+psycopg://por_execution:studio-ci-test-only@127.0.0.1:5432/por_execution
+      TEST_DBOS_NEO4J_URI: bolt://127.0.0.1:7687
+      TEST_DBOS_NEO4J_PASSWORD: studio-ci-test-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - uses: actions/download-artifact@v4
+        with:
+          name: execution-studio-dist
+          path: src/open_deep_research/web/studio/
+      - run: npx playwright install --with-deps --no-shell chromium
+        working-directory: frontend
+      - name: Await isolated Neo4j
+        run: |
+          uv run python - <<'PY'
+          import os, time
+          from neo4j import GraphDatabase
+          driver = GraphDatabase.driver(os.environ['TEST_DBOS_NEO4J_URI'], auth=('neo4j', os.environ['TEST_DBOS_NEO4J_PASSWORD']))
+          for attempt in range(60):
+              try:
+                  driver.verify_connectivity()
+                  break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise RuntimeError('Isolated Neo4j did not become ready')
+          driver.close()
+          PY
+      - name: Actual HTTP, DBOS, SDK, Harness and evidence in Chromium
+        run: npm run test:e2e
+        working-directory: frontend
+      - name: Preserve controlled-fixture browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-browser-evidence
+          path: |
+            .tmp/studio-*.png
+            .tmp/studio-playwright/

@@ -86,8 +86,8 @@ app = FastAPI(
 
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-if STUDIO_DIR.is_dir():
-    app.mount("/studio/assets", StaticFiles(directory=str(STUDIO_DIR)), name="studio-assets")
+if (STUDIO_DIR / "assets").is_dir():
+    app.mount("/studio/assets", StaticFiles(directory=str(STUDIO_DIR / "assets")), name="studio-assets")
 
 
 # 校验前端研究主题、模型及数量等受限输入。

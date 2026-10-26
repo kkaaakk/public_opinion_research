@@ -14,9 +14,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from open_deep_research.budget import merge_budget_usage
 from open_deep_research.configuration import Configuration
 from open_deep_research.web.run_data import (
+    TERMINAL,
     RunConflict,
     digest,
     public_payload,
+    sdk_observation,
     timestamp,
 )
 from open_deep_research.workflow import intake, reporting, research
@@ -101,14 +103,18 @@ async def business_step(run_id, unit_id, name, state):
             repo.check,
             unit_id,
             permit,
-            allow_cancel=kind in {"model_completed", "agent_completed"},
+            allow_cancel=kind
+            in {
+                "model_completed",
+                "model_failed",
+                "agent_completed",
+                "agent_failed",
+                "harness",
+                "tool_result",
+            },
         )
         # Never persist raw prompt/tool arguments/output/exception text publicly.
-        allowed = {
-            k: v
-            for k, v in payload.items()
-            if k in {"role", "name", "model_calls", "invocation_id"}
-        }
+        allowed = sdk_observation(payload)
 
         def publish():
             with repo.engine.begin() as db:
@@ -116,7 +122,10 @@ async def business_step(run_id, unit_id, name, state):
                     db,
                     run_id,
                     "sdk_event",
-                    event="agent_started" if kind == "sdk_session" else kind,
+                    event="session_started" if kind == "sdk_session" else kind,
+                    step=name,
+                    unit_id=unit_id,
+                    execution_id=digest({"unit": unit_id, "permit": permit}),
                     **allowed,
                 )
 
@@ -163,7 +172,15 @@ async def business_step(run_id, unit_id, name, state):
 
         def started():
             with repo.engine.begin() as db:
-                repo.publish(db, run_id, "step_started", step=name)
+                repo.publish(
+                    db,
+                    run_id,
+                    "step_started",
+                    step=name,
+                    unit_id=unit_id,
+                    execution_id=digest({"unit": unit_id, "permit": permit}),
+                    research_round=state.get("workflow", {}).get("round", 1),
+                )
                 repo.publish(
                     db, run_id, "status", message=f"Running {name}", granularity="stage"
                 )
@@ -181,6 +198,27 @@ async def business_step(run_id, unit_id, name, state):
             artifact = {"patch": result.update or {}, "goto": result.goto}
         else:
             artifact = {"patch": result}
+        role = name.removesuffix("_agent")
+        if (
+            name.endswith("_agent")
+            and role
+            in {
+                "public_signal",
+                "internal_knowledge",
+                "risk_assessment",
+                "response_strategy",
+            }
+            and not result
+            and role
+            not in {
+                str(item).strip().lower()
+                for item in (
+                    Configuration.from_runnable_config(cfg).enabled_business_agents
+                    or []
+                )
+            }
+        ):
+            artifact["observation"] = {"skipped": True, "reason": "role_disabled"}
         patch = artifact["patch"]
         if "messages" in patch:
             # Message UUID generation belongs to this persisted Step, not replay.
@@ -356,7 +394,12 @@ async def research_workflow(run_id, initial):
             apply_patch(state, reviewed["patch"])
             packets = reviewed["followup"]
             if packets:
-                await send_event(run_id, "research_followup", round=round_ + 1)
+                await send_event(
+                    run_id,
+                    "research_followup",
+                    round=round_ + 1,
+                    roles=list(packets),
+                )
         for role in ("risk_assessment", "response_strategy"):
             unit = run_id + ":" + role
             with SetWorkflowID(unit):
@@ -453,46 +496,63 @@ async def run_workflow(run_id):
 async def events_workflow(run_id):
     cursor = 0
     generation = 0
+    seen = set()
+    terminal = None
+    history = None
+    acknowledged = False
     while True:
         event = await DBOS.recv_async("events", timeout_seconds=86400)
         if event is None:
             continue
         if "generation" in event and event["generation"] < generation:
             continue
-        if event["type"] == "retry_started":
+        if event.get("generation", generation) > generation:
             generation = event["generation"]
-        if event["type"] == "history_saved" and event.get("generation", 0) < generation:
-            continue
+            seen, terminal, history, acknowledged = set(), None, None, False
         cursor += 1
         event = dict(
             event, protocol_version=1, run_id=run_id, attempt_id=run_id, seq=cursor
         )
+        event.setdefault("generation", generation)
         event = await public_event(event)
         await DBOS.write_stream_async("events", event)
         await DBOS.set_event_async("cursor", cursor)
+        if event["type"] != "run_status" or event.get("status") in TERMINAL:
+            seen.add(event["type"])
         if event["type"] == "done":
-            await DBOS.set_event_async(
-                "done", {"generation": event.get("generation", 0)}
-            )
+            terminal = event
         if event["type"] == "run_status":
             await DBOS.set_event_async("phase", event["status"])
         if event["type"] == "history_saved":
-            # Preserve the old archive receipt followed by a final done event.
+            history = event
+        # DBOS 3.3 orders native messages by millisecond transaction timestamp.
+        # A committed archive packet can overtake tail packets. Receipt readiness
+        # is a delivery fact, never permission to execute or replay research.
+        required = {"settlement", "usage", "run_status"}
+        if terminal:
+            required.update(terminal.get("expected_events", []))
+        if not terminal or not required.issubset(seen):
+            continue
+        if history:
+            # Preserve the public archive-done tail, then publish its receipts.
             cursor += 1
             done = await public_event(
-                dict(event, type="done", seq=cursor, archive_status="saved")
+                dict(history, type="done", seq=cursor, archive_status="saved")
             )
             await DBOS.write_stream_async("events", done)
             await DBOS.set_event_async("cursor", cursor)
+            await DBOS.set_event_async("done", {"generation": generation})
             await DBOS.set_event_async(
-                "done", {"generation": event.get("generation", 0)}
+                "history", {"id": history["id"], "generation": generation}
             )
-            await DBOS.set_event_async(
-                "history", {"id": event["id"], "generation": event.get("generation", 0)}
-            )
-            if event["status"] in {"completed", "cancelled"}:
+            if history["status"] in {"completed", "cancelled"}:
                 await DBOS.close_stream_async("events")
                 return
+            history = None
+            acknowledged = True
+        elif not acknowledged:
+            await DBOS.set_event_async("done", {"generation": generation})
+            acknowledged = True
 
 
 @DBOS.step(retries_allowed=True, max_attempts=10, interval_seconds=0.5, backoff_rate=1)
@@ -672,6 +732,9 @@ async def finalize_workflow(run_id):
             status=result["status"],
             archive_status="pending",
             generation=result["generation"],
+            expected_events=["settlement", "usage", "run_status"]
+            + (["report"] if result["report"] else [])
+            + (["error"] if result["error"] else []),
         )
         advanced = False
         while True:

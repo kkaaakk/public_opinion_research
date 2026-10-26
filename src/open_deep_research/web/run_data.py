@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -110,3 +111,58 @@ class RunJSON(Serializer):
 
 def public_run(run: dict) -> dict:
     return public_payload({k: v for k, v in run.items() if k not in {"owner", "seq"}})
+
+
+def sdk_observation(payload: dict) -> dict:
+    """Allow only bounded metadata, never arbitrary hook payloads or model content."""
+    strings = {
+        "role",
+        "name",
+        "invocation_id",
+        "task_id",
+        "tool_call_id",
+        "graph_call_id",
+        "stage",
+        "error_type",
+        "reason",
+        "status",
+        "model",
+    }
+    numbers = {
+        "model_calls",
+        "model_turn",
+        "research_round",
+        "duration_ms",
+        "batch_size",
+        "context_chars",
+        "compacted_calls",
+        "nodes",
+        "edges",
+        "pending_calls",
+        "in_flight_calls",
+        "removed_turns",
+    }
+    result = {
+        key: value[:160]
+        for key, value in payload.items()
+        if key in strings and isinstance(value, str)
+    }
+    result.update(
+        {
+            key: value
+            for key, value in payload.items()
+            if key in numbers
+            and type(value) in {int, float}
+            and math.isfinite(value)
+            and value >= 0
+        }
+    )
+    if isinstance(payload.get("usage"), dict):
+        result["usage"] = {
+            key: value
+            for key, value in payload["usage"].items()
+            if key in {"input_tokens", "output_tokens", "total_tokens"}
+            and type(value) is int
+            and value >= 0
+        }
+    return result

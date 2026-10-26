@@ -273,3 +273,83 @@ def events(
 ) -> StreamingResponse:
     """Reconnect with Last-Event-ID or after without repeating an Agent invocation."""
     return subscription(raw, run_id, after)
+
+
+@router.get("/{run_id}/event-page")
+def event_page(
+    run_id: str,
+    raw: Request,
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> JSONResponse:
+    """Read a bounded prefix for cold replay; this never starts research."""
+    owner = trusted_owner(raw)
+    items = _call(_store().read_events, run_id, owner, after, limit + 1)
+    page = items[:limit]
+    return JSONResponse(
+        {
+            "items": page,
+            "next_cursor": page[-1]["seq"] if page else after,
+            "has_more": len(items) > limit,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/{run_id}/execution")
+def execution(
+    run_id: str,
+    raw: Request,
+    workflow_id: str = Query(default="", max_length=256),
+    offset: int = Query(default=0, ge=0),
+    workflow_offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> JSONResponse:
+    from open_deep_research.web.observations import execution_view
+
+    owner = trusted_owner(raw)
+    data = _call(
+        execution_view,
+        _store(),
+        run_id,
+        owner,
+        workflow_id,
+        offset,
+        limit,
+        workflow_offset,
+    )
+    return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/{run_id}/evidence")
+def evidence(
+    run_id: str,
+    raw: Request,
+    after: str = Query(default="", max_length=256),
+    limit: int = Query(default=40, ge=1, le=100),
+    kind: str = Query(default="", max_length=32),
+    q: str = Query(default="", max_length=500),
+    node_id: str = Query(default="", max_length=256),
+    edge_after: str = Query(default="", max_length=256),
+) -> JSONResponse:
+    from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
+
+    from open_deep_research.web.observations import evidence_view
+
+    owner = trusted_owner(raw)
+    try:
+        data = _call(
+            evidence_view,
+            _store(),
+            run_id,
+            owner,
+            after=after,
+            limit=limit,
+            kind=kind,
+            query=q,
+            node_id=node_id,
+            edge_after=edge_after,
+        )
+    except (Neo4jError, ServiceUnavailable, SessionExpired, ValueError):
+        raise HTTPException(503, "Research Graph evidence is unavailable.") from None
+    return JSONResponse(data, headers={"Cache-Control": "no-store"})

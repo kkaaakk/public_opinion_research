@@ -21,6 +21,148 @@ from open_deep_research.workflow.run_facts import facts
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("native_case", ["cancel"], indirect=True)
+def test_studio_cancel_records_failed_model_and_agent_after_cancel_intent(native_case):
+    case = native_case
+    run = case.create()
+    case.wait(run, lambda _r: case.blocked.is_set())
+    case.client.cancel(run["run_id"], "alice")
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "cancelled" and result["settlement"] == "settled"
+    events = case.client.read_events(run["run_id"], "alice", 0, 1000)
+    cancelled = [
+        e
+        for e in events
+        if e["type"] == "sdk_event" and e.get("role") == "public_signal"
+    ]
+    assert any(
+        e["event"] == "model_failed" and e["status"] == "cancelled" for e in cancelled
+    )
+    assert any(
+        e["event"] == "agent_failed" and e["status"] == "cancelled" for e in cancelled
+    )
+    assert any(
+        e.get("stage") == "settlement" and e["status"] == "settled" for e in cancelled
+    )
+    assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
+
+
+def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(native_case):
+    """Verify observer facts over actual Runner/DBOS, not synthetic UI events."""
+    from open_deep_research.web.observations import execution_view
+
+    case = native_case
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    before = len(case.models)
+    cursor = 0
+    events = []
+    while cursor < result["event_cursor"]:
+        page = case.client.read_events(run["run_id"], "alice", cursor, 17)
+        assert page
+        events.extend(page)
+        cursor = page[-1]["seq"]
+    assert [e["seq"] for e in events] == list(range(1, cursor + 1))
+    assert all(e["generation"] == 0 for e in events)
+    sdk = [e for e in events if e["type"] == "sdk_event"]
+    invocations = {e["invocation_id"] for e in sdk}
+    assert len(invocations) == 4
+    assert all(e["unit_id"].startswith(run["run_id"] + ":") for e in sdk)
+    for invocation in invocations:
+        local = [e for e in sdk if e["invocation_id"] == invocation]
+        assert sum(e["event"] == "agent_started" for e in local) == 1
+        assert sum(e["event"] == "agent_completed" for e in local) == 1
+        assert all(e.get("execution_id") and e.get("observed_at") for e in local)
+    starts = [e for e in sdk if e["event"] == "model_started"]
+    ends = [e for e in sdk if e["event"] == "model_completed"]
+    assert len(starts) == len(ends) == 6
+    assert {(e["invocation_id"], e["model_turn"]) for e in starts} == {
+        (e["invocation_id"], e["model_turn"]) for e in ends
+    }
+    assert all(
+        e["usage"] == {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
+        for e in ends
+    )
+    assert all(e["duration_ms"] >= 0 for e in ends)
+    tools = [e for e in sdk if e["event"] == "tool_result"]
+    assert len(tools) == 2 and all(e["status"] == "succeeded" for e in tools)
+    assert all(e["tool_call_id"] and e["graph_call_id"] for e in tools)
+    assert any(e.get("stage") == "context_ready" for e in sdk)
+    assert any(e.get("stage") == "settlement" and e["status"] == "settled" for e in sdk)
+    assert not any(
+        {"prompt", "arguments", "output", "observation", "system_prompt"} & e.keys()
+        for e in sdk
+    )
+    catalog = execution_view(case.client, run["run_id"], "alice", "", 0, 200)
+    assert any(
+        w["name"] == "por.run" and w["status"] == "SUCCESS"
+        for w in catalog["workflows"]
+    )
+    assert catalog["steps"]
+    assert len(case.models) == before == 4
+    assert result["usage"]["model_calls"] == 28
+
+
+def test_studio_disabled_role_is_an_explicit_skip_not_a_completed_agent(
+    native_case, monkeypatch
+):
+    from contextlib import asynccontextmanager
+
+    from agents.testing import ScriptedModel, assistant_message, function_call
+    from test_sdk_runtime import TOKENS
+
+    from open_deep_research.runtime import business_agent
+
+    case = native_case
+    case.cfg["configurable"]["enabled_business_agents"] = [
+        "public_signal",
+        "risk_assessment",
+        "response_strategy",
+    ]
+
+    # Consumers have no search tool; use their real role identity to select the fixture.
+    from agents.testing import ModelStep
+
+    @asynccontextmanager
+    async def model(*_args, **_kwargs):
+        def first(call):
+            role = call.system_instructions.split("<Role>\n", 1)[1].split(
+                "\n</Role>", 1
+            )[0]
+            return (
+                [function_call("web_search", {"query": "brand"}, call_id="skip-proof")]
+                if role == "public_signal"
+                else [assistant_message("consumer analysis")]
+            )
+
+        yield ScriptedModel(
+            [ModelStep.respond(first), [assistant_message("analysis")]],
+            default_usage=TOKENS,
+        )
+
+    monkeypatch.setattr(business_agent, "sdk_model", model)
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "completed", result["error"]
+    events = case.client.read_events(run["run_id"], "alice", 0, 1000)
+    skipped = [e for e in events if e["type"] == "step_skipped"]
+    assert len(skipped) == 1 and skipped[0]["step"] == "internal_knowledge_agent"
+    assert skipped[0]["reason"] == "role_disabled"
+    assert not any(
+        e["type"] == "sdk_event" and e.get("role") == "internal_knowledge"
+        for e in events
+    )
+    assert not any(
+        e["type"] == "step_completed" and e.get("step") == "internal_knowledge_agent"
+        for e in events
+    )
+    assert {runtime.role for runtime in case.runtimes} == {
+        "public_signal",
+        "risk_assessment",
+        "response_strategy",
+    }
+
+
 def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
     native_case, monkeypatch
 ):
