@@ -149,7 +149,20 @@ def main():
                 failed.add(run_id)
                 capture_budget_usage({"model_calls": 1})
                 raise RuntimeError("Controlled settled review failure")
-            return await original_review(state, config)
+            result = await original_review(state, config)
+            if (
+                "followup-once"
+                in config["configurable"].get("organization_context", "")
+                and state["workflow"]["round"] == 1
+            ):
+                from test_python_workflow import gap
+
+                from open_deep_research.state import ResearchReview
+
+                result["workflow"]["review"] = ResearchReview(
+                    research_complete=False, next_tasks=[gap("browser-followup")]
+                )
+            return result
 
         patch.setitem(dbos_workflow.OPERATIONS, "research_review", review)
         DBOS.migrate(os.environ["DBOS_DATABASE_URL"], schema="por_dbos")

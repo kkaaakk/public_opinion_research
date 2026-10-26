@@ -9,6 +9,7 @@ import {
 } from '../projection';
 import type { RunEvent } from '../protocol';
 import { Badge, duration, Empty, JsonDetail, time } from './common';
+import { invocationsForInstance, type SDKFocus } from '../inspection';
 
 export function Inspector({
   selected,
@@ -16,12 +17,14 @@ export function Inspector({
   events,
   projection,
   onEvent,
+  onSDK,
 }: {
   selected: PhaseId | null;
   event: RunEvent | null;
   events: RunEvent[];
   projection: Projection;
   onEvent: (e: RunEvent) => void;
+  onSDK?: (focus: SDKFocus) => void;
 }) {
   const phase = PHASES.find((p) => p.id === selected);
   const instances = projection.instances.filter((i) => i.phase === selected);
@@ -70,26 +73,60 @@ export function Inspector({
             </p>
             <div className="instance-list">
               {instances.map((i, index) => (
-                <button
-                  key={i.id}
-                  className="instance"
-                  onClick={() => (i.end ?? i.start) && onEvent((i.end ?? i.start)!)}
-                >
-                  <div>
-                    <strong>{i.step}</strong>
-                    <Badge status={i.status} />
-                  </div>
-                  <small>
-                    Instance {index + 1} · Gen {i.generation} · Round {i.round ?? '未提供'}
-                  </small>
-                  <small className="mono">{i.unitId ?? 'Unit ID 未提供'}</small>
-                  <small>
-                    {duration(measuredDuration(i.start, i.end))} · {time(i.start?.observed_at)}
-                  </small>
-                </button>
+                <div key={i.id} className="instance-record">
+                  <button
+                    className="instance"
+                    onClick={() => (i.end ?? i.start) && onEvent((i.end ?? i.start)!)}
+                  >
+                    <div>
+                      <strong>{i.step}</strong>
+                      <Badge status={i.status} />
+                    </div>
+                    <small>
+                      Instance {index + 1} · Gen {i.generation} · Round {i.round ?? '未提供'}
+                    </small>
+                    <small className="mono">{i.unitId ?? 'Unit ID 未提供'}</small>
+                    <small>
+                      {duration(measuredDuration(i.start, i.end))} · {time(i.start?.observed_at)}
+                    </small>
+                  </button>
+                  {onSDK &&
+                    invocationsForInstance(events, i).map(({ focus, models, tools }) => (
+                      <div
+                        className="invocation-actions"
+                        key={`${focus.invocationId}:${focus.generation ?? 'unknown'}`}
+                      >
+                        <span className="mono" title={focus.invocationId}>
+                          SDK {focus.invocationId.slice(0, 12)}… · Gen{' '}
+                          {focus.generation ?? '未提供'}
+                        </span>
+                        <div>
+                          <button className="button small" onClick={() => onSDK(focus)}>
+                            查看 Invocation
+                          </button>
+                          <button
+                            className="text-button"
+                            disabled={!models}
+                            onClick={() => onSDK({ ...focus, kind: 'model' })}
+                          >
+                            模型 {models}
+                          </button>
+                          <button
+                            className="text-button"
+                            disabled={!tools}
+                            onClick={() => onSDK({ ...focus, kind: 'tool' })}
+                          >
+                            工具 {tools}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
               ))}
             </div>
-            {!instances.length && <Empty>尚未观察到此节点的执行实例。</Empty>}
+            {!instances.length && (
+              <Empty>尚未观察到此节点的 Step 实例；以下仅显示已有公开事件。</Empty>
+            )}
             <h4>
               <Terminal size={14} />
               关联公开事件

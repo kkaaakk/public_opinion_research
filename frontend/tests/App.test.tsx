@@ -154,6 +154,46 @@ it('keeps all mutations disabled during read-only replay', async () => {
   fireEvent.change(screen.getByLabelText('回放游标'), { target: { value: '0' } });
   expect(retry).toBeDisabled();
 });
+it.each([401, 403, 429])(
+  'keeps a lost-ACK retry identity after HTTP %i during confirmation',
+  async (status) => {
+    persist({ runId: ID });
+    const grants: { key: string | null; body: string }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async (input, init) => {
+        if (String(input).endsWith('/retry')) {
+          grants.push({
+            key: new Headers(init?.headers).get('Idempotency-Key'),
+            body: String(init?.body),
+          });
+          if (grants.length === 1) throw new TypeError('ACK lost');
+          if (grants.length === 2) return json({ detail: 'Control request rejected' }, status);
+        }
+        return json(
+          snapshot({
+            status: 'failed',
+            native_status: 'ERROR',
+            retry_safe: true,
+            state_version: 12,
+            generation: 0,
+            events_complete: true,
+          }),
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: '安全重试' }));
+    await user.click(await screen.findByRole('button', { name: '确认原重试请求' }));
+    await waitFor(() => expect(grants).toHaveLength(2));
+    expect(restore().retry?.key).toBe(grants[0].key);
+    await user.click(await screen.findByRole('button', { name: '确认原重试请求' }));
+    await waitFor(() => expect(grants).toHaveLength(3));
+    expect(grants[2]).toEqual(grants[0]);
+    await waitFor(() => expect(restore().retry).toBeUndefined());
+  },
+);
 it('renders Markdown without raw HTML, external image requests or javascript links', () => {
   const { container } = render(
     <Reports

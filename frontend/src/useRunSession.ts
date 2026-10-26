@@ -146,7 +146,18 @@ export function useRunSession() {
             : '审批决定已提交。',
       );
     } catch (error) {
-      if (action === 'retry' && error instanceof ApiError && error.status < 500)
+      // Authentication/rate-limit failures cannot acknowledge an earlier lost ACK.
+      const uncertainExistingGrant = session.retry?.runId === run.run_id;
+      const transientControlFailure =
+        error instanceof ApiError &&
+        (error.status === 429 ||
+          (uncertainExistingGrant && [401, 403, 404].includes(error.status)));
+      if (
+        action === 'retry' &&
+        error instanceof ApiError &&
+        error.status < 500 &&
+        !transientControlFailure
+      )
         commit({ ...session, retry: undefined });
       setMessage((error as Error).message);
     } finally {

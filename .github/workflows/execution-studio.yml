@@ -1,6 +1,18 @@
 name: Execution Studio
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "src/open_deep_research/web/**"
+      - "src/open_deep_research/runtime/**"
+      - "src/open_deep_research/workflow/**"
+      - "tests/studio_browser_server.py"
+      - "tests/test_studio_observations.py"
+      - "tests/test_dbos_contracts.py"
+      - "pyproject.toml"
+      - ".github/workflows/execution-studio.yml"
   pull_request:
     paths:
       - "frontend/**"

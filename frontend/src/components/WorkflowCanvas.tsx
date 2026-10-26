@@ -21,10 +21,16 @@ type StudioNode = Node<
   { label: string; detail: string; status: NodeStatus; instances: number },
   'studio'
 >;
-const WorkflowNode = memo(function WorkflowNode({ data, selected }: NodeProps<StudioNode>) {
+const WorkflowNode = memo(function WorkflowNode({
+  id,
+  data,
+  selected,
+  sourcePosition = Position.Bottom,
+  targetPosition = Position.Top,
+}: NodeProps<StudioNode>) {
   return (
     <div className={`workflow-node state-${data.status}${selected ? ' selected' : ''}`}>
-      <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={targetPosition} />
       <div className="node-title">
         <span className="node-dot" />
         <strong>{data.label}</strong>
@@ -34,21 +40,54 @@ const WorkflowNode = memo(function WorkflowNode({ data, selected }: NodeProps<St
         <small>{data.detail}</small>
         <Badge status={data.status} />
       </div>
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" position={sourcePosition} />
+      {id === 'review' && (
+        <>
+          <Handle
+            type="source"
+            position={Position.Top}
+            id="followup-public_signal"
+            style={{ left: '30%' }}
+          />
+          <Handle
+            type="source"
+            position={Position.Top}
+            id="followup-internal_knowledge"
+            style={{ left: '70%' }}
+          />
+        </>
+      )}
+      {id === 'public_signal' && (
+        <Handle type="target" position={Position.Bottom} id="followup" style={{ left: '35%' }} />
+      )}
+      {id === 'internal_knowledge' && (
+        <Handle type="target" position={Position.Bottom} id="followup" style={{ left: '65%' }} />
+      )}
     </div>
   );
 });
 const nodeTypes = { studio: WorkflowNode };
 const positions: Record<PhaseId, { x: number; y: number }> = {
-  intake: { x: 260, y: 0 },
-  planning: { x: 260, y: 76 },
-  approval: { x: 260, y: 152 },
-  public_signal: { x: 80, y: 242 },
-  internal_knowledge: { x: 440, y: 242 },
-  review: { x: 260, y: 332 },
-  risk_assessment: { x: 260, y: 408 },
-  response_strategy: { x: 260, y: 484 },
-  reporting: { x: 260, y: 560 },
+  intake: { x: 0, y: 0 },
+  planning: { x: 300, y: 0 },
+  approval: { x: 600, y: 0 },
+  public_signal: { x: 420, y: 150 },
+  internal_knowledge: { x: 780, y: 150 },
+  review: { x: 600, y: 300 },
+  risk_assessment: { x: 300, y: 300 },
+  response_strategy: { x: 0, y: 300 },
+  reporting: { x: 0, y: 450 },
+};
+const directions: Record<PhaseId, { sourcePosition: Position; targetPosition: Position }> = {
+  intake: { sourcePosition: Position.Right, targetPosition: Position.Left },
+  planning: { sourcePosition: Position.Right, targetPosition: Position.Left },
+  approval: { sourcePosition: Position.Bottom, targetPosition: Position.Left },
+  public_signal: { sourcePosition: Position.Bottom, targetPosition: Position.Top },
+  internal_knowledge: { sourcePosition: Position.Bottom, targetPosition: Position.Top },
+  review: { sourcePosition: Position.Left, targetPosition: Position.Top },
+  risk_assessment: { sourcePosition: Position.Left, targetPosition: Position.Right },
+  response_strategy: { sourcePosition: Position.Bottom, targetPosition: Position.Right },
+  reporting: { sourcePosition: Position.Bottom, targetPosition: Position.Top },
 };
 function Canvas({
   projection,
@@ -81,6 +120,7 @@ function Canvas({
       id: p.id,
       type: 'studio',
       position: positions[p.id],
+      ...directions[p.id],
       selected: selected === p.id,
       draggable: false,
       deletable: false,
@@ -117,7 +157,10 @@ function Canvas({
       type: 'smoothstep',
       markerEnd: { type: MarkerType.ArrowClosed },
       animated: projection.statuses[target] === 'running',
-      style: { stroke: projection.statuses[source] === 'completed' ? '#4c8f78' : '#34414d' },
+      style: {
+        stroke: projection.statuses[source] === 'completed' ? '#62a88c' : '#526578',
+        strokeWidth: 1.7,
+      },
     }));
     for (const role of ['public_signal', 'internal_knowledge'] as const) {
       const observed = projection.followups.some((e) => !e.roles || e.roles.includes(role));
@@ -125,12 +168,15 @@ function Canvas({
         id: `followup-${role}`,
         source: 'review',
         target: role,
-        type: 'smoothstep',
+        sourceHandle: `followup-${role}`,
+        targetHandle: 'followup',
+        type: 'default',
+        markerEnd: { type: MarkerType.ArrowClosed },
         label: observed
           ? `Follow-up ×${projection.followups.filter((e) => !e.roles || e.roles.includes(role)).length}`
           : 'Follow-up',
         style: { stroke: observed ? '#c6a96e' : '#34414d', strokeDasharray: '5 5' },
-        labelStyle: { fill: observed ? '#c6a96e' : '#8592a3', fontSize: 10 },
+        labelStyle: { fill: observed ? '#c6a96e' : '#a7b8ca', fontSize: 12 },
       });
     }
     return result;
@@ -203,9 +249,9 @@ function Canvas({
             edges={edges}
             nodeTypes={nodeTypes}
             fitView
-            fitViewOptions={{ padding: 0.16 }}
-            minZoom={0.35}
-            maxZoom={1.4}
+            fitViewOptions={{ padding: 0.08, maxZoom: 1.05 }}
+            minZoom={0.25}
+            maxZoom={2}
             nodesConnectable={false}
             nodesDraggable={false}
             deleteKeyCode={null}
@@ -229,7 +275,7 @@ function Canvas({
         </span>
         <span>
           <GitBranch size={13} />
-          虚线为条件补查；节点角标为真实实例数
+          沿箭头折行阅读 · 双 Producer 并行 · 虚线为条件补查
         </span>
       </div>
     </section>

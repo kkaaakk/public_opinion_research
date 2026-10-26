@@ -27,6 +27,8 @@ import { WorkflowCanvas } from './components/WorkflowCanvas';
 import { Inspector } from './components/Inspector';
 import type { ReportOption } from './components/Reports';
 import { Timeline } from './components/Timeline';
+import { eventsForSDKFocus, preferredPhase, type SDKFocus } from './inspection';
+import { sdkSpans } from './projection';
 const SDKTrace = lazy(() => import('./components/SDKTrace').then((m) => ({ default: m.SDKTrace })));
 const NativeTrace = lazy(() =>
   import('./components/NativeTrace').then((m) => ({ default: m.NativeTrace })),
@@ -80,7 +82,11 @@ export default function App() {
   const [create, setCreate] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [openId, setOpenId] = useState('');
-  const [selected, setSelected] = useState<PhaseId | null>(null);
+  const [manualSelection, setManualSelection] = useState<{
+    runId: string | undefined;
+    phase: PhaseId;
+  } | null>(null);
+  const [sdkFocus, setSDKFocus] = useState<SDKFocus | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<RunEvent | null>(null);
   const [replayCursor, setReplayCursor] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -88,10 +94,12 @@ export default function App() {
   const maxCursor = events.at(-1)?.seq ?? 0;
   useEffect(() => {
     setSelectedEvent(null);
-    setSelected(null);
     setReplayCursor(null);
     setPlaying(false);
   }, [observationKey]);
+  useEffect(() => {
+    setSDKFocus(null);
+  }, [runId]);
   useEffect(() => {
     if (!playing) return;
     const timer = setInterval(
@@ -143,6 +151,24 @@ export default function App() {
     () => projectRun(visibleEvents, replayCursor === null ? run : null),
     [visibleEvents, run, replayCursor],
   );
+  const selected =
+    manualSelection && manualSelection.runId === runId
+      ? manualSelection.phase
+      : preferredPhase(projection, visibleEvents);
+  function selectPhase(phase: PhaseId) {
+    setManualSelection({ runId, phase });
+    setSelectedEvent(null);
+  }
+  function openSDK(focus: SDKFocus) {
+    const instance = projection.instances.find((i) => i.id === focus.executionId);
+    if (instance) setManualSelection({ runId, phase: instance.phase });
+    setSDKFocus(focus);
+    setTab('sdk');
+    const span = sdkSpans(eventsForSDKFocus(visibleEvents, focus)).find(
+      (s) => focus.kind === 'all' || s.kind === focus.kind,
+    );
+    setSelectedEvent(span?.end ?? span?.start ?? null);
+  }
   const reports = useMemo<ReportOption[]>(() => {
     const items: ReportOption[] = visibleEvents
       .filter((e) => e.type === 'agent_report' && e.content)
@@ -531,6 +557,7 @@ export default function App() {
                       onClick={() => {
                         setTab(id);
                         setSelectedEvent(null);
+                        if (id === 'sdk') setSDKFocus(null);
                       }}
                     >
                       {label}
@@ -542,10 +569,7 @@ export default function App() {
                     <WorkflowCanvas
                       projection={projection}
                       selected={selected}
-                      onSelect={(id) => {
-                        setSelected(id);
-                        setSelectedEvent(null);
-                      }}
+                      onSelect={selectPhase}
                     />
                     <Inspector
                       selected={selected}
@@ -553,12 +577,22 @@ export default function App() {
                       events={visibleEvents}
                       projection={projection}
                       onEvent={selectEvent}
+                      onSDK={openSDK}
                     />
                   </div>
                 )}
                 {tab === 'sdk' && (
                   <>
-                    <SDKTrace events={visibleEvents} onEvent={selectEvent} />
+                    <SDKTrace
+                      key={`${runId}:${sdkFocus ? JSON.stringify(sdkFocus) : 'all'}`}
+                      events={visibleEvents}
+                      onEvent={selectEvent}
+                      focus={sdkFocus}
+                      onClearFocus={() => {
+                        setSDKFocus(null);
+                        setSelectedEvent(null);
+                      }}
+                    />
                     {selectedEvent && (
                       <details className="panel selected-detail" open>
                         <summary>

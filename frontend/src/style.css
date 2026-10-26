@@ -674,15 +674,15 @@ strong {
   align-items: stretch;
 }
 .flow-frame {
-  height: 545px;
+  height: 550px;
 }
 .workflow-node {
-  width: 230px;
-  border: 1px solid #4b5b6d;
+  width: 280px;
+  border: 1px solid #647488;
   background: #151e28;
   border-radius: 6px;
-  min-height: 58px;
-  padding: 9px 12px;
+  min-height: 84px;
+  padding: 12px 14px;
   color: #d8e2ef;
 }
 .workflow-node.selected {
@@ -693,7 +693,7 @@ strong {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: 18px;
 }
 .node-dot {
   width: 8px;
@@ -702,26 +702,26 @@ strong {
   border-radius: 50%;
 }
 .node-title strong {
-  font-weight: 550;
+  font-weight: 600;
 }
 .node-count {
   margin-left: auto;
-  color: #7f92a9;
+  color: #b3c4d6;
   font-family: Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
 }
 .node-meta {
   display: flex;
   justify-content: space-between;
   gap: 5px;
-  margin: 4px 0 0 16px;
-  color: #91a2b5;
+  margin: 6px 0 0 16px;
+  color: #b4c4d6;
 }
 .node-meta small {
-  font-size: 10px;
+  font-size: 12px;
 }
 .node-meta .badge {
-  font-size: 9px;
+  font-size: 12px;
 }
 .state-running,
 .state-paused {
@@ -1446,7 +1446,7 @@ dialog::backdrop {
     grid-template-columns: minmax(0, 1fr) 380px;
   }
   .workflow-node {
-    width: 230px;
+    width: 280px;
   }
 }
 @media (max-width: 1280px) {
@@ -1471,7 +1471,7 @@ dialog::backdrop {
     padding: 16px;
   }
   .flow-frame {
-    height: 540px;
+    height: 550px;
   }
   .trace-grid {
     grid-template-columns: 1fr;
@@ -1818,5 +1818,60 @@ dialog::backdrop {
   }
   .timeline .table-scroll {
     max-height: 330px;
+  }
+}
+@media (max-width: 1320px) {
+  .studio-grid {
+    grid-template-columns: 1fr;
+  }
+  .inspector-body {
+    max-height: 360px;
+  }
+}
+.instance {
+  width: 100%;
+}
+.invocation-actions {
+  border: 1px solid #314554;
+  border-top: 0;
+  padding: 9px 10px;
+  background: #101e26;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: 0 0 5px 5px;
+}
+.invocation-actions > span {
+  color: #a6bfce;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.invocation-actions > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.trace-focus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 15px;
+  background: #14242b;
+  border-bottom: 1px solid #334856;
+  color: #c4ded5;
+  font-size: 12px;
+}
+.trace-focus small {
+  display: block;
+  margin-top: 5px;
+  color: #96b2c3;
+}
+@media (max-width: 720px) {
+  .trace-focus {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 }

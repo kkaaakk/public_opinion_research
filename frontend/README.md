@@ -22,16 +22,19 @@ npm run build
 
 ## 模块职责
 
-| 模块 | 职责 |
-| --- | --- |
-| `protocol.ts` / `readModels.ts` | v1 事件及 REST DTO 的严格类型、运行时校验 |
-| `api.ts` | 同源认证、受保护读写、稳定错误处理 |
-| `observer.ts` | 冷回放、连续前缀、SSE 解码/补发/去重、自动重连、清算及归档观察；只有 GET |
-| `session.ts` / `useRunSession.ts` | Tab 内 Run 选择、创建/重试的不可变请求身份、显式用户命令 |
-| `projection.ts` | Live / Replay 共用的确定性 fold，按 execution / invocation / model turn / tool call 配对 |
-| `components/` | 工作流、节点检查器、SDK 追踪、Journal、证据、报告、历史、时间线 |
+| 模块                              | 职责                                                                                     |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `protocol.ts` / `readModels.ts`   | v1 事件及 REST DTO 的严格类型、运行时校验                                                |
+| `api.ts`                          | 同源认证、受保护读写、稳定错误处理                                                       |
+| `observer.ts`                     | 冷回放、连续前缀、SSE 解码/补发/去重、自动重连、清算及归档观察；只有 GET                 |
+| `session.ts` / `useRunSession.ts` | Tab 内 Run 选择、创建/重试的不可变请求身份、显式用户命令                                 |
+| `projection.ts`                   | Live / Replay 共用的确定性 fold，按 execution / invocation / model turn / tool call 配对 |
+| `inspection.ts`                   | 从真实前缀选择默认节点，按 execution/invocation/generation 定位 SDK 记录                 |
+| `components/`                     | 工作流、节点检查器、SDK 追踪、Journal、证据、报告、历史、时间线                          |
 
 使用 React 自带状态，不引入另一套状态管理或调度框架。报告、历史与高级面板按需加载。画布可切为实例列表，窄屏默认列表；完整拓扑仍可切换和缩放。时间线分页渲染，不截断已接收事件前缀。
+
+拓扑沿箭头折行，双 Producer 并列显示。未手动选择时，检查器跟随实际活动实例，结束后选择最近终结的业务节点；手动选择只属于当前 Run，后台状态和同 Run 重新读取不会覆盖它。每个可验证的执行实例提供 Invocation、模型、工具入口；定位绑定真实 execution_id/invocation_id/generation，未知身份不按角色名猜测关联。SDK 面板可清除定位，回放只使用游标内的事件。
 
 ## 真实数据与边界
 
@@ -44,6 +47,7 @@ npm run build
 - Report Markdown 禁止 raw HTML，外部图片仅显示说明，不主动加载远程跟踪图片。
 
 协议、接口字段及所有权详见[架构与协议说明](../docs/architecture/agent-execution-studio.md)；Review、验证和截图见[实施审计](../docs/audits/agent-execution-studio.md)。
+本轮最终 Review 与合并验收见[收尾验收记录](../docs/audits/agent-execution-studio-acceptance.md)。
 
 ## 浏览器端到端合同
 

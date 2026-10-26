@@ -1,5 +1,6 @@
 import { defineConfig } from '@playwright/test';
 const python = process.platform === 'win32' ? '../.venv/Scripts/python.exe' : '../.venv/bin/python';
+const port = Number(process.env.STUDIO_TEST_PORT ?? 8765);
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
@@ -9,7 +10,7 @@ export default defineConfig({
   outputDir: '../.tmp/studio-playwright',
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:8765',
+    baseURL: `http://127.0.0.1:${port}`,
     browserName: 'chromium',
     channel: 'chromium',
     viewport: { width: 1600, height: 1000 },
@@ -17,8 +18,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: `"${python}" ../tests/studio_browser_server.py --port 8765`,
-    url: 'http://127.0.0.1:8765/studio',
+    command: `"${python}" ../tests/studio_browser_server.py --port ${port}`,
+    url: `http://127.0.0.1:${port}/studio`,
     timeout: 120000,
     reuseExistingServer: process.env.STUDIO_REUSE_SERVER === '1',
   },

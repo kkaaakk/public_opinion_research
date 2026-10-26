@@ -34,13 +34,22 @@ test('actual FastAPI → DBOS → SDK → Graph: approval, trace, replay, refres
   await authenticate(page);
   const id = await create(page, 'Studio controlled real-chain research', true);
   await expect(page.getByRole('button', { name: '批准执行', exact: true })).toBeVisible();
+  await expect(page.locator('.inspector h3')).toHaveText('Approval');
   await expect(page.locator('.state-waiting').filter({ hasText: 'Risk Assessment' })).toBeVisible();
   await page.getByRole('button', { name: '批准执行', exact: true }).click();
   await expect(page.locator('.connection')).toHaveText('事件已交付');
+  await expect(page.locator('.inspector h3')).toHaveText('Report Generation');
   await expect(page.locator('.node-title').filter({ hasText: 'Report Generation' })).toBeVisible();
   await page.locator('.react-flow__node').filter({ hasText: 'Report Generation' }).focus();
   await page.keyboard.press('Delete');
   await expect(page.locator('.react-flow__node')).toHaveCount(9);
+  const readability = await page.evaluate(() => {
+    const label = document.querySelector('.node-title strong')!;
+    const viewport = document.querySelector('.react-flow__viewport')!;
+    const scale = new DOMMatrix(getComputedStyle(viewport).transform).a;
+    return Number.parseFloat(getComputedStyle(label).fontSize) * scale;
+  });
+  expect(readability).toBeGreaterThanOrEqual(12);
   await page.getByRole('tab', { name: 'SDK 追踪', exact: true }).click();
   await expect(page.locator('.span-row')).toHaveCount(8); // six actual SDK calls + two tools
   await page.locator('.span-row').first().click();
@@ -95,12 +104,18 @@ test('safe retry stays on the same Run and preserves successful Producer invocat
   await authenticate(page);
   const id = await create(page, 'retry-once');
   await expect(page.getByRole('button', { name: '安全重试', exact: true })).toBeVisible();
+  await page.locator('.react-flow__node').filter({ hasText: 'Public Signal' }).click();
+  const producerInvocation = await page.locator('.invocation-actions>span').getAttribute('title');
   await page.getByRole('button', { name: '安全重试', exact: true }).click();
-  await expect(page.locator('.connection')).toHaveText('事件已交付');
   await expect(page.locator('.run-identity strong')).toHaveText(id);
   await expect(page.locator('.run-context')).toContainText('Gen 1');
+  await expect(page.locator('.connection')).toHaveText('事件已交付');
   await page.locator('.react-flow__node').filter({ hasText: 'Public Signal' }).click();
   await expect(page.locator('.instance-list .instance')).toHaveCount(1);
+  await page.getByRole('button', { name: '查看 Invocation' }).click();
+  await expect(page.getByLabel('追踪 Invocation')).toHaveValue(producerInvocation!);
+  await expect(page.locator('.trace-focus')).toContainText('Gen 0');
+  await page.getByRole('tab', { name: '工作流', exact: true }).click();
   await page.locator('.react-flow__node').filter({ hasText: 'Research Review' }).click();
   await expect(page.locator('.instance-list .instance')).toHaveCount(2);
   await expect(page.locator('.instance-list')).toContainText('失败');
@@ -149,4 +164,60 @@ test('a broken SSE connection automatically reconnects to the same Run', async (
   expect(Number(await page.getByLabel('回放游标').getAttribute('max'))).toBe(
     (await state.json()).event_cursor,
   );
+});
+test('manual node selection survives updates and followup invocations navigate to exact SDK calls', async ({
+  page,
+}) => {
+  await page.goto('/studio');
+  await authenticate(page);
+  await create(page, 'followup-once', true);
+  await expect(page.locator('.inspector h3')).toHaveText('Approval');
+  await page.locator('.react-flow__node').filter({ hasText: 'Intake' }).click();
+  await page.getByRole('button', { name: '批准执行', exact: true }).click();
+  await expect(page.locator('.connection')).toHaveText('事件已交付');
+  await expect(page.locator('.inspector h3')).toHaveText('Intake');
+  await page.locator('.react-flow__node').filter({ hasText: 'Public Signal' }).click();
+  await expect(page.locator('.instance-record')).toHaveCount(2);
+  await expect(page.locator('.invocation-actions')).toHaveCount(2);
+  await expect(page.locator('.flow-panel')).toContainText('Follow-up ×1');
+  const first = page.locator('.instance-record').first();
+  const firstID = await first.locator('.invocation-actions>span').getAttribute('title');
+  await first.getByRole('button', { name: /模型/ }).click();
+  await expect(page.getByLabel('追踪 Invocation')).toHaveValue(firstID!);
+  await expect(page.locator('.span-row')).toHaveCount(2);
+  await expect(page.locator('.selected-detail')).toContainText(firstID!);
+  await page.getByRole('tab', { name: '工作流', exact: true }).click();
+  const second = page.locator('.instance-record').last();
+  const secondID = await second.locator('.invocation-actions>span').getAttribute('title');
+  expect(secondID).not.toBe(firstID);
+  await second.getByRole('button', { name: /工具/ }).click();
+  await expect(page.getByLabel('追踪 Invocation')).toHaveValue(secondID!);
+  await expect(page.locator('.span-row')).toHaveCount(1);
+  await expect(page.locator('.selected-detail')).toContainText('web_search');
+  await page.getByLabel('回放游标').fill('0');
+  await expect(page.locator('.span-row')).toHaveCount(0);
+  await page.getByRole('button', { name: '返回实时状态' }).click();
+  await expect(page.locator('.span-row')).toHaveCount(1);
+  await page.locator('.span-row').click();
+  await expect(page.locator('.selected-detail')).toContainText(secondID!);
+  await page.screenshot({ path: '../.tmp/studio-acceptance-invocation.png', fullPage: true });
+});
+test('topology fit, zoom, auto-locate and mobile graph/list remain usable', async ({ page }) => {
+  await page.goto('/studio');
+  await expect(page.locator('.inspector')).toContainText('选择节点查看真实执行实例');
+  await page.getByRole('button', { name: /zoom in/i }).click();
+  await page.getByRole('button', { name: /fit view/i }).click();
+  await page.getByRole('button', { name: '自动定位关' }).click();
+  await expect(page.getByRole('button', { name: '自动定位开' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.locator('.workflow-list>button')).toHaveCount(9);
+  await page.getByRole('button', { name: '切换工作流列表' }).click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(9);
+  await page.getByRole('button', { name: '切换工作流列表' }).click();
+  await expect(page.locator('.workflow-list>button')).toHaveCount(9);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
