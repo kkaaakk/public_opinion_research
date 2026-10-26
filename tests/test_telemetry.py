@@ -24,7 +24,14 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExportResult
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import (
+    Link,
+    SpanContext,
+    Status,
+    StatusCode,
+    TraceFlags,
+    TraceState,
+)
 from test_sdk_context import _tool, _workspace
 
 from open_deep_research.observability import telemetry
@@ -77,6 +84,55 @@ def test_one_initialization_and_no_default_openai_exporter(trace_capture):
         "SDKUsageEnrichment",
         "OpenInferenceTracingProcessor",
     ]
+
+
+def test_initializer_disables_pipeline_if_global_provider_registration_loses_race(
+    monkeypatch,
+):
+    from uuid import uuid4
+
+    from agents import set_trace_processors, set_tracing_disabled
+    from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http import trace_exporter
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    foreign = TracerProvider(shutdown_on_exit=False)
+    current = {"provider": trace.ProxyTracerProvider()}
+    monkeypatch.setattr(trace, "get_tracer_provider", lambda: current["provider"])
+    monkeypatch.setattr(
+        trace, "set_tracer_provider", lambda _: current.update(provider=foreign)
+    )
+    monkeypatch.setattr(
+        trace_exporter, "OTLPSpanExporter", lambda **kwargs: InMemorySpanExporter()
+    )
+    monkeypatch.setenv("POR_TRACING_ENABLED", "true")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-race-test-" + uuid4().hex)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "race-test-only")
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://127.0.0.1:1")
+    for key, value in {
+        "_attempted": False,
+        "_active": False,
+        "_provider": None,
+        "_client": None,
+        "_settings": None,
+    }.items():
+        monkeypatch.setattr(telemetry, key, value)
+    try:
+        assert not telemetry.initialize_telemetry()
+        assert not telemetry.telemetry_enabled()
+        assert trace.get_tracer_provider() is foreign
+    finally:
+        instrumentor = OpenAIAgentsInstrumentor()
+        if instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.uninstrument()
+        set_trace_processors([])
+        set_tracing_disabled(True)
+        telemetry.shutdown_telemetry()
+        foreign.shutdown()
 
 
 @pytest.mark.parametrize("through_harness", [False, True])
@@ -327,6 +383,47 @@ def test_exporter_removes_status_events_resources_and_arbitrary_metadata(trace_c
         status=Status(StatusCode.ERROR, "secret-text"),
     )
     assert "secret-" not in telemetry.safe_span(raw).to_json()
+
+
+def test_exporter_discards_tracestate_in_span_parent_and_link_contexts():
+    def context(span_id, marker):
+        return SpanContext(
+            trace_id=123,
+            span_id=span_id,
+            is_remote=True,
+            trace_flags=TraceFlags(1),
+            trace_state=TraceState([("vendor", marker)]),
+        )
+
+    current = context(1, "private-span-state")
+    parent = context(2, "private-parent-state")
+    linked = context(3, "private-link-state")
+    raw = ReadableSpan(
+        name="privacy_probe",
+        context=current,
+        parent=parent,
+        links=[Link(linked, {"authorization": "private-link-attribute"})],
+    )
+    safe = telemetry.safe_span(raw)
+    assert not safe.context.trace_state
+    assert not safe.parent.trace_state
+    assert not safe.links[0].context.trace_state
+    assert not safe.links[0].attributes
+    assert (safe.context.trace_id, safe.context.span_id) == (123, 1)
+    assert (safe.parent.trace_id, safe.parent.span_id) == (123, 2)
+    assert (safe.links[0].context.trace_id, safe.links[0].context.span_id) == (123, 3)
+    assert safe.context.is_remote and safe.context.trace_flags.sampled
+
+
+def test_exporter_labels_spaced_agent_names_with_the_safe_existing_role():
+    raw = ReadableSpan(
+        name="Public Signal Agent",
+        attributes={"openinference.span.kind": "AGENT", "por.role": "public_signal"},
+    )
+    safe = telemetry.safe_span(raw)
+    assert safe.name == "public_signal.agent"
+    assert safe.attributes["por.role"] == "public_signal"
+    assert "Public Signal Agent" not in safe.to_json()
 
 
 def test_export_failure_does_not_change_business(trace_capture):

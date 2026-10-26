@@ -26,7 +26,7 @@ from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerPr
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
-from opentelemetry.trace import Link, Status, StatusCode
+from opentelemetry.trace import Link, SpanContext, Status, StatusCode
 
 _logger = logging.getLogger(__name__)
 _identity = ContextVar("por_trace_identity", default={})
@@ -189,6 +189,18 @@ def _allowed_span(span):
     }
 
 
+def _export_context(context):
+    """Keep correlation IDs/flags while removing arbitrary vendor tracestate."""
+    if context is None:
+        return None
+    return SpanContext(
+        trace_id=context.trace_id,
+        span_id=context.span_id,
+        is_remote=context.is_remote,
+        trace_flags=context.trace_flags,
+    )
+
+
 def safe_span(span):
     """Copy an export span using an allowlist, including status/resource/links.
 
@@ -225,6 +237,10 @@ def safe_span(span):
         if _LABEL.fullmatch(span.name)
         else "execution"
     )
+    if name == "execution" and kind == "AGENT" and (role := attributes.get("por.role")):
+        # Display the existing safe identity instead of exporting a free-form
+        # Agent name or making all four business roles look identical in the UI.
+        name = f"{role[:180]}.agent"
     # Preserve only DBOS's native retry number, never its raw error attribute.
     events = []
     if span.instrumentation_scope and span.instrumentation_scope.name == "dbos-tracer":
@@ -239,13 +255,13 @@ def safe_span(span):
                 )
     return ReadableSpan(
         name=name,
-        context=span.context,
-        parent=span.parent,
+        context=_export_context(span.context),
+        parent=_export_context(span.parent),
         kind=span.kind,
         resource=Resource({"service.name": "public-opinion-research"}),
         attributes=attributes,
         events=events,
-        links=[Link(link.context) for link in span.links],
+        links=[Link(_export_context(link.context)) for link in span.links],
         status=Status(code),
         start_time=span.start_time,
         end_time=span.end_time,
@@ -458,6 +474,8 @@ def initialize_telemetry():
             if not instrumentor.is_instrumented_by_opentelemetry:
                 raise ValueError("Agents instrumentation failed")
             trace.set_tracer_provider(provider)
+            if trace.get_tracer_provider() is not provider:
+                raise ValueError("OTel provider registration did not take effect")
             set_tracing_disabled(False)
             _provider, _client, _settings, _active = provider, client, cfg, True
         except Exception:
