@@ -25,6 +25,7 @@ from open_deep_research.web.run_data import (
     dumps,
     loads,
     public_payload,
+    timestamp,
 )
 from open_deep_research.workflow.dbos_config import APP, SDK_VERSION, VERSION, settings
 
@@ -144,6 +145,7 @@ class RunFacts:
 
     def publish(self, db, run_id, kind, **payload):
         # Native communication transaction: no application outbox/relay table.
+        payload.setdefault("observed_at", timestamp(self.now(db)))
         self.client.send_in_transaction(
             db,
             run_id + ":events",
@@ -370,6 +372,18 @@ class RunFacts:
                 role=identity["role"],
                 name=identity["name"],
                 status=status,
+                unit_id=unit_id,
+                execution_id=digest({"unit": unit_id, "permit": permit}),
+                **{
+                    key: identity[key]
+                    for key in (
+                        "invocation_id",
+                        "task_id",
+                        "tool_call_id",
+                        "research_round",
+                    )
+                    if key in identity
+                },
             )
         return operation_id
 
@@ -404,7 +418,16 @@ class RunFacts:
                     {"id": unit_id},
                 ).one()
                 run_id, name = row
-                self.publish(db, run_id, "step_completed", step=name)
+                skipped = artifact.get("observation", {}).get("skipped") is True
+                self.publish(
+                    db,
+                    run_id,
+                    "step_skipped" if skipped else "step_completed",
+                    step=name,
+                    unit_id=unit_id,
+                    execution_id=digest({"unit": unit_id, "permit": permit}),
+                    **({"reason": "role_disabled"} if skipped else {}),
+                )
                 patch = artifact.get("patch", {})
                 for role, role_data in patch.get("agents", {}).items():
                     if isinstance(role_data, dict) and role_data.get("report"):
@@ -435,6 +458,21 @@ class RunFacts:
                         if hasattr(review, "model_dump")
                         else review,
                     )
+            elif error:
+                row = db.execute(
+                    text("SELECT run_id,name FROM por_domain.units WHERE id=:id"),
+                    {"id": unit_id},
+                ).one()
+                self.publish(
+                    db,
+                    row[0],
+                    "step_failed",
+                    step=row[1],
+                    unit_id=unit_id,
+                    execution_id=digest({"unit": unit_id, "permit": permit}),
+                    error_kind=error.get("kind", "execution_error"),
+                    settled=settled,
+                )
 
     def units(self, run_id):
         with self.engine.connect() as db:

@@ -41,6 +41,7 @@ from open_deep_research.web.history import (  # noqa: E402, I001
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+STUDIO_DIR = Path(__file__).parent / "studio"
 LOGGER = logging.getLogger(__name__)
 
 MAX_REQUEST_BYTES = 64 * 1024
@@ -85,6 +86,8 @@ app = FastAPI(
 
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+if (STUDIO_DIR / "assets").is_dir():
+    app.mount("/studio/assets", StaticFiles(directory=str(STUDIO_DIR / "assets")), name="studio-assets")
 
 
 # 校验前端研究主题、模型及数量等受限输入。
@@ -201,8 +204,18 @@ def _request_is_authorized(request: Request) -> bool:
 
 # 返回研究仪表盘 HTML 页面。
 @app.get("/", response_class=HTMLResponse)
+@app.get("/studio", response_class=HTMLResponse)
 async def index() -> str:
-    """Serve the research dashboard."""
+    """Prefer the built Execution Studio; preserve the existing dashboard as fallback."""
+    studio_path = STUDIO_DIR / "index.html"
+    if studio_path.is_file():
+        return studio_path.read_text(encoding="utf-8")
+    return await classic_index()
+
+
+@app.get("/classic", response_class=HTMLResponse)
+async def classic_index() -> str:
+    """Serve the existing static dashboard for compatibility and rollback."""
     index_path = STATIC_DIR / "index.html"
     if index_path.is_file():
         return index_path.read_text(encoding="utf-8")

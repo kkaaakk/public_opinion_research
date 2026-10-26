@@ -70,6 +70,7 @@ namespaces = true
 
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
+"open_deep_research.web" = ["static/*", "studio/index.html", "studio/assets/*"]
 
 [tool.ruff]
 cache-dir = ".tmp/ruff-cache"

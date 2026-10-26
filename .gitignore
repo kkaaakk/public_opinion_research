@@ -91,3 +91,7 @@ data/indexes/rag/*
 !data/indexes/rag/.gitkeep
 
 .venv/
+
+# Execution Studio frontend dependencies and build outputs
+frontend/node_modules/
+src/open_deep_research/web/studio/

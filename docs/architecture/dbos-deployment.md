@@ -149,7 +149,17 @@ application receipt acknowledges the grant until its native targets are checked.
 
 ## Phase 5 cutover and compatibility
 
-Application version is `dbos-phase5-v1`; SDK runtime version is `sdk-phase5-v1`.
+The original Phase 5 application version was `dbos-phase5-v1`; SDK runtime
+version remains `sdk-phase5-v1`. Studio uses application version
+`dbos-phase5-studio-v1` because its event relay gates terminal receipts on the
+delivery manifest. DBOS native messages with tied millisecond timestamps can
+arrive out of send order; archive confirmation must not close a Stream before
+that generation's usage/report/error/status facts are delivered. This only
+changes event delivery, not research scheduling or retry authorization.
+Drain pending `dbos-phase5-v1` journals with the original release and Executor
+before switching; never replay an old relay journal on the new release. The
+same matching-release rule applies to a rollback. Existing history remains
+readable; do not copy or resubmit old opaque work as a new Studio Run.
 The role runtime no longer inherits or contains a handwritten Agent loop.
 The removed files include `runtime/agent_runtime.py`, `workflow/graph.py`,
 `langgraph.json` and the Supabase Auth hooks that only served Graph Server.

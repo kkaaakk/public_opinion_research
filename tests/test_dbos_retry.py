@@ -17,6 +17,56 @@ from open_deep_research.workflow.run_facts import facts
 pytestmark = pytest.mark.integration
 
 
+def test_terminal_delivery_waits_for_reordered_current_generation_usage(
+    native_case, monkeypatch
+):
+    """Native messages with tied timestamps need not arrive in send order."""
+    case = native_case
+    original_review = engine.OPERATIONS["research_review"]
+    original_send = engine.send_event
+    original_public = engine.public_event
+    received_history = threading.Event()
+    attempts = []
+    held = {}
+
+    async def review(state, cfg):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("Safe read failure")
+        return await original_review(state, cfg)
+
+    async def public(event):
+        result = await original_public(event)
+        if event["type"] == "history_saved" and event.get("generation") == 1:
+            received_history.set()
+        return result
+
+    async def send(run_id, event_type, **data):
+        if event_type == "usage" and data.get("generation") == 1:
+            held[run_id] = data
+            return
+        await original_send(run_id, event_type, **data)
+        if event_type == "history_saved" and data.get("generation") == 1:
+            for _ in range(1000):
+                if received_history.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert received_history.is_set()
+            await original_send(run_id, "usage", **held.pop(run_id))
+
+    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine, "send_event", send)
+    monkeypatch.setattr(engine, "public_event", public)
+    run = case.create()
+    failed = saved(case, run, "failed", 0)
+    case.client.retry(
+        run["run_id"], "alice", "reordered-terminal", failed["state_version"]
+    )
+    completed = saved(case, run, "completed", 1)
+    assert_consistent(case, run, completed)
+    assert len(attempts) == 2 and len(case.models) == 4
+
+
 def saved(case, run, status, generation):
     return case.wait(
         run,

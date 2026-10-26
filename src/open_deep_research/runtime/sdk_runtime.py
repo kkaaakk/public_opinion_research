@@ -296,6 +296,12 @@ class _BusinessAgentHarness(SDKContextHarness):
                 )
         except BaseException as exc:
             self.events.append(("rolling_compact_failed", type(exc).__name__))
+            await self._observe(
+                "harness",
+                stage="rolling_compact",
+                status="failed",
+                error_type=type(exc).__name__,
+            )
             self.workspace.metrics.add("rolling_compact_failures")
             if self.workspace.transcript is not None:
                 self.workspace.transcript.append(
@@ -318,6 +324,12 @@ class _BusinessAgentHarness(SDKContextHarness):
             "rolling_compact_tokens_removed", before - after, quality="estimated"
         )
         self.events.append(("rolling_compact", str(len(removed))))
+        await self._observe(
+            "harness",
+            stage="rolling_compact",
+            status="completed",
+            removed_turns=len(removed),
+        )
         if self.workspace.transcript is not None:
             self.workspace.transcript.append(
                 "sdk_rolling_compact",
@@ -333,14 +345,12 @@ class _BusinessAgentHarness(SDKContextHarness):
         self, context: Any, agent: Any, system_prompt: Any, input_items: Any
     ) -> None:
         await super().on_llm_start(context, agent, system_prompt, input_items)
-        await observe_execution("model_started", role=self.scope.role)
         self.run_budget.add({"model_calls": 1})
 
     async def on_llm_end(self, context: Any, agent: Any, response: Any) -> None:
+        self.run_budget.add(budget_from_sdk_usage(response.usage))
         await super().on_llm_end(context, agent, response)
         self.items.extend(response.to_input_items())
-        self.run_budget.add(budget_from_sdk_usage(response.usage))
-        await observe_execution("model_completed", role=self.scope.role)
 
 
 class SDKAgentRuntime:
