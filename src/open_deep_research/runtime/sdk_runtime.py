@@ -40,6 +40,11 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
 from open_deep_research.mcp.domain_filter import get_tool_domain
+from open_deep_research.observability.telemetry import (
+    annotate,
+    business_span,
+    telemetry_enabled,
+)
 from open_deep_research.research_graph.compaction import summarize_compactable_history
 from open_deep_research.research_graph.workspace import ResearchWorkspace
 from open_deep_research.runtime.sdk_context import SDKContextHarness
@@ -204,6 +209,7 @@ class _BusinessAgentHarness(SDKContextHarness):
             or 32_768
         )
         before = self._estimate(current, agent)
+        self.estimated_input_tokens = before
         if (
             context_pressure_ratio(before, capacity)
             < self.config.context_compaction_threshold_ratio
@@ -234,112 +240,118 @@ class _BusinessAgentHarness(SDKContextHarness):
                 + "\n[Middle omitted from summary input; original transcript retained.]\n"
                 + history_text[-15_000:]
             )
-        model_name = (
-            self.config.rolling_compaction_model or self.config.compression_model
-        )
-        protected = json.dumps(head, ensure_ascii=False, default=str)
-        previous = self.workspace.rolling_summary
-        try:
-            summary, _ = await summarize_compactable_history(
-                history_text,
-                previous_summary=previous,
-                protected_context=protected,
-                model=self.workspace.model_factory(
-                    model_name, self.config.rolling_compaction_model_max_tokens
-                ),
-                model_name=model_name,
-                max_retries=self.config.max_structured_output_retries,
+        with business_span("rolling_compaction", estimated_tokens_before=before):
+            model_name = (
+                self.config.rolling_compaction_model or self.config.compression_model
             )
-            # Keep receipt identities independently of lossy model prose. They
-            # remain references, never newly verified evidence or a second graph.
-            references = set()
-            for _, unit in eligible:
-                for item in unit:
-                    result = self.results.get(item.get("call_id"))
-                    receipt = (
-                        self.workspace.receipts.get(result.graph_call_id)
-                        if result
-                        else None
+            protected = json.dumps(head, ensure_ascii=False, default=str)
+            previous = self.workspace.rolling_summary
+            try:
+                summary, _ = await summarize_compactable_history(
+                    history_text,
+                    previous_summary=previous,
+                    protected_context=protected,
+                    model=self.workspace.model_factory(
+                        model_name, self.config.rolling_compaction_model_max_tokens
+                    ),
+                    model_name=model_name,
+                    max_retries=self.config.max_structured_output_retries,
+                )
+                # Keep receipt identities independently of lossy model prose. They
+                # remain references, never newly verified evidence or a second graph.
+                references = set()
+                for _, unit in eligible:
+                    for item in unit:
+                        result = self.results.get(item.get("call_id"))
+                        receipt = (
+                            self.workspace.receipts.get(result.graph_call_id)
+                            if result
+                            else None
+                        )
+                        if receipt is not None:
+                            references.update(receipt.node_ids)
+                references.update(self._summary_references)
+                allowed = set(self.workspace.relevant_subgraph.node_ids) | references
+                cited = set(
+                    re.findall(
+                        r"\b(?:SRC|EVD|CLM|FND|EVT|ENT|UNT|SFD|COV)_[a-f0-9]{20}\b",
+                        summary,
                     )
-                    if receipt is not None:
-                        references.update(receipt.node_ids)
-            references.update(self._summary_references)
-            allowed = set(self.workspace.relevant_subgraph.node_ids) | references
-            cited = set(
-                re.findall(
-                    r"\b(?:SRC|EVD|CLM|FND|EVT|ENT|UNT|SFD|COV)_[a-f0-9]{20}\b", summary
                 )
+                if not cited.issubset(allowed):
+                    raise ValueError(
+                        "Rolling summary contains unverified graph references."
+                    )
+                references.update(cited)
+                if references:
+                    summary += "\nCommitted graph references: " + ", ".join(
+                        sorted(references)
+                    )
+                if (
+                    estimate_text_tokens(summary)
+                    > self.config.rolling_compaction_model_max_tokens
+                ):
+                    raise ValueError(
+                        "Rolling summary exceeds the configured output bound."
+                    )
+                candidate = self._with_summary(head, kept, summary, data.instructions)
+                after = self._estimate(candidate, agent)
+                if (
+                    after >= before
+                    or context_pressure_ratio(after, capacity)
+                    >= self.config.context_compaction_threshold_ratio
+                ):
+                    raise ValueError(
+                        "Rolling compaction cannot fit the protected request or did not reduce it."
+                    )
+            except BaseException as exc:
+                self.events.append(("rolling_compact_failed", type(exc).__name__))
+                await self._observe(
+                    "harness",
+                    stage="rolling_compact",
+                    status="failed",
+                    error_type=type(exc).__name__,
+                )
+                self.workspace.metrics.add("rolling_compact_failures")
+                if self.workspace.transcript is not None:
+                    self.workspace.transcript.append(
+                        "sdk_rolling_compact_failed",
+                        {
+                            "error_type": type(exc).__name__,
+                            "estimated_input_tokens": before,
+                        },
+                    )
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise SDKContextLimitExceeded(
+                    f"Rolling compaction failed safely: {type(exc).__name__}: {exc}; original history retained."
+                ) from exc
+            annotate(estimated_tokens_after=after, removed_turns=len(removed))
+            self.estimated_input_tokens = after
+            self._compacted_turns.update(removed)
+            self._summary_references = references
+            self.workspace.rolling_summary = summary
+            self.workspace.metrics.add("rolling_compact_count")
+            self.workspace.metrics.add(
+                "rolling_compact_tokens_removed", before - after, quality="estimated"
             )
-            if not cited.issubset(allowed):
-                raise ValueError(
-                    "Rolling summary contains unverified graph references."
-                )
-            references.update(cited)
-            if references:
-                summary += "\nCommitted graph references: " + ", ".join(
-                    sorted(references)
-                )
-            if (
-                estimate_text_tokens(summary)
-                > self.config.rolling_compaction_model_max_tokens
-            ):
-                raise ValueError("Rolling summary exceeds the configured output bound.")
-            candidate = self._with_summary(head, kept, summary, data.instructions)
-            after = self._estimate(candidate, agent)
-            if (
-                after >= before
-                or context_pressure_ratio(after, capacity)
-                >= self.config.context_compaction_threshold_ratio
-            ):
-                raise ValueError(
-                    "Rolling compaction cannot fit the protected request or did not reduce it."
-                )
-        except BaseException as exc:
-            self.events.append(("rolling_compact_failed", type(exc).__name__))
+            self.events.append(("rolling_compact", str(len(removed))))
             await self._observe(
                 "harness",
                 stage="rolling_compact",
-                status="failed",
-                error_type=type(exc).__name__,
+                status="completed",
+                removed_turns=len(removed),
             )
-            self.workspace.metrics.add("rolling_compact_failures")
             if self.workspace.transcript is not None:
                 self.workspace.transcript.append(
-                    "sdk_rolling_compact_failed",
+                    "sdk_rolling_compact",
                     {
-                        "error_type": type(exc).__name__,
-                        "estimated_input_tokens": before,
+                        "turns": sorted(removed),
+                        "tokens_removed": before - after,
+                        "rolling_summary": summary,
                     },
                 )
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-            raise SDKContextLimitExceeded(
-                f"Rolling compaction failed safely: {type(exc).__name__}: {exc}; original history retained."
-            ) from exc
-        self._compacted_turns.update(removed)
-        self._summary_references = references
-        self.workspace.rolling_summary = summary
-        self.workspace.metrics.add("rolling_compact_count")
-        self.workspace.metrics.add(
-            "rolling_compact_tokens_removed", before - after, quality="estimated"
-        )
-        self.events.append(("rolling_compact", str(len(removed))))
-        await self._observe(
-            "harness",
-            stage="rolling_compact",
-            status="completed",
-            removed_turns=len(removed),
-        )
-        if self.workspace.transcript is not None:
-            self.workspace.transcript.append(
-                "sdk_rolling_compact",
-                {
-                    "turns": sorted(removed),
-                    "tokens_removed": before - after,
-                    "rolling_summary": summary,
-                },
-            )
-        return candidate
+            return candidate
 
     async def on_llm_start(
         self, context: Any, agent: Any, system_prompt: Any, input_items: Any
@@ -781,7 +793,8 @@ class SDKAgentRuntime:
                         self.agent,
                         inputs,
                         run_config=RunConfig(
-                            tracing_disabled=True, trace_include_sensitive_data=False
+                            tracing_disabled=not telemetry_enabled(),
+                            trace_include_sensitive_data=False,
                         ),
                         max_turns=max(1, self.config.max_react_tool_calls),
                         session=session,

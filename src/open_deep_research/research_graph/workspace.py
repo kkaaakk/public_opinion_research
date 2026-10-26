@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from open_deep_research.budget import estimate_text_tokens
+from open_deep_research.observability.telemetry import annotate, business_span
 from open_deep_research.research_graph.compaction import render_protected_context
 from open_deep_research.research_graph.context_manager import (
     ContextManager,
@@ -255,12 +256,17 @@ class ResearchWorkspace:
         if self.retriever is None:
             return self.relevant_subgraph
         started_at = time.perf_counter()
-        self.relevant_subgraph = self.retriever.retrieve(
-            self.task,
-            scope=self.scope,
-            working_context=self.working_context,
-            query_suffix=query_suffix,
-        )
+        with business_span("context_retrieval"):
+            self.relevant_subgraph = self.retriever.retrieve(
+                self.task,
+                scope=self.scope,
+                working_context=self.working_context,
+                query_suffix=query_suffix,
+            )
+            annotate(
+                nodes=len(self.relevant_subgraph.nodes),
+                edges=len(self.relevant_subgraph.edges),
+            )
         self.metrics.add("graph_retrieval_calls")
         self.metrics.add(
             "graph_retrieval_latency",

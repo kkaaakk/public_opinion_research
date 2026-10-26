@@ -214,6 +214,7 @@ def install(directory, scenario):
         yield ScriptedModel(
             [ModelStep.respond(first), [assistant_message("research complete")]],
             default_usage=TOKENS,
+            emit_traces=os.environ.get("POR_TRACING_ENABLED", "").lower() == "true",
         )
 
     async def tools(config, role, spec):
@@ -309,6 +310,9 @@ def main():
     finally:
         DBOS.destroy()
         store.close()
+        from open_deep_research.observability.telemetry import shutdown_telemetry
+
+        shutdown_telemetry()
         patch.undo()
 
 

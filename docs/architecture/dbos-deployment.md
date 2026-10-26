@@ -6,6 +6,11 @@ The former `python`/`openai_agents` request values are validated input aliases
 only; Configuration no longer contains runtime/backend selection fields.
 `Runner.run()` and the Context Harness remain the single SDK execution path.
 
+Optional Langfuse/OTel tracing defaults off and is configured in API and Executor
+environments. It adds no execution database or journal commands; the existing
+`dbos-phase5-studio-v1` version and drain rules remain. See
+[setup, privacy, recovery and rollback](observability.md).
+
 ## Local setup
 
 Use a new database and do not point these commands at existing MySQL/Neo4j data.

@@ -3,10 +3,10 @@
 
 One boundary with a deliberate scope:
 
-* **LangSmith** (``observability.langsmith``) owns execution observability:
-  Trace/Span hierarchy, LangGraph nodes, Agents, LLM, Tool, MCP,
-  Retriever/RAG, latency, and errors.  LangChain/LangGraph auto-tracing is
-  preferred; only high-value RAG stages add a thin fail-open span.
+* **Langfuse / OTel** (``observability.telemetry``) observes native DBOS,
+  OpenInference SDK spans and selected Harness/Graph business boundaries.
+* **LangSmith** (``observability.langsmith``) retains its independent opt-in
+  LangChain business-service/RAG integration and historical report imports.
 
 Token, cache, budget, and cost accounting itself lives in
 ``open_deep_research.budget`` on LangChain's official callbacks and is

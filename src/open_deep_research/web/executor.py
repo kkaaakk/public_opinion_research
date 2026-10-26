@@ -9,6 +9,10 @@ import time
 
 from dbos import DBOS
 
+from open_deep_research.observability.telemetry import (
+    initialize_telemetry,
+    shutdown_telemetry,
+)
 from open_deep_research.web.run_data import RunJSON
 from open_deep_research.workflow import dbos_workflow
 from open_deep_research.workflow.dbos_config import (
@@ -27,6 +31,7 @@ def launch(executor_id, *, queues=None):
     assert callable(dbos_workflow.run_workflow)
     cfg = settings()
     facts().verify_policy()
+    tracing = initialize_telemetry()
     DBOS(
         config={
             "name": APP,
@@ -35,7 +40,8 @@ def launch(executor_id, *, queues=None):
             "application_version": VERSION,
             "executor_id": executor_id,
             "serializer": RunJSON(),
-            "enable_otlp": False,
+            "enable_otlp": tracing,
+            "otel_attribute_format": "semconv",
             "log_level": "WARN",
             "db_engine_kwargs": {
                 "pool_timeout": 3,
@@ -111,8 +117,13 @@ def main():
         while not stop:
             time.sleep(0.2)
     finally:
-        DBOS.destroy()
-        facts().close()
+        try:
+            DBOS.destroy()
+        finally:
+            try:
+                facts().close()
+            finally:
+                shutdown_telemetry()
 
 
 if __name__ == "__main__":

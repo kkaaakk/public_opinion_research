@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
+from contextlib import nullcontext
 from copy import deepcopy
 from typing import Any
 
@@ -13,6 +14,7 @@ from open_deep_research.budget import (
     ModelBudgetExceeded,
     budget_capture,
 )
+from open_deep_research.observability.telemetry import annotate, business_span
 from open_deep_research.state import DeepResearchState
 from open_deep_research.workflow.execution import ExecutionControlError
 
@@ -50,7 +52,18 @@ async def _step(
     original: list[BaseException] = []
 
     async def execute() -> Any:
-        with budget_capture() as usage:
+        span_name = (
+            "research_review"
+            if name == "research_review"
+            else "report_generation"
+            if name
+            in {"section_writer", "write_final_sections", "compile_final_report"}
+            else None
+        )
+        observation = (
+            business_span(span_name, step=name) if span_name else nullcontext()
+        )
+        with observation, budget_capture() as usage:
             try:
                 return await operation(deepcopy(state), config)
             except BaseException as exc:
@@ -58,6 +71,20 @@ async def _step(
                 raise
             finally:
                 captured.update(usage)
+                # Existing accounting remains the source; these stage totals
+                # are descriptive and must not be summed with child LLM spans.
+                annotate(
+                    **{
+                        key: usage[key]
+                        for key in (
+                            "model_calls",
+                            "input_tokens",
+                            "output_tokens",
+                            "total_tokens",
+                        )
+                        if key in usage
+                    }
+                )
 
     try:
         return await asyncio.wait_for(execute(), timeout=timeout)

@@ -1,8 +1,8 @@
 # 规范化追踪配置并提供失败可降级的追踪区间，不让观测故障中断业务。
 """Thin LangSmith integration for execution observability.
 
-LangSmith is the project's tracing system: it owns Trace/Span hierarchy, graph
-node, Agent, LLM, Tool, MCP, Retriever/RAG, latency, and error visibility.
+LangSmith is the optional LangChain business-service/RAG tracing integration.
+Native DBOS and SDK tracing use the separate opt-in OTel/Langfuse pipeline.
 Token / usage / cache / budget / cost accounting deliberately stays in
 ``open_deep_research.budget`` on LangChain's official callbacks.
 
