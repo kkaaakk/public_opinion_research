@@ -1,6 +1,6 @@
 # Agent Execution Studio：实施与验收审计
 
-日期：2026-10-25（Asia/Shanghai）。从最新 `origin/main dc070a4715f3bb1c29c5bce1cac6dfa5f3676b53` 审查，并在原 Draft PR #31 分支 `codex/agent-execution-studio` 继续。没有合并 main，没有修改 `.env`、`CLAUDE.md`、历史业务数据、旧版本安全引用或无关服务。
+日期：2026-10-25—26（Asia/Shanghai）。从最新 `origin/main dc070a4715f3bb1c29c5bce1cac6dfa5f3676b53` 审查，并在原 Draft PR #31 分支 `codex/agent-execution-studio` 继续。没有合并 main，没有修改 `.env`、`CLAUDE.md`、历史业务数据、旧版本安全引用或无关服务。
 
 ## 1. 原 PR 的独立 Review
 
@@ -39,6 +39,7 @@ SDK 只公开已观测的身份、轮次、结果状态、实际 usage、钩子�
 - relay journal 分支变化因此明确提升 application version 为 **`dbos-phase5-studio-v1`**，SDK runtime 仍为 `sdk-phase5-v1`。旧 `dbos-phase5-v1` pending journals 必须由匹配发行版排空，新 Executor 不重放旧 relay。这不是对历史数据的迁移或重投。
 - **取消后的 SDK 异常出口。** 允许已撤销取消意图下记录 `model_failed` 清算元数据，仍校验原许可，不准入新模型/工具。真实取消回归检查 model_failed、agent_failed、Harness settled，以及两个 Producer 工具各只执行一次。
 - **重复终结事实。** 相同 execution_id 的迟到终结记录不会制造另一实例；新 generation / 新执行身份仍保留独立失败与重试。
+- **迟到开始事实。** 同一 execution / model turn / tool call 已有结束事实时，乱序到达的开始事件只补齐身份与时间，不清除已记录用量、回执或将完成实例重新打开；补充两个纯投影回归。
 - **React Flow 几何丢失。** 浏览器暴露快速状态更新时部分节点变为 hidden；改用官方 useNodesState/onNodesChange 保存实际测量尺寸，观察事实更新保留几何，未通过强制 CSS 可见性掩盖问题。检查器仅由用户点击/键盘动作单向选择，避免双向选择回调递归；Delete 不能移除只读拓扑节点。
 - **回放与当前视图。** 回放不引用当前错误/审批/清算横幅填充过去；保留筛选选择，避免选项消失后“显示全部但仍隐式筛选”。当前 Graph/Journal 单独标注。
 - **归档补偿。** Run 清算完成后归档 pending 时继续只读观察，不把 SSE EOF 视为研究成功，不重新创建任务。
@@ -53,7 +54,7 @@ SDK 只公开已观测的身份、轮次、结果状态、实际 usage、钩子�
 | 完整原生矩阵（修复后） | **89 passed / 25 deselected / 0 skipped / 0 xfailed，1150.53s**；真实 PG、Neo4j、Executor kill/restart、容器停启、SDK Runner 和回执/重试/归档故障 |
 | 取消元数据定向 | **1 passed**；不重做工具，模型/Agent 异常与清算可见 |
 | TypeScript / ESLint / 格式 | 通过；strict、无隐式 any，保留 React Hooks 规则 |
-| 前端单元/交互 | **31 passed**；分页冷回放、SSE 分片/去重/缺口/重连、终态清算、归档、并行/补查/重试投影、审批及不可变请求身份 |
+| 前端单元/交互 | **33 passed**；分页冷回放、SSE 分片/去重/缺口/重连、终态清算、归档、并行/补查/重试/乱序投影、审批及不可变请求身份 |
 | Chromium 完整链路 | **4 passed / 48.2s**；1600×1000、390×844，全部用例检查 JS page errors；真实断线重连、审批、重试、取消、证据、报告与刷新 |
 | Classic Node 合同 | **7 passed** |
 | 入口 / Ruff / 编译 | **32 个生产入口 import**、既有 CI E/F/I 口径、compileall 通过 |

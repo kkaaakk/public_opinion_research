@@ -243,6 +243,14 @@ export function projectRun(
       continue;
     const key = e.execution_id ?? `${generation}:${e.step}`;
     if (e.type === 'step_started') {
+      const known = instances.find((i) => !!e.execution_id && i.id === e.execution_id);
+      if (known) {
+        known.start ??= e;
+        known.round ??= e.research_round;
+        known.unitId ??= e.unit_id;
+        if (!known.end) active.set(key, known);
+        continue;
+      }
       const i: StepInstance = {
         id: e.execution_id ?? `${generation}:${e.step}:${e.seq}`,
         step: e.step,
@@ -346,6 +354,13 @@ export function sdkSpans(events: readonly RunEvent[]): SDKSpan[] {
       if (e.event === 'model_started') {
         if (e.model_turn === undefined) key += e.seq;
         currentModel.set(scope, key);
+        const known = spans.get(key);
+        if (known) {
+          known.start ??= e;
+          known.label = e.model_turn ? `模型调用 #${e.model_turn}` : '模型调用 · 轮次未提供';
+          known.events.push(e);
+          continue;
+        }
         spans.set(key, {
           id: key,
           kind: 'model',
@@ -392,7 +407,7 @@ export function sdkSpans(events: readonly RunEvent[]): SDKSpan[] {
       };
       if (e.status === 'started') {
         span.start = e;
-        span.status = 'running';
+        if (!span.end) span.status = 'running';
       } else if (span.end?.event !== 'tool_result' || e.event === 'tool_result') {
         span.end = e;
         span.status = e.status ?? 'unknown';

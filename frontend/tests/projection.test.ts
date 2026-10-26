@@ -116,3 +116,33 @@ it('does not turn relay latency into tool or step execution duration', () => {
     ),
   ).toBe(2000);
 });
+it('merges a late start into its completed execution without reopening or duplicating it', () => {
+  const p = projectRun([
+    event(1, { type: 'step_completed', step: 'research_review', execution_id: 'same' }),
+    event(2, { type: 'step_started', step: 'research_review', execution_id: 'same' }),
+  ]);
+  expect(p.instances).toHaveLength(1);
+  expect(p.instances[0].start?.seq).toBe(2);
+  expect(p.instances[0].end?.seq).toBe(1);
+  expect(p.statuses.review).toBe('completed');
+});
+it('keeps actual SDK usage and result state when native starts arrive after their ends', () => {
+  const m = { type: 'sdk_event', invocation_id: 'one', role: 'public_signal' };
+  const spans = sdkSpans([
+    event(1, { ...m, event: 'model_completed', model_turn: 1, usage: { total_tokens: 14 } }),
+    event(2, {
+      ...m,
+      event: 'tool_result',
+      tool_call_id: 'call',
+      status: 'succeeded',
+      name: 'search',
+    }),
+    event(3, { ...m, event: 'model_started', model_turn: 1 }),
+    event(4, { ...m, event: 'tool', tool_call_id: 'call', status: 'started', name: 'search' }),
+  ]);
+  expect(spans).toHaveLength(2);
+  expect(spans[0].status).toBe('completed');
+  expect(spans[0].usage?.total_tokens).toBe(14);
+  expect(spans[1].status).toBe('succeeded');
+  expect(spans.every((s) => s.start && s.end)).toBe(true);
+});
