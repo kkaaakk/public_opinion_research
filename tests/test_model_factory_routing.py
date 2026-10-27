@@ -49,7 +49,6 @@ async def test_tavily_summarization_routes_to_doubao(
         utils, "structured_output_chain", lambda model, *_a, **_k: model
     )
     monkeypatch.setattr(utils, "summarize_webpage", fake_summarize)
-    monkeypatch.setattr(utils, "get_api_key_for_model", lambda *_a, **_k: "fake-key")
 
     await utils.tavily_search.coroutine(
         ["q"],

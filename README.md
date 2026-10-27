@@ -93,6 +93,8 @@ Mypy 的既有错误基线仍会返回非零；缓存配置不改变检查规则
 
 ### 3. 配置环境变量
 
+模型前缀、正式/可选支持范围及两条模型路径的配置语义见 [供应商契约](docs/architecture/model-providers.md)。
+
 ```bash
 cp .env.example .env
 # 编辑 .env，填入你的 API Key

@@ -21,7 +21,7 @@ from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import remove_up_to_last_ai_message
 from open_deep_research.llm.errors import is_token_limit_exceeded
 from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
-from open_deep_research.models import configurable_chat_model, get_api_key_for_model
+from open_deep_research.models import configurable_chat_model
 from open_deep_research.models.sdk import sdk_model
 from open_deep_research.prompts import (
     compress_research_simple_human_message,
@@ -247,30 +247,6 @@ async def _business_agent_tools(
     return filtered_tools
 
 
-# 执行工具并返回结果、嵌套消耗和成功标记；所有退出路径都恢复预算捕获上下文。
-async def _execute_tool_safely(
-    tool: Any,
-    args: Any,
-    config: RunnableConfig,
-) -> tuple[str, dict[str, Any], bool]:
-    # try/finally guarantees the Budget Capture ContextVar is reset on every exit
-    # path, including CancelledError/BaseException.
-    capture_token = start_budget_capture()
-    failed = False
-    try:
-        try:
-            observation = await tool.ainvoke(args, config)
-        except Exception as exc:
-            LOGGER.exception(
-                "Unexpected tool execution failure for '%s'.", tool_name(tool)
-            )
-            observation = f"Error executing tool: {exc}"
-            failed = True
-    finally:
-        captured_budget = stop_budget_capture(capture_token)
-    return observation, captured_budget, not failed
-
-
 # 压缩研究记录并统计用量，预算不足时保留原始笔记以预留最终报告调用。
 async def _compress_research(
     messages: list[Any],
@@ -304,7 +280,7 @@ async def _compress_research(
         {
             "model": configurable.compression_model,
             "max_tokens": configurable.compression_model_max_tokens,
-            "api_key": get_api_key_for_model(configurable.compression_model, config),
+            "provider_config": config,
             "tags": ["langsmith:nostream"],
         }
     )
@@ -461,7 +437,7 @@ async def run_business_agent(
     def model_factory(model_name: str, max_tokens: int | None) -> Any:
         nested_model_config: dict[str, Any] = {
             "model": model_name,
-            "api_key": get_api_key_for_model(model_name, config),
+            "provider_config": config,
             "tags": ["langsmith:nostream"],
         }
         if max_tokens is not None:
@@ -511,7 +487,6 @@ async def run_business_agent(
         system_prompt=system_prompt,
         tools=tools,
         initial_budget=runtime_state(state).get("budget", {}),
-        execute_tool=_execute_tool_safely,
         compress_report=compress_report,
     )
     # One SDK start is one provider attempt. Errors never select another engine.

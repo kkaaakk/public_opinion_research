@@ -1260,3 +1260,42 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
     assert result["generation"] == 1
     assert len(attempts) == 2
     assert len(case.models) == 4
+
+
+def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypatch):
+    from langchain_core.messages import HumanMessage
+    from test_query_images import _data_url
+    from test_vision_budget import VisionModel
+
+    from open_deep_research.rag.loaders import knowledge
+
+    case = native_case
+    model = VisionModel()
+    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    case.state["messages"] = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "brand recall"},
+                {"type": "image_url", "image_url": {"url": _data_url()}},
+            ]
+        )
+    ]
+    case.cfg["configurable"].update(
+        rag_query_image_enabled=True, rag_vision_model="openai:vision-fixture"
+    )
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "completed", result["error"]
+    assert result["usage"]["model_calls"] == 29
+    assert result["usage"]["total_tokens"] == 326
+    unit = next(
+        u
+        for u in facts().units(run["run_id"])
+        if u["id"] == run["run_id"] + ":enrich_query_images"
+    )
+    assert unit["settled"] and unit["artifact"]
+    assert unit["usage"]["model_calls"] == 1
+    assert unit["usage"]["total_tokens"] == 15
+    assert unit["artifact"]["patch"]["runtime"]["budget"] == unit["usage"]
+    assert case.client.get(run["run_id"], "alice")["usage"] == result["usage"]
+    assert len(model.requests) == 1

@@ -91,6 +91,7 @@ def _runtime(
     initial_budget=None,
     compress=None,
     research_round=1,
+    execute_tool=None,
 ):
     config = config or Configuration(
         research_graph_enabled=False, research_model="openai:fixture"
@@ -121,7 +122,7 @@ def _runtime(
         ),
         tools=tools if tools is not None else [_tool(role)],
         initial_budget=initial_budget or {},
-        execute_tool=business_agent._execute_tool_safely,
+        execute_tool=execute_tool,
         compress_report=compress or _compress,
     )
 
@@ -914,3 +915,33 @@ def test_standalone_business_harness_observes_live_nested_budget_without_runtime
         assert harness.last_settlement.succeeded
 
     asyncio.run(run())
+
+
+def test_legacy_executor_keyword_is_ignored_by_the_real_sdk_tool_path():
+    called = []
+
+    async def search(query: str, limit: int = 3):
+        called.append(query)
+        return "evidence"
+
+    def legacy_executor(*args, **kwargs):
+        pytest.fail("The retired tool executor was called")
+
+    runtime = _runtime(
+        tools=[_tool("public_signal", coroutine=search)],
+        model=ScriptedModel(
+            [
+                [
+                    function_call(
+                        "web_search", '{"query":"fixture"}', call_id="compat-call"
+                    )
+                ],
+                [assistant_message("finished")],
+            ]
+        ),
+        execute_tool=legacy_executor,
+    )
+    assert not hasattr(runtime, "execute_tool")
+    result = asyncio.run(runtime.run("research fixture"))
+    assert called == ["fixture"]
+    assert result.budget["tool_calls"] == 1

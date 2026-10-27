@@ -19,14 +19,15 @@ from open_deep_research.budget import (
     ainvoke_model_with_budget,
     budget_usage_with_reason,
     can_spend_model_call,
+    capture_budget_usage,
     merge_budget_usage,
+    model_budget_admission,
     start_budget_capture,
     stop_budget_capture,
     structured_output_chain,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.errors import is_token_limit_exceeded
-from open_deep_research.models import get_api_key_for_model
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     report_planner_instructions,
@@ -92,31 +93,41 @@ async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict
     if _has_query_image_context(messages):
         return {}
 
-    context = await asyncio.to_thread(
-        query_images.build_query_image_context,
-        messages,
-        vision_model=configurable.rag_vision_model,
-        vision_prompt=configurable.rag_query_image_prompt,
-        vision_max_tokens=configurable.rag_vision_max_tokens,
-        max_images=configurable.rag_query_image_max_images,
-        max_bytes=configurable.rag_query_image_max_bytes,
-    )
-    if not context.strip():
-        return {}
-
-    return {
-        "messages": [
-            HumanMessage(
-                content=(
-                    "Recognized image context from the user's question. "
-                    "Use it as temporary query context; it is not persisted as local "
-                    "knowledge or memory.\n\n"
-                    f"{context.strip()}"
-                ),
-                additional_kwargs={"rag_query_image_context": True},
+    # The request helper captures usage; successful Steps consume State patches.
+    # Mirror the captured delta to that patch and the existing failure boundary.
+    with model_budget_admission(
+        configurable, lambda: runtime_state(state).get("budget", {})
+    ):
+        token = start_budget_capture()
+        try:
+            context = await asyncio.to_thread(
+                query_images.build_query_image_context,
+                messages,
+                vision_model=configurable.rag_vision_model,
+                vision_prompt=configurable.rag_query_image_prompt,
+                vision_max_tokens=configurable.rag_vision_max_tokens,
+                max_images=configurable.rag_query_image_max_images,
+                max_bytes=configurable.rag_query_image_max_bytes,
             )
-        ]
-    }
+        finally:
+            usage = stop_budget_capture(token)
+            capture_budget_usage(usage)
+    patch = {"runtime": {"budget": usage}} if usage["model_calls"] else {}
+    if not context.strip():
+        return patch
+
+    patch["messages"] = [
+        HumanMessage(
+            content=(
+                "Recognized image context from the user's question. "
+                "Use it as temporary query context; it is not persisted as local "
+                "knowledge or memory.\n\n"
+                f"{context.strip()}"
+            ),
+            additional_kwargs={"rag_query_image_context": True},
+        )
+    ]
+    return patch
 
 
 # 为预算跳过的调用生成工具消息，明确说明跳过原因。
@@ -172,7 +183,7 @@ async def clarification_step(
     model_config = {
         "model": configurable.research_model,
         "max_tokens": configurable.research_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
+        "provider_config": config,
         "tags": ["langsmith:nostream"],
     }
 
@@ -258,7 +269,7 @@ async def research_brief_step(
     research_model_config = {
         "model": configurable.research_model,
         "max_tokens": configurable.research_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
+        "provider_config": config,
         "tags": ["langsmith:nostream"],
     }
 
@@ -339,7 +350,7 @@ async def section_plan_step(
 
     planner_model_config: dict[str, Any] = {
         "model": planner_model_name,
-        "api_key": get_api_key_for_model(planner_model_name, config),
+        "provider_config": config,
         "tags": ["langsmith:nostream"],
     }
     if planner_max_tokens is not None:

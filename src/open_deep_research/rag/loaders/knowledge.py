@@ -23,6 +23,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from langchain_core.messages import HumanMessage
 
+from open_deep_research.budget import invoke_model_with_budget
 from open_deep_research.models import create_chat_model as init_chat_model
 from open_deep_research.rag.code_languages import (
     CODE_EXTENSION_LANGUAGE_MAP,
@@ -102,7 +103,9 @@ def load_documents_from_paths(
                     )
                 )
             except Exception as exc:  # pragma: no cover - defensive logging path
-                LOGGER.warning("Failed to load RAG document %s: %s", candidate_path, exc)
+                LOGGER.warning(
+                    "Failed to load RAG document %s: %s", candidate_path, exc
+                )
     return loaded_documents
 
 
@@ -141,14 +144,18 @@ def fingerprint_knowledge_base_paths(
     return {"files": sorted(files, key=lambda item: item["path"])}
 
 
-def _iter_supported_paths(path: Path, include_multimodal: bool = False) -> Iterable[Path]:
+def _iter_supported_paths(
+    path: Path, include_multimodal: bool = False
+) -> Iterable[Path]:
     """枚举一个文件或目录下所有受支持文件.
 
     传入文件时只检查扩展名；传入目录时递归扫描。排序保证同一组文件生成
     文档顺序稳定，从而 chunk id 更稳定。
     """
     if path.is_file():
-        if _is_supported_suffix(path.suffix.lower(), include_multimodal=include_multimodal):
+        if _is_supported_suffix(
+            path.suffix.lower(), include_multimodal=include_multimodal
+        ):
             yield path.resolve()
         return
 
@@ -396,8 +403,12 @@ def _load_image_document(
         "path": path.as_posix(),
         "source_type": "image",
         "modality": "image",
-        "ocr_provider": multimodal_provider if "ocr" in route_metadata["image_route"] else None,
-        "ocr_languages": ocr_languages if "ocr" in route_metadata["image_route"] else None,
+        "ocr_provider": multimodal_provider
+        if "ocr" in route_metadata["image_route"]
+        else None,
+        "ocr_languages": ocr_languages
+        if "ocr" in route_metadata["image_route"]
+        else None,
     }
     metadata.update(route_metadata)
     return [
@@ -471,7 +482,9 @@ def extract_routed_image_bytes_text(
     """Route rendered image bytes, used for image-only PDF pages."""
     features = analyze_image_bytes_features(image_bytes)
     try:
-        ocr_probe_text = quick_ocr_probe_image_bytes_text(image_bytes, provider, ocr_languages)
+        ocr_probe_text = quick_ocr_probe_image_bytes_text(
+            image_bytes, provider, ocr_languages
+        )
     except Exception as exc:  # pragma: no cover - depends on local OCR runtime
         LOGGER.warning("Failed quick OCR probe for rendered PDF page: %s", exc)
         ocr_probe_text = ""
@@ -493,7 +506,9 @@ def extract_routed_image_bytes_text(
         features=features,
         ocr_probe_text=ocr_probe_text,
         classification=classification,
-        ocr_factory=lambda: extract_image_bytes_text(image_bytes, provider, ocr_languages),
+        ocr_factory=lambda: extract_image_bytes_text(
+            image_bytes, provider, ocr_languages
+        ),
         vision_factory=lambda: extract_image_bytes_vision_text(
             image_bytes,
             vision_model,
@@ -536,7 +551,11 @@ def route_image_for_rag(
     if edge_density >= DIAGRAM_EDGE_DENSITY and color_count <= DIAGRAM_MAX_COLOR_COUNT:
         return ("ocr_vision" if vision_enabled else "ocr"), "diagram_like", None
 
-    if text_chars == 0 and color_count >= PHOTO_MIN_COLOR_COUNT and entropy >= PHOTO_MIN_ENTROPY:
+    if (
+        text_chars == 0
+        and color_count >= PHOTO_MIN_COLOR_COUNT
+        and entropy >= PHOTO_MIN_ENTROPY
+    ):
         return ("vision" if vision_enabled else "skip"), "photo_like", None
 
     if not vision_enabled:
@@ -630,8 +649,12 @@ def analyze_image_bytes_features(image_bytes: bytes) -> dict[str, Any]:
     """Extract cheap local image features from in-memory image bytes."""
     try:
         from PIL import Image, ImageFilter, ImageStat
-    except ImportError as exc:  # pragma: no cover - dependency exists in this repository
-        raise ImportError("Install pillow to use multimodal RAG image routing.") from exc
+    except (
+        ImportError
+    ) as exc:  # pragma: no cover - dependency exists in this repository
+        raise ImportError(
+            "Install pillow to use multimodal RAG image routing."
+        ) from exc
 
     try:
         with Image.open(BytesIO(image_bytes)) as image:
@@ -908,7 +931,8 @@ def _invoke_vision_model(
         max_tokens=max_tokens,
         tags=["langsmith:nostream"],
     )
-    response = vision_model.invoke(
+    response, _budget = invoke_model_with_budget(
+        vision_model,
         [
             HumanMessage(
                 content=[
@@ -917,6 +941,8 @@ def _invoke_vision_model(
                 ]
             )
         ],
+        model_name=model,
+        component="rag_vision",
     )
     return _message_content_to_text(response.content).strip()
 
