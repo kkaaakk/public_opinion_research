@@ -16,9 +16,10 @@ from contextvars import ContextVar, Token
 from typing import Any, Callable, Iterator, Mapping, cast
 
 from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.messages.ai import UsageMetadata, add_usage
 from langchain_core.messages.utils import count_tokens_approximately
+from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.config import ensure_config, merge_configs
 
@@ -324,6 +325,40 @@ class ModelAttemptCounter(BaseCallbackHandler):
         self.starts += 1
 
 
+class _ObservedUsageMetadata(UsageMetadataCallbackHandler):
+    """Feed observed successes and partial failures to the official aggregator."""
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        first = response.generations[0] if response.generations else []
+        generation = first[0] if first else None
+        if isinstance(generation, ChatGeneration):
+            message = generation.message
+            if (
+                isinstance(message, AIMessage)
+                and message.usage_metadata
+                and not message.response_metadata.get("model_name")
+            ):
+                # A missing label does not make reported usage unknown. Project
+                # only for this collector; callers/other callbacks keep the raw response.
+                message = message.model_copy(
+                    update={
+                        "response_metadata": {
+                            **message.response_metadata,
+                            "model_name": "_unidentified",
+                        }
+                    }
+                )
+                groups = [list(group) for group in response.generations]
+                groups[0][0] = generation.model_copy(update={"message": message})
+                response = response.model_copy(update={"generations": groups})
+        super().on_llm_end(response, **kwargs)
+
+    def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
+        response = kwargs.pop("response", None)
+        if isinstance(response, LLMResult):
+            self.on_llm_end(response, **kwargs)
+
+
 # 复制调用配置并挂载尝试计数、令牌用量回调，返回配置与两个处理器。
 def model_accounting_config(
     config: Any = None,
@@ -332,9 +367,9 @@ def model_accounting_config(
 ) -> tuple[Any, ModelAttemptCounter, UsageMetadataCallbackHandler]:
     """Return ``(config, attempt_counter, usage_handler)`` for one model invocation.
 
-    Both handlers are LangChain official: ``ModelAttemptCounter`` consumes the
+    Both handlers use LangChain's lifecycle: ``ModelAttemptCounter`` consumes the
     ``on_chat_model_start`` lifecycle and ``UsageMetadataCallbackHandler`` consumes
-    ``AIMessage.usage_metadata`` from every call, including attempts whose
+    ``AIMessage.usage_metadata`` from every call, including partial failures and attempts whose
     structured output fails to parse.  A fresh usage handler per invocation keeps
     parallel agents, section writers, and tools isolated from each other.
 
@@ -342,7 +377,7 @@ def model_accounting_config(
     output).  It does not affect token accounting or the provider call.
     """
     counter = ModelAttemptCounter()
-    usage_handler = UsageMetadataCallbackHandler()
+    usage_handler = _ObservedUsageMetadata()
     overrides: dict[str, Any] = {"callbacks": [counter, usage_handler]}
     if metadata:
         overrides["metadata"] = dict(metadata)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping
 
 from open_deep_research.models.providers import (
     DEFAULT_ARK_BASE_URL,
@@ -15,8 +15,6 @@ from open_deep_research.models.providers import (
 )
 
 if TYPE_CHECKING:
-    from langchain_core.runnables import RunnableConfig
-
     from open_deep_research.models.factory import (
         configurable_chat_model,
         create_chat_model,
@@ -45,7 +43,7 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def get_api_key_for_model(model_name: str, config: RunnableConfig):
+def get_api_key_for_model(model_name: str, config: Mapping[str, Any] | None):
     """Compatibility wrapper around the unified credential resolver."""
     try:
         return resolve_api_key(model_name, config)

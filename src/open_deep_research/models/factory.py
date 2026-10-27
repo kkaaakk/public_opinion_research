@@ -91,6 +91,12 @@ def create_chat_model(
     """Create a LangChain chat model from one logical model reference."""
     logical_name = model_ref or model
     ref = parse_model_ref(str(logical_name or ""))
+    if ref.provider in {"openai", "volcengine", "deepseek", "groq"}:
+        prefix = "groq" if ref.provider == "groq" else "openai"
+        native_key = kwargs.pop(f"{prefix}_api_key", None)
+        native_endpoint = kwargs.pop(f"{prefix}_api_base", None)
+        api_key = api_key or native_key
+        base_url = base_url or native_endpoint
     credential = api_key or resolve_api_key(ref, config)
     endpoint = resolve_base_url(ref, config, base_url)
     if endpoint is not None:

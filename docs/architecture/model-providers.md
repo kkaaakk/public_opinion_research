@@ -35,6 +35,9 @@
 - 显式 `api_key` 优先。`GET_API_KEYS_FROM_CONFIG=true` 时从
   `configurable.apiKeys` 读取；否则使用对应环境变量。SDK 支持的 key 型供应商缺少
   所选来源的凭据时，两条路径都拒绝，不以环境密钥填补空配置。
+- LangChain 既有 `openai_api_key` / `openai_api_base`、Groq 的
+  `groq_api_key` / `groq_api_base` 在工厂边界归一为显式参数；标准 `api_key` /
+  `base_url` 同时存在时优先。这些原生字段别名不会被环境或默认地址覆盖。
 - OpenAI-compatible 地址按显式 `base_url` → 可信配置 → 环境 → 默认值解析。
   Ark 支持 `ARK_BASE_URL` / `ark_base_url`；DeepSeek 用 `DEEPSEEK_API_BASE`，
   Groq 用 `GROQ_API_BASE`。OpenAI 用 `OPENAI_BASE_URL` 并保留 `OPENAI_API_BASE`。

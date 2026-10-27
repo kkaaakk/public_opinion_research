@@ -265,3 +265,51 @@ def test_resolver_compatibility_exports_and_lazy_with_config_preserve_provider_s
     assert model.openai_api_key.get_secret_value() == "configured-key"
     assert str(model.openai_api_base).rstrip("/") == "https://config.example.test/v3"
     assert model.max_tokens == 17
+
+
+@pytest.mark.parametrize(
+    "reference,key_alias,endpoint_alias",
+    [
+        ("openai:fixture", "openai_api_key", "openai_api_base"),
+        ("deepseek:deepseek-chat", "api_key", "openai_api_base"),
+        ("deepseek:deepseek-flash", "api_key", "openai_api_base"),
+        ("groq:fixture", "groq_api_key", "groq_api_base"),
+    ],
+)
+def test_explicit_native_langchain_parameter_aliases_preserve_configuration(
+    monkeypatch, reference, key_alias, endpoint_alias
+):
+    monkeypatch.setenv("GET_API_KEYS_FROM_CONFIG", "false")
+    for key in (
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GROQ_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "DEEPSEEK_API_BASE",
+        "GROQ_API_BASE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    model = create_chat_model(
+        reference,
+        **{
+            key_alias: "explicit-native-key",
+            endpoint_alias: "https://explicit-native.example.test/v1",
+        },
+    )
+    credential = getattr(model, "openai_api_key", None) or getattr(
+        model, "groq_api_key", None
+    )
+    endpoint = getattr(model, "openai_api_base", None) or getattr(
+        model, "groq_api_base", None
+    )
+    assert credential.get_secret_value() == "explicit-native-key"
+    assert str(endpoint).rstrip("/") == "https://explicit-native.example.test/v1"
+
+
+def test_legacy_public_key_helper_supports_runtime_type_introspection():
+    from typing import get_type_hints
+
+    from open_deep_research.models import get_api_key_for_model
+
+    assert get_type_hints(get_api_key_for_model)["config"]

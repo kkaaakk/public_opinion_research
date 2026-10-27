@@ -86,9 +86,19 @@ async def _step(
                     }
                 )
 
+    pending = asyncio.create_task(execute())
     try:
-        return await asyncio.wait_for(execute(), timeout=timeout)
+        return await asyncio.wait_for(pending, timeout=timeout)
     except BaseException as exc:
+        # A repeated cancellation can interrupt wait_for's cleanup wait. Keep
+        # the existing child alive until its own settlement/capture has finished.
+        drain = asyncio.gather(pending, return_exceptions=True)
+        while not drain.done():
+            try:
+                await asyncio.shield(drain)
+            except asyncio.CancelledError:
+                pass
+        drain.result()
         source = original[-1] if original else exc
         setattr(exc, "workflow_step", name)
         # SDK Runtime already owns all its nested accounting. Ordinary business

@@ -1,6 +1,9 @@
 # LangChain 接缝精简与模型调用体系完善（方案 A）
 
 日期：2026-10-27（Asia/Shanghai）。保留 LangChain，不迁移 AsyncOpenAI。
+第 1–8 节保留初始 HEAD `73fc662c` 的实施/验收事实；后续独立最终 Review、
+修复和新的验收门禁见第 9 节。最终 HEAD、实际全量结果和 CI 链接以 PR #33 的
+冻结 Review COMMENT 为准，不把初始结果外推为最终提交已经通过。
 基线为最新 `main` / PR #32 Merge SHA
 `dbd743b4fc4625d05292a1372cc2ee5a5d85d632`，远端 `ls-remote` 与 GitHub PR 元数据核对一致。
 分支：`codex/langchain-seam-simplification`。使用独立 managed Worktree；原工作目录的
@@ -231,3 +234,74 @@ integration 没有运行，不计通过数。Proxy Fluent 和旧导出因兼容�
 未知/未上报 token 不能从本地估算补成实际费用；取消/故障后不能为了补观测重放模型或工具。
 
 本次交付保持 Draft，未合并、未部署；本地 Worktree 和全部测试证据保留。
+
+## 9. 独立最终 Review 与修复
+
+日期：2026-10-27。审查起点 `73fc662cd335da6cfaaed707e43bb5624b3edd36`；
+main `dbd743b4fc4625d05292a1372cc2ee5a5d85d632`。重新 fetch、读取完整生产/
+测试/文档 diff、固定 LC/DBOS 实现、调用与动态赋值，核对初始 CI、评论、Reviews 和
+未解决 threads。初始 CI/Studio/Claude 工作流均 success，评论/Review/thread 均为 0；
+没有以此代替源码和边界复现。
+
+### 9.1 发现、影响与处置
+
+初始定位行号均属于 `73fc662c` 的 `src/open_deep_research/`。
+
+| 编号 | 等级 / 位置 | 触发条件、影响和复现 | 修复 |
+| --- | --- | --- | --- |
+| R1 | P1，`workflow/intake.py:103–114` | Vision 在线程中已发出；取消/超时结束 `to_thread` 等待后立即关闭 capture。线程晚到的实际费用丢失，还可能处理下一张图。4 个取消/超时回归先失败 | 复用现有 `owned_io` 等待已发请求清算；原 admission 的 usage 回调检查 owner 的取消状态，拒绝后续图像请求；不重试、不新增预算 Wrapper |
+| R2 | P1，`workflow/business_steps.py:90–92` | 配置 Step deadline 且重复取消；第二次取消能打断 `wait_for` 自身的 cleanup wait，外层早于原子任务读取费用。补充 2 个 deadline/repeated-cancel 回归先失败 | 显式持有原 execute Task，在原异常分支 shield/drain 原 Task 后读取 capture；仍抛出原取消/超时/失败，不创建第二次业务执行 |
+| R3 | P1，`budget.py:345` | 官方 Usage handler 要求非空 model_name 且只处理 on_llm_end。固定 Google GenAI 真实模型返回合法 usage 但省略可选 model_version 时记为 0；真实 Core 流错误的部分 usage 也被忽略。3 个实际生命周期回归先失败 | 在现有官方 handler 上补输入适配：只给本 collector 的不可变响应副本提供未识别名称；on_llm_error 的真实 LLMResult 交给同一官方聚合。锁、add_usage、capture/ledger 和模型/错误结果保持原职责 |
+| R4 | P2，`models/factory.py:94–95` | 既有 `openai_api_key/openai_api_base` 或 Groq 原生字段经 kwargs 传入；key 被拒绝，或显式 host 被默认 DeepSeek 地址覆盖。4 个固定实现的真实构造回归先失败 | 只在原工厂边界归一这些既有参数，再进入同一 Resolver；标准参数优先。没有扩充 provider 或建立新配置层 |
+| R5 | P2，`models/__init__.py:17,48` | `typing.get_type_hints(get_api_key_for_model)` 因 TYPE_CHECKING-only 的 RunnableConfig 抛 NameError；影响公共 helper 的标准运行时检查。1 个回归先失败 | 用运行时可解析的 Mapping 注解，保持参数及配置行为；不恢复后端 eager import |
+
+发现 P0 **0**、P1 **3**、P2 **2**；五项已实施修复，剩余可执行 P0/P1/P2 **0**，
+最终通过结论仍受下述实际 HEAD 门禁约束。R1–R5 的初始日志在忽略目录
+`.tmp/pr33-review/red.log`（9 failed）、`deadline-red.log`（2 failed）、
+`observed-usage-red.log`（3 failed）；`repeat-red.log` 的无 deadline 场景本来通过，
+没有冒称所有重复取消都失败。
+
+R3 不是 Token 估算或第二账本。模型缺少名称时只投影 collector 输入；其他 callback
+和原始响应仍看到原数据。错误 callback 仅消费 Core 已提供的 LLMResult，缺 usage
+仍为 0；不发新的 on_llm_end 事件，不改变错误 Span，不上传内容。新增 structured retry
+回归验证两次真实响应为 2 calls / 30 tokens，raw metadata 不被修改。
+
+R2 位于既有纯业务失败清算 helper；没有改 native Workflow/Step 注册、命令序列、授权、
+重试授予、Finalizer、Effect Receipt 或 RunFacts。R1 等待 provider 返回/既有 provider
+超时再清算，不承诺取消等待者能撤销远程请求。SDK Runner、Harness、Graph 和工具执行
+去重/权限路径未改；没有接入 LC Generation instrumentation 或 Vertex extra。
+
+### 9.2 本轮证据与最终门禁
+
+补修后的独立定向矩阵已实际得到 **296 passed / 1 deselected**，包含 Vision、预算、
+Token、真实 provider 构造、SDK Model/Tool、LangSmith 与 OTel。另有真实 PG/DBOS/Neo4j
+Vision **3 passed / 63 deselected**：成功 Run 仍恰好增加 1 call / 15 tokens；取消时
+unit 在请求返回前保持 pending，返回后费用只结算一次、第二张图不调用、SDK 不启动。
+保留初始 fixture 的 7 calls / 77 tokens，最终为 8 / 92 或 provider 失败时 8 / 77，
+另断言单位增量恰为 1 / 15 或 1 / 0，重复读取不增加费用。
+
+原生新增测试初次失败另包含两个测试客户端假定：cancel RPC 落库早于 DBOS 的本地
+取消送达；fixture 本来有 7 / 77 的既有预算。测试现在只读记录真实 owner Task 并等待
+其收到取消，再释放模型 gate；原单次费用/不重复调用断言保留，且增加显式基线累计和
+unit delta 断言。没有修改生产取消 API、放宽清算或删除断言来掩盖失败。
+
+最终候选提交冻结后必须重新执行：全量离线、一次完整 101 项指定原生矩阵、LangSmith
+原生合同、Studio TS/lint/unit/build/browser、Classic、Ruff/变更文件格式/编译、32 入口、
+根锁与 pip check。模型均为 Fake/ScriptedModel/Mock client，dotenv/default tracing 禁用，
+socket 只允许 loopback/unix，付费推理为 0。精确 HEAD、实际数量/退出码及 CI run 链接
+写入 PR 的冻结 Review COMMENT 和描述；未执行的集合不预先写成通过。
+
+与 main 的最新生产 eLOC 实测为 **+336 / −233 / 净 +103**，25,475 → 25,578；
+相对初始 PR 为净 +47，包含必要的清算持有、兼容参数归一和 Usage 输入适配。
+仍按同一 AST/docstring/物理行口径计算，包含移动与变更文件格式，不冒称净减少。
+测量文件 `.tmp/pr33-review/metrics.json` 可从同一 Git 基线复算。
+
+预算入口数量和 SDK/真实工具主干不变；Intake 的同步等待改为既有 owned_io，
+业务步骤明确持有原子任务，官方 Usage 聚合前增加缺名称/部分失败投影。
+新增常数级 Task/类型检查；只有缺名称时复制浅层响应视图，没有新增模型请求或网络往返。
+未测量生产吞吐/延迟。依赖和锁无差分，既有 markitdown-mcp/mcp 冲突仍单列。
+
+最终只在当前候选的全部必要 CI 通过、无阻塞 Review/thread、权限/规则复核后 Ready，
+以 expected head SHA 约束 Merge Commit；保留分支，不使用 squash/rebase 或 admin bypass。
+合并后的双 Parent、HEAD 祖先/代码树、main 同步与 push CI 以同一 PR 留档，不为填写
+自引用 SHA 再改已经测试的代码树。Langfuse 非 Agent Generation 继续作为独立后续 PR。

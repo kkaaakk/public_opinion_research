@@ -45,6 +45,7 @@ from open_deep_research.time_utils import get_today_str
 
 # Initialize a configurable model that we will use throughout the agent
 from open_deep_research.workflow import shared
+from open_deep_research.workflow.execution import owned_io
 from open_deep_research.workflow.state_utils import (
     report_state,
     runtime_state,
@@ -95,12 +96,19 @@ async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict
 
     # The request helper captures usage; successful Steps consume State patches.
     # Mirror the captured delta to that patch and the existing failure boundary.
-    with model_budget_admission(
-        configurable, lambda: runtime_state(state).get("budget", {})
-    ):
+    caller = asyncio.current_task()
+
+    def current_usage():
+        # The worker can finish an admitted request after cancellation, but must
+        # not start another image request while its owner is draining it.
+        if caller is not None and caller.cancelling():
+            raise asyncio.CancelledError()
+        return runtime_state(state).get("budget", {})
+
+    with model_budget_admission(configurable, current_usage):
         token = start_budget_capture()
         try:
-            context = await asyncio.to_thread(
+            context, cancellation = await owned_io(
                 query_images.build_query_image_context,
                 messages,
                 vision_model=configurable.rag_vision_model,
@@ -109,6 +117,8 @@ async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict
                 max_images=configurable.rag_query_image_max_images,
                 max_bytes=configurable.rag_query_image_max_bytes,
             )
+            if cancellation is not None:
+                raise cancellation
         finally:
             usage = stop_budget_capture(token)
             capture_budget_usage(usage)
