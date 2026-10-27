@@ -49,7 +49,7 @@ def main():
         POR_TRACE_SAMPLE_RATE="1",
         LANGFUSE_BASE_URL=args.base_url,
         LANGFUSE_FLUSH_INTERVAL="0.1",
-        POR_TRACE_TIMEOUT_SECONDS="0.4",
+        POR_TRACE_TIMEOUT_SECONDS="2",
         POR_TRACE_SHUTDOWN_SECONDS="2",
     )
     import dotenv
