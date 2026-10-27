@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 
 from open_deep_research.web.durable import RunClient, close_run_client
 from open_deep_research.web.history import Neo4jHistoryStore
+from open_deep_research.web.run_data import RunConflict
 from open_deep_research.workflow.dbos_config import settings
 from open_deep_research.workflow.run_facts import facts
 
@@ -74,6 +75,36 @@ def pg_database(monkeypatch, request, tmp_path):
         with admin.connect() as db:
             db.execute(text("DROP DATABASE " + name + " WITH (FORCE)"))
         admin.dispose()
+
+
+def retry_observed_failure(case, run, key, observed):
+    """Re-observe only a newer receipt cursor for the same safe test failure.
+
+    Late relay packets can invalidate a terminal observation. Never reinterpret
+    an accepted request, a different failure generation or an unsafe outcome.
+    """
+    for attempt in range(3):
+        try:
+            case.client.retry(
+                run["run_id"], run["owner"], key, observed["state_version"]
+            )
+        except RunConflict:
+            if attempt == 2:
+                raise
+            latest = case.client.get(run["run_id"], run["owner"])
+            if (
+                latest["state_version"] <= observed["state_version"]
+                or latest["generation"] != observed["generation"]
+                or latest["status"] != "failed"
+                or not latest["retry_safe"]
+                or not latest["events_complete"]
+                or latest["retry_requested"]
+                or latest["settlement"] != "settled"
+            ):
+                raise
+            observed = latest
+        else:
+            return observed
 
 
 class NativeCase:

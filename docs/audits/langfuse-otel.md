@@ -7,6 +7,8 @@
 
 最终 Review 更新：后续独立复核发现并修复 tracestate 出口、Provider 注册竞态和
 Agent 标签三个问题，并在官方本地 Langfuse 4.70.1 UI 完成真实验收。
+最终原生回归另修正测试对归档后 receipt cursor 不再变化的假定；生产 CAS、
+Finalizer 与授权未改，旧版本拒绝及执行次数断言保留。
 下文首次实现的数字与“未验 UI”保留为原始阶段记录；当前结论、隔离测试凭据处理、
 精确 HEAD 回归及合并门禁见 [最终 Review](langfuse-otel-final-review.md)。
 

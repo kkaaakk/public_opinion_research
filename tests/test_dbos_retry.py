@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from dbos_support import retry_observed_failure
 from sqlalchemy import text
 
 from open_deep_research.budget import capture_budget_usage
@@ -491,6 +492,45 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
         store.close()
 
 
+def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypatch):
+    case = native_case
+    original = engine.OPERATIONS["research_review"]
+    attempts = []
+
+    async def review(state, cfg):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("Safe read failure")
+        return await original(state, cfg)
+
+    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    run = case.create()
+    observed = case.wait(
+        run,
+        lambda r: r["status"] == "failed"
+        and r["archive_status"] == "saved"
+        and r["events_complete"]
+        and r["retry_safe"],
+    )
+    # A late duplicate usage delivery advances the real relay cursor while the
+    # observed failure and its execution authority stay unchanged.
+    case.client.client.send(
+        run["run_id"] + ":events",
+        {"type": "usage", "generation": 0, "usage": observed["usage"]},
+        topic="events",
+        idempotency_key="late-terminal-usage",
+    )
+    current = case.wait(run, lambda r: r["state_version"] > observed["state_version"])
+    assert current["generation"] == observed["generation"] == 0
+    with pytest.raises(RunConflict):
+        case.client.retry(run["run_id"], "alice", "fresh", observed["state_version"])
+    retry_observed_failure(case, run, "fresh", observed)
+    final = saved(case, run, "completed", 1)
+    assert final["generation"] == 1
+    assert len(attempts) == 2 and len(case.models) == 4
+    assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
+
+
 def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeypatch):
     case = native_case
     original_review = engine.OPERATIONS["research_review"]
@@ -518,7 +558,7 @@ def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeyp
     monkeypatch.setattr(case.history, "save", save)
     run = case.create()
     first = saved(case, run, "failed", 0)
-    case.client.retry(run["run_id"], "alice", "original", first["state_version"])
+    retry_observed_failure(case, run, "original", first)
     case.wait(
         run,
         lambda r: r["generation"] == 1
@@ -538,7 +578,7 @@ def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeyp
     second = saved(case, run, "failed", 1)
     assert_consistent(case, run, second)
     assert len(attempts) == 2
-    case.client.retry(run["run_id"], "alice", "next", second["state_version"])
+    retry_observed_failure(case, run, "next", second)
     final = saved(case, run, "completed", 2)
     assert_consistent(case, run, final)
     assert len(attempts) == 3

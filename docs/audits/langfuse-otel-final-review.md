@@ -1,6 +1,6 @@
 # PR #32 独立最终 Review 与真实 Langfuse 验收
 
-日期：2026-10-26（Asia/Shanghai）。原始 review HEAD：
+日期：2026-10-26 至 2026-10-27（Asia/Shanghai）。原始 review HEAD：
 `c633437fbae8368d668e8626480000d1c784734d`；main：
 `b682ad5bf633f046df43101f012a5985f2768395`。先 fetch、核对完整 diff、独立读取实际
 代码及固定 SDK/DBOS/OTel 实现，再对照历史审计；没有将历史审计或 CI success 当作
@@ -13,14 +13,25 @@
 | R1 | P1 | c633437f `observability/telemetry.py:239–248` 直接复用 Span/parent/Link 的 SpanContext；只删 Link attributes | 构造带任意 vendor tracestate 的标准 Context 后，safe_span 仍保留字符串；出口白名单可被 context 字段绕过 | `_export_context` 只复制 IDs、remote/trace flags，清空全部 tracestate；不改变进程内或 DBOS 官方传播 |
 | R2 | P2 | c633437f `telemetry.py:458–463` 调用 OTel once-only setter 后没有验证注册结果 | 模拟别的 initializer 在检查与注册间抢先成功，函数仍返回 True；DBOS/global 与 SDK/provider 可能分裂，不能保证统一出口 | 注册后检查 global identity，失败则关闭本管道/SDK tracing、清理自有资源，业务继续 |
 | R3 | P2 | c633437f `telemetry.py:220–231` 对空格名称回退 execution | 真实服务端显示六个业务 Agent 全部匿名为 execution；API 有角色，UI 默认名称无法区分 | 使用已允许的 `por.role` 构造安全 `.agent` 显示名；不放开任意 name，不改 AgentSpec 或 Prompt |
+| R4 | P2 | 018f6369 `tests/test_dbos_contracts.py:1248` / `tests/test_dbos_retry.py:521` 假定归档后的观察版本稳定 | 原生矩阵 95 passed / 2 failed；定向重复 9 passed / 1 failed 时捕获同一已清算、已投递失败的 cursor 从 55 到 57，生产 CAS 正确拒绝旧版本 | 仅测试客户端在同代安全失败、终态已投递且版本严格推进时重新观察，最多三次提交；负向拒绝、幂等和执行次数断言保留，生产 API/Finalizer 不变 |
 
-三个修复均包含先失败的回归：`tracestate-red.log`、`provider-red.log`、
+R1–R3 均包含先失败的回归：`tracestate-red.log`、`provider-red.log`、
 `labels-red.log` 各 **1 failed**；修复后三项均通过，包含全部原有用例的 tracing
 单元矩阵为 **25 passed**。原始复现日志在忽略的 `.tmp/pr32-review/`，不提交
 敏感数据、数据库或运行输出。修复提交：
 `aad827f8edbad6b1e74c96936dff22268674b013`。
 
-Review 处置结论：发现 P0 **0**、P1 **1**、P2 **2**，三项已修复；剩余 P0/P1/P2
+R4 初始失败、重复观察和确定性旧版本回归分别保留于
+`native-initial-failed.log`、`retry-probe.log` / `retry-probe.jsonl`、
+`retry-cas-red.log`。新的 `test_terminal_receipt_advancement_preserves_retry_cas`
+通过真实 DBOS 消息推进 relay cursor，先断言旧版本被生产 API 拒绝，再验证重新
+观察只产生一次合法 grant，Producer 工具各一次、模型调用合计四次。首次为 **1 failed**，
+修正测试客户端后通过。该客户端不改变 Run 状态、放行旧 key 或给 Finalizer 授权；
+代次变化、已接受请求、未清算/未投递或无版本推进时仍原样抛错。此前仅延迟 done
+投递的探针没有复现失败；版本推进是实际捕获的拒绝原因，不将猜测写成结论。
+R4 提交及完整新 HEAD 矩阵以冻结 PR 评论为准。
+
+Review 处置结论：发现 P0 **0**、P1 **1**、P2 **3**，四项已修复；剩余 P0/P1/P2
 可执行缺陷 **0**。下文明确列出的平台/范围限制未冒充新发现或已实现能力。
 
 ## 2. 独立审查覆盖与语义边界
