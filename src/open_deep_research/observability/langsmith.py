@@ -95,7 +95,9 @@ def ensure_langsmith_configuration() -> None:
     if project is not None and not project.strip():
         os.environ["LANGSMITH_PROJECT"] = DEFAULT_PROJECT
         changed = True
-    if not os.environ.get("LANGSMITH_PROJECT") and not os.environ.get("LANGCHAIN_PROJECT"):
+    if not os.environ.get("LANGSMITH_PROJECT") and not os.environ.get(
+        "LANGCHAIN_PROJECT"
+    ):
         os.environ["LANGSMITH_PROJECT"] = DEFAULT_PROJECT
         changed = True
 
@@ -120,7 +122,9 @@ def ensure_langsmith_configuration() -> None:
 # 返回当前进程是否具备启用 LangSmith 追踪的条件。
 def langsmith_enabled() -> bool:
     """Return whether LangSmith tracing should be active for this process."""
-    if not _truthy(os.environ.get("LANGSMITH_TRACING") or os.environ.get("LANGCHAIN_TRACING")):
+    if not _truthy(
+        os.environ.get("LANGSMITH_TRACING") or os.environ.get("LANGCHAIN_TRACING")
+    ):
         return False
     return bool((os.environ.get("LANGSMITH_API_KEY") or "").strip()) or bool(
         (os.environ.get("LANGSMITH_ENDPOINT") or "").strip()
@@ -178,7 +182,9 @@ def correlation_metadata(config: Mapping[str, Any] | None = None) -> dict[str, A
         if value is not None:
             metadata[key] = value
     metadata["logical_run_id"] = logical_run_id(config)
-    environment = _bounded(os.environ.get("APP_ENV") or os.environ.get("ENVIRONMENT"), limit=64)
+    environment = _bounded(
+        os.environ.get("APP_ENV") or os.environ.get("ENVIRONMENT"), limit=64
+    )
     if environment is not None:
         metadata["environment"] = environment
     git_commit = _bounded(os.environ.get("GIT_COMMIT"), limit=128)
