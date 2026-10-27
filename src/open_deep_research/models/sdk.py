@@ -2,27 +2,21 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Any, Literal
-from urllib.parse import urlparse
 
 from agents import Model, OpenAIChatCompletionsModel, OpenAIResponsesModel
 from openai import AsyncOpenAI
 
-from open_deep_research.models.factory import (
+from open_deep_research.models.providers import (
     ModelConfigurationError,
     parse_model_ref,
     resolve_api_key,
-    resolve_ark_base_url,
+    resolve_base_url,
 )
 
 SDKModelAPI = Literal["responses", "chat_completions"]
-_COMPATIBLE_ENDPOINTS = {
-    "deepseek": ("DEEPSEEK_API_BASE", "https://api.deepseek.com"),
-    "groq": ("GROQ_API_BASE", "https://api.groq.com/openai/v1"),
-}
 
 
 @asynccontextmanager
@@ -43,10 +37,10 @@ async def sdk_model(
     production path. ModelSettings belong on Agent/RunConfig, not a second loop.
     """
     ref = parse_model_ref(model_ref)
-    if ref.provider not in {"openai", "volcengine", *_COMPATIBLE_ENDPOINTS}:
+    if ref.provider not in {"openai", "volcengine", "deepseek", "groq"}:
         raise ModelConfigurationError(
-            f"Phase 0 has no verified SDK adapter for {ref.provider!r}; "
-            "supply an official SDK Model directly or use the existing runtime."
+            f"No verified SDK adapter for {ref.provider!r}; "
+            "supply an official SDK Model directly. LangChain support is separate."
         )
     model_api = api or ("responses" if ref.provider == "openai" else "chat_completions")
     if model_api not in {"responses", "chat_completions"}:
@@ -64,27 +58,7 @@ async def sdk_model(
         raise ModelConfigurationError(
             f"A configured credential is required for {ref.provider!r}."
         )
-    configurable = config or {}
-    nested = configurable.get("configurable")
-    if isinstance(nested, Mapping):
-        configurable = nested
-    endpoint = base_url
-    if ref.provider == "volcengine":
-        endpoint = resolve_ark_base_url(config, base_url)
-    elif ref.provider in _COMPATIBLE_ENDPOINTS:
-        env_name, default_url = _COMPATIBLE_ENDPOINTS[ref.provider]
-        endpoint = (
-            base_url or configurable.get(env_name) or os.getenv(env_name) or default_url
-        )
-    elif endpoint is None:
-        endpoint = configurable.get("OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL")
-    if endpoint is not None:
-        endpoint = str(endpoint).strip().rstrip("/")
-        parsed = urlparse(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ModelConfigurationError(
-                "Model base URL must be an absolute http(s) URL."
-            )
+    endpoint = resolve_base_url(ref, config, base_url)
     client_options: dict[str, Any] = {"api_key": credential, "base_url": endpoint}
     if max_retries is not None:
         client_options["max_retries"] = max_retries

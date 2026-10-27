@@ -14,7 +14,6 @@ from open_deep_research.budget import (
     structured_output_chain,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.models import get_api_key_for_model
 from open_deep_research.prompts import (
     research_review_prompt,
 )
@@ -199,7 +198,7 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     )
     review_model_config: dict[str, Any] = {
         "model": configurable.research_model,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
+        "provider_config": config,
         "tags": ["langsmith:nostream"],
     }
     if configurable.research_model_max_tokens is not None:

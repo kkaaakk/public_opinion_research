@@ -16,7 +16,7 @@ from tavily import AsyncTavilyClient
 
 from open_deep_research.budget import ainvoke_model_with_budget, structured_output_chain
 from open_deep_research.configuration import Configuration
-from open_deep_research.models import create_chat_model, get_api_key_for_model
+from open_deep_research.models import create_chat_model
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import Summary
 from open_deep_research.time_utils import get_today_str
@@ -25,13 +25,17 @@ TAVILY_SEARCH_DESCRIPTION = (
     "A search engine optimized for comprehensive, accurate, and trusted results. "
     "Useful for when you need to answer questions about current events."
 )
+
+
 # 并发检索多条查询，对带原文的结果生成摘要并汇总来源。
 @tool(description=TAVILY_SEARCH_DESCRIPTION)
 async def tavily_search(
     queries: List[str],
     max_results: Annotated[int, InjectedToolArg] = 5,
-    topic: Annotated[Literal["general", "news", "finance"], InjectedToolArg] = "general",
-    config: RunnableConfig = None
+    topic: Annotated[
+        Literal["general", "news", "finance"], InjectedToolArg
+    ] = "general",
+    config: RunnableConfig = None,
 ) -> str:
     """Fetch and summarize search results from Tavily search API.
 
@@ -50,16 +54,16 @@ async def tavily_search(
         max_results=max_results,
         topic=topic,
         include_raw_content=True,
-        config=config
+        config=config,
     )
 
     # Step 2: Deduplicate results by URL to avoid processing the same content multiple times
     unique_results = {}
     for response in search_results:
-        for result in response['results']:
-            url = result['url']
+        for result in response["results"]:
+            url = result["url"]
             if url not in unique_results:
-                unique_results[url] = {**result, "query": response['query']}
+                unique_results[url] = {**result, "query": response["query"]}
 
     # Step 3: Set up the summarization model with configuration
     configurable = Configuration.from_runnable_config(config)
@@ -68,12 +72,11 @@ async def tavily_search(
     max_char_to_include = configurable.max_content_length
 
     # Initialize summarization model with retry logic
-    model_api_key = get_api_key_for_model(configurable.summarization_model, config)
     summarization_model = structured_output_chain(
         create_chat_model(
             model=configurable.summarization_model,
             max_tokens=configurable.summarization_model_max_tokens,
-            api_key=model_api_key,
+            config=config,
             tags=["langsmith:nostream"],
         ),
         Summary,
@@ -93,7 +96,8 @@ async def tavily_search(
             summarization_model,
             result["raw_content"][:max_char_to_include],
             model_name=configurable.summarization_model,
-        )        for result in unique_results.values()
+        )
+        for result in unique_results.values()
     ]
 
     # Step 5: Execute all summarization tasks in parallel
@@ -102,13 +106,11 @@ async def tavily_search(
     # Step 6: Combine results with their summaries
     summarized_results = {
         url: {
-            'title': result['title'],
-            'content': result['content'] if summary is None else summary
+            "title": result["title"],
+            "content": result["content"] if summary is None else summary,
         }
         for url, result, summary in zip(
-            unique_results.keys(),
-            unique_results.values(),
-            summaries
+            unique_results.keys(), unique_results.values(), summaries
         )
     }
 
@@ -118,7 +120,7 @@ async def tavily_search(
 
     formatted_output = "Search results: \n\n"
     for i, (url, result) in enumerate(summarized_results.items()):
-        formatted_output += f"\n\n--- SOURCE {i+1}: {result['title']} ---\n"
+        formatted_output += f"\n\n--- SOURCE {i + 1}: {result['title']} ---\n"
         formatted_output += f"URL: {url}\n\n"
         formatted_output += f"SUMMARY:\n{result['content']}\n\n"
         formatted_output += "\n\n" + "-" * 80 + "\n"
@@ -136,7 +138,9 @@ async def tavily_search(
 async def tavily_search_raw(
     queries: List[str],
     max_results: Annotated[int, InjectedToolArg] = 5,
-    topic: Annotated[Literal["general", "news", "finance"], InjectedToolArg] = "general",
+    topic: Annotated[
+        Literal["general", "news", "finance"], InjectedToolArg
+    ] = "general",
     config: RunnableConfig = None,
 ) -> str:
     """Fetch raw Tavily results without the standard per-URL summary fan-out."""
@@ -173,13 +177,14 @@ async def tavily_search_raw(
         ensure_ascii=False,
     )
 
+
 # 并发发送多条 Tavily 查询，并应用结果数量、主题等搜索参数。
 async def tavily_search_async(
     search_queries,
     max_results: int = 5,
     topic: Literal["general", "news", "finance"] = "general",
     include_raw_content: bool = True,
-    config: RunnableConfig = None
+    config: RunnableConfig = None,
 ):
     """Execute multiple Tavily search queries asynchronously.
 
@@ -202,7 +207,7 @@ async def tavily_search_async(
             query,
             max_results=max_results,
             include_raw_content=include_raw_content,
-            topic=topic
+            topic=topic,
         )
         for query in search_queries
     ]
@@ -210,6 +215,7 @@ async def tavily_search_async(
     # Execute all search queries in parallel and return results
     search_results = await asyncio.gather(*search_tasks)
     return search_results
+
 
 # 在超时保护下调用摘要模型处理网页，异常时按现有逻辑回退。
 async def summarize_webpage(
@@ -231,8 +237,7 @@ async def summarize_webpage(
     try:
         # Create prompt with current date context
         prompt_content = summarize_webpage_prompt.format(
-            webpage_content=webpage_content,
-            date=get_today_str()
+            webpage_content=webpage_content, date=get_today_str()
         )
 
         # Execute summarization with timeout to prevent hanging
@@ -244,7 +249,7 @@ async def summarize_webpage(
                 structured_output=True,
                 component="webpage_summarization",
             ),
-            timeout=60.0  # 60 second timeout for summarization
+            timeout=60.0,  # 60 second timeout for summarization
         )
         summary = response["parsed"]
 
@@ -258,16 +263,22 @@ async def summarize_webpage(
 
     except asyncio.TimeoutError:
         # Timeout during summarization - return original content
-        logging.warning("Summarization timed out after 60 seconds, returning original content")
+        logging.warning(
+            "Summarization timed out after 60 seconds, returning original content"
+        )
         return webpage_content
     except Exception as e:
         # Other errors during summarization - log and return original content
-        logging.warning(f"Summarization failed with error: {str(e)}, returning original content")
+        logging.warning(
+            f"Summarization failed with error: {str(e)}, returning original content"
+        )
         return webpage_content
+
 
 ##########################
 # Reflection Tool Utils
 ##########################
+
 
 # 从运行配置或环境变量中解析 Tavily API 密钥。
 @tool(description="Strategic reflection tool for research planning")

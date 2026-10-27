@@ -233,7 +233,7 @@ def test_native_providers_delegate_to_langchain(
 
     monkeypatch.setattr(factory_module, "init_chat_model", fake_init_chat_model)
     assert create_chat_model(model_ref, api_key="fake-key") is sentinel
-    assert captured["model"] == model_ref
+    assert captured["model"] == parse_model_ref(model_ref).original
     assert captured["api_key"] == "fake-key"
 
 
@@ -279,8 +279,8 @@ def test_configurable_proxy_preserves_bind_tools_and_retry(
             return self
 
     # 记录模型创建顺序与参数，并返回可链式配置的替身。
-    def fake_create(model_ref: str, **kwargs: Any) -> FakeModel:
-        events.append(("create", (model_ref, kwargs)))
+    def fake_create(*, model: str, **kwargs: Any) -> FakeModel:
+        events.append(("create", (model, kwargs)))
         return FakeModel()
 
     monkeypatch.setattr(factory_module, "create_chat_model", fake_create)

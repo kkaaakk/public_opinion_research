@@ -33,7 +33,6 @@ from open_deep_research.llm.errors import is_token_limit_exceeded
 from open_deep_research.memory.writer import (
     maybe_persist_chat_memory,
 )
-from open_deep_research.models import get_api_key_for_model
 from open_deep_research.prompts import (
     final_section_writer_instructions,
     public_opinion_final_report_generation_prompt,
@@ -406,7 +405,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
 
     writer_model_config: dict[str, Any] = {
         "model": writer_model_name,
-        "api_key": get_api_key_for_model(writer_model_name, config),
+        "provider_config": config,
         "tags": ["langsmith:nostream"],
     }
     if writer_max_tokens is not None:
@@ -490,7 +489,7 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
 
     writer_model_config: dict[str, Any] = {
         "model": configurable.final_report_model,
-        "api_key": get_api_key_for_model(configurable.final_report_model, config),
+        "provider_config": config,
         "tags": ["langsmith:nostream"],
     }
 
@@ -577,9 +576,7 @@ async def compile_final_report(
 
                 writer_config: dict[str, Any] = {
                     "model": configurable.final_report_model,
-                    "api_key": get_api_key_for_model(
-                        configurable.final_report_model, config
-                    ),
+                    "provider_config": config,
                     "tags": ["langsmith:nostream"],
                 }
                 attempt_token = start_budget_capture()
@@ -758,7 +755,7 @@ async def _fallback_report_generation(
     writer_model_config = {
         "model": configurable.final_report_model,
         "max_tokens": final_report_max_tokens,
-        "api_key": get_api_key_for_model(configurable.final_report_model, config),
+        "provider_config": config,
         "tags": ["langsmith:nostream"],
     }
 

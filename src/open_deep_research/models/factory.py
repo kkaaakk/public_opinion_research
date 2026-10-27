@@ -1,137 +1,36 @@
-# 解析供应商与模型标识，集中构建模型实例并适配结构化输出差异。
 """The single authoritative factory for LangChain chat models."""
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from typing import Any, Mapping
-from urllib.parse import urlparse
 
 from langchain_classic.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
 
-DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-
-_CREDENTIAL_ENV_BY_PROVIDER = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "google": "GOOGLE_API_KEY",
-    "google_genai": "GOOGLE_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "groq": "GROQ_API_KEY",
-    "volcengine": "ARK_API_KEY",
-}
-
-# Providers already delegated to LangChain by this project.  Keeping this list
-# explicit prevents a typo from silently selecting another provider.
-_LANGCHAIN_PROVIDERS = {
-    "anthropic",
-    "bedrock",
-    "cohere",
-    "deepseek",
-    "google",
-    "google_genai",
-    "groq",
-    "mistral",
-    "ollama",
-    "openai",
-}
-
-
-# 表示模型引用或供应商配置不合法的错误。
-class ModelConfigurationError(ValueError):
-    """Raised when a model reference or provider configuration is invalid."""
-
-
-# 保存归一化后的供应商、模型 ID 及原始模型引用。
-@dataclass(frozen=True)
-class ModelRef:
-    """A normalized ``provider:model`` reference."""
-
-    provider: str
-    model: str
-    original: str
-
-
-# 解析 provider:model 格式，同时保留供应商自定义模型和端点 ID。
-def parse_model_ref(value: str) -> ModelRef:
-    """Parse a ``provider:model`` reference without constraining provider model IDs.
-
-    In particular, Volcengine accepts both readable preset model IDs and custom
-    ``ep-*`` endpoint IDs.  The factory owns only provider-prefix parsing; the
-    upstream provider remains authoritative for model availability.
-    """
-    original = str(value or "").strip()
-    if ":" not in original:
-        raise ModelConfigurationError(
-            f"Invalid model reference {original!r}; expected 'provider:model'."
-        )
-    provider, model = original.split(":", 1)
-    provider = provider.strip().lower()
-    model = model.strip()
-    if not provider or not model:
-        raise ModelConfigurationError(
-            f"Invalid model reference {original!r}; provider and model are required."
-        )
-    if provider != "volcengine" and provider not in _LANGCHAIN_PROVIDERS:
-        raise ModelConfigurationError(
-            f"Unknown model provider {provider!r} for model {model!r}."
-        )
-    return ModelRef(provider=provider, model=model, original=f"{provider}:{model}")
-
-
-# 从运行配置安全取得供应商可配置项。
-def _configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    if not isinstance(config, Mapping):
-        return {}
-    nested = config.get("configurable")
-    return nested if isinstance(nested, Mapping) else config
-
-
-# 按供应商从运行时配置或环境变量解析 API 凭据。
-def resolve_api_key(
-    model_ref: str | ModelRef,
-    config: Mapping[str, Any] | None = None,
-) -> str | None:
-    """Resolve a provider credential from OAP config or the environment."""
-    ref = model_ref if isinstance(model_ref, ModelRef) else parse_model_ref(model_ref)
-    env_name = _CREDENTIAL_ENV_BY_PROVIDER.get(ref.provider)
-    if env_name is None:
-        return None
-    if os.getenv("GET_API_KEYS_FROM_CONFIG", "false").strip().lower() == "true":
-        configurable = _configurable(config)
-        api_keys = configurable.get("apiKeys", {})
-        if isinstance(api_keys, Mapping):
-            value = api_keys.get(env_name)
-            return str(value) if value else None
-        return None
-    return os.getenv(env_name) or None
-
-
-# 取得并校验火山方舟的 OpenAI 兼容接口地址。
-def resolve_ark_base_url(
-    config: Mapping[str, Any] | None = None,
-    explicit: str | None = None,
-) -> str:
-    """Resolve and validate the Volcengine Ark OpenAI-compatible endpoint."""
-    configurable = _configurable(config)
-    value = (
-        explicit
-        or configurable.get("ARK_BASE_URL")
-        or configurable.get("ark_base_url")
-        or os.getenv("ARK_BASE_URL")
-        or DEFAULT_ARK_BASE_URL
-    )
-    endpoint = str(value).strip().rstrip("/")
-    parsed = urlparse(endpoint)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ModelConfigurationError(
-            "Invalid ARK_BASE_URL; expected an absolute http(s) URL."
-        )
-    return endpoint
+# Preserve historical imports while the resolver no longer imports any backend.
+from open_deep_research.models.providers import (
+    DEFAULT_ARK_BASE_URL as DEFAULT_ARK_BASE_URL,
+)
+from open_deep_research.models.providers import (
+    ModelConfigurationError as ModelConfigurationError,
+)
+from open_deep_research.models.providers import (
+    ModelRef as ModelRef,
+)
+from open_deep_research.models.providers import (
+    parse_model_ref as parse_model_ref,
+)
+from open_deep_research.models.providers import (
+    resolve_api_key as resolve_api_key,
+)
+from open_deep_research.models.providers import (
+    resolve_ark_base_url as resolve_ark_base_url,
+)
+from open_deep_research.models.providers import (
+    resolve_base_url,
+)
 
 
 # 为方舟模型提供基于工具调用的结构化输出适配。
@@ -192,33 +91,33 @@ def create_chat_model(
     """Create a LangChain chat model from one logical model reference."""
     logical_name = model_ref or model
     ref = parse_model_ref(str(logical_name or ""))
+    if ref.provider in {"openai", "volcengine", "deepseek", "groq"}:
+        prefix = "groq" if ref.provider == "groq" else "openai"
+        native_key = kwargs.pop(f"{prefix}_api_key", None)
+        native_endpoint = kwargs.pop(f"{prefix}_api_base", None)
+        api_key = api_key or native_key
+        base_url = base_url or native_endpoint
     credential = api_key or resolve_api_key(ref, config)
+    endpoint = resolve_base_url(ref, config, base_url)
+    if endpoint is not None:
+        kwargs["base_url"] = endpoint
 
-    if ref.provider == "volcengine":
+    if ref.provider == "volcengine" or (
+        ref.provider == "deepseek" and ref.model == "deepseek-flash"
+    ):
         if not credential:
-            raise ModelConfigurationError(
-                f"ARK_API_KEY is required for provider 'volcengine' and model {ref.model!r}."
+            key_name = (
+                "ARK_API_KEY" if ref.provider == "volcengine" else "DEEPSEEK_API_KEY"
             )
-        endpoint = resolve_ark_base_url(config, base_url)
+            raise ModelConfigurationError(
+                f"{key_name} is required for provider {ref.provider!r} and model {ref.model!r}."
+            )
         metadata = dict(kwargs.pop("metadata", {}) or {})
         metadata.setdefault("logical_model", ref.original)
-        return VolcengineChatOpenAI(
-            model=ref.model,
-            api_key=credential,
-            base_url=endpoint,
-            metadata=metadata,
-            logical_model_ref=ref.original,
-            **kwargs,
+        adapter = (
+            VolcengineChatOpenAI if ref.provider == "volcengine" else DeepSeekFlashChat
         )
-
-    if ref.provider == "deepseek" and ref.model == "deepseek-flash":
-        if not credential:
-            raise ModelConfigurationError(
-                f"DEEPSEEK_API_KEY is required for provider 'deepseek' and model {ref.model!r}."
-            )
-        metadata = dict(kwargs.pop("metadata", {}) or {})
-        metadata.setdefault("logical_model", ref.original)
-        return DeepSeekFlashChat(
+        return adapter(
             model=ref.model,
             api_key=credential,
             metadata=metadata,
@@ -226,10 +125,21 @@ def create_chat_model(
             **kwargs,
         )
 
-    init_kwargs = dict(kwargs)
+    # Native constructors may otherwise fall back to environment keys even when
+    # GET_API_KEYS_FROM_CONFIG explicitly selected an empty operator key map.
+    if ref.provider in {"openai", "deepseek", "groq"} and not credential:
+        raise ModelConfigurationError(
+            f"A configured credential is required for {ref.provider!r}."
+        )
     if credential:
-        init_kwargs["api_key"] = credential
-    return init_chat_model(model=ref.original, **init_kwargs)
+        kwargs["api_key"] = credential
+    try:
+        return init_chat_model(model=ref.original, **kwargs)
+    except ImportError as exc:
+        raise ModelConfigurationError(
+            f"Provider {ref.provider!r} requires its optional LangChain integration; "
+            "install the provider package named in the underlying ImportError."
+        ) from exc
 
 
 # 延迟构建模型的兼容代理，在最终配置阶段统一创建真实实例。
@@ -264,16 +174,8 @@ class _ConfigurableChatModel:
     ) -> Any:
         settings = dict(config or {})
         settings.update(kwargs)
-        model_name = settings.pop("model", None)
-        api_key = settings.pop("api_key", None)
-        base_url = settings.pop("base_url", None)
-        runtime_config = settings.pop("provider_config", None)
         instance = create_chat_model(
-            model_name,
-            config=runtime_config,
-            api_key=api_key,
-            base_url=base_url,
-            **settings,
+            config=settings.pop("provider_config", None), **settings
         )
         if self._bound_tools is not None:
             args, tool_kwargs = self._bound_tools

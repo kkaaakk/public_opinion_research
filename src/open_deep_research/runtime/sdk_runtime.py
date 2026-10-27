@@ -388,8 +388,8 @@ class SDKAgentRuntime:
         system_prompt: str,
         tools: list[Any],
         initial_budget: Mapping[str, Any],
-        execute_tool: ToolExecutor,
         compress_report: CompressionCallback,
+        execute_tool: ToolExecutor | None = None,
     ) -> None:
         """Bind one AgentSpec to its SDK model, tools and ResearchWorkspace."""
         self.role = role
@@ -402,7 +402,8 @@ class SDKAgentRuntime:
         self.system_prompt = system_prompt
         self.tools = tools
         self.initial_budget = dict(initial_budget or {})
-        self.execute_tool = execute_tool
+        # Compatibility-only constructor keyword; Runner owns tool execution.
+        del execute_tool
         self.compress_report = compress_report
         self.rolling_summary = str(self.agent_state.get("rolling_summary") or "")
         self.workspace.rolling_summary = self.rolling_summary

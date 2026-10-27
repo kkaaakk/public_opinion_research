@@ -282,7 +282,7 @@ def test_sdk_propagates_official_provider_errors_without_a_custom_loop(
 )
 def test_unverified_sdk_providers_fail_explicitly(provider):
     async def scenario():
-        with pytest.raises(ModelConfigurationError, match="no verified SDK adapter"):
+        with pytest.raises(ModelConfigurationError, match="No verified SDK adapter"):
             async with sdk_models.sdk_model(f"{provider}:fixture"):
                 raise AssertionError("An unsupported provider was admitted")
 

@@ -1260,3 +1260,132 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
     assert result["generation"] == 1
     assert len(attempts) == 2
     assert len(case.models) == 4
+
+
+def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypatch):
+    from langchain_core.messages import HumanMessage
+    from test_query_images import _data_url
+    from test_vision_budget import VisionModel
+
+    from open_deep_research.rag.loaders import knowledge
+
+    case = native_case
+    model = VisionModel()
+    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    case.state["messages"] = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "brand recall"},
+                {"type": "image_url", "image_url": {"url": _data_url()}},
+            ]
+        )
+    ]
+    case.cfg["configurable"].update(
+        rag_query_image_enabled=True, rag_vision_model="openai:vision-fixture"
+    )
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "completed", result["error"]
+    assert result["usage"]["model_calls"] == 29
+    assert result["usage"]["total_tokens"] == 326
+    unit = next(
+        u
+        for u in facts().units(run["run_id"])
+        if u["id"] == run["run_id"] + ":enrich_query_images"
+    )
+    assert unit["settled"] and unit["artifact"]
+    assert unit["usage"]["model_calls"] == 1
+    assert unit["usage"]["total_tokens"] == 15
+    assert unit["artifact"]["patch"]["runtime"]["budget"] == unit["usage"]
+    assert case.client.get(run["run_id"], "alice")["usage"] == result["usage"]
+    assert len(model.requests) == 1
+
+
+@pytest.mark.parametrize("provider_error", [False, True])
+def test_native_cancelled_vision_keeps_reservation_until_actual_usage_settles(
+    native_case, monkeypatch, provider_error
+):
+    import threading
+
+    from langchain_core.messages import HumanMessage
+    from test_query_images import _data_url
+    from test_vision_budget import BlockingVision
+
+    from open_deep_research.rag.loaders import knowledge
+    from open_deep_research.workflow import intake
+
+    case = native_case
+    owners = []
+    original_io = intake.owned_io
+
+    async def record_owner(*args, **kwargs):
+        owners.append(asyncio.current_task())
+        return await original_io(*args, **kwargs)
+
+    monkeypatch.setattr(intake, "owned_io", record_owner)
+    model = BlockingVision(
+        started=threading.Event(),
+        release=threading.Event(),
+        finished=threading.Event(),
+        error=provider_error,
+        wait_seconds=20,
+    )
+    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    case.state["messages"] = [
+        HumanMessage(
+            content=[
+                {"type": "image_url", "image_url": {"url": _data_url()}},
+                {"type": "image_url", "image_url": {"url": _data_url()}},
+            ]
+        )
+    ]
+    case.cfg["configurable"].update(
+        rag_query_image_enabled=True,
+        rag_vision_model="openai:vision-fixture",
+        workflow_step_timeout_seconds=10,
+    )
+    baseline = dict(case.state["runtime"]["budget"])
+    run = case.create()
+    try:
+        assert model.started.wait(3)
+        case.client.cancel(run["run_id"], "alice")
+        # The public cancel intent precedes DBOS's asynchronous local delivery.
+        # Observe that delivery without replacing the native cancellation path.
+        deadline = time.monotonic() + 10
+        while (
+            not any(owner.cancelling() for owner in owners)
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert any(owner.cancelling() for owner in owners)
+        pending = case.client.get(run["run_id"], "alice")
+        assert pending["status"] == "cancelling"
+        assert pending["settlement"] == "pending"
+        unit = next(
+            u
+            for u in facts().units(run["run_id"])
+            if u["name"] == "enrich_query_images"
+        )
+        assert unit["settled"] is None and unit["artifact"] is None
+    finally:
+        model.release.set()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "cancelled"
+    assert result["settlement"] == "settled"
+    assert result["usage"]["model_calls"] == baseline["model_calls"] + 1
+    for field, delta in (
+        ("input_tokens", 12),
+        ("output_tokens", 3),
+        ("total_tokens", 15),
+    ):
+        assert result["usage"][field] == baseline[field] + (
+            0 if provider_error else delta
+        )
+    unit = next(
+        u for u in facts().units(run["run_id"]) if u["name"] == "enrich_query_images"
+    )
+    assert unit["usage"]["model_calls"] == 1 and unit["settled"]
+    assert unit["usage"]["total_tokens"] == (0 if provider_error else 15)
+    assert model.finished.is_set() and len(model.requests) == 1
+    assert len(case.models) == 0 and not any(case.calls.values())
+    assert case.client.get(run["run_id"], "alice")["usage"] == result["usage"]
