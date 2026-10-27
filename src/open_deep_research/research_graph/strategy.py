@@ -18,6 +18,7 @@ from open_deep_research.budget import (
     estimate_text_tokens,
     merge_budget_usage,
 )
+from open_deep_research.observability.telemetry import annotate, business_span
 from open_deep_research.research_graph.compaction import (
     micro_compact_messages,
 )
@@ -323,7 +324,9 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
             while stage.written < len(stage.extraction.batches):
                 batch_result = stage.extraction.batches[stage.written]
                 write_started_at = time.perf_counter()
-                receipt = workspace.store.write_delta(batch_result.delta)
+                with business_span("research_graph_write"):
+                    receipt = workspace.store.write_delta(batch_result.delta)
+                    annotate(nodes=len(receipt.node_ids), edges=len(receipt.edge_ids))
                 if not receipt.has_complete_node_references or (
                     receipt.run_id,
                     receipt.role,

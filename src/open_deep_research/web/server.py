@@ -68,13 +68,24 @@ WEB_API_TOKEN = (
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Release history database connections when the web server stops."""
+    from open_deep_research.observability.telemetry import (
+        initialize_telemetry,
+        shutdown_telemetry,
+    )
+
+    initialize_telemetry()
     try:
         yield
     finally:
-        await asyncio.to_thread(close_history_store)
         from open_deep_research.web.durable import close_run_client
 
-        await asyncio.to_thread(close_run_client)
+        try:
+            await asyncio.to_thread(close_history_store)
+        finally:
+            try:
+                await asyncio.to_thread(close_run_client)
+            finally:
+                await asyncio.to_thread(shutdown_telemetry)
 
 
 app = FastAPI(
@@ -87,7 +98,11 @@ app = FastAPI(
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 if (STUDIO_DIR / "assets").is_dir():
-    app.mount("/studio/assets", StaticFiles(directory=str(STUDIO_DIR / "assets")), name="studio-assets")
+    app.mount(
+        "/studio/assets",
+        StaticFiles(directory=str(STUDIO_DIR / "assets")),
+        name="studio-assets",
+    )
 
 
 # 校验前端研究主题、模型及数量等受限输入。

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import ExitStack
 from copy import deepcopy
 from functools import partial
 
@@ -13,6 +14,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.budget import merge_budget_usage
 from open_deep_research.configuration import Configuration
+from open_deep_research.observability.telemetry import (
+    annotate,
+    correlation,
+    dbos_scope,
+    telemetry_enabled,
+)
 from open_deep_research.web.run_data import (
     TERMINAL,
     RunConflict,
@@ -63,6 +70,7 @@ async def send_event(run_id, event_type, **data):
 
 
 @DBOS.step(preemptible=True)
+@dbos_scope
 async def business_step(run_id, unit_id, name, state):
     repo = facts()
     req = await asyncio.to_thread(repo.request, run_id)
@@ -88,6 +96,12 @@ async def business_step(run_id, unit_id, name, state):
                 permit,
                 payload["identity"],
                 status="started" if kind == "tool_started" else payload["status"],
+            )
+            annotate(
+                operation_id=result,
+                effect_status="started"
+                if kind == "tool_started"
+                else payload["status"],
             )
             if kind == "tool_started" and cancelled:
                 await owned_io(
@@ -167,8 +181,38 @@ async def business_step(run_id, unit_id, name, state):
                 await asyncio.sleep(0.5)
 
     observed_usage = past
+    identity = ExitStack()
+    identity.enter_context(
+        correlation(
+            run_id=run_id,
+            unit_id=unit_id,
+            step=name,
+            execution_id=digest({"unit": unit_id, "permit": permit}),
+            research_round=state.get("workflow", {}).get("round", 1),
+        )
+    )
     token = execution_observer.set(observer)
     try:
+        if telemetry_enabled():
+            # Read existing accepted generation as RunClient.get does. Keep this
+            # cancellable telemetry read inside the original settlement boundary.
+            def read_generation():
+                from sqlalchemy import text
+
+                with repo.engine.connect() as db:
+                    return db.execute(
+                        text(
+                            "SELECT coalesce(max(generation),0) FROM por_domain.retries WHERE run_id=:id"
+                        ),
+                        {"id": run_id},
+                    ).scalar_one()
+
+            try:
+                generation = await asyncio.to_thread(read_generation)
+            except Exception:
+                pass  # No generation claim on a failed telemetry-only read.
+            else:
+                identity.enter_context(correlation(generation=generation))
 
         def started():
             with repo.engine.begin() as db:
@@ -238,6 +282,10 @@ async def business_step(run_id, unit_id, name, state):
             raise cancelled
         return artifact
     except BaseException as exc:
+        annotate(
+            failure_kind=failure_kind(exc),
+            status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+        )
         harness = getattr(exc, "context_harness", None)
         settlement = getattr(exc, "context_settlement", None)
         settled = (
@@ -266,11 +314,13 @@ async def business_step(run_id, unit_id, name, state):
         raise
     finally:
         execution_observer.reset(token)
+        identity.close()
         for session in sessions:
             await owned_io(session.close)
 
 
 @DBOS.workflow(name="por.role")
+@dbos_scope
 async def role_workflow(run_id, unit_id, role, state):
     return await business_step(
         run_id, unit_id, role + "_agent", role_snapshot(state, role)
@@ -295,6 +345,7 @@ async def reserve(run_id):
 
 
 @DBOS.workflow(name="por.plan")
+@dbos_scope
 async def planning_workflow(run_id, initial):
     await reserve(run_id)
     state = copy_state(initial)
@@ -331,6 +382,7 @@ async def cleanup_children(run_id):
 
 
 @DBOS.workflow(name="por.research")
+@dbos_scope
 async def research_workflow(run_id, initial):
     await reserve(run_id)
     state = copy_state(initial)
@@ -433,6 +485,7 @@ async def approval_deadline():
 
 
 @DBOS.workflow(name="por.run")
+@dbos_scope
 async def run_workflow(run_id):
     req = await load_request(run_id)
     await send_event(run_id, "run_status", status="running")
@@ -493,6 +546,7 @@ async def run_workflow(run_id):
 
 
 @DBOS.workflow(name="por.events")
+@dbos_scope
 async def events_workflow(run_id):
     cursor = 0
     generation = 0
@@ -655,6 +709,7 @@ async def apply_retry(run_id, command, applied_generation):
 
 
 @DBOS.workflow(name="por.finalize")
+@dbos_scope
 async def finalize_workflow(run_id):
     applied_generation = 0
     while True:

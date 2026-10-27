@@ -6,6 +6,17 @@ The former `python`/`openai_agents` request values are validated input aliases
 only; Configuration no longer contains runtime/backend selection fields.
 `Runner.run()` and the Context Harness remain the single SDK execution path.
 
+Optional Langfuse/OTel tracing defaults off and is configured in API and Executor
+environments. It adds no execution database or journal commands; the existing
+`dbos-phase5-studio-v1` version and drain rules remain. See
+[setup, privacy, recovery and rollback](observability.md).
+
+Final acceptance of PR #32 uses an official isolated Langfuse 4.70.1 server and
+the guarded `tests/langfuse_acceptance_fixture.py` runner with synthetic inference.
+It does not connect test fixtures to an operator's services. See the
+[final review and UI evidence](../audits/langfuse-otel-final-review.md) for ports,
+identity/usage checks, recovery regressions and the precise-head merge gate.
+
 ## Local setup
 
 Use a new database and do not point these commands at existing MySQL/Neo4j data.

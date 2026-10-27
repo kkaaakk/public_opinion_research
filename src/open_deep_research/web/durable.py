@@ -9,6 +9,11 @@ from sqlalchemy import text
 
 from open_deep_research.budget import merge_budget_usage
 from open_deep_research.configuration import Configuration
+from open_deep_research.observability.telemetry import (
+    business_span,
+    correlation,
+    enqueue_context,
+)
 from open_deep_research.runtime.sdk_runtime import SDK_RUNTIME_VERSION
 from open_deep_research.web.run_data import (
     RunConflict,
@@ -125,22 +130,24 @@ class RunClient:
                         "v": dumps(data),
                     },
                 )
-                for suffix, name, queue in [
-                    (":events", "por.events", CONTROL),
-                    ("", "por.run", CONTROL),
-                    (":finalize", "por.finalize", ARCHIVE),
-                ]:
-                    self.client.enqueue_in_transaction(
-                        db,
-                        {
-                            "workflow_name": name,
-                            "queue_name": queue,
-                            "workflow_id": run_id + suffix,
-                            "app_version": VERSION,
-                            "authenticated_user": owner,
-                        },
-                        run_id,
-                    )
+                with correlation(run_id=run_id), business_span("run_submit"):
+                    for suffix, name, queue in [
+                        (":events", "por.events", CONTROL),
+                        ("", "por.run", CONTROL),
+                        (":finalize", "por.finalize", ARCHIVE),
+                    ]:
+                        self.client.enqueue_in_transaction(
+                            db,
+                            {
+                                "workflow_name": name,
+                                "queue_name": queue,
+                                "workflow_id": run_id + suffix,
+                                "app_version": VERSION,
+                                "authenticated_user": owner,
+                                **enqueue_context(),
+                            },
+                            run_id,
+                        )
                 repo.publish(db, run_id, "run_status", status="queued")
                 created = True
         return self.get(run_id, owner), created

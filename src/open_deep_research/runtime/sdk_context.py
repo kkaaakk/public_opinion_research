@@ -28,6 +28,12 @@ from agents.tool_context import ToolContext
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from open_deep_research.budget import merge_budget_usage
+from open_deep_research.observability.telemetry import (
+    annotate,
+    correlation,
+    observed,
+    telemetry_enabled,
+)
 from open_deep_research.research_graph.compaction import micro_compact_messages
 from open_deep_research.research_graph.schema import stable_id
 from open_deep_research.research_graph.workspace import ResearchWorkspace, ToolBatchItem
@@ -146,6 +152,7 @@ class SDKContextHarness(RunHooks):
 
     async def _observe(self, kind: str, **metadata: Any) -> None:
         """Send metadata at existing SDK/Harness seams; never send content."""
+        annotate(**metadata)
         await observe_execution(
             kind,
             role=self.scope.role,
@@ -351,7 +358,11 @@ class SDKContextHarness(RunHooks):
         """Observe per-call identity without treating the hook as a batch boundary."""
         self._check(context.context)
         if isinstance(context, ToolContext):
-            self._start(context)
+            recorded = self._start(context)
+            annotate(
+                tool_call_id=recorded.tool_call_id,
+                graph_call_id=recorded.graph_call_id,
+            )
             self.events.append(("tool_start", context.tool_call_id))
             self._tool_started_at[context.tool_call_id] = time.monotonic()
 
@@ -523,6 +534,7 @@ class SDKContextHarness(RunHooks):
                 updated = await self._flush_evidence(group) or updated
             return updated
 
+    @observed("persist_tool_results")
     async def _flush_evidence(self, evidence: list[ObservedToolResult]) -> bool:
         self.events.append(("batch_start", str(len(evidence))))
         await self._observe(
@@ -655,6 +667,7 @@ class SDKContextHarness(RunHooks):
                         continue
                     self._compacted[original.tool_call_id] = str(message.content)
 
+    @observed("context_build")
     async def filter_model_input(self, data: CallModelData[Any]) -> ModelInputData:
         """Commit a complete tool batch, then inject one bounded current context."""
         self._check(data.context)
@@ -889,6 +902,7 @@ class SDKContextHarness(RunHooks):
             raise asyncio.CancelledError()
         return settlement
 
+    @observed("sdk_invocation")
     async def run(
         self,
         agent: Agent[Any],
@@ -913,14 +927,28 @@ class SDKContextHarness(RunHooks):
                 "Evidence status after output guardrails is outside the Phase 0 contract."
             )
         config = run_config or RunConfig(
-            tracing_disabled=True, trace_include_sensitive_data=False
+            tracing_disabled=not telemetry_enabled(), trace_include_sensitive_data=False
         )
         if config.call_model_input_filter is not None:
             raise ValueError(
                 "Phase 0 requires its own filter and full client-managed input."
             )
-        config = replace(config, call_model_input_filter=self.filter_model_input)
+        config = replace(
+            config,
+            call_model_input_filter=self.filter_model_input,
+            tracing_disabled=config.tracing_disabled or not telemetry_enabled(),
+            trace_include_sensitive_data=False,
+        )
         self._agent, self._started = agent, True
+        identity = correlation(
+            harness=self,
+            run_id=self.scope.run_id,
+            role=self.scope.role,
+            task_id=self.scope.task_id,
+            research_round=self.scope.research_round,
+            invocation_id=self.sdk_run_id,
+        )
+        identity.__enter__()
         try:
             result = await Runner.run(
                 agent,
@@ -960,10 +988,13 @@ class SDKContextHarness(RunHooks):
                 # Observability must not replace the original execution failure.
                 pass
             raise
-        self._closing = True
-        settlement = await self._settle_on_exit("completed")
-        if not settlement.succeeded:
-            raise ResearchGraphSettlementError(
-                f"Unsettled Research Graph results: {settlement}"
-            )
-        return result
+        else:
+            self._closing = True
+            settlement = await self._settle_on_exit("completed")
+            if not settlement.succeeded:
+                raise ResearchGraphSettlementError(
+                    f"Unsettled Research Graph results: {settlement}"
+                )
+            return result
+        finally:
+            identity.__exit__(None, None, None)

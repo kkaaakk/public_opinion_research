@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
+from dbos_support import retry_observed_failure
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -657,7 +658,7 @@ def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
     )
     assert prior.run_state_version == 1
     key = uuid4().hex
-    case.client.retry(run["run_id"], "alice", key, failed["state_version"])
+    failed = retry_observed_failure(case, run, key, failed)
     case.client.retry(run["run_id"], "alice", key, failed["state_version"])
     result = case.wait(run, lambda r: r["status"] == "completed")
     assert len(case.models) == 4
@@ -1112,7 +1113,7 @@ def test_cancel_of_safe_retry_cannot_release_an_active_unsettled_unit(
         run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
     )
     assert failed["retry_safe"]
-    case.client.retry(run["run_id"], "alice", "retry", failed["state_version"])
+    retry_observed_failure(case, run, "retry", failed)
     end = time.monotonic() + 10
     while not entered.is_set() and time.monotonic() < end:
         time.sleep(0.05)
@@ -1245,7 +1246,7 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
     failed = case.wait(
         run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
     )
-    case.client.retry(run["run_id"], "alice", "first", failed["state_version"])
+    retry_observed_failure(case, run, "first", failed)
     try:
         assert entered.wait(15)
         observed = case.client.get(run["run_id"], "alice")
