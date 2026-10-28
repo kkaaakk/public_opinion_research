@@ -282,6 +282,9 @@ class ModelAttemptCounter(BaseCallbackHandler):
     """
 
     raise_error = True
+    # Admission must run before inline model observers. This changes callback
+    # dispatch only; the admission predicate and usage accounting are unchanged.
+    run_inline = True
 
     # 初始化调用计数及回调处理所需的实例状态。
     def __init__(self) -> None:
