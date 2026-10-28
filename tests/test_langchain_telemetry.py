@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -44,6 +45,9 @@ def test_one_generation_with_usage_and_native_parent(trace_capture, asynchronous
         run_id="lc-run", role="public_signal", workflow_id="lc-run:role", generation=2
     ):
         with telemetry.business_span("evidence_extraction"):
+            # Core datetime and OTel time_ns use different sub-microsecond
+            # rounding. Keep real separation while retaining strict ordering.
+            time.sleep(0.001)
             config = {
                 "metadata": {
                     "ls_model_name": "offline-model",
@@ -56,6 +60,7 @@ def test_one_generation_with_usage_and_native_parent(trace_capture, asynchronous
                 result = asyncio.run(model.ainvoke("PRIVATE_PROMPT_SENTINEL", config))
             else:
                 result = model.invoke("PRIVATE_PROMPT_SENTINEL", config)
+            time.sleep(0.001)
     assert result.content == "PRIVATE_RESPONSE_SENTINEL"
     llms = generations(trace_capture)
     assert len(llms) == 1
@@ -419,4 +424,116 @@ def test_budget_rejection_never_creates_a_generation_for_an_unissued_request(
             asyncio.run(run())
     assert len(_SCRIPT) == 1
     assert usage["model_calls"] == 0 and usage["total_tokens"] == 0
+    assert generations(trace_capture) == []
+
+
+@pytest.mark.parametrize("parent", ["tool", "runnable"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_inherited_observer_never_precedes_budget_admission(
+    trace_capture, parent, asynchronous
+):
+    from test_token_accounting import _SCRIPT
+
+    from open_deep_research.budget import (
+        ModelBudgetExceeded,
+        budget_capture,
+        invoke_model_with_budget,
+        model_budget_admission,
+    )
+    from open_deep_research.configuration import Configuration
+    from open_deep_research.observability import langchain as recorder
+
+    def sync(query: str):
+        """Controlled nested bounded model."""
+        return invoke_model_with_budget(ScriptedChat(), query)[0].content
+
+    async def async_call(query: str):
+        """Controlled nested bounded model."""
+        return (await ainvoke_model_with_budget(ScriptedChat(), query))[0].content
+
+    operation = async_call if asynchronous else sync
+    runnable = tool(operation) if parent == "tool" else RunnableLambda(operation)
+    _script(_text_step())
+    with budget_capture() as usage:
+        with model_budget_admission(
+            Configuration(budget_enabled=True, max_model_calls=1), lambda: {}
+        ):
+            with pytest.raises(ModelBudgetExceeded):
+                if asynchronous:
+                    asyncio.run(runnable.ainvoke("private"))
+                else:
+                    runnable.invoke("private")
+    assert len(_SCRIPT) == 1
+    assert usage["model_calls"] == usage["total_tokens"] == 0
+    assert not recorder._delegate.run_map
+    assert generations(trace_capture) == []
+
+
+@pytest.mark.parametrize("manager", [False, True])
+def test_admission_order_does_not_mutate_callers_or_promote_local_callbacks(
+    trace_capture, manager
+):
+    from langchain_core.callbacks import BaseCallbackHandler, CallbackManager
+
+    from open_deep_research.budget import model_accounting_config
+    from open_deep_research.observability.langchain import _handler
+
+    inherited, local = _handler.get(), BaseCallbackHandler()
+    caller = (
+        CallbackManager(handlers=[inherited, local], inheritable_handlers=[inherited])
+        if manager
+        else [inherited, local]
+    )
+    before = list(caller.handlers) if manager else list(caller)
+    merged, counter, _ = model_accounting_config({"callbacks": caller})
+    result = merged["callbacks"]
+    if manager:
+        assert caller.handlers == before
+        assert caller.inheritable_handlers == [inherited]
+        assert result.handlers[0] is counter
+        assert result.inheritable_handlers[0] is counter
+        assert local in result.handlers and local not in result.inheritable_handlers
+        assert result.handlers.index(inherited) < result.handlers.index(local)
+    else:
+        assert caller == before and result is not caller
+        assert result[0] is counter
+        assert result.index(inherited) < result.index(local)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_inherited_stricter_admission_precedes_new_counter_and_observer(
+    trace_capture, asynchronous
+):
+    from test_token_accounting import _SCRIPT
+
+    from open_deep_research.budget import (
+        ModelBudgetExceeded,
+        budget_capture,
+        invoke_model_with_budget,
+        model_accounting_config,
+        model_budget_admission,
+    )
+    from open_deep_research.configuration import Configuration
+    from open_deep_research.observability import langchain as recorder
+
+    with model_budget_admission(
+        Configuration(budget_enabled=True, max_model_calls=1), lambda: {}
+    ):
+        inherited, old_counter, _ = model_accounting_config()
+    inherited["callbacks"].insert(0, recorder._handler.get())
+    _script(_text_step())
+    with budget_capture() as usage:
+        with pytest.raises(ModelBudgetExceeded):
+            if asynchronous:
+                asyncio.run(
+                    ainvoke_model_with_budget(
+                        ScriptedChat(), "private", config=inherited
+                    )
+                )
+            else:
+                invoke_model_with_budget(ScriptedChat(), "private", config=inherited)
+    assert old_counter.starts == 0
+    assert len(_SCRIPT) == 1
+    assert usage["model_calls"] == usage["total_tokens"] == 0
+    assert not recorder._delegate.run_map
     assert generations(trace_capture) == []

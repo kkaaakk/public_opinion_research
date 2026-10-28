@@ -123,3 +123,27 @@ Official references checked alongside installed source:
 Tests use ScriptedModel/Fake models/MockTransport. Paid provider requests: **0**.
 No DBOS commands, workflow inputs, application/runtime versions, Finalizer,
 authorization, operations, role prompts or Research Graph storage were changed.
+
+## Independent review follow-up
+
+The authorized read-only reviewer found one P1 in inherited callback ordering:
+inline dispatch alone did not place admission before a ModelOnlyHandler inherited
+from a Tool/Runnable. Synchronous rejection could leave OI request state; async
+rejection could export an unissued Generation. Merely prioritizing the newly
+created Counter was insufficient when an older inherited Counter had a stricter
+policy. Eight sync/async parent/config regressions first failed (6 + 2).
+
+`model_accounting_config` now stably partitions **all** ModelAttemptCounter objects
+before observers in the merged copy's public handler and inheritable-handler
+lists. Existing Counters keep their relative order, so an older rejection occurs
+before a new counter increments. The caller manager/list, membership, local
+callbacks, metadata and parent identity remain unchanged. Rejection tests assert
+0 provider requests, 0 captured calls/tokens, no Generation and empty OI run state.
+Targeted budget/usage/SDK/trace matrix: **106 passed**. The reviewer confirmed the
+P1 closed with no further blocker. Full final offline/remote CI results are
+recorded in the PR freeze comment; previous 927/101 results above are kept as
+historical checkpoints, not substituted for the updated tree.
+
+The Task cleanup guarantee applies to the project's bounded invoke/ainvoke paths.
+Arbitrary cross-Task `astream` iteration is not a claimed supported ownership
+pattern. No new Agent loop, execution grant or trace replay was added.
