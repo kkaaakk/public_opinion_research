@@ -17,7 +17,7 @@ HA、磁盘故障和真实 provider 费用仍未验证。
 | --- | --- | --- |
 | A | `codex/observability-langchain-generations` / [#34](https://github.com/kkaaakk/public_opinion_research/pull/34) | Core 逐请求 Generation；Draft、未合并 |
 | B | `codex/observability-reliability` / [#35](https://github.com/kkaaakk/public_opinion_research/pull/35) | 原生业务视图、交付诊断和有界退出；Draft、未合并 |
-| C | `codex/observability-benchmarks` | 可重复基准及本报告；发布状态以该 PR 为准，保持 Draft、未合并 |
+| C | `codex/observability-benchmarks` / [#36](https://github.com/kkaaakk/public_opinion_research/pull/36) | 可重复基准及本报告；Draft、未合并 |
 
 原有架构实际为单 Provider → LangfuseSpanProcessor/BatchSpanProcessor → 安全 Exporter，
 DBOS 原生 Workflow/Step、OI Agents 和业务边界共用它。非 Agent Core 模型只有阶段
@@ -187,10 +187,10 @@ unavailable **9.869–11.428**，concurrent **20.671–25.370**。12 个样本�
 队列/关闭门槛通过，但不能把 CPU 增量忽略。四并发 p95 **25.368s > 20.770s 门槛**，
 原总 gate 保持 false。
 
-追加同并发 tracing-off 因果对照（另3轮×4 Run，不替代原实验）：p50 **18.467s**、
+追加同并发 tracing-off 分组对照（另3轮×4 Run，不替代原实验，非同期随机配对）：p50 **18.467s**、
 p95 **18.541s**、p99 **18.543s**、CPU/Run **6.368s**、RSS **806.91MiB**。
-对应 tracing-on p95 **+36.82%**、CPU/Run **+27.30%**。因此存在本环境下的实测追踪开销，
-不能完全归因并发业务本身。原门槛没有改成事后有利的值。
+对应 tracing-on p95 **+36.82%**、CPU/Run **+27.30%**。它提示本环境下有显著追踪开销，
+但非同期实验不能排除后台负载/时段效应，不能当作严格生产因果证明。原门槛没有改成事后有利的值。
 
 检查了 native helper 数量、2048/512 batch 配置、无队列积压丢弃、元数据出口及采样。
 额外 py-spy 诊断出现最多约22秒 sampling lag，不能用它给热点分配可靠百分比；未据此
@@ -225,6 +225,34 @@ usage，改用官方 Models + MockHTTP，校验器也改为等待所有 ACK Span
 冻结 tree 校验相等；提交作者/时间导致 SHA 可不同。A/B/C全部保持 Draft，未合并。
 仓库 Claude Review 工作流虽然显示 success，其实际模型 Review step 为 **skipped**；
 没有把它当作独立 Review 完成。最终 CI、独立 Review及剩余事项以各 PR 的冻结记录为准。
+
+## 8. 已授权独立 Review 及修复记录
+
+三个子代理分别只读审查 A/B/C，没有读取凭据、编辑文件或调用业务模型。B 未发现
+P0/P1/P2；A 找到 1 个 P1，C 找到 1 个 P1 和 5 个 P2，均已修复并复审确认闭环。
+
+A：父 Tool/Runnable 先继承模型 observer，再合并预算 Counter 时，inline 本身不能保证
+admission 先运行。只前置新 Counter 也不能覆盖继承的更严格 Counter。现在只对合并副本
+稳定前置**全部** ModelAttemptCounter，保留它们及其他 handler 的相对顺序、local/继承
+成员资格和调用者配置。新增8个 sync/async/配置回归先失败，修复后目标矩阵106 passed；
+拒绝同时验证0请求、0费用、无Generation、无遗留OI Run。最终计数以更新CI为准。
+
+C：修复了继承业务环境可覆盖测试 Graph/目录/SDK session、libpq query 可覆盖校验host、
+单 `--case` 忽略 `--source-root`、内容哨兵未覆盖实际 Memory/SDK/tool、聚合完整率掩盖跨
+Run错归，以及Windows timeout只杀venv redirector的问题。入口现仅保留最小OS/显式TEST
+输入；不读取被剔除变量的值。DSN必须显式测试用户/密码/数据库且无query/fragment；本地
+PG禁SSL/GSS并只允许已提供密码认证，Requests不发现netrc/proxy。子进程超时/中断清理
+整个自有树。逐Run强制唯一不共享Trace、双run_id/session、21/234、8Agent2Tool、业务
+阶段数量和同Run父关系。26个纯离线隔离/统计/归属/清理回归通过。
+
+初版正式数字已被独立用标准库复算且一致，原数据的每Run实际也是唯一Trace、21/234，
+并未发现这批数据真实错归。修复后单Run真实服务端612/21/234、全部逐Run校验通过；
+随后完整多Run执行验证单列保存。第6节数字仍明确对应最初冻结组合，未拿功能验证
+期间的数据或新配置替换原性能失败。新加内容哨兵和更严验证不构成“性能已优化”的证明。
+
+A初版最终Linux CI和Studio已通过，B Linux为927 offline（含两个POSIX信号）+101 native，
+C初版Linux CI也通过。修复后的最终HEAD及独立复审结论统一在各PR冻结评论记录，不能用
+旧HEAD绿灯代替新HEAD；所有PR仍保持Draft、未合并。
 
 本次已经证明：逐请求观测和去重、实际用量/失败隔离、真实服务端脱敏与原生可读视图、
 有界退出/队列及不重放的恢复边界。尚未证明：四并发性能达标、生产长期内容量/吞吐、

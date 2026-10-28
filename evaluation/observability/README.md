@@ -10,6 +10,12 @@ Pass **test-only** keys through the environment, never CLI arguments or Git:
 `TEST_DBOS_DATABASE_URL`, `TEST_DBOS_NEO4J_URI`, `TEST_DBOS_NEO4J_PASSWORD`,
 `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`. Service URLs must be loopback and
 must not point at business databases. The driver creates/drops only its own
+random test databases. PostgreSQL URLs require explicit test user/password/database
+and no query parameters; host/service/passfile overrides are rejected. Operator
+business environment and SDK session paths are not inherited. Local PG disables
+SSL/GSS and requires password authentication; Requests sessions ignore netrc/proxies.
+`--source-root` applies to single-case execution as well as the full matrix.
+The driver creates/drops only its own
 random `por_test_UUID` databases. Evidence/History remain in the isolated Neo4j
 volume until that test project's normal cleanup.
 
@@ -59,6 +65,9 @@ be distinguished from server persistence and UI validation. Healthy/concurrent
 cases additionally fetch complete v2 observation fields after the timing window,
 wait for all acknowledged span IDs, traverse cursors, and check Generations,
 tokens, parent closure and content sentinels against the actual Langfuse server.
+Validation is per Run: trace sets cannot overlap, every observation/parent must
+belong to its Run/Trace, and Agent/Tool/critical-stage counts must match. Prompt,
+Memory, SDK response, tool arguments and real tool-body sentinel families are checked.
 An unavailable
 exporter discards failed batches after its bounded attempt; recovery does not
 replay them. In-memory queued/open spans can be lost on a process kill.

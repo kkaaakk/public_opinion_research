@@ -76,8 +76,176 @@ def distribution(values):
 
 
 def local(url):
-    if urlsplit(url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+    parsed = urlsplit(url)
+    if (
+        parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or parsed.scheme not in {"http", "https", "bolt", "postgresql+psycopg"}
+        or parsed.query
+        or parsed.fragment
+        or (
+            parsed.scheme == "postgresql+psycopg"
+            and (not parsed.username or not parsed.password or parsed.path in {"", "/"})
+        )
+        or (
+            parsed.scheme != "postgresql+psycopg"
+            and (parsed.username is not None or parsed.password is not None)
+        )
+    ):
         raise ValueError("Benchmark requires explicitly isolated loopback services")
+
+
+def isolated_environment(values):
+    """Keep OS startup and explicit test inputs, never operator business config."""
+    names = {
+        "SYSTEMROOT",
+        "WINDIR",
+        "PATH",
+        "PATHEXT",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+        "PYTHONUTF8",
+        "PYTHONIOENCODING",
+        "TEST_DBOS_DATABASE_URL",
+        "TEST_DBOS_NEO4J_URI",
+        "TEST_DBOS_NEO4J_PASSWORD",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+    }
+    return {key: values[key] for key in values if key.upper() in names}
+
+
+def apply_source_root(source_root):
+    if source_root is not None:
+        source = source_root.resolve() / "src"
+        if not (source / "open_deep_research/observability/telemetry.py").is_file():
+            raise ValueError("Source root is not an application checkout")
+        sys.path.insert(0, str(source))
+        os.environ["PYTHONPATH"] = str(source)
+
+
+CONTENT_SENTINELS = (
+    "service output",
+    "PRIVATE_",
+    "SDK_MODEL_OK",
+    "Official brake investigation",
+    "private-public_signal",
+    "private-internal_knowledge",
+    "private-risk_assessment",
+    "private-response_strategy",
+)
+EXPECTED_STAGES = {
+    "run_submit": 1,
+    "por.run": 1,
+    "por.plan": 1,
+    "por.research": 1,
+    "por.role": 4,
+    "por.finalize": 1,
+    "sdk_invocation": 4,
+    "research_review": 1,
+    "report_generation": 3,
+    "persist_tool_results": 2,
+    "research_graph_write": 2,
+    "context_build": 6,
+    "context_retrieval": 12,
+    "business_step": 12,
+}
+
+
+def contains_content(observations):
+    return any(
+        sentinel in json.dumps(observation)
+        for observation in observations
+        for sentinel in CONTENT_SENTINELS
+    )
+
+
+def verify_runs(observations, run_traces, generations, tokens):
+    """Check each Run independently; aggregate totals cannot prove ownership."""
+    owners = defaultdict(set)
+    for run, traces in run_traces.items():
+        for trace_id in traces:
+            owners[trace_id].add(run)
+    result = {}
+    for run, traces in run_traces.items():
+        rows = [o for o in observations.values() if o["traceId"] in traces]
+        kinds, names = (
+            Counter(o["type"] for o in rows),
+            Counter(o["name"] for o in rows),
+        )
+        issues = []
+        if len(traces) != 1 or any(len(owners[t]) != 1 for t in traces):
+            issues.append("trace_ownership")
+        if not rows or any(
+            o.get("sessionId") != run
+            or o.get("metadata", {}).get("run_id") != run
+            or o.get("metadata", {}).get("attributes.por.run_id") != run
+            for o in rows
+        ):
+            issues.append("run_identity")
+        if (
+            kinds["GENERATION"] != generations
+            or sum(o.get("totalUsage") or 0 for o in rows) != tokens
+        ):
+            issues.append("generation_usage")
+        if kinds["TOOL"] != 2 or kinds["AGENT"] != 8:
+            issues.append("agent_tool_count")
+        if any(names[name] != count for name, count in EXPECTED_STAGES.items()):
+            issues.append("business_stage_count")
+        for observation in rows:
+            parent = observation.get("parentObservationId")
+            if parent and (
+                parent not in observations
+                or observations[parent]["traceId"] != observation["traceId"]
+                or observations[parent].get("sessionId") != run
+            ):
+                issues.append("parent_ownership")
+                break
+        if contains_content(rows):
+            issues.append("content_leak")
+        result[run] = {
+            "valid": not issues,
+            "issues": issues,
+            "generations": kinds["GENERATION"],
+            "tokens": sum(o.get("totalUsage") or 0 for o in rows),
+        }
+    return result
+
+
+def terminate_owned(process):
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    else:
+        process.kill()
+    process.wait(timeout=10)
+
+
+def execute_worker(command, env, log, timeout=600):
+    process = subprocess.Popen(
+        command,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    try:
+        code = process.wait(timeout=timeout)
+        if code:
+            raise subprocess.CalledProcessError(code, command)
+    except BaseException:
+        terminate_owned(process)
+        raise
 
 
 def summarize(records):
@@ -166,6 +334,11 @@ def summarize(records):
                 == r["server_verification"]["expected_tokens"]
                 and r["server_verification"]["parent_gaps"] == 0
                 and not r["server_verification"]["content_leak"]
+                and len(r["server_verification"].get("per_run", {})) == len(r["runs"])
+                and all(
+                    v["valid"]
+                    for v in r["server_verification"].get("per_run", {}).values()
+                )
                 for r in rows
             )
     for name, summary in result.items():
@@ -221,6 +394,9 @@ def rss():
 
 def worker(args):
     traced = args.case not in {"off", "concurrent_off"}
+    clean = isolated_environment(os.environ)
+    os.environ.clear()
+    os.environ.update(clean)
     for key in (
         "TEST_DBOS_DATABASE_URL",
         "TEST_DBOS_NEO4J_URI",
@@ -250,6 +426,10 @@ def worker(args):
         OTEL_BSP_MAX_EXPORT_BATCH_SIZE="512",
         OTEL_BSP_SCHEDULE_DELAY="5000",
         NO_PROXY="127.0.0.1,localhost,::1",
+        PGSSLMODE="disable",
+        PGGSSENCMODE="disable",
+        PGREQUIREAUTH="scram-sha-256,md5,password",
+        PGPASSFILE=os.devnull,
     )
     reserved = None
     if args.case == "unavailable":
@@ -281,6 +461,7 @@ def worker(args):
 
     import httpx2
     import pytest
+    import requests
     from agents import OpenAIResponsesModel
     from dbos import DBOS
     from dbos_support import NativeCase
@@ -318,6 +499,15 @@ def worker(args):
     acknowledged_traces = defaultdict(set)
     http_requests = Counter()
     patch = pytest.MonkeyPatch()
+    original_exporter_init = OTLPSpanExporter.__init__
+
+    def local_exporter_init(self, *a, **kwargs):
+        session = requests.Session()
+        session.trust_env = False  # no operator proxy/netrc credential discovery
+        kwargs["session"] = session
+        original_exporter_init(self, *a, **kwargs)
+
+    patch.setattr(OTLPSpanExporter, "__init__", local_exporter_init)
 
     class Clock(BaseCallbackHandler):
         run_inline = True
@@ -457,6 +647,10 @@ def worker(args):
         DBOS.migrate(os.environ["DBOS_DATABASE_URL"], schema="por_dbos")
         facts().initialize()
         case = NativeCase(patch, directory, "normal")
+        case.state["messages"][0].content += " PRIVATE_PROMPT_SENTINEL"
+        for state in case.state["agents"].values():
+            for memory in state.get("memory", []):
+                memory["content"] += " PRIVATE_MEMORY_SENTINEL"
 
         @asynccontextmanager
         async def http_model(*a, **k):
@@ -481,13 +675,19 @@ def worker(args):
                     payload["output"][0].update(
                         name="web_search" if role == "public_signal" else "rag_search",
                         call_id="lookup-" + role,
-                        arguments=json.dumps({"query": role}),
+                        arguments=json.dumps(
+                            {"query": role + " PRIVATE_TOOL_ARGUMENT_SENTINEL"}
+                        ),
                     )
                 payload["usage"].update(
                     input_tokens=10, output_tokens=4, total_tokens=14
                 )
                 payload["usage"]["input_tokens_details"]["cached_tokens"] = 0
                 payload["usage"]["output_tokens_details"]["reasoning_tokens"] = 0
+                if not (producer and turn == 1):
+                    payload["output"][0]["content"][0]["text"] += (
+                        " PRIVATE_SDK_RESPONSE_SENTINEL"
+                    )
                 await asyncio.sleep(0.002)
                 return httpx2.Response(200, json=payload)
 
@@ -592,8 +792,6 @@ def worker(args):
         if args.case in {"healthy", "concurrent"}:
             # Verification is outside the CPU/RSS/latency measurement window.
             # An OTLP ACK alone does not prove backend persistence.
-            import requests
-
             persisted, observations = set(), {}
             target_traces = {t for rid in ids for t in trace_ids[rid]}
             expected_ids = {
@@ -612,7 +810,9 @@ def worker(args):
                         }
                         if cursor:
                             params["cursor"] = cursor
-                        response = requests.get(
+                        verification_session = requests.Session()
+                        verification_session.trust_env = False
+                        response = verification_session.get(
                             args.healthy_url + "/api/public/v2/observations",
                             params=params,
                             auth=(
@@ -623,6 +823,7 @@ def worker(args):
                         )
                         response.raise_for_status()
                         page = response.json()
+                        verification_session.close()
                         for item in page["data"]:
                             observations[item["id"]] = item
                             persisted.add(int(item["id"], 16))
@@ -662,9 +863,12 @@ def worker(args):
                 "tokens": sum(o.get("totalUsage") or 0 for o in observations.values()),
                 "expected_tokens": expected_tokens,
                 "parent_gaps": parent_gaps,
-                "content_leak": any(
-                    "service output" in json.dumps(o) or "PRIVATE_" in json.dumps(o)
-                    for o in observations.values()
+                "content_leak": contains_content(observations.values()),
+                "per_run": verify_runs(
+                    observations,
+                    {rid: trace_ids[rid] for rid in ids},
+                    21 if has_lc else 6,
+                    234 if has_lc else 84,
                 ),
             }
         output = {
@@ -765,13 +969,12 @@ def main():
         parser.error("Explicit local services, positive samples and warmup required")
     local(args.healthy_url)
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    apply_source_root(args.source_root)
     if args.case:
         worker(args)
         return
     records, cases = [], ["off", "healthy", "unavailable", "concurrent"]
-    env = dict(os.environ)
-    if args.source_root:
-        env["PYTHONPATH"] = str(args.source_root.resolve() / "src")
+    env = isolated_environment(os.environ)
     for repeat in range(args.repetitions):
         for case in cases[repeat % 4 :] + cases[: repeat % 4]:
             output = args.output.parent / f"{args.output.stem}-{repeat}-{case}.json"
@@ -791,15 +994,7 @@ def main():
                 case,
             ]
             with output.with_suffix(".log").open("w", encoding="utf-8") as log:
-                subprocess.run(
-                    command,
-                    check=True,
-                    env=env,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    timeout=600,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-                )
+                execute_worker(command, env, log)
             records.append(json.loads(output.read_text(encoding="utf-8")))
             print(
                 f"Completed repetition {repeat + 1}/{args.repetitions}: {case}",
