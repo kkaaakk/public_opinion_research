@@ -107,6 +107,20 @@ _TOKEN_KEYS = frozenset(
         "llm.token_count.completion_details.reasoning",
     }
 )
+# Exact key sets and this immutable content-free Resource do not vary by Span.
+_NUMERIC_KEYS = _TOKEN_KEYS | {
+    "por." + field for field in _COUNTS | {"research_round", "generation", "model_turn"}
+}
+_STRING_KEYS = _NATIVE | {"por." + field for field in _IDENTITY}
+_SAFE_RESOURCE = Resource({"service.name": "public-opinion-research"})
+_ALLOWED_SCOPES = frozenset(
+    {
+        "dbos-tracer",
+        __name__,
+        "openinference.instrumentation.openai_agents",
+        "openinference.instrumentation.langchain",
+    }
+)
 _LABEL = re.compile(r"[\w.:/\-]{1,200}\Z", re.UNICODE)
 # Display classification only. Every native diagnostic span is still exported.
 _BUSINESS_SPANS = frozenset(
@@ -178,15 +192,7 @@ class TelemetrySettings:
 def _attributes(values):
     result = {}
     for key, value in values.items():
-        field = key.removeprefix("por.")
-        if (
-            key in _TOKEN_KEYS
-            or key.startswith("por.")
-            and (
-                field in _COUNTS
-                or field in {"research_round", "generation", "model_turn"}
-            )
-        ):
+        if key in _NUMERIC_KEYS:
             if (
                 isinstance(value, (int, float))
                 and not isinstance(value, bool)
@@ -194,23 +200,14 @@ def _attributes(values):
                 and value >= 0
             ):
                 result[key] = value
-        elif (
-            (key.startswith("por.") and field in _IDENTITY or key in _NATIVE)
-            and isinstance(value, str)
-            and _LABEL.fullmatch(value)
-        ):
+        elif key in _STRING_KEYS and isinstance(value, str) and _LABEL.fullmatch(value):
             result[key] = value
     return result
 
 
 def _allowed_span(span):
     scope = span.instrumentation_scope
-    return scope is not None and scope.name in {
-        "dbos-tracer",
-        __name__,
-        "openinference.instrumentation.openai_agents",
-        "openinference.instrumentation.langchain",
-    }
+    return scope is not None and scope.name in _ALLOWED_SCOPES
 
 
 def _export_context(context):
@@ -231,7 +228,7 @@ def safe_span(span):
     DBOS 3.3 embeds exception text in status.description. OI may emit tool
     schemas even with sensitive SDK data disabled. Neither is safe to export.
     """
-    attributes = _attributes(dict(span.attributes or {}))
+    attributes = _attributes(span.attributes or {})
     code = (
         StatusCode.ERROR
         if attributes.get("por.status")
@@ -287,7 +284,7 @@ def safe_span(span):
         context=_export_context(span.context),
         parent=_export_context(span.parent),
         kind=span.kind,
-        resource=Resource({"service.name": "public-opinion-research"}),
+        resource=_SAFE_RESOURCE,
         attributes=attributes,
         events=events,
         links=[Link(_export_context(link.context)) for link in span.links],
@@ -490,7 +487,7 @@ def initialize_telemetry():
             if instrumentor.is_instrumented_by_opentelemetry:
                 raise ValueError("Agents instrumentation already configured")
             provider = TracerProvider(
-                resource=Resource({"service.name": "public-opinion-research"}),
+                resource=_SAFE_RESOURCE,
                 sampler=ParentBased(TraceIdRatioBased(cfg.sample_rate)),
                 shutdown_on_exit=False,
             )

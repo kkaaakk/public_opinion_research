@@ -385,6 +385,70 @@ def test_exporter_removes_status_events_resources_and_arbitrary_metadata(trace_c
     assert "secret-" not in telemetry.safe_span(raw).to_json()
 
 
+def test_attribute_allowlist_preserves_exact_types_and_rejects_similar_keys():
+    values = {
+        "por.run_id": "safe-run",
+        "por.generation": 0,
+        "por.model_calls": 2,
+        "por.total_tokens": 15,
+        "por.error_type": "ValueError",
+        "llm.model_name": "fixture/model-1",
+        "llm.provider": "fixture",
+        "llm.token_count.prompt_details.cache_read": 3,
+        "llm.token_count.completion_details.reasoning": 1,
+        "por.input_tokens": True,
+        "por.output_tokens": float("nan"),
+        "por.nodes": float("inf"),
+        "por.edges": -1,
+        "por.model_turn": "1",
+        "porpor.run_id": "private",
+        "por.run_id.extra": "private",
+        "por.span_layer": "business",
+        "por.role": "private text with spaces",
+        "input.value": "private",
+        "llm.token_count.total.extra": 99,
+    }
+    assert telemetry._attributes(values) == {
+        "por.run_id": "safe-run",
+        "por.generation": 0,
+        "por.model_calls": 2,
+        "por.total_tokens": 15,
+        "por.error_type": "ValueError",
+        "llm.model_name": "fixture/model-1",
+        "llm.provider": "fixture",
+        "llm.token_count.prompt_details.cache_read": 3,
+        "llm.token_count.completion_details.reasoning": 1,
+    }
+    assert values["por.span_layer"] == "business"  # caller data is untouched
+
+
+def test_sanitized_resource_is_immutable_and_cannot_carry_between_spans():
+    first = telemetry.safe_span(
+        ReadableSpan(
+            name="first",
+            resource=Resource({"secret-resource": "private-first"}),
+            attributes={"por.run_id": "run-a"},
+        )
+    )
+    with pytest.raises(TypeError):
+        first.resource.attributes["secret-resource"] = "private-mutation"
+    second = telemetry.safe_span(
+        ReadableSpan(
+            name="second",
+            resource=Resource({"secret-resource": "private-second"}),
+            attributes={"por.run_id": "run-b"},
+        )
+    )
+    assert (
+        dict(first.resource.attributes)
+        == dict(second.resource.attributes)
+        == {"service.name": "public-opinion-research"}
+    )
+    assert first.attributes["por.run_id"] == "run-a"
+    assert second.attributes["por.run_id"] == "run-b"
+    assert "private-" not in first.to_json() + second.to_json()
+
+
 def test_exporter_discards_tracestate_in_span_parent_and_link_contexts():
     def context(span_id, marker):
         return SpanContext(
