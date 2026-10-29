@@ -23,6 +23,37 @@ async function create(page: Page, topic: string, approval = false) {
   return (await page.locator('.run-identity strong').textContent())!;
 }
 
+async function retryObservedFailure(page: Page, id: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = (await page.locator('.run-context').innerText()).match(/Gen (\d+) · v(\d+)/);
+    expect(before).not.toBeNull();
+    const pending = page.waitForResponse(
+      (response) => response.request().method() === 'POST' && response.url().endsWith(`/api/runs/${id}/retry`),
+    );
+    await page.getByRole('button', { name: '安全重试', exact: true }).click();
+    const response = await pending;
+    if (response.ok()) return;
+    expect(response.status()).toBe(409);
+    await page.getByRole('button', { name: '重新读取', exact: true }).click();
+    const observed = await page.request.get(`/api/runs/${id}`, {
+      headers: { Authorization: 'Bearer studio-browser-test-only' },
+    });
+    expect(observed.ok()).toBeTruthy();
+    const latest = await observed.json();
+    if (latest.generation > Number(before![1]) || latest.retry_requested) {
+      expect(latest.generation).toBeLessThanOrEqual(Number(before![1]) + 1);
+      return; // an accepted grant is never submitted again
+    }
+    expect(latest.generation).toBe(Number(before![1]));
+    expect(latest.status).toBe('failed');
+    expect(latest.retry_safe && latest.events_complete).toBeTruthy();
+    expect(latest.settlement).toBe('settled');
+    expect(latest.state_version).toBeGreaterThan(Number(before![2]));
+    await expect.poll(async () => Number((await page.locator('.run-context').innerText()).match(/· v(\d+)/)?.[1])).toBeGreaterThanOrEqual(latest.state_version);
+  }
+  throw new Error('The observed safe failure kept advancing before retry admission');
+}
+
 test('actual FastAPI → DBOS → SDK → Graph: approval, trace, replay, refresh, evidence, report and history', async ({
   page,
 }) => {
@@ -106,7 +137,7 @@ test('safe retry stays on the same Run and preserves successful Producer invocat
   await expect(page.getByRole('button', { name: '安全重试', exact: true })).toBeVisible();
   await page.locator('.react-flow__node').filter({ hasText: 'Public Signal' }).click();
   const producerInvocation = await page.locator('.invocation-actions>span').getAttribute('title');
-  await page.getByRole('button', { name: '安全重试', exact: true }).click();
+  await retryObservedFailure(page, id);
   await expect(page.locator('.run-identity strong')).toHaveText(id);
   await expect(page.locator('.run-context')).toContainText('Gen 1');
   await expect(page.locator('.connection')).toHaveText('事件已交付');

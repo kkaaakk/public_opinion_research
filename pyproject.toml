@@ -47,6 +47,7 @@ dependencies = [
     "openinference-instrumentation-openai-agents==2.6.0",
     "opentelemetry-sdk>=1.39,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
+    "openinference-instrumentation-langchain==0.1.80",
 ]
 
 [project.optional-dependencies]

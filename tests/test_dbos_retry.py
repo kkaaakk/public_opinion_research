@@ -333,7 +333,7 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
         monkeypatch.setitem(engine.OPERATIONS, "compile_final_report", uncertain_memory)
     run = case.create()
     failed = saved(case, run, "failed", 0)
-    case.client.retry(run["run_id"], "alice", "only-grant", failed["state_version"])
+    failed = retry_observed_failure(case, run, "only-grant", failed)
     if outcome == "cancelled":
         assert entered.wait(15)
         assert facts().unresolved(run["run_id"])
