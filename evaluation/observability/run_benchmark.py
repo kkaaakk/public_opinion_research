@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import platform
+import random
 import socket
 import subprocess
 import sys
@@ -126,6 +128,74 @@ def apply_source_root(source_root):
             raise ValueError("Source root is not an application checkout")
         sys.path.insert(0, str(source))
         os.environ["PYTHONPATH"] = str(source)
+
+
+def source_fingerprint(source_root):
+    """Identify production Python bytes without reading operator configuration."""
+    source = source_root.resolve() / "src"
+    digest = hashlib.sha256()
+    for path in sorted(source.rglob("*.py")):
+        digest.update(path.relative_to(source).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def experiment_schedule(source_root, baseline_source_root, repetitions, seed):
+    """Randomize balanced blocks; each version gets both concurrency controls."""
+    versions = {"candidate": source_root}
+    if baseline_source_root is not None:
+        versions["original"] = baseline_source_root
+    rng = random.Random(seed)
+    plan = []
+    for repeat in range(repetitions):
+        block = [
+            {
+                "variant": variant,
+                "source_root": str(source.resolve()),
+                "repeat": repeat,
+                "case": case,
+            }
+            for variant, source in versions.items()
+            for case in (
+                "off",
+                "healthy",
+                "concurrent_off",
+                "concurrent",
+                "unavailable",
+            )
+        ]
+        rng.shuffle(block)
+        plan.extend(block)
+    return plan
+
+
+def wait_for_archive(case, run, timeout=120):
+    """Wait on DBOS's delivered archive receipt, then verify the full projection.
+
+    The normal fixture has no retry generation. Its relay publishes history
+    only after saved History and the terminal event manifest. Repeated complete
+    Run projections every 50ms otherwise become an unrelated SQL load generator.
+    This helper is benchmark-only and never changes execution or its receipts.
+    """
+    generation = run.get("generation", 0)
+    receipt = case.client.client.get_event(
+        run["run_id"] + ":events", "history", timeout_seconds=timeout
+    )
+    assert isinstance(receipt, dict) and receipt.get("generation") == generation
+    final = case.client.get(run["run_id"], run["owner"])
+    assert (
+        final["run_id"] == run["run_id"]
+        and final["generation"] == generation
+        and final["status"] == "completed"
+        and final["settlement"] == "settled"
+        and final["archive_status"] == "saved"
+        and final["events_complete"]
+        and final["history_id"] == receipt.get("id")
+        and bool(final["history_id"])
+    ), "Native archive receipt and complete terminal projection must agree"
+    return final
 
 
 CONTENT_SENTINELS = (
@@ -273,6 +343,13 @@ def summarize(records):
             "spans": sum(r["span_count"] for r in rows),
             "export_spans_per_second": sum(r["acknowledged_spans"] for r in rows)
             / wall,
+            "completed_runs_per_second": n / wall,
+            "batch_export_ms": distribution(
+                [v for r in rows for v in r.get("batch_export_samples_ms", [])]
+            ),
+            "flush_ms": distribution(
+                [v for r in rows for v in r.get("flush_samples_ms", [])]
+            ),
             "export_failed_batch_fraction": sum(
                 r["export"].get("failed_batches", 0) for r in rows
             )
@@ -289,7 +366,7 @@ def summarize(records):
         }
     checks = {
         "all_configurations": set(groups)
-        == {"off", "healthy", "unavailable", "concurrent"},
+        == {"off", "healthy", "unavailable", "concurrent", "concurrent_off"},
         "repeated_samples": all(
             len(rows) >= LIMITS["minimum_repetitions"]
             and result[name]["runs"] >= LIMITS["minimum_runs_per_case"]
@@ -313,6 +390,15 @@ def summarize(records):
         checks["concurrent_p95_capacity"] = (
             result["concurrent"]["run_ms"]["p95"]
             <= result["healthy"]["run_ms"]["p95"] * LIMITS["concurrent_p95_ratio"]
+        )
+    if "concurrent" in result and "concurrent_off" in result:
+        checks["concurrent_rss"] = (
+            result["concurrent"]["peak_rss_mib"]
+            <= result["concurrent_off"]["peak_rss_mib"] + LIMITS["additional_rss_mib"]
+        )
+        result["concurrent"]["same_concurrency_p95_overhead_ratio"] = (
+            result["concurrent"]["run_ms"]["p95"]
+            / result["concurrent_off"]["run_ms"]["p95"]
         )
     for name in ("healthy", "concurrent"):
         if name in result:
@@ -473,7 +559,7 @@ def worker(args):
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-    from opentelemetry.sdk.trace import SpanProcessor
+    from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
     from opentelemetry.sdk.trace.export import SpanExportResult
     from sqlalchemy import create_engine, text
     from sqlalchemy.engine import make_url
@@ -498,6 +584,7 @@ def worker(args):
     trace_ids = defaultdict(set)
     acknowledged_traces = defaultdict(set)
     http_requests = Counter()
+    batch_export_samples, otlp_export_samples, flush_samples = [], [], []
     patch = pytest.MonkeyPatch()
     original_exporter_init = OTLPSpanExporter.__init__
 
@@ -567,8 +654,10 @@ def worker(args):
     original_export = OTLPSpanExporter.export
 
     def export(self, spans):
+        start = time.perf_counter()
         result = original_export(self, spans)
         with lock:
+            otlp_export_samples.append((time.perf_counter() - start) * 1000)
             exports["attempted_spans"] += len(spans)
             exports["batches"] += 1
             exports["failed_batches"] += result != SpanExportResult.SUCCESS
@@ -581,6 +670,28 @@ def worker(args):
         return result
 
     patch.setattr(OTLPSpanExporter, "export", export)
+    original_safe_export = telemetry.SafeExporter.export
+
+    def safe_export(self, spans):
+        start = time.perf_counter()
+        try:
+            return original_safe_export(self, spans)
+        finally:
+            with lock:
+                batch_export_samples.append((time.perf_counter() - start) * 1000)
+
+    patch.setattr(telemetry.SafeExporter, "export", safe_export)
+    original_flush = TracerProvider.force_flush
+
+    def flush(self, *a, **kwargs):
+        start = time.perf_counter()
+        try:
+            return original_flush(self, *a, **kwargs)
+        finally:
+            with lock:
+                flush_samples.append((time.perf_counter() - start) * 1000)
+
+    patch.setattr(TracerProvider, "force_flush", flush)
     url, name = (
         make_url(os.environ["TEST_DBOS_DATABASE_URL"]),
         "por_test_" + uuid4().hex,
@@ -628,11 +739,7 @@ def worker(args):
     def run(index):
         start = time.perf_counter()
         value = case.create(owner="bench-" + str(index))
-        final = case.wait(
-            value,
-            lambda r: r["archive_status"] == "saved" and r["events_complete"],
-            timeout=120,
-        )
+        final = wait_for_archive(case, value)
         assert final["status"] == "completed" and final["settlement"] == "settled"
         assert (
             final["usage"]["model_calls"] == 28
@@ -727,6 +834,9 @@ def worker(args):
         ack.clear()
         acknowledged_traces.clear()
         exports.clear()
+        batch_export_samples.clear()
+        otlp_export_samples.clear()
+        flush_samples.clear()
         kinds.clear()
         trace_ids.clear()
         before, wall_start, cpu_start = rss(), time.perf_counter(), time.process_time()
@@ -873,6 +983,8 @@ def worker(args):
             }
         output = {
             "case": args.case,
+            "variant": getattr(args, "variant", "candidate"),
+            "observer": "native_archive_receipt_then_one_full_projection",
             "concurrency": concurrency,
             "runs": results,
             "latency_ms": {
@@ -889,6 +1001,10 @@ def worker(args):
             "peak_rss_mib": max(samples or [before]) / 2**20,
             "queue": dict(queue),
             "export": dict(exports),
+            "batch_export_samples_ms": batch_export_samples,
+            "otlp_export_samples_ms": otlp_export_samples,
+            "flush_samples_ms": flush_samples,
+            "completed_runs_per_second": args.runs / wall,
             "span_count": len(ended),
             "business_span_count": sum(critical for _, critical, _ in ended.values()),
             "missing_stages": missing if traced else None,
@@ -908,6 +1024,9 @@ def worker(args):
                 "warmup_runs": args.warmup,
                 "source_root": os.environ.get(
                     "PYTHONPATH", "installed editable package"
+                ),
+                "source_sha256": source_fingerprint(
+                    Path(telemetry.__file__).resolve().parents[3]
                 ),
                 "versions": {
                     p: version(p)
@@ -957,6 +1076,11 @@ def main():
     parser.add_argument("--runs", type=int, default=4)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--source-root", type=Path)
+    parser.add_argument("--baseline-source-root", type=Path)
+    parser.add_argument("--seed", type=int, default=20261029)
+    parser.add_argument(
+        "--variant", choices=("original", "candidate"), default="candidate"
+    )
     parser.add_argument(
         "--case",
         choices=("off", "healthy", "unavailable", "concurrent", "concurrent_off"),
@@ -973,40 +1097,56 @@ def main():
     if args.case:
         worker(args)
         return
-    records, cases = [], ["off", "healthy", "unavailable", "concurrent"]
+    records = []
+    plan = experiment_schedule(
+        args.source_root or ROOT, args.baseline_source_root, args.repetitions, args.seed
+    )
     env = isolated_environment(os.environ)
-    for repeat in range(args.repetitions):
-        for case in cases[repeat % 4 :] + cases[: repeat % 4]:
-            output = args.output.parent / f"{args.output.stem}-{repeat}-{case}.json"
-            command = [
-                sys.executable,
-                str(Path(__file__)),
-                "--enable-local-services",
-                "--healthy-url",
-                args.healthy_url,
-                "--output",
-                str(output),
-                "--runs",
-                str(args.runs),
-                "--warmup",
-                str(args.warmup),
-                "--case",
-                case,
-            ]
-            with output.with_suffix(".log").open("w", encoding="utf-8") as log:
-                execute_worker(command, env, log)
-            records.append(json.loads(output.read_text(encoding="utf-8")))
-            print(
-                f"Completed repetition {repeat + 1}/{args.repetitions}: {case}",
-                flush=True,
-            )
+    for cell in plan:
+        repeat, variant, case = cell["repeat"], cell["variant"], cell["case"]
+        output = (
+            args.output.parent / f"{args.output.stem}-{variant}-{repeat}-{case}.json"
+        )
+        command = [
+            sys.executable,
+            str(Path(__file__)),
+            "--enable-local-services",
+            "--healthy-url",
+            args.healthy_url,
+            "--output",
+            str(output),
+            "--runs",
+            str(args.runs),
+            "--warmup",
+            str(args.warmup),
+            "--case",
+            case,
+            "--source-root",
+            cell["source_root"],
+            "--variant",
+            variant,
+        ]
+        with output.with_suffix(".log").open("w", encoding="utf-8") as log:
+            execute_worker(command, env, log)
+        records.append(json.loads(output.read_text(encoding="utf-8")))
+        print(
+            f"Completed repetition {repeat + 1}/{args.repetitions}: {variant}/{case}",
+            flush=True,
+        )
+    summaries = {
+        variant: summarize([r for r in records if r["variant"] == variant])
+        for variant in sorted({r["variant"] for r in records})
+    }
     args.output.write_text(
         json.dumps(
             {
                 "limits": LIMITS,
                 "repetitions": args.repetitions,
+                "seed": args.seed,
+                "schedule": plan,
                 "records": records,
-                "summary": summarize(records),
+                "summaries": summaries,
+                "summary": summaries["candidate"],
             },
             indent=2,
         ),

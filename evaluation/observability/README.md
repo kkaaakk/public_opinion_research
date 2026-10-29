@@ -15,8 +15,7 @@ and no query parameters; host/service/passfile overrides are rejected. Operator
 business environment and SDK session paths are not inherited. Local PG disables
 SSL/GSS and requires password authentication; Requests sessions ignore netrc/proxies.
 `--source-root` applies to single-case execution as well as the full matrix.
-The driver creates/drops only its own
-random `por_test_UUID` databases. Evidence/History remain in the isolated Neo4j
+Only random `por_test_UUID` databases are created/dropped. Evidence/History remain in the isolated Neo4j
 volume until that test project's normal cleanup.
 
 ```powershell
@@ -24,9 +23,9 @@ volume until that test project's normal cleanup.
 ```
 
 Each repetition/configuration starts a fresh interpreter and warms up a full Run.
-Order rotates to expose service-cache drift. The four configurations are tracing
-off, tracing with real healthy Langfuse, tracing with a reserved non-listening
-loopback port, and four concurrent traced Runs. The last matches the project's
+The seeded order randomizes balanced blocks to reduce service-cache/time drift.
+The five configurations are serial tracing off/on, four concurrent tracing off/on,
+and tracing with a reserved non-listening loopback port. Four matches the project's
 default active capacity. All use the same deterministic responses, workflows and
 service resources. Every measured Run must finish/settle/archive with 28 model
 calls / 311 tokens, including the fixture's initial 7 calls / 77 tokens. Real
@@ -57,6 +56,29 @@ is compared with the healthy sequential baseline using a 2× local capacity gate
 Report failed gates; do not adjust limits after seeing favorable measurements.
 No production optimization is justified solely by this synthetic test.
 
+The integration revision waits using public `DBOSClient.get_event` for the
+relay's archive receipt, then reads and validates the complete public Run
+projection once. Both submission and that final projection remain inside Run
+latency/CPU timing. The relay publishes this receipt only after saved History
+and the terminal manifest. There are still exactly 21 model requests and two
+tools per measured Run. The old fixture polled the full projection every 50ms;
+it adds a substantial SQL workload. Keep its historical measurements separately.
+Compare OFF/original ON/optimized ON with the same observer; a measurement-method
+correction is not a production optimization. Regular native tests retain the
+original polling helper, so this does not weaken their correctness contracts.
+
+For a same-environment comparison, freeze the original production `src` tree in
+a separate checkout or snapshot, then add `--baseline-source-root ORIGINAL` and
+`--source-root CANDIDATE`. Each repetition includes all five cases for both
+versions, shuffled using `--seed` (default 20261029). The output retains the exact
+schedule, normalized production Python SHA-256, raw per-case samples, and
+separate `summaries.original` / `summaries.candidate`. `summary` remains the
+candidate alias. Do not compare a mixture of different source fingerprints.
+Batch timing includes sanitization and OTLP; OTLP-only timing is also retained.
+Flush is observed inside bounded shutdown, not added to the request hot path.
+Completed Runs/second is reported separately from acknowledged spans/second.
+The same 256MiB incremental RSS limit also applies to concurrent ON versus OFF.
+
 Aggregate raw Run/agent/LLM/tool samples across repetitions, not the mean of their
 percentiles. Retain each repetition's range and counters. Twelve Runs/config are
 a small local regression sample, especially for p99; they do not establish a
@@ -78,6 +100,6 @@ record its commits/tree, and keep all PRs based independently on main. This does
 not merge their GitHub PRs or make the benchmark branch depend on unmerged code.
 The report must distinguish measurements of main from that composed candidate.
 
-If the four-concurrent capacity gate fails, `--case concurrent_off --runs 4`
-provides the same-concurrency tracing-off diagnostic. Repeat it independently;
-do not replace the original four-case results or change their frozen limits.
+`--case concurrent_off --runs 4` remains available for a single diagnostic, but
+the full matrix now measures it alongside tracing ON in every randomized block.
+Do not replace the historical four-case results or change their frozen limits.

@@ -5,6 +5,7 @@ import runpy
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -266,3 +267,138 @@ def test_worker_timeout_terminates_the_owned_process_tree(monkeypatch):
     else:
         assert process.killed
     assert process.waits == 2
+
+
+def test_archive_wait_observes_native_receipt_and_reads_full_projection_once():
+    calls = []
+    final = dict(
+        run_id="run-a",
+        generation=0,
+        status="completed",
+        settlement="settled",
+        archive_status="saved",
+        events_complete=True,
+        history_id="archive-a",
+    )
+
+    def event(run_id, key, *, timeout_seconds):
+        calls.append((run_id, key, timeout_seconds))
+        return {"id": "archive-a", "generation": 0}
+
+    def get(run_id, owner):
+        calls.append((run_id, owner))
+        return final
+
+    case = SimpleNamespace(
+        client=SimpleNamespace(
+            client=SimpleNamespace(get_event=event),
+            get=get,
+        )
+    )
+    assert (
+        DRIVER["wait_for_archive"](
+            case, {"run_id": "run-a", "owner": "alice", "generation": 0}
+        )
+        is final
+    )
+    assert calls == [("run-a:events", "history", 120), ("run-a", "alice")]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"generation": 1},
+        {"events_complete": False},
+        {"history_id": "other"},
+        {"settlement": "pending"},
+        {"status": "failed"},
+        {"archive_status": "pending"},
+    ],
+)
+def test_archive_wait_still_requires_full_terminal_projection(mutation):
+    final = dict(
+        run_id="run-a",
+        generation=0,
+        status="completed",
+        settlement="settled",
+        archive_status="saved",
+        events_complete=True,
+        history_id="archive-a",
+    )
+    final.update(mutation)
+    case = SimpleNamespace(
+        client=SimpleNamespace(
+            client=SimpleNamespace(
+                get_event=lambda *a, **k: {"id": "archive-a", "generation": 0}
+            ),
+            get=lambda *a: final,
+        )
+    )
+    with pytest.raises(AssertionError):
+        DRIVER["wait_for_archive"](
+            case, {"run_id": "run-a", "owner": "alice", "generation": 0}
+        )
+
+
+def test_schedule_is_seeded_balanced_and_keeps_same_concurrency_controls(tmp_path):
+    plan = DRIVER["experiment_schedule"](
+        tmp_path / "candidate", tmp_path / "original", 3, 19
+    )
+    assert plan == DRIVER["experiment_schedule"](
+        tmp_path / "candidate", tmp_path / "original", 3, 19
+    )
+    assert plan != DRIVER["experiment_schedule"](
+        tmp_path / "candidate", tmp_path / "original", 3, 20
+    )
+    assert len(plan) == 30
+    expected = {
+        (version, case)
+        for version in ("original", "candidate")
+        for case in ("off", "healthy", "concurrent_off", "concurrent", "unavailable")
+    }
+    for repeat in range(3):
+        rows = [item for item in plan if item["repeat"] == repeat]
+        assert len(rows) == 10
+        assert {(item["variant"], item["case"]) for item in rows} == expected
+
+
+def test_concurrent_rss_gate_uses_same_concurrency_off_control():
+    def row(case, peak):
+        return {
+            "case": case,
+            "runs": [{"elapsed_ms": 10}],
+            "wall_seconds": 1,
+            "cpu_seconds": 0.1,
+            "peak_rss_mib": peak,
+            "latency_ms": {"run": DRIVER["distribution"]([10])},
+            "timing_samples_ms": {},
+            "export": {},
+            "queue": {},
+            "span_count": 0,
+            "acknowledged_spans": 0,
+            "shutdown_seconds": 0.01,
+            "key_span_ack_fraction": 1,
+            "server_verification": {
+                "key_span_fraction": 1,
+                "acknowledged_span_fraction": 1,
+                "generations": 21,
+                "expected_generations": 21,
+                "tokens": 234,
+                "expected_tokens": 234,
+                "parent_gaps": 0,
+                "content_leak": False,
+                "per_run": {"run-a": {"valid": True}},
+            },
+        }
+
+    rows = [
+        row("off", 100),
+        row("healthy", 120),
+        row("unavailable", 120),
+        row("concurrent_off", 180),
+        row("concurrent", 437),
+    ]
+    result = DRIVER["summarize"](rows)
+    assert result["gates"]["concurrent_rss"] is False
+    rows[-1]["peak_rss_mib"] = 430
+    assert DRIVER["summarize"](rows)["gates"]["concurrent_rss"] is True
