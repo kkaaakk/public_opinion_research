@@ -86,6 +86,7 @@ def trace_capture(monkeypatch, request):
         "_provider": None,
         "_client": None,
         "_settings": None,
+        "_exporter": None,
     }.items():
         monkeypatch.setattr(telemetry, key, value)
     assert telemetry.initialize_telemetry()

@@ -54,7 +54,9 @@ def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(nativ
 
     case = native_case
     run = case.create()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(
+        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
+    )
     before = len(case.models)
     cursor = 0
     events = []
