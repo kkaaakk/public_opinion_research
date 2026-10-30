@@ -14,7 +14,7 @@ or resource release. See the [implementation audit](../audits/langfuse-otel.md).
 | Public progress | DBOS Durable Stream seq, generation and Run ID; SSE is a read projection |
 | Report archive | Stable History ID, owner, Run ID and generation-derived `run_state_version` |
 | Trace hierarchy/timing | Native DBOS + OpenInference SDK spans and selected business spans exported to Langfuse |
-| LangChain/RAG request tracing | Existing independently opt-in LangSmith integration |
+| LangChain/RAG request tracing | Official OpenInference model callbacks on the same Provider/exporter; LangSmith remains independently opt-in |
 
 Telemetry defaults off. After successful initialization, Harness RunConfig enables
 SDK tracing with `trace_include_sensitive_data=False`. Native DBOS and SDK spans
@@ -78,9 +78,27 @@ receipts. Context/compaction tokens are estimates, not provider usage.
 Planning, intake, extraction, compaction, memory and report models remain bounded
 LangChain business services. Existing actual stage usage is copied to the
 enclosing business Step/span as `por.model_calls` and
-`por.{input,output,total}_tokens`. No second LangChain model/tool recorder is
-added. Per-request LangChain inspection remains in optional LangSmith; Langfuse's
-detailed LLM spans cover SDK Models. Stage and child usage overlap: do not sum them.
+`por.{input,output,total}_tokens`. Each actual Core model lifecycle also creates
+one `langchain_generation` through OpenInference LangChain **0.1.80**. The
+model-only adapter forwards public model callbacks to OI's official handler;
+Core's public configure hook inherits it into nested services and threads. OI's
+global all-event hook is removed before enabling the pipeline. Chains,
+retrievers and LC tools are not recorded again. No private tracer is patched.
+SDK Models remain owned by OI Agents. Stage and child usage overlap: do not sum them.
+
+Structured parsing retries produce separate Generations only when Core actually
+starts another model lifecycle. Provider SDK HTTP retries inside a lifecycle are
+not individually observable here. OI retains canonical usage, cache and reasoning
+details; an error's partial Core usage enriches the same existing span. Missing
+usage stays absent. Nothing is submitted to the business budget by this adapter.
+Cancellation is recorded when Core delivers its model-error callback. If outer
+awaiter cancellation omits that callback, the inline callback's original Task
+ends the already-started observation with an unknown effect and a
+`model_callback_missing` marker. It does not cancel, wait for or retry a request,
+or invent response/usage. The existing budget admission callback also runs inline
+before model observers, so a rejected request produces no Generation. Admission
+rules, charges, owned-I/O settlement and DBOS recovery remain unchanged. A process
+crash can still lose an open/buffered span; no missing Generation is reconstructed.
 
 ## Configuration and startup
 
@@ -120,7 +138,8 @@ and its DBOS tracing configuration. Configuration changes require a restart.
 ## Fixed versions and privacy
 
 The lock uses DBOS **3.3.0**, Agents SDK **0.24.0**, Langfuse **4.18.0**,
-OpenInference Agents **2.6.0** and OTel **1.45.1**. No Langfuse v2 API is used.
+OpenInference Agents **2.6.0**, OpenInference LangChain **0.1.80** and OTel
+**1.45.1**. No Langfuse v2 API is used.
 `tracing_disabled=True` suppresses SDK events needed by OpenInference; it is
 disabled only after successful initialization. Sensitive SDK data stays off.
 
@@ -198,7 +217,7 @@ and a retired LangGraph dependency.
 
 Studio receives no project credential or guessed deep link. Operators query
 `run_id` in their authorized Langfuse project. Multi-tenant trace-link permissions,
-trace query APIs, per-request LangChain spans in Langfuse, production SaaS
+trace query APIs, production SaaS
 validation, exactly-once export, guaranteed SIGKILL tail delivery and production
 throughput benchmarks remain unsupported.
 

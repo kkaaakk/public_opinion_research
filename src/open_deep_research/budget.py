@@ -16,6 +16,7 @@ from contextvars import ContextVar, Token
 from typing import Any, Callable, Iterator, Mapping, cast
 
 from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
+from langchain_core.callbacks.base import BaseCallbackManager
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.messages.ai import UsageMetadata, add_usage
 from langchain_core.messages.utils import count_tokens_approximately
@@ -282,6 +283,9 @@ class ModelAttemptCounter(BaseCallbackHandler):
     """
 
     raise_error = True
+    # Admission must run before inline model observers. This changes callback
+    # dispatch only; the admission predicate and usage accounting are unchanged.
+    run_inline = True
 
     # 初始化调用计数及回调处理所需的实例状态。
     def __init__(self) -> None:
@@ -382,6 +386,20 @@ def model_accounting_config(
     if metadata:
         overrides["metadata"] = dict(metadata)
     merged = merge_configs(ensure_config(config), overrides)
+    # A parent Tool/Runnable may already inherit a model observer. Core appends
+    # the new counter when merging, so inline dispatch alone is insufficient.
+    # These are the merged copy's public lists: preserve membership, inheritance
+    # and all other relative ordering without mutating the caller's manager.
+    callbacks = merged.get("callbacks")
+    if isinstance(callbacks, BaseCallbackManager):
+        callbacks.handlers.sort(
+            key=lambda handler: not isinstance(handler, ModelAttemptCounter)
+        )
+        callbacks.inheritable_handlers.sort(
+            key=lambda handler: not isinstance(handler, ModelAttemptCounter)
+        )
+    elif isinstance(callbacks, list):
+        callbacks.sort(key=lambda handler: not isinstance(handler, ModelAttemptCounter))
     return merged, counter, usage_handler
 
 
