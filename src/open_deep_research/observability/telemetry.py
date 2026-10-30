@@ -7,6 +7,7 @@ spans; the exporter also removes sensitive data produced by either library.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import base64
 import logging
 import math
@@ -37,6 +38,7 @@ _provider = None
 _client = None
 _settings = None
 _active = False
+_exporter = None
 
 # Explicit fields only: no arbitrary metadata, content, exception text or auth.
 _IDENTITY = frozenset(
@@ -85,6 +87,7 @@ _NATIVE = frozenset(
         "openinference.span.kind",
         "llm.model_name",
         "llm.system",
+        "llm.provider",
         "tool.name",
         "agent.name",
         "dbos.operation.workflow_id",
@@ -105,6 +108,26 @@ _TOKEN_KEYS = frozenset(
     }
 )
 _LABEL = re.compile(r"[\w.:/\-]{1,200}\Z", re.UNICODE)
+# Display classification only. Every native diagnostic span is still exported.
+_BUSINESS_SPANS = frozenset(
+    {
+        "run_submit",
+        "por.run",
+        "por.plan",
+        "por.research",
+        "por.role",
+        "por.finalize",
+        "business_step",
+        "sdk_invocation",
+        "context_build",
+        "context_retrieval",
+        "persist_tool_results",
+        "rolling_compaction",
+        "research_graph_write",
+        "research_review",
+        "report_generation",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -186,6 +209,7 @@ def _allowed_span(span):
         "dbos-tracer",
         __name__,
         "openinference.instrumentation.openai_agents",
+        "openinference.instrumentation.langchain",
     }
 
 
@@ -224,6 +248,11 @@ def safe_span(span):
         attributes["session.id"] = run_id
         attributes["langfuse.trace.metadata.run_id"] = run_id
     kind = attributes.get("openinference.span.kind")
+    attributes["por.span_layer"] = (
+        "business"
+        if kind in {"LLM", "AGENT", "TOOL"} or span.name in _BUSINESS_SPANS
+        else "framework"
+    )
     attributes["langfuse.observation.type"] = {
         "LLM": "generation",
         "AGENT": "agent",
@@ -278,21 +307,56 @@ class SafeExporter(SpanExporter):
 
     def __init__(self, exporter):
         self.exporter = exporter
+        self._lock = threading.Lock()
+        self._closed = False
+        self._delivery = {
+            "attempted_spans": 0,
+            "acknowledged_spans": 0,
+            "failed_spans": 0,
+            "export_batches": 0,
+            "failed_batches": 0,
+        }
+
+    def snapshot(self):
+        """Process-local delivery counters; an ACK is not backend persistence."""
+        with self._lock:
+            return {**self._delivery, "closed": self._closed}
 
     def export(self, spans):
+        safe = []
         try:
-            return self.exporter.export(
-                [safe_span(s) for s in spans if _allowed_span(s)]
-            )
+            safe = [safe_span(s) for s in spans if _allowed_span(s)]
+            result = self.exporter.export(safe)
         except Exception:
+            result = SpanExportResult.FAILURE
+        with self._lock:
+            self._delivery["attempted_spans"] += len(safe)
+            self._delivery["export_batches"] += 1
+            success = result == SpanExportResult.SUCCESS
+            self._delivery["acknowledged_spans" if success else "failed_spans"] += len(
+                safe
+            )
+            self._delivery["failed_batches"] += int(not success)
+        if not success:
             _logger.warning("Trace export failed; research continues")
-            return SpanExportResult.FAILURE
+        return result
 
     def shutdown(self):
-        self.exporter.shutdown()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        try:
+            self.exporter.shutdown()
+        except Exception:
+            _logger.warning("Trace exporter shutdown incomplete")
 
     def force_flush(self, timeout_millis=30000):
-        return self.exporter.force_flush(timeout_millis)
+        try:
+            return self.exporter.force_flush(timeout_millis)
+        except Exception:
+            _logger.warning("Trace exporter flush incomplete")
+            return False
 
 
 class CorrelationProcessor(SpanProcessor):
@@ -394,7 +458,7 @@ class SDKUsageEnrichment(TracingProcessor):
 
 def initialize_telemetry():
     """Initialize once per process; no auth probe and no network on startup."""
-    global _attempted, _provider, _client, _settings, _active
+    global _attempted, _provider, _client, _settings, _active, _exporter
     with _lock:
         if _attempted:
             return _active
@@ -457,19 +521,23 @@ def initialize_telemetry():
             )
             # Replace the default OpenAI uploader before enabling native SDK spans.
             set_trace_processors([SDKUsageEnrichment()])
+            privacy = TraceConfig(
+                hide_inputs=True,
+                hide_outputs=True,
+                hide_input_messages=True,
+                hide_output_messages=True,
+                hide_llm_invocation_parameters=True,
+                hide_llm_tools=True,
+                hide_prompts=True,
+                hide_retrieval_documents=True,
+            )
+            from .langchain import configure_model_tracing
+
+            configure_model_tracing(provider, privacy)
             instrumentor.instrument(
                 tracer_provider=provider,
                 exclusive_processor=False,
-                config=TraceConfig(
-                    hide_inputs=True,
-                    hide_outputs=True,
-                    hide_input_messages=True,
-                    hide_output_messages=True,
-                    hide_llm_invocation_parameters=True,
-                    hide_llm_tools=True,
-                    hide_prompts=True,
-                    hide_retrieval_documents=True,
-                ),
+                config=privacy,
             )
             if not instrumentor.is_instrumented_by_opentelemetry:
                 raise ValueError("Agents instrumentation failed")
@@ -478,6 +546,8 @@ def initialize_telemetry():
                 raise ValueError("OTel provider registration did not take effect")
             set_tracing_disabled(False)
             _provider, _client, _settings, _active = provider, client, cfg, True
+            _exporter = exporter
+            atexit.register(shutdown_telemetry)
         except Exception:
             _logger.warning(
                 "Tracing unavailable; research continues (configuration/initialization)"
@@ -501,6 +571,15 @@ def telemetry_enabled():
     return _active
 
 
+def delivery_health():
+    """Read bounded numeric export facts without querying or replaying a Run.
+
+    Queue occupancy/drops belong to OTel's native SDK metrics. Missing or open
+    spans and SIGKILL losses cannot be inferred from these delivery counters.
+    """
+    return {"enabled": _active, **(_exporter.snapshot() if _exporter else {})}
+
+
 def _close_in_background(client, provider, seconds):
     def close():
         try:
@@ -510,7 +589,10 @@ def _close_in_background(client, provider, seconds):
             _logger.warning("Trace shutdown incomplete")
         finally:
             if provider is not None:
-                provider.shutdown()
+                try:
+                    provider.shutdown()
+                except Exception:
+                    _logger.warning("Trace provider shutdown incomplete")
 
     worker = threading.Thread(target=close, name="por-trace-shutdown", daemon=True)
     worker.start()
@@ -526,6 +608,7 @@ def shutdown_telemetry():
         if not _active:
             return
         _active = False
+    atexit.unregister(shutdown_telemetry)
     _close_in_background(_client, _provider, _settings.shutdown_seconds)
 
 
