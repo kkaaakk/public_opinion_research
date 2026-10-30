@@ -510,3 +510,96 @@ main保持9b479fa4；没有Ready、Merge、Squash/Rebase、生产部署或生产
 适合继续本地开发与排障；四并发容量明确未达标。没有证据需要新的可观测性基础设施。
 可以继续独立业务开发与源码学习，但**不能按本轮原验收标准宣布可观测性改造结束、
 达到长期生产成熟度或批量合并**。下一步应先完成上述最小SQL/交付专项验证，而非降低门槛。
+
+## 10. 2026-10-30 收尾复测及顺序集成
+
+### 2026-10-30 两组独立稳定性复测与收尾判断
+
+本节追加新证据，不覆盖第6/9节及SQL专项中的历史失败。冻结原始组合HEAD022fb1aa、
+116个生产Python指纹 `d16878720c457796908a0b2f0d0a48276252188caf8ee0ff11a5ac3e75c88c9d`。
+没有采用清洗缓存或no-ping候选，未改工作流、预算、完整archive/manifest终态条件或原LIMITS。
+两组独立seed20261030/20261031，每组3随机平衡块，每块5场景，每格新进程/UUID库、2次完整预热/4次实测；
+合计120实测+60预热。预热增加在运行前固定；不把它与旧单预热cohort的差值归作源码优化。
+正式计时无SQL/CIM/profiling，未并行测试/构建/浏览器。只使用模拟模型，付费推理0。
+
+| 组/配置（每格12实测） | p50/p95/p99 s | CPU s/Run | peak RSS MiB | shutdown max s |
+| --- | --- | ---: | ---: | ---: |
+| A/off | 8.289261/9.313101/9.315780 | 4.1107 | 791.27 | 0.000005 |
+| A/healthy | 9.278446/11.313132/11.319700 | 4.6276 | 809.87 | 0.060793 |
+| A/concurrent_off | 14.508867/20.636546/20.641756 | 4.4323 | 791.64 | 0.000006 |
+| A/concurrent | 17.521458/17.868708/17.874853 | 4.6771 | 810.05 | 0.137333 |
+| A/unavailable | 9.276941/9.525513/9.728164 | 4.5339 | 823.10 | 2.026905 |
+| B/off | 8.278301/9.283464/9.286030 | 3.9727 | 791.49 | 0.000005 |
+| B/healthy | 8.280828/9.282109/9.288516 | 4.2422 | 808.78 | 0.044416 |
+| B/concurrent_off | 13.434085/13.465935/13.467465 | 3.8099 | 790.29 | 0.000005 |
+| B/concurrent | 16.326342/17.861206/17.862146 | 4.6458 | 810.11 | 0.074808 |
+| B/unavailable | 8.787184/9.809451/10.215572 | 4.6107 | 823.68 | 2.170192 |
+
+| 组 | 四并发ON p95 /原上限 s | 余量 s | 原19项汇总gate |
+| --- | --- | ---: | --- |
+| A | 17.868708 / 22.626264 | 4.757556 | 全true |
+| B | 17.861206 / 18.564218 | 0.703013 | 全true |
+
+| 组/块（各4 Run，描述性） | 串行ON p95 s | 四并发ON p95 s | 容量比 |
+| --- | ---: | ---: | ---: |
+| A/1 | 11.001487 | 17.476093 | 1.588521 |
+| A/2 | 9.281558 | 17.874295 | 1.925786 |
+| A/3 | 11.169587 | 17.595973 | 1.575347 |
+| B/1 | 8.450797 | 16.970870 | 2.008198 |
+| B/2 | 9.187204 | 17.862060 | 1.944232 |
+| B/3 | 9.136059 | 15.605898 | 1.708165 |
+
+B首块2.008198仅描述性超过2约69.276ms，其并发绝对耗时16.970870s并非慢点。
+没有把单块比变成新硬门槛；同时保留A首块OFF并发20.641283s慢点、A串行分母增大对余量的影响。
+ON/OFF差分在两组方向不同，不能宣称Tracing带来性能收益。两组各自汇总，不混池、不择优替换。
+独立标准库复算120唯一Run/72唯一Trace、全部38个原gate、两seed计划/文件及三项源码/锁哈希一致。
+48个健康服务端验证均valid：每Run21 Generations/234tokens（账本含初值为28calls/311tokens）、2Tool；
+健康ended/ACK/server守恒29424，queue drop0、shutdown均≤3.5s，内容哨兵检查通过。
+
+独立判断：本次本地模拟负载中未见持续、系统性严重容量退化，足以进入后续逐PR严格门禁的顺序集成阶段。
+这是有条件的本地收尾证据，不是无条件合并批准、旧失败消失或生产长期SLA证明。
+Windows/Docker与用户服务仍共享；宿主开始仅约0.7GiB空闲内存/16GiB，CPU10%；Docker16CPU/约7.95GB，
+PG512MiB/Neo1GiB、官方LF4.70.1。PGpreload空、IO计时off、fsync/同步提交/full_page_writes始终on。
+共享卷/缓存、主机IO与小样本仍限制因果分摊；没有停止其他业务服务或降低可靠性。
+
+组合定向合同316 passed/2 POSIX skipped（Windows）；原断言保留。真实Web停机/同进程恢复重新验收：
+第一研究仍completed/settled/saved/events_complete，28calls/311tokens/2tools，610spans失败、ACK0；
+恢复后第二研究21Generations/234tokens、shutdown 0.043803s；只执行两研究，无旧模型/工具补跑。
+恢复Run `05a6c830841c4b4e891f7fcbcd8a4141` /Trace `3f9ab23bf0bdec0a165bfa3fe68beae5`：612全量/82业务、21Generation/8Agent/2Tool，
+SDK/Core/Tool与Tree/Timeline真实UI通过，Input/Output过滤；两Producer同一por.research祖先且重叠0.717s；
+完整字段无内容、Memory或测试凭据泄漏。仅有隔离路由阻止外部徽标的ERR_FAILED，不宣称console零错误。
+
+SIGKILL/断电/崩溃可丢未导出内存尾部；OTLP失败批次丢弃，不为Trace补跑。DBOS journal/回执/Finalizer仍为执行事实来源。
+根锁的markitdown-mcp/mcp既有pip-check冲突不变；未验证长期生产负载、HA、磁盘灾难与真实云端模型费用/质量。
+
+原始协议、30单元JSON/log、两组summary及独立验证留在SQL专项worktree `.tmp/observability-closeout/20261030/`，
+故障/UI证据在相邻目录与visualizations中；所有旧记录、worktree、分支、stash和卷保留，不提交凭据/本地输出。
+| 原始证据 | SHA-256 |
+| --- | --- |
+| protocol.json | `89d6a16fd0f2cfc73f1c69b5ccaea8121091480fbd6c4233f7017e5523e4b57d` |
+| group-A-summary.json | `c50505f81aae00353f8b046ab62124bb952c0aec56778d86b51c6cc2ca8f1dd9` |
+| group-B-summary.json | `e307cc4ad2a343ada2ef588e611171882551b3ddf53cd5ddbe9c26c61a45bf1d` |
+| validated-results.json | `56a6a8ab1712a7f4079cbbdca6873a69c819bfebbc2bf51c689e726636a20441` |
+
+#### 顺序集成状态
+
+第9.7节“不合并”是当时容量失败后的决定，保留为历史；本节是后续两组新实验通过后的有条件更新。
+#34 已使用 Merge Commit 合入 `d50db57f5b885f3f67a5fdc5cb808b52df3b4d10`，
+parents 为原 main `9b479fa4…` 与 `ef282a3a…`；合并树等于受审 HEAD。
+[main CI](https://github.com/kkaaakk/public_opinion_research/actions/runs/40993487396) 与
+[Studio](https://github.com/kkaaakk/public_opinion_research/actions/runs/40993487609) 均通过。
+
+#35 先将 #34 的 main 正常合入，形成 `185f374c7450f3a000e48a68b022e2a66704346e`；
+无冲突，独立 Review 确认 LangChain 初始化、准入、Callback、隐私与业务分类、交付计数、有界退出均保留。
+该 HEAD 的组合合同316 passed /2 POSIX skipped（Windows），
+[CI](https://github.com/kkaaakk/public_opinion_research/actions/runs/40993854075) 和
+[Studio](https://github.com/kkaaakk/public_opinion_research/actions/runs/40993854131) 全绿后，
+以 Merge Commit 合入 `fb9f6a2768f69b6555e350cc2c5bd21268abc6a8`。
+两个 parents 为 `d50db57f…` 与 `185f374c…`，合并树 `aa6dc30cae084981b0b7468a78f491dda6acdaae` 等于该受审 HEAD。
+
+#36 以保留历史的普通合并集成上述 main；生产源码、根依赖和锁均与冻结原始组合一致。
+后续每个 PR 仍须独立 Review、最新 HEAD CI，以及前一个 Merge Commit 的 main CI 通过才可合并。
+#37 须先合入最新 main 并改基线，确认只剩诊断工具/测试及必要文档，禁止重复引入生产候选。
+最终合并 SHA、实际 main 全量验证及 CI 链接统一在
+[PR #37 收尾记录](https://github.com/kkaaakk/public_opinion_research/pull/37) 追加，
+本段不把尚未发生的合并、最终主线测试或 CI 预先写成通过。

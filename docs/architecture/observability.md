@@ -243,3 +243,30 @@ operator keys outside Git, run one bounded approved task and inspect the session
 above. Check export failures and sensitive-data absence before wider rollout.
 Actual results and unverified conditions are recorded in the
 [audit](../audits/langfuse-otel.md).
+
+## Local validation and closeout scope (2026-10-30)
+
+The original A+B production combination passed two new independent balanced local
+experiments: seeds 20261030/20261031, three blocks each, two full warmups and four
+measured Runs per cell. Both unchanged pooled capacity gates passed: concurrent
+ON p95 17.868708s <= 22.626264s and 17.861206s <= 18.564218s. All six descriptive
+block ratios, including 2.008198 in B1, and earlier capacity failures remain in the
+[final hardening audit](../audits/observability-final-hardening.md#10-2026-10-30-收尾复测及顺序集成).
+No sustained severe degradation was observed in these local mock-model cohorts;
+shared Windows/Docker memory, storage/cache and small samples still limit this
+judgment. The earlier sanitization and pool-pre-ping candidates remain unpromoted.
+
+Actual local Langfuse UI/API verification covered Tree, Timeline, SDK and
+LangChain Generations, Tool, Run correlation and full/business views (612/82
+observations), with 21 Generations and 234 tokens. Outage and recovery in one
+process preserved research completion and did not replay model/tool work.
+All parent links and the sensitive-data egress check passed. These are validated
+local features and local capacity results. Trace export remains best-effort:
+failed OTLP batches and SIGKILL/crash/power-loss memory tails can be lost.
+DBOS journals and operation receipts remain the execution authority.
+
+Long-running production load, HA, disaster recovery and real cloud-model quality,
+cost and latency remain unverified. The existing markitdown-mcp/mcp pip-check
+conflict is retained in the audit. Sequential Merge Commits and final main test
+results are recorded in [PR #37](https://github.com/kkaaakk/public_opinion_research/pull/37);
+local success does not establish a production SLA or zero-loss guarantee.
