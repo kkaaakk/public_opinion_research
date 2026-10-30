@@ -535,7 +535,7 @@ B1比值略高于2，超出约69.276ms；不能事后把4样本块比变成新�
 
 ### 历史与生产边界
 
-#34 Merge Commit `d50db57f5b885f3f67a5fdc5cb808b52df3b4d10`；#35正常合入该main后，经最新HEAD全绿CI及独立Review，Merge Commit `fb9f6a2768f69b6555e350cc2c5bd21268abc6a8`。两次实际合并均验证双Parent及合并树等于受审HEAD。#36在main CI全绿后合入 `83a5ef6c4b0801673ab1f3e22cf1e4962556b307`。#37正常合入这个实际main，保留原 `022fb1aa` 和冻结组合历史，然后将Base改为main；相对main只保留原六个诊断目标文件及本节文档，`src/`、pyproject、uv.lock零diff，无重复生产变更、no-ping或清洗缓存候选。
+#34 Merge Commit `d50db57f5b885f3f67a5fdc5cb808b52df3b4d10`；#35正常合入该main后，经最新HEAD全绿CI及独立Review，Merge Commit `fb9f6a2768f69b6555e350cc2c5bd21268abc6a8`。两次实际合并均验证双Parent及合并树等于受审HEAD。#36在main CI全绿后合入 `83a5ef6c4b0801673ab1f3e22cf1e4962556b307`。#37正常合入这个实际main，保留原 `022fb1aa` 和冻结组合历史，然后将Base改为main；相对main保留原六个诊断目标文件；最终格式核验另发现#35交付测试的一行空白，仅删除该空行，已比较完整测试AST完全相同。因此还包括这一项必要的测试格式修正，断言和用例不变。`src/`、pyproject、uv.lock零diff，无重复生产变更、no-ping或清洗缓存候选。
 
 本专项的SQL/事件relay结论不变：611原生命令对应的SQL、提交、协议往返和交付尾段是最大已测延迟路径，OFF中同样存在。普通statement计划没有明显缺索引证据；未证实连接池排队主导。WAL/NOTIFY有竞争迹象但未定量解释全部差额。`pool_pre_ping=False`收益方向不稳定且故障边界未充分验证，继续不推广；SQL诊断仍需显式opt-in。PG fsync/synchronous_commit/full_page_writes保持on，DBOS事务/Event/Stream/Finalizer/未知效果与重试语义不变。
 
