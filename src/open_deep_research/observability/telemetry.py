@@ -87,6 +87,7 @@ _NATIVE = frozenset(
         "openinference.span.kind",
         "llm.model_name",
         "llm.system",
+        "llm.provider",
         "tool.name",
         "agent.name",
         "dbos.operation.workflow_id",
@@ -208,6 +209,7 @@ def _allowed_span(span):
         "dbos-tracer",
         __name__,
         "openinference.instrumentation.openai_agents",
+        "openinference.instrumentation.langchain",
     }
 
 
@@ -519,19 +521,23 @@ def initialize_telemetry():
             )
             # Replace the default OpenAI uploader before enabling native SDK spans.
             set_trace_processors([SDKUsageEnrichment()])
+            privacy = TraceConfig(
+                hide_inputs=True,
+                hide_outputs=True,
+                hide_input_messages=True,
+                hide_output_messages=True,
+                hide_llm_invocation_parameters=True,
+                hide_llm_tools=True,
+                hide_prompts=True,
+                hide_retrieval_documents=True,
+            )
+            from .langchain import configure_model_tracing
+
+            configure_model_tracing(provider, privacy)
             instrumentor.instrument(
                 tracer_provider=provider,
                 exclusive_processor=False,
-                config=TraceConfig(
-                    hide_inputs=True,
-                    hide_outputs=True,
-                    hide_input_messages=True,
-                    hide_output_messages=True,
-                    hide_llm_invocation_parameters=True,
-                    hide_llm_tools=True,
-                    hide_prompts=True,
-                    hide_retrieval_documents=True,
-                ),
+                config=privacy,
             )
             if not instrumentor.is_instrumented_by_opentelemetry:
                 raise ValueError("Agents instrumentation failed")
