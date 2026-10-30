@@ -102,6 +102,14 @@ crash can still lose an open/buffered span; no missing Generation is reconstruct
 
 ## Configuration and startup
 
+Use the native Langfuse Tracing view with query
+`metadata.attributes.por.span_layer:business` and save it in My Views. Add
+`metadata.run_id:RUN_ID` for one research. The business classification retains
+native Run/plan/role/Finalizer and the SDK Agent/Generation/Tool path; every
+framework span remains exported and accessible by clearing the view. Historical
+observations without the label require the full view. No hierarchy is reparented.
+See [native views and reliability evidence](../audits/observability-reliability.md).
+
 Install the root lock: `uv sync --extra dev --locked --python 3.11`.
 
 | Operator environment variable | Default / behavior |
