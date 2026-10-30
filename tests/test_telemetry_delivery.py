@@ -107,7 +107,6 @@ def test_exporter_flush_error_is_fail_open(caplog):
 
 
 def test_business_filter_is_metadata_only_and_preserves_all_parents(trace_capture):
-
     tracer = trace_capture.provider.get_tracer("dbos-tracer")
     with telemetry.business_span("por.run", run_id="layer-run"):
         with tracer.start_as_current_span("send"):

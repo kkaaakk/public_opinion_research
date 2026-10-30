@@ -103,3 +103,42 @@ The report must distinguish measurements of main from that composed candidate.
 `--case concurrent_off --runs 4` remains available for a single diagnostic, but
 the full matrix now measures it alongside tracing ON in every randomized block.
 Do not replace the historical four-case results or change their frozen limits.
+
+## SQL and event diagnostics
+
+`run_sql_diagnostics.py` is a separate, explicit diagnostic entry point. Use the
+same isolated environment variables above. It requires PostgreSQL 17 with
+`pg_stat_statements` preloaded and installed in the explicit test observer database.
+Planning, I/O and WAL I/O timers may be enabled on that dedicated test container
+for diagnosis; record and restore them before formal timing. Keep fsync,
+synchronous_commit and full_page_writes enabled. Never run this against an
+operator or production database.
+
+```powershell
+.venv/Scripts/python.exe evaluation/observability/run_sql_diagnostics.py --enable-local-services --case concurrent --healthy-url http://127.0.0.1:33080 --output .tmp/sql-event/diagnostic.json --runs 4 --warmup 1
+```
+
+The four diagnostic cases are `off`, `healthy`, `concurrent_off`, `concurrent`.
+Run balanced, seeded, repeated blocks in separate processes; do not run another
+load concurrently. Diagnostic SQL/public-method timing, PG activity/locks and
+container/host samplers add cost. Their benchmark sibling file is diagnostic
+evidence, never a formal gate sample. Formal measurement continues to use
+`run_benchmark.py` without installing these probes.
+
+The SQL probe keeps templates and timing/row counts, not bind parameters,
+exception messages or query payloads. Unknown syntax is opaque. It excludes
+startup/warmup, marks measurement/drain, and freezes before test DB cleanup.
+PG deltas require stable full statement keys, database identity and reset/eviction
+metadata. Server totals do not provide statement percentiles. Client method
+timers are inclusive; pool acquisition includes ping, and commit includes the
+server acknowledgement. Do not sum nested timers or label the remainder network
+latency. Resource samples have their own observation interval. Per-Run attribution
+is the caller context; background and bulk operations remain unassigned.
+
+`--executor-no-ping` applies one **experiment-only** public engine option to a
+benchmark executor. Domain/API engines retain their existing connection checks.
+It changes when a dead connection is detected and is not a production recommendation.
+Healthy speedups alone do not establish equivalent failure/recovery behavior.
+Keep every failed or slower cell, the exact order, source/method hashes, raw
+samples and service configuration. See the [SQL/event audit](../../docs/audits/dbos-sql-event-performance.md)
+for the frozen baseline, measurement limits and promotion decision.
