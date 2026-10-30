@@ -505,3 +505,40 @@ fixture取本地keys并剥离业务环境。通用可复现入口是提交的run
    独立冻结分支，只交付诊断/回归/审计；后续正式合并三PR后再按实际main重定其base。
 
 本轮无生产部署、无main合并、无付费推理；不删除任何已有worktree/分支/stash/卷/历史数据。
+
+## 11. 2026-10-30 稳定性复测与顺序合并收尾
+
+第10节是专项诊断当时的 Draft/不合并决定，作为历史保留。用户随后明确授权：先做两组新的独立稳定性复测，全部原门禁通过且无持续严重退化后，逐 PR 使用 Merge Commit 集成。本节更新该决定，不将新数据覆盖旧失败。
+
+### 独立稳定性证据
+
+冻结原生产组合 `022fb1aa7e4c92e3b4727bc20a90b271a4c5d08b`，116个生产Python文件指纹仍为 `d16878720c457796908a0b2f0d0a48276252188caf8ee0ff11a5ac3e75c88c9d`。seed20261030/20261031 各3平衡块，每块OFF/ON/四并发OFF/四并发ON/不可达5场景，每格独立进程和UUID库、2次完整预热+4实测，共120实测/60预热。工作负载、完整archive/manifest终态、资源约束和原LIMITS未改；正式计时无SQL探针、其他测试、编译或浏览器负载，只有模拟推理。
+
+| 新实验 | 串行OFF/ON p95 s | 四并发OFF/ON p95 s | 四并发上限 s | 原19项汇总门禁 |
+| --- | --- | --- | ---: | --- |
+| A | 9.313101 / 11.313132 | 20.636546 / 17.868708 | 22.626264 | 全通过 |
+| B | 9.283464 / 9.282109 | 13.465935 / 17.861206 | 18.564218 | 全通过 |
+
+| 组/块（4 Run，仅描述性） | 串行ON p95 s | 四并发ON p95 s | 容量比 |
+| --- | ---: | ---: | ---: |
+| A/1 | 11.001487 | 17.476093 | 1.588521 |
+| A/2 | 9.281558 | 17.874295 | 1.925786 |
+| A/3 | 11.169587 | 17.595973 | 1.575347 |
+| B/1 | 8.450797 | 16.970870 | 2.008198 |
+| B/2 | 9.187204 | 17.862060 | 1.944232 |
+| B/3 | 9.136059 | 15.605898 | 1.708165 |
+
+独立 Review 从30原始单元复算38项原门禁、全部表格和证据SHA一致。120唯一Run、72Trace，48健康服务端Run各21Generations/234tokens/2Tools，ended=ACK=server 29424，健康queue drop0；最大shutdown A2.026905s/B2.170192s，隐私出口通过。
+B1比值略高于2，超出约69.276ms；不能事后把4样本块比变成新硬门槛，也不能隐藏该点、旧2.1694或更早汇总失败。A首块并发OFF慢点20.641283s和串行分母变化均保留。完整p50/p95/p99、CPU、RSS、shutdown及协议/证据SHA见[最终收尾审计第10节](observability-final-hardening.md#10-2026-10-30-收尾复测及顺序集成)。
+
+两组各自汇总且均通过，本地模拟负载中未见持续、系统性严重容量退化；支持进入逐PR严格门禁。ON/OFF差分方向跨组变化，说明共享Windows/Docker、缓存和IO仍影响结果，不能把它作为源码修复或Tracing性能收益。宿主16GiB且开始约0.7GiB空闲，Docker16CPU/约7.95GB、PG512MiB/Neo1GiB；未停止用户其他服务或放宽数据库持久化。
+
+### 历史与生产边界
+
+#34 Merge Commit `d50db57f5b885f3f67a5fdc5cb808b52df3b4d10`；#35正常合入该main后，经最新HEAD全绿CI及独立Review，Merge Commit `fb9f6a2768f69b6555e350cc2c5bd21268abc6a8`。两次实际合并均验证双Parent及合并树等于受审HEAD。#36在main CI全绿后合入 `83a5ef6c4b0801673ab1f3e22cf1e4962556b307`。#37正常合入这个实际main，保留原 `022fb1aa` 和冻结组合历史，然后将Base改为main；相对main只保留原六个诊断目标文件及本节文档，`src/`、pyproject、uv.lock零diff，无重复生产变更、no-ping或清洗缓存候选。
+
+本专项的SQL/事件relay结论不变：611原生命令对应的SQL、提交、协议往返和交付尾段是最大已测延迟路径，OFF中同样存在。普通statement计划没有明显缺索引证据；未证实连接池排队主导。WAL/NOTIFY有竞争迹象但未定量解释全部差额。`pool_pre_ping=False`收益方向不稳定且故障边界未充分验证，继续不推广；SQL诊断仍需显式opt-in。PG fsync/synchronous_commit/full_page_writes保持on，DBOS事务/Event/Stream/Finalizer/未知效果与重试语义不变。
+
+真实本地Langfuse最终组合复验612全量/82业务、SDK/Core Generation与Tool、Tree/Timeline/Run关联、21Generations/234tokens及敏感数据出口通过。同进程停Web仍完成研究，恢复后新研究完整且没有为Trace重放旧模型或工具。SIGKILL/崩溃/断电可丢内存尾部，OTLP失败批次可丢弃；DBOS journal/回执继续是执行事实来源。根锁既有markitdown-mcp/mcp pip-check冲突不变，生产长期负载、HA、灾难恢复和真实云端模型质量/费用尚未验证。
+
+四个实际Merge SHA、最终main全量测试/Studio/原生数据库合同、实际main性能及真实UI的最终证据，追加在[PR #37收尾记录](https://github.com/kkaaakk/public_opinion_research/pull/37)。本节不预先宣称尚未完成的合并或测试成功。所有原始样本、失败、旧worktree/分支/stash/卷保留；无强推、生产部署或付费模型调用。本轮完成门禁后结束可观测性工程，不据此开展新的DBOS架构或微优化Phase。
