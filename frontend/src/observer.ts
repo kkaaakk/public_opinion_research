@@ -81,7 +81,7 @@ export class RunObserver {
           return;
         }
         if (
-          snapshot.status === 'awaiting_approval' &&
+          ['awaiting_approval', 'awaiting_clarification'].includes(snapshot.status) &&
           snapshot.events_paused &&
           this.cursor() >= snapshot.event_cursor
         ) {
@@ -103,7 +103,7 @@ export class RunObserver {
               this.sink.snapshot(run);
               if (
                 isDelivered(run, this.cursor()) ||
-                (run.status === 'awaiting_approval' &&
+                (['awaiting_approval', 'awaiting_clarification'].includes(run.status) &&
                   run.events_paused &&
                   this.cursor() >= run.event_cursor)
               )

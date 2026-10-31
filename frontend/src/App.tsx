@@ -22,6 +22,7 @@ import { useRunSession } from './useRunSession';
 import { describeEvent, PHASES, projectRun, type PhaseId } from './projection';
 import { TERMINAL, type RunEvent, type RunRequest } from './protocol';
 import { Badge, count, duration, Empty, ErrorNote, Modal, time } from './components/common';
+import { ResearchSpec } from './components/ResearchSpec';
 import { CreateDialog } from './components/RunDialogs';
 import { WorkflowCanvas } from './components/WorkflowCanvas';
 import { Inspector } from './components/Inspector';
@@ -49,7 +50,7 @@ const connectionLabels: Record<Connection | 'idle', string> = {
   loading: '加载持久事件',
   live: '实时订阅',
   reconnecting: '自动重连',
-  paused: '审批等待 · 观察中',
+  paused: '等待补充或审批 · 观察中',
   archiving: '已清算 · 归档补偿中',
   complete: '事件已交付',
   error: '订阅需处理',
@@ -140,8 +141,12 @@ export default function App() {
       setTab('workflow');
     }
   }
-  function command(action: 'cancel' | 'approval' | 'retry', decision?: 'approve' | 'reject') {
-    if (replayCursor === null) return studio.command(action, decision);
+  function command(
+    action: 'cancel' | 'approval' | 'retry' | 'clarification',
+    decision?: 'approve' | 'reject',
+    payload?: object,
+  ) {
+    if (replayCursor === null) return studio.command(action, decision, payload);
   }
   const visibleEvents = useMemo(
     () => (replayCursor === null ? events : events.filter((e) => e.seq <= replayCursor)),
@@ -208,7 +213,10 @@ export default function App() {
       ? Math.max(0, new Date(endAt).valueOf() - new Date(createdAt).valueOf())
       : undefined;
   const canCancel =
-    run && ['queued', 'running', 'awaiting_approval', 'cancelling'].includes(run.status);
+    run &&
+    ['queued', 'running', 'awaiting_approval', 'awaiting_clarification', 'cancelling'].includes(
+      run.status,
+    );
   const pendingRetry = session.retry?.runId === runId ? session.retry : undefined;
   const canRetry =
     run &&
@@ -514,38 +522,12 @@ export default function App() {
                     </button>
                   </div>
                 )}
-                {run?.status === 'awaiting_approval' && run.plan && replayCursor === null && (
-                  <section className="panel approval">
-                    <div className="panel-head">
-                      <strong>研究计划待审批</strong>
-                      <span className="mono">{run.plan.version.slice(0, 12)}</span>
-                    </div>
-                    <div className="approval-body">
-                      <p>{run.plan.brief}</p>
-                      <ol>
-                        {run.plan.sections.map((s, i) => (
-                          <li key={i}>{s.name}</li>
-                        ))}
-                      </ol>
-                      <small>到期：{time(run.plan.expires_at)}</small>
-                      <div className="form-actions">
-                        <button
-                          className="button"
-                          disabled={busy}
-                          onClick={() => void command('approval', 'reject')}
-                        >
-                          拒绝计划
-                        </button>
-                        <button
-                          className="button primary"
-                          disabled={busy}
-                          onClick={() => void command('approval', 'approve')}
-                        >
-                          批准执行
-                        </button>
-                      </div>
-                    </div>
-                  </section>
+                {run && replayCursor === null && (
+                  <ResearchSpec
+                    run={run}
+                    busy={busy}
+                    submit={(action, body) => void command(action, undefined, body)}
+                  />
                 )}
                 <div className="tabs" role="tablist" aria-label="运行视图">
                   {tabs.map(([id, label]) => (

@@ -97,6 +97,8 @@ class RunClient:
                 effective = Configuration.from_runnable_config(cfg).model_dump(
                     mode="json"
                 )
+                # Freeze the accepted report topology before any journal exists.
+                cfg["configurable"]["report_mode"] = effective["report_mode"]
                 run_id = uuid4().hex
                 session_id = session_id or uuid4().hex
                 cfg["configurable"].update(
@@ -174,8 +176,16 @@ class RunClient:
                     {"id": run_id},
                 ).scalar_one()
             )
-        plan = self.client.get_event(run_id, "plan", timeout_seconds=0)
+        # Read phase before the payloads it fences: workflows publish payload first.
         phase = self.client.get_event(run_id, "phase", timeout_seconds=0)
+        plan = self.client.get_event(run_id, "plan", timeout_seconds=0)
+        clarification = self.client.get_event(
+            run_id, "clarification", timeout_seconds=0
+        )
+        resolved = self.client.get_event(
+            run_id, "clarification_resolved", timeout_seconds=0
+        )
+        locked_brief = self.client.get_event(run_id, "brief_locked", timeout_seconds=0)
         cursor = (
             self.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0
         )
@@ -232,8 +242,8 @@ class RunClient:
         approval = self.client.get_event(run_id, "approval_end", timeout_seconds=0)
         if status.status == "SUCCESS" and approval in {"reject", "expired"}:
             native_state = "cancelled"
-        if not terminal and phase == "awaiting_approval":
-            native_state = "awaiting_approval"
+        if not terminal and phase in {"awaiting_approval", "awaiting_clarification"}:
+            native_state = phase
         if req["cancel_requested"] and not terminal:
             native_state = "cancelling"
         if terminal and unsettled:
@@ -285,7 +295,13 @@ class RunClient:
             "events_complete": bool(
                 delivered and delivered.get("generation", 0) == generation
             ),
-            "events_paused": delivered_phase == "awaiting_approval",
+            "events_paused": delivered_phase
+            in {"awaiting_approval", "awaiting_clarification"},
+            "clarification": dict(
+                clarification, expires_at=timestamp(clarification["expires_at"])
+            )
+            if clarification and resolved != clarification["version"] and not terminal
+            else None,
             "run_id": run_id,
             "owner": req["owner"],
             "research_session_id": req["session"],
@@ -300,7 +316,7 @@ class RunClient:
             "workflow_backend": "dbos",
             "business_agent_runtime": "openai_agents",
             "execution_engine": "dbos",
-            "workflow_version": VERSION,
+            "workflow_version": req["data"]["version"],
             "sdk_version": SDK_VERSION,
             "runtime_version": SDK_RUNTIME_VERSION,
             "usage": budget,
@@ -312,6 +328,9 @@ class RunClient:
             "history_id": history,
             "plan": dict(
                 version=plan["version"],
+                revision=plan.get("revision", 1),
+                content_hash=plan.get("content_hash", ""),
+                locked=locked_brief == plan["version"],
                 brief=plan["brief"],
                 sections=[
                     s.model_dump(mode="json") if hasattr(s, "model_dump") else s
@@ -351,38 +370,100 @@ class RunClient:
                 )
         return result
 
-    def approve(self, run_id, owner, plan_version, decision):
-        req = self.facts.request(run_id, owner)
-        current = self.get(run_id, owner)
-        plan = self.client.get_event(run_id, "plan", timeout_seconds=0)
-        if (
-            current["status"] != "awaiting_approval"
-            or not plan
-            or plan["version"] != plan_version
-            or decision not in {"approve", "reject"}
-        ):
-            raise RunConflict("Approval is no longer pending or plan version changed")
+    def _human_command(self, run_id, owner, version, decision, topic, payload):
+        """Reuse the existing locked approval receipt and native transactional message.
+
+        Only the last accepted interaction receipt is needed: old duplicates either
+        acknowledge the same payload or fail closed, never create a new continuation.
+        """
+        receipt = topic + ":" + digest(payload)
         with self.facts.engine.begin() as db:
-            locked = self.facts.request(run_id, owner, db=db, lock=True)
-            if locked["cancel_requested"] or self.facts.now(db) >= plan["expires_at"]:
-                raise RunConflict("Approval expired or cancellation requested")
+            req = self.facts.request(run_id, owner, db=db, lock=True)
+            self.facts.validate(req)
+            old = db.execute(
+                text(
+                    "SELECT version,decision FROM por_domain.approvals WHERE run_id=:id"
+                ),
+                {"id": run_id},
+            ).first()
+            if old and old[0] == version:
+                if old[1] == receipt:
+                    if topic == "approval" and payload.get("decision") in {
+                        "approve",
+                        "reject",
+                    }:
+                        raise RunConflict("Approval already consumed")
+                    return  # committed duplicate, including a lost HTTP acknowledgement
+                raise RunConflict("This version already has a different decision")
+            current = self.get(run_id, owner)
+            pending = self.client.get_event(
+                run_id,
+                "plan" if topic == "approval" else "clarification",
+                timeout_seconds=0,
+            )
+            phase = (
+                "awaiting_approval" if topic == "approval" else "awaiting_clarification"
+            )
             if (
-                db.execute(
-                    text(
-                        "INSERT INTO por_domain.approvals VALUES (:id,:v,:d) ON CONFLICT DO NOTHING"
-                    ),
-                    {"id": run_id, "v": plan_version, "d": decision},
-                ).rowcount
-                != 1
+                req["cancel_requested"]
+                or current["status"] != phase
+                or not pending
+                or pending["version"] != version
+                or self.facts.now(db) >= pending["expires_at"]
             ):
-                raise RunConflict("Approval already consumed")
+                raise RunConflict(
+                    "Interaction expired, was cancelled, or its version changed"
+                )
+            if topic == "clarification":
+                from open_deep_research.workflow.brief import validate_answers
+
+                try:
+                    validate_answers(
+                        pending["questions"], payload["answers"], payload["skip"]
+                    )
+                except ValueError as exc:
+                    raise RunConflict(str(exc)) from exc
+            db.execute(
+                text(
+                    "INSERT INTO por_domain.approvals VALUES (:id,:v,:d) ON CONFLICT (run_id) DO UPDATE SET version=EXCLUDED.version,decision=EXCLUDED.decision"
+                ),
+                {"id": run_id, "v": version, "d": receipt},
+            )
             self.client.send_in_transaction(
                 db,
                 run_id,
-                {"owner": req["owner"], "version": plan_version, "decision": decision},
-                topic="approval",
-                idempotency_key="approval:" + plan_version,
+                dict(owner=owner, version=version, **payload),
+                topic=topic,
+                idempotency_key=topic + ":" + version,
             )
+
+    def approve(self, run_id, owner, plan_version, decision, brief_md=None):
+        if decision not in {"approve", "reject", "edit"}:
+            raise RunConflict("Invalid approval decision")
+        payload = dict(decision=decision)
+        if decision == "edit":
+            from open_deep_research.workflow.brief import validate_brief
+
+            try:
+                payload["brief_md"] = validate_brief(brief_md)
+            except ValueError as exc:
+                raise RunConflict(str(exc)) from exc
+        elif brief_md is not None:
+            raise RunConflict(
+                "Brief edits must be saved before approving their new version"
+            )
+        self._human_command(run_id, owner, plan_version, decision, "approval", payload)
+        return self.get(run_id, owner)
+
+    def clarify(self, run_id, owner, version, answers, skip=False):
+        self._human_command(
+            run_id,
+            owner,
+            version,
+            "answer",
+            "clarification",
+            dict(answers=answers, skip=skip),
+        )
         return self.get(run_id, owner)
 
     def cancel(self, run_id, owner):

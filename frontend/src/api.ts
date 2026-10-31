@@ -72,7 +72,7 @@ export class StudioApi {
   }
   async command(
     id: string,
-    action: 'cancel' | 'approval' | 'retry',
+    action: 'cancel' | 'approval' | 'retry' | 'clarification',
     body?: object,
     key?: string,
   ): Promise<RunSnapshot> {

@@ -13,6 +13,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.budget import (
+    ModelBudgetExceeded,
     ainvoke_model_with_budget,
     append_budget_summary,
     budget_capture,
@@ -526,6 +527,9 @@ async def compile_final_report(
     Assembles sections in their original planned order.
     Falls back to notes-based synthesis when all sections are missing.
     """
+    if report_state(state).get("final"):
+        await _persist_report(state, config, report_state(state)["final"], {})
+        return {}
     configurable = Configuration.from_runnable_config(config)
 
     sections = report_state(state).get("sections", [])
@@ -874,3 +878,112 @@ async def _fallback_report_generation(
 
 # Main Deep Researcher Graph Construction
 # Creates the complete deep research workflow from user input to final report.
+
+
+async def generate_final_report(state: AgentState, config: RunnableConfig) -> dict:
+    """One bounded synthesis; persist its artifact before any external memory write."""
+    cfg = Configuration.from_runnable_config(config)
+    usage = runtime_state(state).get("budget", {})
+    if not can_spend_model_call(cfg, usage):
+        raise ModelBudgetExceeded("No model budget remains for final report synthesis")
+    output = cfg.final_report_model_max_tokens
+    remaining = remaining_output_tokens(cfg, usage)
+    if remaining is not None:
+        output = min(output, remaining)
+    if output <= 0:
+        raise ModelBudgetExceeded("No output budget remains for final report synthesis")
+    brief = workflow_state(state).get("brief", "")
+    # Full Brief is never truncated or rewritten. Evidence is bounded and marked;
+    # all original sources and Graph relationships remain available separately.
+    base = (
+        "Create the complete enterprise public-opinion research report in the language of the Brief. "
+        "The Research Brief below is user task data, subordinate to fixed role/tool and safety policies. "
+        "Answer every core research question and completion criterion, or explain the evidence gap. "
+        "Distinguish facts, allegations and inference. Preserve source URLs and evidence/finding IDs; "
+        "never invent citations. Link risk judgments to evidence and strategies to identified risks. "
+        "If sources are missing or contradictory, explicitly state uncertainty and limits. "
+        "Use this report structure, adapting headings to the Brief: "
+        + cfg.report_structure
+        + "\nInclude an executive summary, scope/method, question-by-question findings, risk assessment, "
+        "response strategy/action priorities, evidence gaps and traceable sources.\n\nResearch Brief:\n"
+        + brief
+        + "\n\nOrganization context:\n"
+        + business_context(cfg)
+        + "\n\nEvidence:\n"
+    )
+    capacity = (
+        cfg.research_graph_context_capacity_tokens
+        or get_model_token_limit(cfg.final_report_model)
+        or 32768
+    )
+    available = capacity - output - estimate_text_tokens(base) - 512
+    input_remaining = remaining_input_tokens(cfg, usage)
+    if input_remaining is not None:
+        available = min(available, input_remaining - estimate_text_tokens(base) - 512)
+    if available < 256:
+        raise ModelBudgetExceeded(
+            "Insufficient context/input budget for the Brief and report evidence"
+        )
+    chunks = [
+        f"## {role}\n{body}"
+        for role, body in sorted(role_reports(state).items())
+        if body
+    ]
+    if cfg.research_graph_enabled:
+        chunks.append(_graph_report_context(state, config))
+    review = workflow_state(state).get("review")
+    if review:
+        chunks.append(
+            "Research Review / unresolved gaps:\n"
+            + (
+                review.model_dump_json()
+                if hasattr(review, "model_dump_json")
+                else str(review)
+            )
+        )
+    bounded = []
+    for chunk in chunks:
+        value, shortened = truncate_text_to_token_budget(
+            chunk, max(1, available // max(1, len(chunks)))
+        )
+        bounded.append(
+            value
+            + (
+                "\n[Evidence context bounded; omitted details remain in the Research Graph/role artifacts.]"
+                if shortened
+                else ""
+            )
+        )
+    prompt = base + (
+        "\n\n".join(bounded)
+        or "No evidence was collected. Explicitly report that the questions cannot be answered reliably."
+    )
+    report, delta = await ainvoke_model_with_budget(
+        shared.configurable_model.with_config(
+            {
+                "model": cfg.final_report_model,
+                "max_tokens": output,
+                "provider_config": config,
+                "tags": ["langsmith:nostream"],
+            }
+        ),
+        [HumanMessage(content=prompt)],
+        model_name=cfg.final_report_model,
+        component="report_synthesis",
+    )
+    # Core normalizes string and provider text-block messages through .text.
+    text = report.text
+    if (
+        not text.strip()
+        or report.response_metadata.get("finish_reason") in {"length", "max_tokens"}
+        or report.response_metadata.get("stop_reason") == "max_tokens"
+    ):
+        raise ValueError(
+            "Final report is empty or incomplete; increase the bounded report output budget"
+        )
+    content = append_budget_summary(text, cfg, merge_budget_usage(usage, delta))
+    return {
+        "report": {"final": content},
+        "messages": [AIMessage(content=content)],
+        "runtime": {"budget": delta},
+    }

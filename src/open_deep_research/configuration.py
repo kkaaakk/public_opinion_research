@@ -6,7 +6,7 @@ import os
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -1457,17 +1457,18 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": False,
-                "description": "Whether to pause after planning report sections to allow human feedback on the plan (public-opinion mode only).",
+                "description": "Whether to pause for version-bound Markdown Research Brief editing and approval.",
             }
         },
     )
+    report_mode: Literal["synthesis", "sections"] = Field(default="synthesis", description="Single synthesis by default; sections opts into long-report planning and writing.")
     report_structure: str = Field(
         default=DEFAULT_REPORT_STRUCTURE,
         metadata={
             "x_oap_ui_config": {
                 "type": "textarea",
                 "default": DEFAULT_REPORT_STRUCTURE,
-                "description": "Report structure guideline passed to the section planner.",
+                "description": "Report structure used by synthesis and the optional section planner.",
             }
         },
     )
@@ -1751,6 +1752,7 @@ class Configuration(BaseModel):
             for field_name in (
                 "allow_plan_feedback",
                 "allow_clarification",
+                "report_mode",
                 "research_model",
                 "compression_model",
                 "final_report_model",

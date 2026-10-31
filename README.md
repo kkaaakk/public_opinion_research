@@ -1,8 +1,10 @@
 # 🔬 Public Opinion Research
 
+> 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](docs/architecture/research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
+
 基于 DBOS、OpenAI Agents SDK、RAG、MCP 和四角色协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒体监控、长期记忆等能力。
 
-## 当前架构（2026-10-24）
+## 当前架构（2026-10-31）
 
 正式执行链为 **FastAPI / CLI → DBOS 3.3.0 Workflow/Step/Queue → OpenAI Agents SDK 0.24.0 → Research Graph Context Harness → 业务工具**。
 新研究默认使用持久 Run，浏览器刷新只重新订阅，停止操作会请求取消并等待清算。

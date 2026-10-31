@@ -7,6 +7,7 @@ import time
 from contextlib import ExitStack
 from copy import deepcopy
 from functools import partial
+from uuid import uuid4
 
 from agents import SQLiteSession
 from dbos import DBOS, SetEnqueueOptions, SetWorkflowID, SetWorkflowTimeout
@@ -24,6 +25,7 @@ from open_deep_research.web.run_data import (
     TERMINAL,
     RunConflict,
     digest,
+    dumps,
     public_payload,
     sdk_observation,
     timestamp,
@@ -52,8 +54,8 @@ from open_deep_research.workflow.state_utils import agents_for_new_run
 
 OPERATIONS = {
     "enrich_query_images": intake.enrich_query_images,
-    "clarify_with_user": intake.clarification_step,
-    "write_research_brief": intake.research_brief_step,
+    "plan_research": intake.plan_research,
+    "generate_final_report": reporting.generate_final_report,
     "plan_report_sections": intake.section_plan_step,
     "research_review": research.research_review,
     "section_writer": reporting.section_writer,
@@ -85,6 +87,7 @@ async def business_step(run_id, unit_id, name, state):
     cfg = deepcopy(req["data"]["config"])
     cfg["configurable"]["allow_plan_feedback"] = False
     sessions = []
+    delivery_ids = set()
 
     async def observe_business(kind, **payload):
         if kind == "effect_guard":
@@ -131,19 +134,23 @@ async def business_step(run_id, unit_id, name, state):
         allowed = sdk_observation(payload)
 
         def publish():
+            event_id = uuid4().hex
             with repo.engine.begin() as db:
                 repo.publish(
                     db,
                     run_id,
                     "sdk_event",
+                    event_id=event_id,
                     event="session_started" if kind == "sdk_session" else kind,
                     step=name,
                     unit_id=unit_id,
                     execution_id=digest({"unit": unit_id, "permit": permit}),
                     **allowed,
                 )
+            return event_id
 
-        _, cancelled = await owned_io(publish)
+        event_id, cancelled = await owned_io(publish)
+        delivery_ids.add(event_id)
         if cancelled:
             raise cancelled
         if kind == "sdk_session":
@@ -238,7 +245,9 @@ async def business_step(run_id, unit_id, name, state):
             cfg,
             Configuration.from_runnable_config(cfg).workflow_step_timeout_seconds,
         )
-        if hasattr(result, "goto"):
+        if name == "plan_research":
+            artifact = result
+        elif hasattr(result, "goto"):
             artifact = {"patch": result.update or {}, "goto": result.goto}
         else:
             artifact = {"patch": result}
@@ -277,6 +286,7 @@ async def business_step(run_id, unit_id, name, state):
                 reviewed, Configuration.from_runnable_config(cfg)
             )
         observed_usage = usage
+        artifact["delivery_ids"] = sorted(delivery_ids)
         cancelled = await persist(artifact=artifact, usage=usage)
         if cancelled:
             raise cancelled
@@ -306,6 +316,7 @@ async def business_step(run_id, unit_id, name, state):
                     "kind": failure_kind(exc),
                     "step": name,
                     "usage_complete": settled,
+                    "delivery_ids": sorted(delivery_ids),
                 },
             )
         except Exception:
@@ -346,26 +357,21 @@ async def reserve(run_id):
 
 @DBOS.workflow(name="por.plan")
 @dbos_scope
-async def planning_workflow(run_id, initial):
+async def planning_workflow(run_id, initial, round_=1):
+    # No durable human wait holds a BUSINESS queue slot or resource reservation.
     await reserve(run_id)
     state = copy_state(initial)
     try:
-        for name in (
-            "enrich_query_images",
-            "clarify_with_user",
-            "write_research_brief",
-            "plan_report_sections",
-        ):
-            outcome = await business_step(run_id, run_id + ":" + name, name, state)
+        if round_ == 1:
+            outcome = await business_step(
+                run_id, run_id + ":enrich_query_images", "enrich_query_images", state
+            )
             apply_patch(state, outcome["patch"])
-            if outcome.get("goto") == "__end__":
-                return {"state": state, "end": True}
-            if (
-                name == "write_research_brief"
-                and outcome.get("goto") != "plan_report_sections"
-            ):
-                break
-        return {"state": state, "end": False}
+        outcome = await business_step(
+            run_id, f"{run_id}:plan:{round_}", "plan_research", state
+        )
+        apply_patch(state, outcome["patch"])
+        return {"state": state, "decision": outcome["decision"]}
     finally:
         await release_step(run_id)
 
@@ -392,7 +398,7 @@ async def research_workflow(run_id, initial):
             "workflow": {
                 "type": "override",
                 "value": {
-                    "brief": state.get("workflow", {}).get("brief", ""),
+                    **state.get("workflow", {}),
                     "round": 1,
                     "review": None,
                     "pending_tasks": [],
@@ -459,7 +465,31 @@ async def research_workflow(run_id, initial):
                     role_workflow, run_id, unit, role, state
                 )
             apply_patch(state, (await handle.get_result())["patch"])
-        for name in ("section_writer", "write_final_sections", "compile_final_report"):
+        request = await load_request(run_id)
+        report_mode = request["data"]["config"]["configurable"].get(
+            "report_mode", "synthesis"
+        )
+        if report_mode == "sections":
+            # Plan from the frozen, approved specification, never the earlier draft.
+            apply_patch(
+                state,
+                (
+                    await business_step(
+                        run_id,
+                        run_id + ":plan_report_sections",
+                        "plan_report_sections",
+                        state,
+                    )
+                )["patch"],
+            )
+            report_steps = (
+                "section_writer",
+                "write_final_sections",
+                "compile_final_report",
+            )
+        else:
+            report_steps = ("generate_final_report", "compile_final_report")
+        for name in report_steps:
             apply_patch(
                 state,
                 (await business_step(run_id, run_id + ":" + name, name, state))[
@@ -487,62 +517,153 @@ async def approval_deadline():
 @DBOS.workflow(name="por.run")
 @dbos_scope
 async def run_workflow(run_id):
+    from langchain_core.messages import HumanMessage
+
+    from open_deep_research.workflow.brief import brief_metadata, validate_brief
+
     req = await load_request(run_id)
-    await send_event(run_id, "run_status", status="running")
-    with (
-        SetWorkflowID(run_id + ":planning"),
-        SetEnqueueOptions(queue_partition_key=req["owner"]),
-        SetWorkflowTimeout(req["data"]["run_seconds"]),
-    ):
-        handle = await DBOS.enqueue_workflow_async(
-            BUSINESS, planning_workflow, run_id, req["data"]["initial"]
-        )
-    planned = await handle.get_result()
-    state = planned["state"]
-    if not planned["end"]:
-        plan = {
-            "brief": state.get("workflow", {}).get("brief", ""),
-            "sections": state.get("report", {}).get("sections", []),
-        }
-        plan.update(version=digest(plan), expires_at=await approval_deadline())
-        await DBOS.set_event_async("plan", plan)
-        if req["data"]["config"]["configurable"]["allow_plan_feedback"]:
-            await DBOS.set_event_async("phase", "awaiting_approval")
-            await send_event(
-                run_id,
-                "run_status",
-                status="awaiting_approval",
-                plan_version=plan["version"],
-            )
-            decision = await DBOS.recv_async(
-                "approval", timeout_seconds=req["data"]["approval_seconds"]
-            )
-            if decision is None or decision != {
-                "owner": req["owner"],
-                "version": plan["version"],
-                "decision": "approve",
-            }:
-                await DBOS.set_event_async(
-                    "approval_end", "expired" if decision is None else "reject"
-                )
-                await send_event(
-                    run_id,
-                    "approval_ended",
-                    decision="expired" if decision is None else "reject",
-                )
-                return {"approval": "expired" if decision is None else "reject"}
-        await DBOS.set_event_async("phase", "research")
+    state = req["data"]["initial"]
+    for round_ in (1, 2):
+        await DBOS.set_event_async("phase", "planning")
         await send_event(run_id, "run_status", status="running")
         with (
-            SetWorkflowID(run_id + ":research"),
+            SetWorkflowID(run_id + f":planning:{round_}"),
             SetEnqueueOptions(queue_partition_key=req["owner"]),
             SetWorkflowTimeout(req["data"]["run_seconds"]),
         ):
             handle = await DBOS.enqueue_workflow_async(
-                BUSINESS, research_workflow, run_id, state
+                BUSINESS, planning_workflow, run_id, state, round_
             )
-        state = await handle.get_result()
-    return state
+        planned = await handle.get_result()
+        state = planned["state"]
+        decision = planned["decision"]
+        if decision["action"] == "ready":
+            break
+        if round_ == 2:
+            raise ValueError(
+                "Planning cannot ask again after clarification was resolved"
+            )
+        challenge = dict(
+            questions=decision["questions"], expires_at=await approval_deadline()
+        )
+        challenge["version"] = digest(dict(run_id=run_id, **challenge))
+        await DBOS.set_event_async("clarification", challenge)
+        await DBOS.set_event_async("phase", "awaiting_clarification")
+        await send_event(run_id, "run_status", status="awaiting_clarification")
+        reply = await DBOS.recv_async(
+            "clarification", timeout_seconds=req["data"]["approval_seconds"]
+        )
+        if reply is None:
+            await DBOS.set_event_async("approval_end", "expired")
+            await send_event(run_id, "clarification_ended", decision="expired")
+            return {"clarification": "expired"}
+        if (
+            reply.get("owner") != req["owner"]
+            or reply.get("version") != challenge["version"]
+        ):
+            raise ValueError(
+                "Clarification continuation does not match the pending request"
+            )
+        await DBOS.set_event_async("clarification_resolved", challenge["version"])
+        # Structured control was validated by admission. It is task data, never system instructions.
+        apply_patch(
+            state,
+            {
+                "messages": [
+                    HumanMessage(
+                        id="clarification-" + challenge["version"],
+                        content=(
+                            "Clarification questions: "
+                            + dumps(challenge["questions"])
+                            + "\nUser response: "
+                            + (
+                                "Skipped. Continue with existing information; do not invent unspecified details."
+                                if reply["skip"]
+                                else dumps(reply["answers"])
+                            )
+                        )
+                    )
+                ],
+                "workflow": {"clarification_complete": True},
+            },
+        )
+
+    brief = validate_brief(state["workflow"]["brief"])
+    plan = dict(
+        brief=brief,
+        sections=[],
+        expires_at=await approval_deadline(),
+        **brief_metadata(brief, 1, run_id),
+    )
+    while True:
+        await DBOS.set_event_async("plan", plan)
+        if not req["data"]["config"]["configurable"]["allow_plan_feedback"]:
+            break
+        await DBOS.set_event_async("phase", "awaiting_approval")
+        await send_event(
+            run_id,
+            "run_status",
+            status="awaiting_approval",
+            plan_version=plan["version"],
+        )
+        # Edits retain the original deadline; editing cannot extend an approval indefinitely.
+        command = await DBOS.recv_async(
+            "approval",
+            timeout_seconds=max(0, plan["expires_at"] - await interaction_clock()),
+        )
+        if command is None or command.get("decision") == "reject":
+            reason = "expired" if command is None else "reject"
+            await DBOS.set_event_async("approval_end", reason)
+            await send_event(run_id, "approval_ended", decision=reason)
+            return {"approval": reason}
+        if (
+            command.get("owner") != req["owner"]
+            or command.get("version") != plan["version"]
+        ):
+            raise ValueError(
+                "Approval continuation does not match the current Brief version"
+            )
+        if command["decision"] == "edit":
+            brief = validate_brief(command["brief_md"])
+            plan = dict(
+                brief=brief,
+                sections=[],
+                expires_at=plan["expires_at"],
+                **brief_metadata(brief, plan["revision"] + 1, run_id),
+            )
+            continue
+        if command["decision"] != "approve":
+            raise ValueError("Unknown approval decision")
+        break
+    apply_patch(
+        state,
+        {
+            "workflow": {
+                "brief": plan["brief"],
+                "brief_version": plan["version"],
+                "brief_hash": plan["content_hash"],
+                "brief_revision": plan["revision"],
+            }
+        },
+    )
+    await DBOS.set_event_async("brief_locked", plan["version"])
+    await DBOS.set_event_async("phase", "research")
+    await send_event(run_id, "run_status", status="running")
+    with (
+        SetWorkflowID(run_id + ":research"),
+        SetEnqueueOptions(queue_partition_key=req["owner"]),
+        SetWorkflowTimeout(req["data"]["run_seconds"]),
+    ):
+        handle = await DBOS.enqueue_workflow_async(
+            BUSINESS, research_workflow, run_id, state
+        )
+    return await handle.get_result()
+
+
+@DBOS.step()
+async def interaction_clock():
+    with facts().engine.connect() as db:
+        return facts().now(db)
 
 
 @DBOS.workflow(name="por.events")
@@ -551,6 +672,7 @@ async def events_workflow(run_id):
     cursor = 0
     generation = 0
     seen = set()
+    delivered_ids = set()
     terminal = None
     history = None
     acknowledged = False
@@ -571,6 +693,8 @@ async def events_workflow(run_id):
         event = await public_event(event)
         await DBOS.write_stream_async("events", event)
         await DBOS.set_event_async("cursor", cursor)
+        if event.get("event_id"):
+            delivered_ids.add(event["event_id"])
         if event["type"] != "run_status" or event.get("status") in TERMINAL:
             seen.add(event["type"])
         if event["type"] == "done":
@@ -585,7 +709,11 @@ async def events_workflow(run_id):
         required = {"settlement", "usage", "run_status"}
         if terminal:
             required.update(terminal.get("expected_events", []))
-        if not terminal or not required.issubset(seen):
+        if (
+            not terminal
+            or not required.issubset(seen)
+            or not set(terminal.get("expected_event_ids", [])).issubset(delivered_ids)
+        ):
             continue
         if history:
             # Preserve the public archive-done tail, then publish its receipts.
@@ -645,6 +773,17 @@ async def completion_facts(run_id, cleanup_expired=False):
     if result["settlement"] == "pending":
         return None
     await asyncio.to_thread(facts().release, run_id)
+    # Delivery metadata from committed unit facts, not execution authorization.
+    units = await asyncio.to_thread(facts().units, run_id)
+    result["expected_event_ids"] = sorted(
+        {
+            event_id
+            for unit in units
+            for event_id in (unit["artifact"] or unit["error"] or {}).get(
+                "delivery_ids", []
+            )
+        }
+    )
     return result
 
 
@@ -787,6 +926,7 @@ async def finalize_workflow(run_id):
             status=result["status"],
             archive_status="pending",
             generation=result["generation"],
+            expected_event_ids=result.get("expected_event_ids", []),
             expected_events=["settlement", "usage", "run_status"]
             + (["report"] if result["report"] else [])
             + (["error"] if result["error"] else []),

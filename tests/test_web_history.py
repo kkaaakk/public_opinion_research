@@ -406,7 +406,7 @@ def test_failed_sse_run_preserves_nested_role_outputs(native_case, monkeypatch):
         k: result["usage"][k]
         for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
     }
-    assert result["usage"]["model_calls"] == 22
+    assert result["usage"]["model_calls"] == 20
     events = case.client.read_events(run["run_id"], "alice", 0, 1000)
     assert any(e["type"] == "error" for e in events)
     assert any(e["type"] == "history_saved" for e in events)
@@ -425,6 +425,34 @@ def test_no_final_report_still_creates_an_incomplete_history_record(
     async def fail(*args):
         raise RuntimeError("Final report generation failed")
 
+    monkeypatch.setitem(OPERATIONS, "generate_final_report", fail)
+    result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
+    record = case.history.get(result["history_id"], owner="alice")
+    assert record["status"] == "failed"
+    assert result["status"] == "failed"
+    assert result["settlement"] == "settled"
+    assert result["retry_safe"] is True
+    assert not record["report"]
+    assert len(record["role_reports"]) == 4
+    assert len(case.models) == 4
+    assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
+    assert result["usage"]["model_calls"] == 25
+    assert record["usage"] == {
+        k: result["usage"][k]
+        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+    }
+
+
+@pytest.mark.integration
+def test_memory_boundary_failure_preserves_committed_report_and_stays_unsafe(
+    native_case, monkeypatch
+):
+    from open_deep_research.workflow.dbos_workflow import OPERATIONS
+
+    async def fail(*args):
+        raise RuntimeError("Unconfirmed report memory boundary")
+
+    case = native_case
     monkeypatch.setitem(OPERATIONS, "compile_final_report", fail)
     result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
     record = case.history.get(result["history_id"], owner="alice")
@@ -432,11 +460,16 @@ def test_no_final_report_still_creates_an_incomplete_history_record(
     assert result["status"] == "interrupted"
     assert result["settlement"] == "unresolved"
     assert result["retry_safe"] is False
-    assert not record["report"]
-    assert len(record["role_reports"]) == 4
+    assert record["report"] == result["report"]
+    assert record["report"].startswith(
+        "FINAL brand recall report, sourced and reviewed"
+    )
+    assert len(record["role_reports"]) == len(case.models) == 4
+    assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
+    assert result["usage"]["model_calls"] == 26
     assert record["usage"] == {
-        k: result["usage"][k]
-        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+        key: result["usage"][key]
+        for key in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
     }
 
 

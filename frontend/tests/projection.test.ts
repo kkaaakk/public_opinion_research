@@ -1,6 +1,32 @@
 import { expect, it } from 'vitest';
 import { measuredDuration, projectRun, sdkSpans } from '../src/projection';
 import { event, snapshot } from './fixtures';
+
+it('marks unified Plan and synthesis complete without waiting for retired optional steps', () => {
+  const steps = [
+    'enrich_query_images',
+    'plan_research',
+    'generate_final_report',
+    'compile_final_report',
+  ];
+  const events = steps.flatMap((step, index) => [
+    event(index * 2 + 1, { type: 'step_started', step, execution_id: step }),
+    event(index * 2 + 2, { type: 'step_completed', step, execution_id: step }),
+  ]);
+  const result = projectRun(events);
+  expect(result.statuses.intake).toBe('completed');
+  expect(result.statuses.planning).toBe('completed');
+  expect(result.statuses.reporting).toBe('completed');
+});
+
+it('keeps clarification separate from approval in the observer projection', () => {
+  const result = projectRun(
+    [],
+    snapshot({ status: 'awaiting_clarification', events_paused: true }),
+  );
+  expect(result.statuses.planning).toBe('paused');
+  expect(result.statuses.approval).toBe('waiting');
+});
 it('projects concurrent producers without completing future nodes', () => {
   const p = projectRun([
     event(1, { type: 'step_started', step: 'public_signal_agent', execution_id: 'a' }),

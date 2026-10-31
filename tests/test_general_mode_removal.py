@@ -93,15 +93,15 @@ class TestGraphStructure:
         )
         assert "business_scenario" not in source
         assert (
-            'for name in ("section_writer", "write_final_sections", "compile_final_report"):'
+            'for name in report_steps:'
             in source
         )
 
     def test_public_opinion_nodes_exist(self):
         assert {
             "enrich_query_images",
-            "clarify_with_user",
-            "write_research_brief",
+            "plan_research",
+            "generate_final_report",
             "plan_report_sections",
             "research_review",
             "section_writer",

@@ -10,6 +10,7 @@ export type RunStatus =
   | 'queued'
   | 'running'
   | 'awaiting_approval'
+  | 'awaiting_clarification'
   | 'cancelling'
   | 'completed'
   | 'failed'
@@ -24,6 +25,7 @@ export type RunRequest = {
   org_context: string;
   rag_enabled: boolean;
   require_approval: boolean;
+  allow_clarification?: boolean;
 };
 export type RoleReport = {
   role: string;
@@ -31,7 +33,20 @@ export type RoleReport = {
   stage_id?: string;
   completed_at?: string;
 };
+export type Clarification = {
+  version: string;
+  expires_at: string;
+  questions: {
+    id: string;
+    text: string;
+    kind: 'single' | 'multiple' | 'text';
+    options: string[];
+  }[];
+};
 export type Plan = {
+  revision?: number;
+  content_hash?: string;
+  locked?: boolean;
   version: string;
   brief: string;
   sections: { name: string }[];
@@ -59,6 +74,7 @@ export type RunSnapshot = {
   report: string;
   role_reports: RoleReport[];
   plan: Plan | null;
+  clarification?: Clarification | null;
   request?: Partial<RunRequest>;
   approval_required?: boolean;
   archive_status?: string;
@@ -299,7 +315,16 @@ export function parseEvent(value: unknown): RunEvent {
 export function parseSnapshot(value: unknown): RunSnapshot {
   const v = record(value);
   const status = string(v.status) as RunStatus;
-  if (!['queued', 'running', 'awaiting_approval', 'cancelling', ...TERMINAL].includes(status))
+  if (
+    ![
+      'queued',
+      'running',
+      'awaiting_approval',
+      'awaiting_clarification',
+      'cancelling',
+      ...TERMINAL,
+    ].includes(status)
+  )
     throw new ProtocolError('未知 Run 状态');
   const reports = parseRoleReports(v.role_reports);
   let plan: Plan | null = null;
@@ -307,6 +332,9 @@ export function parseSnapshot(value: unknown): RunSnapshot {
     const p = record(v.plan);
     plan = {
       version: string(p.version),
+      revision: p.revision === undefined ? undefined : integer(p.revision),
+      content_hash: optionalString(p.content_hash),
+      locked: p.locked === undefined ? undefined : boolean(p.locked),
       brief: string(p.brief),
       expires_at: string(p.expires_at),
       sections: array(p.sections).map((s) => ({ name: string(record(s).name) })),
@@ -330,6 +358,26 @@ export function parseSnapshot(value: unknown): RunSnapshot {
     report: string(v.report),
     role_reports: reports,
     plan,
+    clarification: v.clarification
+      ? (() => {
+          const c = record(v.clarification);
+          return {
+            version: string(c.version),
+            expires_at: string(c.expires_at),
+            questions: array(c.questions).map((item) => {
+              const q = record(item);
+              if (!['single', 'multiple', 'text'].includes(string(q.kind)))
+                throw new ProtocolError('无效澄清问题类型');
+              return {
+                id: string(q.id),
+                text: string(q.text),
+                kind: q.kind as 'single' | 'multiple' | 'text',
+                options: array(q.options).map(string),
+              };
+            }),
+          };
+        })()
+      : null,
     request: parseRequest(v.request),
     approval_required: v.approval_required === undefined ? undefined : boolean(v.approval_required),
     current_step: optionalString(v.current_step),

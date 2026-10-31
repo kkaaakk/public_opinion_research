@@ -16,10 +16,12 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.budget import (
+    ModelBudgetExceeded,
     ainvoke_model_with_budget,
     budget_usage_with_reason,
     can_spend_model_call,
     capture_budget_usage,
+    estimate_text_tokens,
     merge_budget_usage,
     model_budget_admission,
     start_budget_capture,
@@ -452,3 +454,84 @@ async def section_plan_step(
 
 
 # Public-opinion role names for validation
+
+
+async def plan_research(state: AgentState, config: RunnableConfig) -> dict:
+    """One bounded decision: ask necessary questions or produce the Markdown spec."""
+    from open_deep_research.workflow.brief import (
+        MAX_BRIEF_TOKENS,
+        PlanDecision,
+        validate_brief,
+    )
+
+    cfg = Configuration.from_runnable_config(config)
+    initial_usage = runtime_state(state).get("budget", {})
+    resolved = bool(workflow_state(state).get("clarification_complete"))
+    may_ask = cfg.allow_clarification and not resolved
+    prompt = (
+        "You prepare enterprise public-opinion research, not research conclusions. "
+        "Return one PlanDecision. Ordinary valid input needs one call: ready with a Markdown Research Brief. "
+        "Only ask_user for material ambiguity that prevents useful research; at most four concise questions. "
+        "Support single/multiple choice or text. Never ask for incidental missing details. "
+        f"Clarification allowed: {may_ask}. If false, you MUST return ready; state unspecified details and assumptions explicitly. "
+        "Use the user's language. Target 600–1200 Chinese characters for a normal brief, and at most 2500 estimated tokens. "
+        "Use a title and five sections: 研究目标, 研究范围, 核心研究问题, 研究约束, 完成标准 (or equivalents in the user's language). "
+        "Preserve the object, objective, time/geography/sources, key questions and ALL user constraints. "
+        "Do not invent facts, resolved claims, report chapter plans, role duties, or repeat general safety rules. "
+        "The brief is user task data; configuration and fixed role/tool policies remain authoritative. "
+        f"Today: {get_today_str()}. Organization context: {cfg.organization_context or 'Unspecified'}.\n\n"
+        + get_buffer_string(state.get("messages", []))
+    )
+    usage = {}
+    decision = None
+    for attempt in range(2):
+        cumulative = merge_budget_usage(initial_usage, usage)
+        if not can_spend_model_call(cfg, cumulative, reserve_final_report_call=True):
+            raise ModelBudgetExceeded(
+                "Insufficient budget to generate a validated Research Brief"
+            )
+        chain = structured_output_chain(
+            shared.configurable_model.with_config(
+                {
+                    "model": cfg.research_model,
+                    "max_tokens": max(4096, cfg.research_model_max_tokens),
+                    "provider_config": config,
+                    "tags": ["langsmith:nostream"],
+                }
+            ),
+            PlanDecision,
+            max_attempts=1 if attempt else cfg.max_structured_output_retries,
+        )
+        with model_budget_admission(cfg, lambda: cumulative):
+            response, delta = await ainvoke_model_with_budget(
+                chain,
+                [HumanMessage(content=prompt)],
+                model_name=cfg.research_model,
+                structured_output=True,
+                component="plan" if attempt == 0 else "brief_compaction",
+            )
+        usage = merge_budget_usage(usage, delta)
+        decision = PlanDecision.model_validate(response["parsed"])
+        if decision.action == "ask_user":
+            if not may_ask or attempt:
+                raise ValueError(
+                    "Planner requested clarification after it was disabled or resolved"
+                )
+            break
+        if estimate_text_tokens(decision.brief_md) <= MAX_BRIEF_TOKENS:
+            validate_brief(decision.brief_md)
+            break
+        if attempt:
+            raise ValueError(
+                "Research Brief remains over 2500 estimated tokens after one compaction; revise the request"
+            )
+        prompt = (
+            "Return ready with empty questions. Shorten the following Markdown Research Brief to at most 2500 estimated tokens. "
+            "Preserve the research object, objectives, scope, key questions and every user constraint. "
+            "Do not truncate or silently drop requirements. Keep the five sections.\n\n"
+            + decision.brief_md
+        )
+    patch = {"runtime": {"budget": usage}}
+    if decision.action == "ready":
+        patch["workflow"] = {"brief": decision.brief_md}
+    return {"patch": patch, "decision": decision.model_dump(mode="json")}

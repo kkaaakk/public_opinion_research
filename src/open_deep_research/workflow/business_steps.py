@@ -57,7 +57,7 @@ async def _step(
             if name == "research_review"
             else "report_generation"
             if name
-            in {"section_writer", "write_final_sections", "compile_final_report"}
+            in {"section_writer", "write_final_sections", "compile_final_report", "generate_final_report"}
             else None
         )
         observation = (
@@ -119,6 +119,8 @@ async def _step(
 SAFE_STEPS = frozenset(
     {
         "enrich_query_images",
+        "plan_research",
+        "generate_final_report",
         "clarify_with_user",
         "write_research_brief",
         "plan_report_sections",

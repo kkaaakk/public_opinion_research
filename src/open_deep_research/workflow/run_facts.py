@@ -229,7 +229,9 @@ class RunFacts:
                 return False
             inserted = db.execute(
                 text(
-                    "INSERT INTO por_domain.approvals VALUES (:id,:v,'expired') ON CONFLICT DO NOTHING"
+                    "INSERT INTO por_domain.approvals VALUES (:id,:v,'expired') "
+                    "ON CONFLICT (run_id) DO UPDATE SET version=EXCLUDED.version,decision='expired' "
+                    "WHERE por_domain.approvals.version<>EXCLUDED.version"
                 ),
                 {"id": run_id, "v": plan["version"]},
             ).rowcount

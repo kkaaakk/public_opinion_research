@@ -39,8 +39,8 @@ def test_research_subgraph_contract():
     assert RESEARCH_ROLES == ("public_signal", "internal_knowledge")
     assert set(OPERATIONS) == {
         "enrich_query_images",
-        "clarify_with_user",
-        "write_research_brief",
+        "plan_research",
+        "generate_final_report",
         "plan_report_sections",
         "research_review",
         "section_writer",

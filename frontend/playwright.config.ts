@@ -12,7 +12,7 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     browserName: 'chromium',
-    channel: 'chromium',
+    channel: process.env.STUDIO_BROWSER_CHANNEL ?? 'chromium',
     viewport: { width: 1600, height: 1000 },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

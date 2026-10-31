@@ -10,8 +10,8 @@ export const PHASES = [
   {
     id: 'planning',
     label: 'Planning',
-    detail: '研究简报与章节规划',
-    steps: ['write_research_brief', 'plan_report_sections'],
+    detail: '统一 Plan / Markdown Brief',
+    steps: ['plan_research', 'write_research_brief', 'plan_report_sections'],
   },
   { id: 'approval', label: 'Approval', detail: '不可变计划审批', steps: [] },
   {
@@ -48,7 +48,12 @@ export const PHASES = [
     id: 'reporting',
     label: 'Report Generation',
     detail: '章节 / 最终报告 / 记忆',
-    steps: ['section_writer', 'write_final_sections', 'compile_final_report'],
+    steps: [
+      'generate_final_report',
+      'section_writer',
+      'write_final_sections',
+      'compile_final_report',
+    ],
   },
 ] as const;
 export type PhaseId = (typeof PHASES)[number]['id'];
@@ -89,11 +94,12 @@ export const STATUS_LABELS: Record<string, string> = {
   failed: '失败',
   cancelled: '已取消',
   interrupted: '中断 / 待核对',
-  paused: '等待审批',
+  paused: '等待人工输入',
   partial: '部分完成',
   skipped: '已跳过',
   queued: '等待调度',
   awaiting_approval: '等待审批',
+  awaiting_clarification: '等待补充需求',
   cancelling: '取消与清算中',
   settled: '已清算',
   pending: '清算中',
@@ -295,6 +301,7 @@ export function projectRun(
     generation = snapshot.generation;
     usage = snapshot.usage;
     if (status === 'awaiting_approval') approval = 'paused';
+
     if (snapshot.approval_required === false && snapshot.plan && approval === 'waiting')
       approval = 'skipped';
   }
@@ -310,7 +317,19 @@ export function projectRun(
   statuses.approval = approval;
   for (const p of PHASES) {
     if (p.id === 'approval') continue;
-    const latest = p.steps.map((step) => instances.findLast((i) => i.step === step));
+    // Historical phase steps remain readable; current execution only waits for
+    // the active pipeline's actual steps, not retired or optional writers.
+    const unifiedPlan = instances.some((i) => i.step === 'plan_research');
+    const synthesis = instances.some((i) => i.step === 'generate_final_report');
+    const steps =
+      p.id === 'planning' && unifiedPlan
+        ? ['plan_research']
+        : p.id === 'intake' && unifiedPlan
+          ? ['enrich_query_images']
+          : p.id === 'reporting' && synthesis
+            ? ['generate_final_report', 'compile_final_report']
+            : p.steps;
+    const latest = steps.map((step) => instances.findLast((i) => i.step === step));
     const values = latest.map((i) => i?.status ?? 'waiting');
     statuses[p.id] = values.includes('running')
       ? 'running'
@@ -328,6 +347,7 @@ export function projectRun(
                   ? 'partial'
                   : 'waiting';
   }
+  if (status === 'awaiting_clarification') statuses.planning = 'paused';
   return { statuses, instances, followups, generation, status, settlement, usage };
 }
 

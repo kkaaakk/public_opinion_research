@@ -294,7 +294,7 @@ async function durableRequest(path, options = {}) {
 }
 
 function showDurableState(state) {
-    const labels = { queued: '等待执行', running: '研究中', awaiting_approval: '等待计划审批',
+    const labels = { queued: '等待执行', running: '研究中', awaiting_approval: '等待计划审批', awaiting_clarification: '等待补充需求',
         cancelling: '正在停止并清算', completed: '已完成', failed: '运行失败',
         cancelled: '已停止', interrupted: '运行中断，需要核对' };
     statusText.textContent = labels[state.status] || state.status;
@@ -303,8 +303,11 @@ function showDurableState(state) {
     if (state.history_id) handleEvent({ type: 'history_saved', id: state.history_id,
         status: state.status, completed_at: state.terminated_at });
     document.getElementById('approval-panel').classList.toggle('hidden', state.status !== 'awaiting_approval');
+    showClarification(state);
     if (state.status === 'awaiting_approval') {
+        if (durablePlanVersion !== state.plan.version) document.getElementById('brief-edit').value = state.plan.brief;
         durablePlanVersion = state.plan.version;
+        durableBrief = state.plan.brief;
         document.getElementById('approval-plan').textContent = state.plan.brief + '\n\n'
             + state.plan.sections.map(section => section.name + '\n' + section.description).join('\n\n');
     }
@@ -338,7 +341,7 @@ async function followDurableRun(request) {
             for (const stage of state.role_reports || []) addLog(stage.role + '_agent', stage.content);
             hydrate = false;
         }
-        if (state.status === 'awaiting_approval') return;
+        if (['awaiting_approval', 'awaiting_clarification'].includes(state.status)) return;
         if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status) && state.settlement !== 'pending') {
             researchFailed = state.status !== 'completed';
             if (state.archive_status === 'pending') {
@@ -387,12 +390,15 @@ async function followDurableRun(request) {
 
 async function decidePlan(decision) {
     if (!durableRun?.runId || !durablePlanVersion || approvalSubmitting) return;
+    if (decision === 'approve' && durableBrief !== document.getElementById('brief-edit').value.trim()) {
+        statusText.textContent = '请先保存 Brief 新版本，再批准执行'; return;
+    }
     approvalSubmitting = true;
     const buttons = ['approve-plan-btn', 'reject-plan-btn'].map(id => document.getElementById(id));
     buttons.forEach(button => { button.disabled = true; });
     try {
         await durableRequest('/api/runs/' + durableRun.runId + '/approval', { method: 'POST',
-            body: JSON.stringify({ plan_version: durablePlanVersion, decision }) });
+            body: JSON.stringify({ plan_version: durablePlanVersion, decision, ...(decision === 'edit' ? {brief_md: document.getElementById('brief-edit').value} : {}) }) });
         durablePlanVersion = null;
         document.getElementById('approval-panel').classList.add('hidden');
         await startResearch(true);
@@ -734,4 +740,44 @@ function toast(msg) {
     document.body.appendChild(el);
     // 移除本次创建的提示节点，不影响之后产生的其他提示。
     setTimeout(() => el.remove(), 2000);
+}
+
+
+let durableClarification = null;
+let durableBrief = '';
+function showClarification(state) {
+    const panel = document.getElementById('clarification-panel');
+    panel.classList.toggle('hidden', state.status !== 'awaiting_clarification');
+    if (state.status !== 'awaiting_clarification' || !state.clarification || durableClarification?.version === state.clarification.version) return;
+    durableClarification = state.clarification;
+    const container = document.getElementById('clarification-questions');
+    container.replaceChildren();
+    for (const question of durableClarification.questions) {
+        const field = document.createElement('fieldset');
+        const legend = document.createElement('legend'); legend.textContent = question.text; field.append(legend);
+        if (question.kind === 'text') {
+            const input = document.createElement('textarea'); input.name = question.id; input.maxLength = 4000; input.setAttribute('aria-label', question.text); field.append(input);
+        } else for (const option of question.options) {
+            const label = document.createElement('label'); const input = document.createElement('input');
+            input.type = question.kind === 'single' ? 'radio' : 'checkbox'; input.name = question.id; input.value = option;
+            label.append(input, document.createTextNode(option)); field.append(label);
+        }
+        container.append(field);
+    }
+}
+async function answerClarification(skip) {
+    if (!durableRun?.runId || !durableClarification || approvalSubmitting) return;
+    approvalSubmitting = true;
+    try {
+        const answers = {};
+        if (!skip) for (const question of durableClarification.questions) {
+            const inputs = Array.from(document.querySelectorAll('#clarification-questions input, #clarification-questions textarea')).filter(input => input.name === question.id);
+            if (question.kind === 'text') {if (inputs[0].value.trim()) answers[question.id] = inputs[0].value;}
+            else {const selected = inputs.filter(input => input.checked).map(input => input.value); if (selected.length) answers[question.id] = question.kind === 'single' ? selected[0] : selected;}
+        }
+        await durableRequest('/api/runs/' + durableRun.runId + '/clarification', {method: 'POST', body: JSON.stringify({version: durableClarification.version, answers, skip})});
+        document.getElementById('clarification-panel').classList.add('hidden');
+        await startResearch(true);
+    } catch (error) {statusText.textContent = error.message;}
+    finally {approvalSubmitting = false;}
 }

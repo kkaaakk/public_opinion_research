@@ -26,6 +26,7 @@ export function CreateDialog({
     org_context: '',
     rag_enabled: true,
     require_approval: true,
+    allow_clarification: true,
   });
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -97,6 +98,14 @@ export function CreateDialog({
               onChange={(e) => setRequest({ ...request, require_approval: e.target.checked })}
             />
             执行前审批计划
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={request.allow_clarification ?? true}
+              onChange={(e) => setRequest({ ...request, allow_clarification: e.target.checked })}
+            />
+            必要时澄清研究需求
           </label>
         </div>
         <p className="note">

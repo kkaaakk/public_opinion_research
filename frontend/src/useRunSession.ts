@@ -106,7 +106,11 @@ export function useRunSession() {
       setBusy(false);
     }
   }
-  async function command(action: 'cancel' | 'approval' | 'retry', decision?: 'approve' | 'reject') {
+  async function command(
+    action: 'cancel' | 'approval' | 'retry' | 'clarification',
+    decision?: 'approve' | 'reject',
+    payload?: object,
+  ) {
     if (!run || run.run_id !== runId || busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
@@ -128,11 +132,12 @@ export function useRunSession() {
       const result = await api.command(
         run.run_id,
         action,
-        action === 'approval'
-          ? { plan_version: run.plan?.version, decision }
-          : action === 'retry'
-            ? { state_version: retry!.state_version }
-            : undefined,
+        payload ??
+          (action === 'approval'
+            ? { plan_version: run.plan?.version, decision }
+            : action === 'retry'
+              ? { state_version: retry!.state_version }
+              : undefined),
         retry?.key,
       );
       if (action === 'retry') commit({ ...session, retry: undefined });
@@ -143,7 +148,9 @@ export function useRunSession() {
           ? '取消请求已提交；继续观察 SDK 清算与归档。'
           : action === 'retry'
             ? '重试请求已确认；只有 durable Finalizer 可以应用授权。'
-            : '审批决定已提交。',
+            : action === 'clarification'
+              ? '澄清回答已提交，继续原研究任务。'
+              : '审批或 Brief 版本修改已提交。',
       );
     } catch (error) {
       // Authentication/rate-limit failures cannot acknowledge an earlier lost ACK.

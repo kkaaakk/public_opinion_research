@@ -1875,3 +1875,27 @@ dialog::backdrop {
     gap: 8px;
   }
 }
+
+.approval-body textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.approval-body fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+.approval-body fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.tone-awaiting_clarification {
+  color: #936413;
+}
+
+.approval .panel-head h2 {
+  font: inherit;
+  margin: 0;
+}

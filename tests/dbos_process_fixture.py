@@ -56,7 +56,7 @@ from open_deep_research.workflow.run_facts import RunFacts, facts
 
 def install(directory, scenario):
     patch = pytest.MonkeyPatch()
-    install_sdk(patch, directory / "t")
+    install_sdk(patch, directory / "t", "clarify" if scenario == "clarification" else "normal")
     store = history.Neo4jHistoryStore(
         GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
     )
