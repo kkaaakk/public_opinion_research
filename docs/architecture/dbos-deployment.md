@@ -1,5 +1,7 @@
 # DBOS production execution — Phase 5
 
+> 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
+
 All new research uses PostgreSQL + DBOS. Web, `/api/runs`, `/api/research` and
 `deep-research` CLI share the durable Run API. No LangGraph Server is started.
 The former `python`/`openai_agents` request values are validated input aliases
@@ -8,7 +10,7 @@ only; Configuration no longer contains runtime/backend selection fields.
 
 Optional Langfuse/OTel tracing defaults off and is configured in API and Executor
 environments. It adds no execution database or journal commands; the existing
-`dbos-phase5-studio-v1` version and drain rules remain. See
+matching-release drain rules remain; current version is `dbos-brief-spec-v1`. See
 [setup, privacy, recovery and rollback](observability.md).
 
 Final acceptance of PR #32 uses an official isolated Langfuse 4.70.1 server and

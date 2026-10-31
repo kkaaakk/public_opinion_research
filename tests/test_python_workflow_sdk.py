@@ -35,6 +35,7 @@ from open_deep_research.state import (
     Sections,
 )
 from open_deep_research.workflow import shared
+from open_deep_research.workflow.brief import PlanDecision, PlanQuestion
 
 
 def test_fixed_fixture_repeated_sdk_runs_preserve_context_and_evidence(
@@ -94,6 +95,11 @@ def install_sdk(monkeypatch, tmp_path, mode="normal", *, local_tool=None):
     class WorkflowServices(Services):
         def with_structured_output(self, schema, include_raw=False):
             values = {
+                PlanDecision: PlanDecision(
+                    action="ready",
+                    questions=[],
+                    brief_md="# Brand recall research\n\n## Objective\nEstablish reliable recall facts.\n\n## Scope\nBrand, last 30 days, geography unspecified.\n\n## Core questions\nWhat happened and which sources support it?\n\n## Constraints\nDistinguish allegations from facts; cite sources.\n\n## Completion criteria\nAnswer the question or explain missing evidence; match risk and strategy.",
+                ),
                 ClarifyWithUser: ClarifyWithUser(
                     need_clarification=mode == "clarify",
                     question="Which brand?",
@@ -110,7 +116,22 @@ def install_sdk(monkeypatch, tmp_path, mode="normal", *, local_tool=None):
 
             async def reply(messages, config=None):
                 raw = await self.raw.ainvoke(messages, config)
-                return {"raw": raw, "parsed": values[schema], "parsing_error": None}
+                parsed = values[schema]
+                if (
+                    schema is PlanDecision
+                    and (mode == "clarify" or "browser-clarify" in str(messages))
+                    and "Clarification allowed: True." in str(messages)
+                ):
+                    parsed = PlanDecision(
+                        action="ask_user",
+                        questions=[
+                            PlanQuestion(
+                                id="brand", text="Which brand?", kind="text", options=[]
+                            )
+                        ],
+                        brief_md="",
+                    )
+                return {"raw": raw, "parsed": parsed, "parsing_error": None}
 
             return RunnableLambda(reply)
 

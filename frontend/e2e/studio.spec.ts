@@ -28,7 +28,8 @@ async function retryObservedFailure(page: Page, id: string) {
     const before = (await page.locator('.run-context').innerText()).match(/Gen (\d+) · v(\d+)/);
     expect(before).not.toBeNull();
     const pending = page.waitForResponse(
-      (response) => response.request().method() === 'POST' && response.url().endsWith(`/api/runs/${id}/retry`),
+      (response) =>
+        response.request().method() === 'POST' && response.url().endsWith(`/api/runs/${id}/retry`),
     );
     await page.getByRole('button', { name: '安全重试', exact: true }).click();
     const response = await pending;
@@ -49,7 +50,11 @@ async function retryObservedFailure(page: Page, id: string) {
     expect(latest.retry_safe && latest.events_complete).toBeTruthy();
     expect(latest.settlement).toBe('settled');
     expect(latest.state_version).toBeGreaterThan(Number(before![2]));
-    await expect.poll(async () => Number((await page.locator('.run-context').innerText()).match(/· v(\d+)/)?.[1])).toBeGreaterThanOrEqual(latest.state_version);
+    await expect
+      .poll(async () =>
+        Number((await page.locator('.run-context').innerText()).match(/· v(\d+)/)?.[1]),
+      )
+      .toBeGreaterThanOrEqual(latest.state_version);
   }
   throw new Error('The observed safe failure kept advancing before retry admission');
 }
@@ -97,7 +102,7 @@ test('actual FastAPI → DBOS → SDK → Graph: approval, trace, replay, refres
   await expect(page.locator('.evidence-detail')).toContainText('引用与关系');
   await expect(page.locator('.relation')).not.toHaveCount(0);
   await page.getByRole('tab', { name: '报告', exact: true }).click();
-  await expect(page.locator('.markdown')).toContainText('FINAL brand recall report');
+  await expect(page.locator('.report-panel .markdown')).toContainText('FINAL brand recall report');
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Markdown 导出' }).click();
   expect((await download).suggestedFilename()).toBe('final.md');
@@ -124,7 +129,7 @@ test('actual FastAPI → DBOS → SDK → Graph: approval, trace, replay, refres
   await expect(
     page.getByText('报告归档与 DBOS 执行事件独立。此视图不代表完整 Trace。'),
   ).toBeVisible();
-  await expect(page.locator('.markdown')).toContainText('FINAL brand recall report');
+  await expect(page.locator('.report-panel .markdown')).toContainText('FINAL brand recall report');
   expect(errors).toEqual([]);
 });
 

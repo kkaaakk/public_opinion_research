@@ -163,8 +163,8 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
         if s.instrumentation_scope.name == "openinference.instrumentation.langchain"
     ]
     assert len(tools) == 2 and len(sdk_llms) == 6
-    assert len(lc_llms) == 15
-    assert sum(s.attributes["llm.token_count.total"] for s in lc_llms) == 150
+    assert len(lc_llms) == 13
+    assert sum(s.attributes["llm.token_count.total"] for s in lc_llms) == 130
     assert (
         len(llms) == result["usage"]["model_calls"] - 7
     )  # fixture's saved starting budget
@@ -189,7 +189,7 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
         "context_build",
         "research_graph_write",
     } <= {s.name for s in spans}
-    assert result["usage"]["model_calls"] == 28
+    assert result["usage"]["model_calls"] == 26
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
     # Read/SSE projections do not create spans or repeat work.
     count = len(spans)
@@ -225,7 +225,7 @@ def test_safe_retry_distinguishes_generation_without_repeating_producers(
     assert len({s.context.trace_id for s in reviews}) == 1
     assert reviews[0].status.status_code == StatusCode.ERROR
     assert all("secret-review-error" not in s.to_json() for s in spans)
-    assert final["usage"]["model_calls"] == 28
+    assert final["usage"]["model_calls"] == 26
     assert len(case.models) == 4 and case.calls == {
         "public_signal": 1,
         "internal_knowledge": 1,
@@ -359,7 +359,7 @@ def test_actual_process_recovery_joins_persisted_context_and_never_replays_effec
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == before
         result = client.get(run["run_id"], "alice")
         if scenario == "checkpoint":
-            assert result["usage"]["model_calls"] == 28
+            assert result["usage"]["model_calls"] == 26
         else:
             assert result["settlement"] == "unresolved" and not result["retry_safe"]
     finally:

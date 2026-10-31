@@ -243,7 +243,7 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
         if scenario == "checkpoint":
             assert result["status"] == "completed", result["error"]
             assert result["report"]
-            assert result["usage"]["model_calls"] == 28
+            assert result["usage"]["model_calls"] == 26
         else:
             assert result["status"] == "interrupted"
             assert result["settlement"] == "unresolved"
@@ -314,8 +314,8 @@ def test_approval_process_restart_uses_committed_plan(pg_database, tmp_path):
             directory,
         )
         result = client.get(run["run_id"], "alice")
-        assert result["plan"] == plan
-        assert result["usage"]["model_calls"] == 28
+        assert result["plan"] == dict(plan, locked=True)
+        assert result["usage"]["model_calls"] == 26
         assert set(units_before) <= {u["id"] for u in facts().units(run["run_id"])}
         assert effect_count(directory) == 2
     finally:
@@ -599,3 +599,63 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
         for child in (process, restart):
             if child:
                 kill_owned(child)
+
+
+def test_clarification_wait_survives_executor_kill_and_same_run_answer(
+    pg_database, tmp_path
+):
+    """Real durable recv replay: no replanning or research effect before the answer."""
+    client = RunClient()
+    executor = "brief-wait-" + uuid4().hex
+    process = start(tmp_path, executor, "clarification")
+    restart = None
+    try:
+        wait(lambda: (tmp_path / "executor-ready").exists(), process, tmp_path)
+        run = client.create(
+            "alice",
+            "clarification-kill",
+            {"topic": "ambiguous brand"},
+            configuration(tmp_path),
+            initial(),
+        )[0]
+        wait(
+            lambda: client.get(run["run_id"], "alice")["status"]
+            == "awaiting_clarification",
+            process,
+            tmp_path,
+        )
+        pending = client.get(run["run_id"], "alice")
+        units = [u["id"] for u in facts().units(run["run_id"])]
+        version = pending["clarification"]["version"]
+        assert not facts().request(run["run_id"])["occupied"]
+        kill_owned(process)
+        assert effect_count(tmp_path) == 0
+        (tmp_path / "executor-ready").unlink()
+        restart = start(tmp_path, executor, "clarification")
+        wait(lambda: (tmp_path / "executor-ready").exists(), restart, tmp_path)
+        restored = client.get(run["run_id"], "alice")
+        assert restored["clarification"]["version"] == version
+        assert [u["id"] for u in facts().units(run["run_id"])] == units
+        client.clarify(run["run_id"], "alice", version, {"brand": "Brand A"})
+        wait(
+            lambda: client.get(run["run_id"], "alice")["archive_status"] == "saved",
+            restart,
+            tmp_path,
+        )
+        result = client.get(run["run_id"], "alice")
+        assert result["status"] == "completed" and result["events_complete"]
+        assert result["plan"]["locked"] and effect_count(tmp_path) == 2
+        assert (
+            len(
+                [
+                    u
+                    for u in facts().units(run["run_id"])
+                    if u["name"] == "plan_research"
+                ]
+            )
+            == 2
+        )
+    finally:
+        kill_owned(process)
+        if restart:
+            kill_owned(restart)

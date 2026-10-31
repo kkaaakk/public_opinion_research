@@ -128,6 +128,7 @@ class ResearchRequest(BaseModel):
     org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
     rag_enabled: bool = False
     require_approval: bool = False
+    allow_clarification: bool = True
     research_session_id: str | None = Field(default=None, max_length=64)
 
     # 去除主题两端空白，并拒绝空主题。

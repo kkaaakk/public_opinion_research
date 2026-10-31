@@ -25,7 +25,8 @@ def main(argv=None):
     create.add_argument("--mode", choices=["fast", "normal", "deep"], default="normal")
     create.add_argument("--rag", action="store_true")
     create.add_argument("--approval", action="store_true")
-    for name in ("get", "events", "cancel", "approve", "retry"):
+    create.add_argument("--no-clarification", action="store_true")
+    for name in ("get", "events", "cancel", "approve", "retry", "clarify"):
         sub = commands.add_parser(name)
         sub.add_argument("run_id")
         if name == "events":
@@ -33,6 +34,12 @@ def main(argv=None):
         elif name == "approve":
             sub.add_argument("--plan-version", required=True)
             sub.add_argument("--decision", choices=["approve", "reject"], required=True)
+        elif name == "clarify":
+            sub.add_argument("--version", required=True)
+            sub.add_argument(
+                "--answers", default="{}", help="JSON object keyed by question ID"
+            )
+            sub.add_argument("--skip", action="store_true")
         elif name == "retry":
             sub.add_argument("--state-version", type=int, required=True)
             sub.add_argument("--key", required=True)
@@ -55,6 +62,7 @@ def main(argv=None):
             mode=args.mode,
             rag_enabled=args.rag,
             require_approval=args.approval,
+            allow_clarification=not args.no_clarification,
         )
     else:
         path += "/" + args.run_id
@@ -62,9 +70,21 @@ def main(argv=None):
             path += "/events?after=" + str(args.after)
         elif args.command != "get":
             method = "POST"
-            path += "/approval" if args.command == "approve" else "/" + args.command
+            path += (
+                "/approval"
+                if args.command == "approve"
+                else "/clarification"
+                if args.command == "clarify"
+                else "/" + args.command
+            )
             if args.command == "approve":
                 body = dict(plan_version=args.plan_version, decision=args.decision)
+            elif args.command == "clarify":
+                body = dict(
+                    version=args.version,
+                    answers=json.loads(args.answers),
+                    skip=args.skip,
+                )
             elif args.command == "retry":
                 headers["Idempotency-Key"] = args.key
                 body = dict(state_version=args.state_version)

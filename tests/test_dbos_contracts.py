@@ -103,7 +103,7 @@ def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(nativ
     )
     assert catalog["steps"]
     assert len(case.models) == before == 4
-    assert result["usage"]["model_calls"] == 28
+    assert result["usage"]["model_calls"] == 26
 
 
 def test_studio_disabled_role_is_an_explicit_skip_not_a_completed_agent(
@@ -222,17 +222,27 @@ def test_native_four_roles_real_sdk_graph_budget_and_history(native_case):
     assert result["status"] == "completed", result["error"]
     assert "FINAL brand recall report" in result["report"]
     assert len(case.runtimes) == len(case.models) == 4
+    # Includes the rolling-compaction scenario: the full locked Brief is visible
+    # once on every SDK model request, including after history compaction.
+    for model in case.models:
+        for request in model.calls:
+            content = "\n".join(
+                item.get("content", "")
+                for item in request.input
+                if isinstance(item, dict) and isinstance(item.get("content"), str)
+            )
+            assert content.count(result["plan"]["brief"]) == 1
     assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
     assert all(rt.workspace.working_context.active_evidence_ids for rt in case.runtimes)
     assert (
         result["usage"]["model_calls"]
-        == 7 + sum(rt.budget_usage["model_calls"] for rt in case.runtimes) + 5
+        == 7 + sum(rt.budget_usage["model_calls"] for rt in case.runtimes) + 3
     )
-    # Intake uses three model calls, sections/final report use two.
+    # Unified Plan, Review and synthesis use exactly one model call each.
     # Exact normal fixture is also an oracle for all SDK/Graph service charges.
     if case.mode != "rolling":
-        assert result["usage"]["total_tokens"] == 311
-        assert result["usage"]["model_calls"] == 28
+        assert result["usage"]["total_tokens"] == 291
+        assert result["usage"]["model_calls"] == 26
     archived = case.wait(run, lambda r: r["archive_status"] == "saved")
     saved = case.history.get(archived["history_id"], owner="alice")
     assert saved["run_id"] == run["run_id"]
@@ -289,7 +299,7 @@ def test_approval_immutable_once_and_no_replanning(native_case, decision):
     assert result["status"] == ("completed" if decision == "approve" else "cancelled")
     after = [u["id"] for u in facts().units(run["run_id"])]
     assert set(before) <= set(after)
-    assert len([k for k in after if "write_research_brief" in k]) == 1
+    assert len([k for k in after if ":plan:" in k]) == 1
     if decision == "reject":
         assert not case.runtimes
 
@@ -583,12 +593,18 @@ def test_configuration_and_sdk_drift_fail_before_external_work(
                 text("UPDATE por_domain.requests SET value=:v WHERE id=:id"),
                 {"id": run["run_id"], "v": dumps(req["data"])},
             )
-    case.client.approve(run["run_id"], "alice", plan["version"], "approve")
+    # New human-control admission rejects drift before a continuation is even sent.
+    with pytest.raises(RunConflict, match="Accepted configuration/version changed"):
+        case.client.approve(run["run_id"], "alice", plan["version"], "approve")
+    pending = case.client.get(run["run_id"], "alice")
+    assert pending["status"] == "awaiting_approval"
+    assert pending["usage"]["model_calls"] == 8  # saved 7 + exactly one unified Plan
+    assert not case.runtimes and not case.calls and not pending["retry_safe"]
+    case.client.cancel(run["run_id"], "alice")
     result = case.wait(run)
-    assert result["status"] == "failed"
-    assert not case.runtimes
-    assert not result["retry_safe"]
-    assert result["usage"]["model_calls"] == 10
+    assert result["status"] == "cancelled"
+    assert not case.runtimes and not case.calls
+    assert result["usage"]["model_calls"] == 8
 
 
 def test_archive_compensates_independently_without_rerunning_research(
@@ -664,7 +680,7 @@ def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
     case.client.retry(run["run_id"], "alice", key, failed["state_version"])
     result = case.wait(run, lambda r: r["status"] == "completed")
     assert len(case.models) == 4
-    assert result["usage"]["model_calls"] == 29
+    assert result["usage"]["model_calls"] == 27
     assert result["generation"] == 1
     saved = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert case.history.get(saved["history_id"], owner="alice")["status"] == "completed"
@@ -938,7 +954,7 @@ def test_cancellation_during_real_receipt_commit_drains_harness(
     assert len(case.models) == 2
     assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
     assert all(len(rt.workspace.receipts) == 1 for rt in case.runtimes)
-    assert result["usage"]["model_calls"] == 10 + sum(
+    assert result["usage"]["model_calls"] == 8 + sum(
         rt.budget_usage["model_calls"] for rt in case.runtimes
     )
 
@@ -1050,8 +1066,8 @@ def test_committed_role_ack_loss_does_not_repeat_sdk_or_drop_usage(
     result = native_case.wait(run)
     assert lost
     assert result["status"] == "completed"
-    assert result["usage"]["model_calls"] == 28
-    assert result["usage"]["total_tokens"] == 311
+    assert result["usage"]["model_calls"] == 26
+    assert result["usage"]["total_tokens"] == 291
     assert len(native_case.models) == 4
     native_case.wait(run, lambda r: r["archive_status"] == "saved")
     events = native_case.client.read_events(run["run_id"], "alice", 0, 1000)
@@ -1134,19 +1150,42 @@ def test_cancel_of_safe_retry_cannot_release_an_active_unsettled_unit(
 def test_native_workflow_matches_frozen_business_reference(
     native_case, monkeypatch, tmp_path
 ):
+    """Freeze the same Brief and costs; retained long-report behavior stays identical."""
     from reference_workflow import PythonWorkflow
     from test_python_workflow_sdk import install_sdk
 
+    from open_deep_research.budget import merge_budget_usage
+    from open_deep_research.workflow.brief import brief_metadata
+
     case = native_case
+    case.cfg["configurable"]["report_mode"] = "sections"
     run = case.create()
-    case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
     native = case.client.client.list_workflows(
         workflow_ids=[run["run_id"]], load_input=False, load_output=True
     )[0].output
     with monkeypatch.context() as patch:
         state, cfg, *_ = install_sdk(patch, tmp_path / "reference")
-        reference = asyncio.run(PythonWorkflow().ainvoke(state, cfg))
-    assert native["workflow"] == reference["workflow"]
+        state["workflow"]["brief"] = result["plan"]["brief"]
+        state["research"]["run_id"] = run["run_id"]
+        cfg["configurable"]["research_run_id"] = run["run_id"]
+        # The oracle starts at unchanged research ownership, after the new Plan.
+        # Account exactly the native planning artifacts rather than forging zero cost.
+        for unit in facts().units(run["run_id"]):
+            if unit["name"] in {"plan_research", "plan_report_sections"}:
+                state["runtime"]["budget"] = merge_budget_usage(
+                    state["runtime"]["budget"], unit["usage"]
+                )
+        reference = asyncio.run(
+            PythonWorkflow().ainvoke(state, cfg, start_at="research")
+        )
+    meta = brief_metadata(result["plan"]["brief"], 1, run["run_id"])
+    assert native["workflow"] == dict(
+        reference["workflow"],
+        brief_version=meta["version"],
+        brief_hash=meta["content_hash"],
+        brief_revision=1,
+    )
     assert native["report"] == reference["report"]
     assert native["runtime"]["budget"] == reference["runtime"]["budget"]
     for role in (
@@ -1201,8 +1240,8 @@ def test_operator_approval_cannot_be_bypassed_or_replanned(native_case, monkeypa
     case.client.approve(run["run_id"], "alice", paused["plan"]["version"], "approve")
     result = case.wait(run)
     assert result["status"] == "completed"
-    assert result["usage"]["model_calls"] == 28
-    assert result["plan"] == paused["plan"]
+    assert result["usage"]["model_calls"] == 26
+    assert result["plan"] == dict(paused["plan"], locked=True)
 
 
 def test_paused_runs_do_not_starve_another_runs_archive(native_case):
@@ -1288,8 +1327,8 @@ def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypat
     run = case.create()
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert result["status"] == "completed", result["error"]
-    assert result["usage"]["model_calls"] == 29
-    assert result["usage"]["total_tokens"] == 326
+    assert result["usage"]["model_calls"] == 27
+    assert result["usage"]["total_tokens"] == 306
     unit = next(
         u
         for u in facts().units(run["run_id"])

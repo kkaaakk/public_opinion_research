@@ -110,6 +110,10 @@ class WorkflowState(TypedDict, total=False):
     """Where the public-opinion workflow is in the current run."""
 
     brief: str
+    brief_version: str
+    brief_hash: str
+    brief_revision: int
+    clarification_complete: bool
     round: int
     review: ResearchReview | None
     pending_tasks: list[ResearchTask]
@@ -234,7 +238,14 @@ def workflow_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
     current = dict(current_value) if isinstance(current_value, Mapping) else {}
     incoming = dict(new_value) if isinstance(new_value, Mapping) else {}
     merged: dict[str, Any] = dict(current)
-    for key in ("brief", "review"):
+    for key in (
+        "brief",
+        "review",
+        "brief_version",
+        "brief_hash",
+        "brief_revision",
+        "clarification_complete",
+    ):
         if key in incoming:
             merged[key] = incoming[key]
     if "round" in incoming:

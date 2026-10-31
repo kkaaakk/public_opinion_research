@@ -1,14 +1,16 @@
 # 业务执行与 Agent Loop
 
+> 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
+
 当前架构为 DBOS 3.3.0 + OpenAI Agents SDK 0.24.0 + Research Graph Context Harness。
 部署见 [DBOS 部署说明](dbos-deployment.md)，实测范围见 [Phase 5 审计](../audits/openai-agents-phase5.md)。
 
 ```text
 Web / CLI → FastAPI Run API → RunClient（身份、幂等和资源准入）
-  → DBOS por.run → por.plan → 不可变计划审批 → por.research
+  → DBOS por.run → por.plan（统一 Plan / 图片）→ 同 Run 持久澄清 → Markdown Brief 编辑/审批 → por.research
   → 两个 por.role Producer 并行 → 固定角色顺序汇合
   → Review → 按角色批处理 Gap → 定向补查 → Review
-  → Risk → Strategy → 章节写作 → 最终报告 / Memory
+  → Risk → Strategy → 单次综合报告 → 已提交报告 artifact → Memory
 
 por.role → business_step → 原角色函数 → run_business_agent
   → SDKAgentRuntime → SDKContextHarness → Runner.run → 原业务工具
@@ -30,8 +32,8 @@ Harness 管理 Evidence/Claim/Finding/Source 溯源、角色私有上下文、�
 Persist-then-Compact、滚动摘要、预算和退出清算。仅已提交并核对回执的证据可压缩。
 未知工具效果不自动重放；SDK Session 是私有轨迹记录，不是 Workflow checkpoint。
 
-`workflow/intake.py` 的澄清、brief、章节计划和 `research.py` 的 Review 是有界单次
-结构化业务调用；有限结构化解析重试不是 Agent Loop。报告章节、最终报告、Graph
+`workflow/intake.py` 的统一 Plan、超限时的一次精简和 `research.py` 的 Review 是有界单次
+结构化业务调用。显式 sections 高级模式保留章节规划/写作。最终报告、Graph
 抽取/上下文更新/压缩、检索重写、Vision 和长期记忆同样是单一业务服务调用。
 它们继续使用 LangChain messages/model/runnable/callback，费用通过共享预算捕获。
 这些调用没有根据工具输出反复选择工具、也不决定跨角色执行顺序。

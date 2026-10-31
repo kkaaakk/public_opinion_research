@@ -126,10 +126,18 @@
         <section id="approval-panel" class="api-settings hidden" aria-labelledby="approval-title">
             <h2 id="approval-title">研究计划待审批</h2>
             <pre id="approval-plan"></pre>
+            <label>编辑 Markdown Brief<textarea id="brief-edit" rows="12" maxlength="30000" style="width:100%"></textarea></label>
+            <button class="btn-action" type="button" onclick="decidePlan('edit')">保存新版本（须重新审批）</button>
             <button id="approve-plan-btn" class="btn-action" type="button" onclick="decidePlan('approve')">批准并继续</button>
             <button id="reject-plan-btn" class="btn-action" type="button" onclick="decidePlan('reject')">拒绝计划</button>
         </section>
 
+        <section id="clarification-panel" class="api-settings hidden">
+            <h2>补充研究需求</h2><div id="clarification-questions"></div>
+            <button class="btn-action" type="button" onclick="answerClarification(false)">提交回答并继续</button>
+            <button class="btn-action" type="button" onclick="answerClarification(true)">跳过澄清，直接研究</button>
+            <p>等待时研究配额已释放。刷新后输入访问令牌并继续原任务。</p>
+        </section>
         <!-- 实时日志：显示研究节点产生的进度内容。 -->
         <section id="log-panel" class="log-panel hidden">
             <div id="log-entries" class="log-entries"></div>
@@ -179,6 +187,6 @@
         </footer>
     </div>
 
-    <script src="/static/app.js?v=20261021-runs-4"></script>
+    <script src="/static/app.js?v=20261031-brief-spec"></script>
 </body>
 </html>

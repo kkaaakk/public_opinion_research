@@ -79,7 +79,7 @@ def accepted_config(body: dict) -> dict:
             final_report_model=body["model"],
             summarization_model=body["model"],
             search_api=body["search_api"],
-            allow_clarification=False,
+            allow_clarification=body.get("allow_clarification", True),
             allow_plan_feedback=body.get("require_approval", False),
             business_scenario="public_opinion_risk",
             organization_context=body["org_context"] or None,
@@ -111,6 +111,7 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
         "workflow_backend",
         "business_agent_runtime",
         "require_approval",
+        "allow_clarification",
         "research_session_id",
     }
     if set(body) - permitted:
@@ -181,7 +182,8 @@ class Approval(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     plan_version: str = Field(pattern=r"^[a-f0-9]{64}$")
-    decision: Literal["approve", "reject"]
+    decision: Literal["approve", "reject", "edit"]
+    brief_md: str | None = Field(default=None, max_length=30000)
 
 
 @router.post("/{run_id}/approval")
@@ -195,6 +197,7 @@ def approve(run_id: str, body: Approval, raw: Request) -> dict:
             owner,
             body.plan_version,
             body.decision,
+            body.brief_md,
         )
     )
 
@@ -233,7 +236,8 @@ async def event_stream(store, run_id: str, owner: str, after: int, raw: Request)
                 and run["events_complete"]
             )
             approval_delivered = (
-                run["status"] == "awaiting_approval" and run["events_paused"]
+                run["status"] in {"awaiting_approval", "awaiting_clarification"}
+                and run["events_paused"]
             )
             if (terminal_delivered or approval_delivered) and after >= run["seq"]:
                 return
@@ -353,3 +357,19 @@ def evidence(
     except (Neo4jError, ServiceUnavailable, SessionExpired, ValueError):
         raise HTTPException(503, "Research Graph evidence is unavailable.") from None
     return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+
+class ClarificationAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    version: str = Field(pattern=r"^[a-f0-9]{64}$")
+    skip: bool = False
+    answers: dict[str, str | list[str]] = Field(default_factory=dict, max_length=4)
+
+
+@router.post("/{run_id}/clarification")
+def clarify(run_id: str, body: ClarificationAnswer, raw: Request) -> dict:
+    """Continue this same Run using a durable, version-bound answer or explicit skip."""
+    owner = trusted_owner(raw)
+    return public_run(
+        _call(_store().clarify, run_id, owner, body.version, body.answers, body.skip)
+    )

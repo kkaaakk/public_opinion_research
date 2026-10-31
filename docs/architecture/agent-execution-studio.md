@@ -1,5 +1,7 @@
 # Agent Execution Studio：事实协议与展示边界
 
+> 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
+
 基线：`origin/main dc070a4715f3bb1c29c5bce1cac6dfa5f3676b53`；继续 Draft PR #31，原 head `379209db4630ba3f3f56d2ca3f64dfbc5b252435`。执行架构以 [Phase 5](../audits/openai-agents-phase5.md)、[Phase 4 DBOS](../audits/openai-agents-phase4-dbos.md)和[部署文档](dbos-deployment.md)为准。没有恢复旧 LangGraph、手写 Agent Loop，或新增执行器。
 
 ## 1. 所有权与实施顺序
@@ -39,7 +41,7 @@ Planning、Intake、Review、报告、抽取和压缩依旧是有界业务服务
 
 ## 3. v1 事件与身份
 
-继续使用 `protocol_version=1`，增加字段/事件，没有 SQL outbox 或游标解释器。终态 `done.expected_events` 声明本代必须交付的 settlement/usage/status 及存在的 report/error；relay 只在真实尾事件齐全后发布 done/history 回执并封闭 Stream，防止原生消息乱序造成缺尾。此交付分支改变了 relay journal，所以应用版本提升为 `dbos-phase5-studio-v1`；SDK runtime 仍为 `sdk-phase5-v1`。旧版本的 pending journals 继续由匹配发行版处理，不在新 Executor 重放；旧 Stream 仍可阅读，缺失的新字段明确为未提供。
+继续使用 `protocol_version=1`，增加字段/事件，没有 SQL outbox 或游标解释器。终态 `done.expected_events` 声明本代必须交付的 settlement/usage/status 及存在的 report/error；relay 只在真实尾事件齐全后发布 done/history 回执并封闭 Stream，防止原生消息乱序造成缺尾。原 Studio 交付分支使用 `dbos-phase5-studio-v1`。本次 `dbos-brief-spec-v1` 还会等待已提交角色 artifact/error 中列明的 SDK 事件 ID，防止同毫秒乱序丢失模型/工具轨迹；这只是交付回执，不授权业务执行或重放。SDK runtime 仍为 `sdk-phase5-v1`。旧版本的 pending journals 继续由匹配发行版处理，不在新 Executor 重放；旧 Stream 仍可阅读，缺失的新字段明确为未提供。
 
 | 字段 | 含义 |
 | --- | --- |

@@ -96,6 +96,7 @@ def main():
             config = deepcopy(cfg)
             config["configurable"].update(
                 allow_plan_feedback=body.get("require_approval", False),
+                allow_clarification=body.get("allow_clarification", True),
                 organization_context=body["topic"],
             )
             return config
