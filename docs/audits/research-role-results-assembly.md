@@ -97,7 +97,7 @@ Working Context/Scope 按角色更新；证据仍在原 Graph Store，组装不�
 原合并器 deepcopy 整个 State，再复制每份 Patch。新组装只构造改变的聚合值，
 用 model_dump 分离新增可变记录，原有列表/映射不原地修改；全部成功才一次 state.update。
 messages、章节和最终报告不进入拷贝。旧记忆记录只被读取，新列表继续保存它们。
-没有运行吞吐或延迟 benchmark，不宣称性能明显提升。
+只做了下述合成 join 微基准，没有运行端到端吞吐或模型/工具延迟 benchmark，不宣称生产性能明显提升。
 
 ## 4. 旧 DBOS journal / Artifact 兼容与回滚
 
@@ -128,12 +128,20 @@ journals 仍遵守原 matching-release 排空策略。升级先停旧准入、�
 测试专用旧边界写出冻结 Patch，由真实 business_step、RunFacts、DBOS journal 持久化。
 随后杀掉完整 Executor 进程树，以当前结果契约重启，覆盖已提交 journal 及
 Artifact 已提交/Step ACK 未提交窗口。调用见证和费用在恢复后精确核对。
-这证明实际持久化与恢复合同，未声称执行过生产库升级或所有历史发行版二进制组合。
+这证明实际持久化与恢复合同。另做 **1 项真实旧源码升级 smoke，通过（69.54s）**：
+从 Git 归档固定 `31e8ad8e865817c9aa2a610591d90b5d24748562` 的 src/tests，
+用该版本的 `tests/dbos_process_fixture.py` 和 src 启动旧 Executor；原 checkpoint
+场景在真实 Review 边界暂停，核对两个已结清 Producer Artifact 确实只有旧 patch，
+再终止进程树。随后用当前 fixture/src、相同 Executor ID 和 UUID 数据库重启，
+复用原 `test_process_kill_journal_recovery_never_replays_unknown_tool[checkpoint]`
+全部断言：报告成功、工具实际调用/效果仍为 2、model_calls 仍为 26。使用浏览器项目
+15435 PostgreSQL，独立临时测试驱动和源码归档位于忽略的 `.tmp`，不是新增生产入口。
+该项是额外手工 smoke，不冒充 CI 固定合同数量；未执行生产库升级或所有历史发行版组合。
 
-## 5. 验证证据（交付前更新）
+## 5. 验证证据
 
 所有 Python 测试禁 dotenv、远程 tracing 和非 loopback socket；付费模型/API 调用为 0。
-独立 Compose project `por-research-results` 使用 PostgreSQL 17.6 / Neo4j 5.26.31；
+独立 Compose project `por-research-results` 使用 PostgreSQL 17.6 / Neo4j 5.26.31；浏览器另用 `por-research-results-browser` 的 15435 PostgreSQL，避免原生停库测试影响它；
 测试只创建/删除自己的 `por_test_<uuid>` PostgreSQL 库，故障只操作标记的本次容器。
 
 | 检查 | 结果 |
@@ -148,10 +156,12 @@ Artifact 已提交/Step ACK 未提交窗口。调用见证和费用在恢复后�
 | 生产入口 smoke | 32 imports passed，旧引擎和外网均被阻断 |
 | Ruff E/F/I / compileall | 通过；修改模块格式检查通过 |
 | 修改模块 Mypy（非 CI 门禁） | state/python_state/business_agent 三模块通过，follow-imports=skip / ignore-missing-imports；未声称全仓类型零错误 |
-| 完整原生故障矩阵 | 运行中，最终实测结果在交付前更新 |
-| Studio 浏览器真实链路 | 待运行，使用原六项 Playwright 场景 |
+| 本地完整原生故障矩阵 | 116 passed / 2 failed / 25 deselected，1894.70s；两个新增用例误用持久化 JSON 键序判断业务顺序，原因及修正见下文 |
+| 两种完成顺序修正后复验 | 2 passed / 35.53s；真实组装点顺序、持久化报告/记忆/Context/Scope、费用全部精确断言 |
+| 真实基线源码 → 当前 Executor smoke | 1 passed / 69.54s；实际旧代码、旧 journal、kill/restart，工具及费用不重复 |
+| Studio 浏览器真实链路 | 7 passed / 2.4m；本机 Chrome，真实 HTTP/DBOS/SDK/Neo4j，包含 Brief 场景和六项 Studio 场景 |
 | 依赖一致性 | 未通过：继承 markitdown-mcp 要求 mcp~=1.8.0，实际 1.23.0；未改依赖锁 |
-| GitHub CI | Draft PR 创建后观察，最终状态见 PR checks |
+| GitHub CI | [PR #39 当前 HEAD checks](https://github.com/kkaaakk/public_opinion_research/pull/39/checks)；quality/tests/原生故障矩阵及 Studio 前端/浏览器均为实际作业，最终固定 Run 和计数列在 PR 描述 |
 
 Windows 两项跳过均为既有 `test_telemetry_delivery.py:261`：POSIX signals 需 Linux
 CI 进程，不把 TerminateProcess 当等价信号；没有新增 skip/xfail。其余 integration
@@ -160,7 +170,13 @@ CI 进程，不把 TerminateProcess 当等价信号；没有新增 skip/xfail。
 如实保留迭代失败：首轮 7/90 定向失败为旧返回断言及新增报告追加期望，迁移断言并
 保持原追加规则后通过；首轮 11 项原生定向 8 passed / 3 failed，其中禁用零预算是
 真实兼容问题，另两项是测试读取了错误的公开字段名。修复后重跑，不将旧失败轮次
-写成通过。新模型/工具调用没有因这些测试失败被生产代码重试。
+写成通过。完整本地矩阵另外发现 2 个新增顺序用例错误：DBOS JSON 持久化会重排对象键，
+不能从最终 JSON 的键序推断组装顺序。修正为在真实 assembler 调用后观察候选 State，
+再逐字段核对持久化报告、记忆、Context 和 Scope；真实 finish_unit 的双完成顺序屏障、
+费用和四角色断言全部保留，复验 2 passed。没有改生产代码来适配测试，也没有放宽
+业务值、并发或恢复断言。所有失败轮次保留为失败，不拼成一次虚构的完整本地绿测。
+最终完整 Linux 原生矩阵通过后才交付，计数与当前 HEAD 固定 CI 链接见 PR 描述。
+新模型/工具调用没有因这些测试失败被生产代码重试。
 
 复现：
 
@@ -194,6 +210,10 @@ node --test tests/durable_frontend.test.cjs
 | 合并到业务规则的调用层数 | merge → apply_patch → Reducer，3 | assemble → 角色/进度 Reducer 或费用函数，2 |
 | 研究业务可返回 State 域 | 通用五域及 messages | 一个独立结果，无任意 State 域 |
 | 生产研究合并路径 | 通用 Patch 校验与合并 | 单一结果组装；旧格式只在读取处处理 |
+| 显式合并入口与直接领域规则函数 | 7（merge/apply + 五 Reducer） | 5（assemble + role/workflow/budget/metrics） |
+| join 边界的数据契约 | 2（Patch、State） | 2（RoleResult、State）；没有虚称契约数量下降 |
+| 持久化 wire 格式 | 1 | 2（当前 JSON 结果 + 有界旧 Patch 读取） |
+| 新增结果结构/读取函数 | 0 | 1 个模型（含 2 个校验函数）+ 1 个 reader |
 | 新执行/存储设施 | 0 | 0 |
 
 本轮**没有实现代码净减少**。新增的持久化 reader 和强类型结构是实际维护成本，
@@ -204,13 +224,26 @@ node --test tests/durable_frontend.test.cjs
 继续迁移的判断依据是业务所有权更窄、任务进度集中、只保留一个执行路径，而不是
 形式上换成 Pydantic 或声称 LOC/速度改善。如果验收仅要求净减行数，本实现不应被
 描述为达到该指标。兼容 reader 在相关 Artifact 保留期结束后才可评估删除，不能现在
-删掉以制造代码量收益。新增需要理解的契约是 ResearchRoleResult；旧 Patch 合同
+删掉以制造代码量收益。函数计数仅统计合并入口与直接选择的领域规则，共用内部辅助函数不重复统计；新 schema 校验和 reader 另列，不隐藏它们的成本。新增需要理解的契约是 ResearchRoleResult；旧 Patch 合同
 仅在升级边界和独立 oracle 保留，State/SDK Runtime/Workspace 的业务含义保持原样。
+
+`deepcopy` 开销另做合成测量：Windows 同一解释器，5 组 × 每组 20 次，取每组平均耗时的中位数；每次输入重建在计时外。旧函数使用冻结 oracle，两个角色结果转换成原 Patch；新函数使用同一结果。无 Graph I/O、LLM 或工具。
+
+| 合成 State | 旧 merge，ms/join | 新 assemble，ms/join |
+| --- | ---: | ---: |
+| 2 条消息、每角色 2 条记忆、2 个章节 | 0.187 | 0.084 |
+| 250 条消息、每角色 1000 条记忆、100 个章节 | 16.881 | 0.282 |
+
+消息内容各 1000 字符，记忆记录含 content 和单项 metadata，章节为原 Section 模型；预算初值 model_calls=7，每角色结果增量=2。该测量用于检查全 State 深拷贝的规模影响，受并行测试负载影响，不是生产容量或端到端速度证明。选择局部构造的依据还包括失败原子性和测试中验证的数据隔离；没有为微基准引入运行期缓存或状态同步。
 
 历史 oracle 审计后仅调整了输入边界：把旧合并器原样冻结到测试模块，将新结果转回
 旧生产格式，再执行原循环/错误/报告/预算比较。它不调用新 assembler 或新 reader；
 没有改研究、补研或失败期望来迎合新行为。新引擎另外由真实 native/reference 对照
 验证，旧 oracle 的离线通过数不冒充恢复能力证据。
+
+GitHub 首个实现提交 d38577dc 的 quality、Linux **1080 passed / 125 deselected**、
+前端和七项浏览器验收已通过；该轮新增键序测试的修正提交再次触发完整 CI。
+Draft 的 Claude Review 步骤按原规则跳过，不能把其工作流 success 说成外部模型审查已运行。
 
 ## 7. 审查、剩余风险与面试取舍
 

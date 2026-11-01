@@ -1449,14 +1449,24 @@ def test_native_cancelled_vision_keeps_reservation_until_actual_usage_settles(
 def test_research_results_are_joined_after_both_native_children(
     native_case, monkeypatch, slower
 ):
+    from copy import deepcopy
     from threading import Event
 
+    from open_deep_research.workflow import dbos_workflow as engine
     from open_deep_research.workflow.run_facts import RunFacts
 
     case = native_case
     original = RunFacts.finish_unit
     fast_committed = Event()
     order = []
+    joined = []
+    original_assemble = engine.assemble_research_results
+
+    def assemble(state, results, packets):
+        original_assemble(state, results, packets)
+        joined.append(deepcopy(state))
+
+    monkeypatch.setattr(engine, "assemble_research_results", assemble)
 
     def finish(repo, unit, permit, **data):
         value = data.get("artifact", {}).get("research_result")
@@ -1479,10 +1489,17 @@ def test_research_results_are_joined_after_both_native_children(
     output = case.client.client.list_workflows(
         workflow_ids=[run["run_id"]], load_input=False, load_output=True
     )[0].output
-    assert list(output["research"]["working_contexts"])[:2] == [
+    # DBOS JSON persistence sorts object keys. Observe the actual join before
+    # serialization, then compare persisted values rather than JSON key order.
+    assert len(joined) == 1
+    assert list(joined[0]["research"]["working_contexts"]) == [
         "public_signal",
         "internal_knowledge",
     ]
+    for role in ("public_signal", "internal_knowledge"):
+        assert output["agents"][role] == joined[0]["agents"][role]
+        for field in ("working_contexts", "working_context_scopes"):
+            assert output["research"][field][role] == joined[0]["research"][field][role]
     assert result["usage"]["model_calls"] == 26
     assert len(result["role_reports"]) == 4
     assert len(case.runtimes) == 4
