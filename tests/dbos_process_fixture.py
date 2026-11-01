@@ -56,7 +56,9 @@ from open_deep_research.workflow.run_facts import RunFacts, facts
 
 def install(directory, scenario):
     patch = pytest.MonkeyPatch()
-    install_sdk(patch, directory / "t", "clarify" if scenario == "clarification" else "normal")
+    install_sdk(
+        patch, directory / "t", "clarify" if scenario == "clarification" else "normal"
+    )
     store = history.Neo4jHistoryStore(
         GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
     )
@@ -96,6 +98,30 @@ def install(directory, scenario):
                 return await original.ainvoke(*args, **kwargs)
 
         patch.setattr(shared, "configurable_model", GapServices())
+    if (
+        scenario.startswith("legacy-")
+        and not (directory / (scenario + ".release")).exists()
+    ):
+        from functools import partial
+
+        from reference_research import legacy_research_patch
+
+        from open_deep_research.workflow import dbos_workflow as engine
+
+        async def legacy_producer(state, config, *, role):
+            # Run the actual SDK/Harness, but persist the frozen 31e8ad8 wire
+            # contract. No journal/Artifact fabrication or external replay.
+            value = await business_agent.run_business_agent(
+                role=role, state=state, config=config
+            )
+            return legacy_research_patch(value, state)
+
+        for role in ("public_signal", "internal_knowledge"):
+            patch.setitem(
+                engine.OPERATIONS, role + "_agent", partial(legacy_producer, role=role)
+            )
+
+    old_finish = RunFacts.finish_unit
     old_acquire = RunFacts.acquire
     old_operation = RunFacts.operation
     old_check = RunFacts.check
@@ -165,9 +191,25 @@ def install(directory, scenario):
         patch.setattr(DBOSClient, "rewind_workflow", rewind)
         patch.setattr(RunClient, "_rewind_safe", apply)
 
+    def finish(self, unit, permit, **data):
+        value = old_finish(self, unit, permit, **data)
+        if (
+            scenario == "legacy-artifact"
+            and unit.endswith(":public_signal:1")
+            and data.get("artifact")
+        ):
+            # The real domain transaction has committed; native Step ACK has not.
+            gate("legacy-artifact")
+        return value
+
+    patch.setattr(RunFacts, "finish_unit", finish)
+
     def acquire(self, run_id, unit, name, **kw):
-        if scenario == "checkpoint" and name == "research_review":
-            gate("checkpoint")
+        if (
+            scenario in {"checkpoint", "legacy-checkpoint"}
+            and name == "research_review"
+        ):
+            gate(scenario)
         if scenario == "gap-checkpoint" and unit.endswith(":public_signal:2"):
             gate("gap-checkpoint")
         return old_acquire(self, run_id, unit, name, **kw)
@@ -193,10 +235,20 @@ def install(directory, scenario):
 
     @asynccontextmanager
     async def model(*args, **kwargs):
+        def record_model(role):
+            if scenario.startswith("legacy-"):
+                with sqlite3.connect(directory / "external.db", timeout=10) as db:
+                    db.execute("CREATE TABLE IF NOT EXISTS models(role text)")
+                    db.execute("INSERT INTO models VALUES (?)", (role,))
+
+        current = {}
+
         async def first(call):
             role = call.system_instructions.split("<Role>\n", 1)[1].split(
                 "\n</Role>", 1
             )[0]
+            current["role"] = role
+            record_model(role)
             if scenario == "model-wait" and role == "public_signal":
                 (directory / "model-wait").write_text("ready")
                 while not (directory / "model-wait.release").exists():
@@ -211,8 +263,12 @@ def install(directory, scenario):
                 ]
             return [assistant_message("analysis")]
 
+        def second(call):
+            record_model(current["role"])
+            return [assistant_message("research complete")]
+
         yield ScriptedModel(
-            [ModelStep.respond(first), [assistant_message("research complete")]],
+            [ModelStep.respond(first), ModelStep.respond(second)],
             default_usage=TOKENS,
             emit_traces=os.environ.get("POR_TRACING_ENABLED", "").lower() == "true",
         )

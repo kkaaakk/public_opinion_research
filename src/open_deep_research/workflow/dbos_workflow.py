@@ -21,6 +21,7 @@ from open_deep_research.observability.telemetry import (
     dbos_scope,
     telemetry_enabled,
 )
+from open_deep_research.state import ResearchRoleResult
 from open_deep_research.web.run_data import (
     TERMINAL,
     RunConflict,
@@ -45,8 +46,9 @@ from open_deep_research.workflow.execution import (
 from open_deep_research.workflow.python_state import (
     RESEARCH_ROLES,
     apply_patch,
+    assemble_research_results,
     copy_state,
-    merge_research_patches,
+    read_research_result,
     role_snapshot,
 )
 from open_deep_research.workflow.run_facts import facts
@@ -245,7 +247,12 @@ async def business_step(run_id, unit_id, name, state):
             cfg,
             Configuration.from_runnable_config(cfg).workflow_step_timeout_seconds,
         )
-        if name == "plan_research":
+        if isinstance(result, ResearchRoleResult):
+            # Unit history belongs in this delta once; the State baseline does not.
+            usage = merge_budget_usage(past, result.budget_delta)
+            artifact = {"research_result": result.model_dump(mode="json")}
+            artifact["research_result"]["budget_delta"] = usage
+        elif name == "plan_research":
             artifact = result
         elif hasattr(result, "goto"):
             artifact = {"patch": result.update or {}, "goto": result.goto}
@@ -272,13 +279,14 @@ async def business_step(run_id, unit_id, name, state):
             }
         ):
             artifact["observation"] = {"skipped": True, "reason": "role_disabled"}
-        patch = artifact["patch"]
+        patch = artifact.get("patch", {})
         if "messages" in patch:
             # Message UUID generation belongs to this persisted Step, not replay.
             patch["messages"] = copy_state({"messages": patch["messages"]})["messages"]
-        usage = merge_budget_usage(past, patch.get("runtime", {}).get("budget", {}))
-        if usage:
-            patch.setdefault("runtime", {})["budget"] = usage
+        if "research_result" not in artifact:
+            usage = merge_budget_usage(past, patch.get("runtime", {}).get("budget", {}))
+            if usage:
+                patch.setdefault("runtime", {})["budget"] = usage
         if name == "research_review":
             reviewed = deepcopy(state)
             apply_patch(reviewed, patch)
@@ -426,7 +434,7 @@ async def research_workflow(run_id, initial):
                         role_workflow, run_id, unit, role, packet
                     )
             remaining = dict(handles)
-            patches = {}
+            results = {}
             try:
                 while remaining:
                     completed = await DBOS.wait_first_async(list(remaining.values()))
@@ -435,7 +443,9 @@ async def research_workflow(run_id, initial):
                         for k, h in remaining.items()
                         if h.workflow_id == completed.workflow_id
                     )
-                    patches[role] = (await completed.get_result())["patch"]
+                    results[role] = read_research_result(
+                        await completed.get_result(), role, packets[role]
+                    )
                     del remaining[role]
             except BaseException:
                 for handle in remaining.values():
@@ -444,7 +454,7 @@ async def research_workflow(run_id, initial):
                     )
                 await cleanup_children(run_id)
                 raise
-            merge_research_patches(state, patches)
+            assemble_research_results(state, results, packets)
             round_ = state["workflow"]["round"]
             reviewed = await business_step(
                 run_id, f"{run_id}:review:{round_}", "research_review", state
@@ -581,7 +591,7 @@ async def run_workflow(run_id):
                                 if reply["skip"]
                                 else dumps(reply["answers"])
                             )
-                        )
+                        ),
                     )
                 ],
                 "workflow": {"clarification_complete": True},

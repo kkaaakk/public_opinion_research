@@ -431,7 +431,10 @@ class RunFacts:
                     **({"reason": "role_disabled"} if skipped else {}),
                 )
                 patch = artifact.get("patch", {})
-                for role, role_data in patch.get("agents", {}).items():
+                reports = patch.get("agents", {})
+                if result := artifact.get("research_result"):
+                    reports = {result["role"]: {"report": result["report"]}}
+                for role, role_data in reports.items():
                     if isinstance(role_data, dict) and role_data.get("report"):
                         report = role_data["report"]
                         report = (

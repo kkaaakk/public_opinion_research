@@ -6,6 +6,7 @@ import json
 import threading
 import weakref
 from contextlib import asynccontextmanager
+from copy import deepcopy
 
 import pytest
 from agents import Agent, FunctionTool
@@ -608,10 +609,23 @@ def test_business_assembly_selects_sdk_and_keeps_followup_state(monkeypatch, rol
             },
         )
     )
-    assert "Research mode: followup" in result["agents"][role]["report"]
-    assert result["workflow"]["round"] == 2
-    assert result["workflow"]["completed_tasks"][0].task_id == "gap"
-    assert result["runtime"]["budget"]["model_calls"] == 1
+    if role in ROLES[:2]:
+        from open_deep_research.state import ResearchRoleResult
+        from open_deep_research.workflow.python_state import assemble_research_results
+
+        assert isinstance(result, ResearchRoleResult)
+        assert (result.role, result.round) == (role, 2)
+        assembled = deepcopy(state)
+        assemble_research_results(assembled, {role: result}, {role: state})
+        assert "Research mode: followup" in assembled["agents"][role]["report"]
+        assert assembled["workflow"]["completed_tasks"][0].task_id == "gap"
+        assert assembled["workflow"]["round"] == 2
+        assert result.budget_delta["model_calls"] == 1
+    else:
+        assert "Research mode: followup" in result["agents"][role]["report"]
+        assert result["workflow"]["round"] == 2
+        assert result["workflow"]["completed_tasks"][0].task_id == "gap"
+        assert result["runtime"]["budget"]["model_calls"] == 1
     actual_input = json.dumps(models[0].calls[0].input)
     assert f"OWN_{role}" in actual_input
     assert "OTHER_PRIVATE_SECRET" not in actual_input

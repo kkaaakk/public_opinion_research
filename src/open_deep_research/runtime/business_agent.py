@@ -36,7 +36,7 @@ from open_deep_research.research_graph import (
 from open_deep_research.research_graph.schema import stable_id
 from open_deep_research.runtime.sdk_runtime import AgentRuntimeResult, SDKAgentRuntime
 from open_deep_research.social_media.tools import get_social_media_tools
-from open_deep_research.state import DeepResearchState
+from open_deep_research.state import DeepResearchState, ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.tools.registry import (
     build_dynamic_tool_prompt,
@@ -359,7 +359,7 @@ async def _compress_research(
     )
 
 
-# 把角色运行结果映射为各状态域的增量，供 LangGraph reducer 合并。
+# 风险与策略阶段保留原有状态增量；研究 Producer 返回独立业务结果。
 def _build_state_patch(
     *,
     role: str,
@@ -404,8 +404,8 @@ async def run_business_agent(
     role: str,
     state: DeepResearchState,
     config: RunnableConfig,
-) -> dict[str, Any]:
-    """Assemble, run, and translate one business agent into a state patch."""
+) -> ResearchRoleResult | dict[str, Any]:
+    """Run one SDK role; producers return results, consumers retain their Patch."""
     configurable = Configuration.from_runnable_config(config)
     enabled_roles = {
         str(item).strip().lower()
@@ -496,6 +496,21 @@ async def run_business_agent(
         configurable.research_model, config=config, max_retries=0
     ) as model:
         result = await SDKAgentRuntime(model=model, **runtime_args).run(assignment)
+    if role in {"public_signal", "internal_knowledge"}:
+        return ResearchRoleResult(
+            role=role,
+            round=research_round,
+            report=result.report,
+            replace_report=result.replace_report,
+            memory=[result.memory],
+            rolling_summary=result.rolling_summary,
+            working_context=workspace.working_context
+            if strategy.graph_enabled
+            else None,
+            working_context_scope=workspace.scope if strategy.graph_enabled else None,
+            budget_delta=result.budget,
+            metrics_delta=workspace.metrics.as_dict() if strategy.graph_enabled else {},
+        )
     return _build_state_patch(
         role=role,
         state=state,

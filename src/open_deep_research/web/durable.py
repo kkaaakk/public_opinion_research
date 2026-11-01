@@ -202,9 +202,13 @@ class RunClient:
             budget = merge_budget_usage(budget, unit["usage"])
             if unit["error"]:
                 error = unit["error"]
-            patch = (unit["artifact"] or {}).get("patch", {})
+            artifact = unit["artifact"] or {}
+            patch = artifact.get("patch", {})
             report = patch.get("report", {}).get("final", report)
-            for role, data in patch.get("agents", {}).items():
+            reports = patch.get("agents", {})
+            if result := artifact.get("research_result"):
+                reports = {result["role"]: {"report": result["report"]}}
+            for role, data in reports.items():
                 if isinstance(data, dict) and data.get("report"):
                     stages.append(
                         {

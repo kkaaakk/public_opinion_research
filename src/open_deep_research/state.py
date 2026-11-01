@@ -7,11 +7,20 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import TypedDict
 
 from open_deep_research.budget import empty_budget_usage, merge_budget_usage
 from open_deep_research.research_graph.metrics import merge_research_graph_metrics
+from open_deep_research.research_graph.models import ResearchGraphScope, WorkingContext
 
 BusinessAgentRole = Literal[
     "public_signal", "internal_knowledge", "risk_assessment", "response_strategy"
@@ -69,6 +78,47 @@ class ResearchReview(BaseModel):
     conflicts: list[str] = Field(default_factory=list)
     research_gaps: list[str] = Field(default_factory=list)
     next_tasks: list[ResearchTask] = Field(default_factory=list)
+
+
+class ResearchRoleResult(BaseModel):
+    """One producer invocation, assembled by Python; never an LLM output schema."""
+
+    model_config = ConfigDict(
+        extra="forbid", strict=True, revalidate_instances="always", allow_inf_nan=False
+    )
+
+    role: Literal["public_signal", "internal_knowledge"]
+    round: int = Field(ge=1)
+    report: str
+    replace_report: bool = False
+    memory: list[dict[str, JsonValue]] = Field(default_factory=list)
+    rolling_summary: str = ""
+    working_context: WorkingContext | None = None
+    working_context_scope: ResearchGraphScope | None = None
+    budget_delta: dict[str, JsonValue] = Field(default_factory=dict)
+    metrics_delta: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("working_context", "working_context_scope", mode="before")
+    @classmethod
+    def validate_graph_payload(cls, value: Any, info: ValidationInfo) -> Any:
+        if value is None:
+            return None
+        model = (
+            WorkingContext
+            if info.field_name == "working_context"
+            else ResearchGraphScope
+        )
+        payload = value.model_dump() if isinstance(value, BaseModel) else value
+        return model.model_validate(payload, extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_context_scope(self) -> ResearchRoleResult:
+        scope = self.working_context_scope
+        if (self.working_context is None) != (scope is None):
+            raise ValueError("Working Context and Scope must be supplied together")
+        if scope and (scope.role != self.role or scope.research_round != self.round):
+            raise ValueError("Working Context Scope must match result role and round")
+        return self
 
 
 # 承载一条补充检索查询。
@@ -422,6 +472,7 @@ __all__ = [
     "ResearchComplete",
     "ResearchQuestion",
     "ResearchReview",
+    "ResearchRoleResult",
     "ResearchState",
     "ResearchTask",
     "RuntimeState",

@@ -9,14 +9,19 @@ from uuid import uuid4
 
 from langchain_core.messages import RemoveMessage, convert_to_messages
 
+from open_deep_research.budget import empty_budget_usage, merge_budget_usage
+from open_deep_research.research_graph.metrics import merge_research_graph_metrics
 from open_deep_research.state import (
     DeepResearchState,
+    ResearchRoleResult,
+    ResearchTask,
     agents_reducer,
     report_reducer,
     research_reducer,
     runtime_reducer,
     workflow_reducer,
 )
+from open_deep_research.workflow.state_utils import coerce_research_tasks
 
 _DOMAIN_UPDATES = {
     "workflow": workflow_reducer,
@@ -76,52 +81,136 @@ def role_snapshot(state: DeepResearchState, role: str) -> DeepResearchState:
     return snapshot
 
 
-def merge_research_patches(
-    state: DeepResearchState, patches: Mapping[str, Mapping[str, Any]]
-) -> None:
-    """Validate ownership, then atomically join producer deltas in role order.
+def read_research_result(
+    artifact: Mapping[str, Any], role: str, packet: Mapping[str, Any]
+) -> ResearchRoleResult | None:
+    """Read current JSON or the exact historical producer Artifact, without I/O.
 
-    Budgets/metrics add; tasks deduplicate; rounds take max. Role reports append
-    unless explicitly replaced; role memory appends. Shared replacement fields
-    must agree. Section additions retain role order, then report compilation
-    selects the last valid version by name in the original plan order.
+    Unsupported historical fields fail closed: drain them on their original
+    release instead of silently discarding data or replaying an opaque unit.
     """
-    candidate = deepcopy(state)
-    replacements: dict[str, Any] = {}
+    if "research_result" in artifact:
+        if "patch" in artifact:
+            raise ValueError("Ambiguous research Artifact")
+        return ResearchRoleResult.model_validate(artifact["research_result"])
+    patch = artifact.get("patch")
+    if not isinstance(patch, Mapping):
+        raise ValueError("Missing legacy research Patch")
+    if artifact.get("observation") == {"skipped": True, "reason": "role_disabled"}:
+        if patch not in ({}, {"runtime": {"budget": empty_budget_usage()}}):
+            raise ValueError("Skipped research role contains unexpected result data")
+        return None
+    allowed = {
+        "agents": {role},
+        "workflow": {"round", "completed_tasks"},
+        "research": {"run_id", "working_contexts", "working_context_scopes"},
+        "runtime": {"budget", "metrics"},
+    }
+    if set(patch) - allowed.keys() or any(
+        not isinstance(patch.get(k, {}), Mapping) or set(patch.get(k, {})) - keys
+        for k, keys in allowed.items()
+    ):
+        raise ValueError("Unsupported legacy research Patch fields")
+    agent = patch.get("agents", {}).get(role, {})
+    if not agent or set(agent) - {"report", "memory", "rolling_summary"}:
+        raise ValueError("Invalid legacy research role result")
+    workflow = packet.get("workflow", {})
+    round_ = workflow.get("round", 1)
+    progress = patch.get("workflow", {})
+    tasks = [
+        ResearchTask.model_validate(t) for t in progress.get("completed_tasks", [])
+    ]
+    expected = (
+        coerce_research_tasks(workflow.get("pending_tasks", [])) if round_ > 1 else []
+    )
+    if progress.get("round", round_) != round_ or tasks != expected:
+        raise ValueError("Legacy research progress differs from dispatched work")
+    graph = patch.get("research", {})
+    if graph.get("run_id", packet.get("research", {}).get("run_id")) != packet.get(
+        "research", {}
+    ).get("run_id"):
+        raise ValueError("Legacy research run mismatch")
+    for key in ("working_contexts", "working_context_scopes"):
+        if set(graph.get(key, {})) - {role}:
+            raise ValueError("Legacy Working Context ownership mismatch")
+    report = agent.get("report", "")
+    replace = isinstance(report, Mapping)
+    if replace and (set(report) != {"type", "value"} or report["type"] != "override"):
+        raise ValueError("Unsupported legacy report replacement")
+    runtime = patch.get("runtime", {})
+    return ResearchRoleResult(
+        role=role,
+        round=round_,
+        report=report["value"] if replace else report,
+        replace_report=replace,
+        memory=agent.get("memory", []),
+        rolling_summary=agent.get("rolling_summary", ""),
+        working_context=graph.get("working_contexts", {}).get(role),
+        working_context_scope=graph.get("working_context_scopes", {}).get(role),
+        budget_delta=runtime.get("budget", {}),
+        metrics_delta=runtime.get("metrics", {}),
+    )
+
+
+def assemble_research_results(
+    state: DeepResearchState,
+    results: Mapping[str, ResearchRoleResult | None],
+    packets: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Join a complete dispatched batch in role order, then commit atomically.
+
+    None is an explicit disabled-role receipt. Progress comes from packets, not
+    producers. Copy only changed aggregates; reports/messages/evidence stay put.
+    """
+    if set(results) != set(packets) or set(results) - set(RESEARCH_ROLES):
+        raise ValueError("Research results must match the dispatched roles")
+    agents = state.get("agents", {})
+    graph = dict(state.get("research", {}))
+    runtime = state.get("runtime", {})
+    workflow = state.get("workflow", {})
     for role in RESEARCH_ROLES:
-        if role not in patches:
+        if (result := results.get(role)) is None:
             continue
-        patch = patches[role]
-        for domain in _DOMAIN_UPDATES:
-            update = patch.get(domain, {})
-            if not isinstance(update, Mapping) or update.get("type") == "override":
-                raise ValueError(f"Producer cannot replace shared {domain}")
-        if set(patch.get("agents", {})) - {role}:
-            raise ValueError(
-                f"Producer {role} cannot write another role's private state"
+        result = ResearchRoleResult.model_validate(result.model_dump())
+        packet = packets[role]
+        if result.role != role or result.round != packet.get("workflow", {}).get(
+            "round", 1
+        ):
+            raise ValueError("Research result role or round mismatch")
+        if (
+            result.working_context_scope
+            and result.working_context_scope.run_id != graph.get("run_id")
+        ):
+            raise ValueError("Research result run mismatch")
+        value = result.model_dump(mode="json")  # detach nested mutable result data
+        agent = {key: value[key] for key in ("report", "memory", "rolling_summary")}
+        if result.replace_report:
+            agent["report"] = {"type": "override", "value": result.report}
+        agents = agents_reducer(agents, {role: agent})
+        if result.working_context is not None:
+            for field, key in (
+                ("working_contexts", "working_context"),
+                ("working_context_scopes", "working_context_scope"),
+            ):
+                graph[field] = {**graph.get(field, {}), role: value[key]}
+        runtime = {
+            **runtime,
+            "budget": merge_budget_usage(runtime.get("budget"), result.budget_delta),
+        }
+        if result.metrics_delta:
+            runtime["metrics"] = merge_research_graph_metrics(
+                runtime.get("metrics"), result.metrics_delta
             )
-        workflow = patch.get("workflow", {})
-        if set(workflow) - {"round", "completed_tasks"}:
-            raise ValueError("Only Workflow owns brief, review and pending tasks")
-        for task in workflow_reducer({}, workflow).get("completed_tasks", []):
-            if task.target_role != role:
-                raise ValueError(f"Producer {role} cannot complete another role's task")
-        research = patch.get("research", {})
-        if research.get("run_id", state.get("research", {}).get("run_id")) != state.get(
-            "research", {}
-        ).get("run_id"):
-            raise ValueError("Producer cannot change the research run")
-        for field in ("working_contexts", "working_context_scopes"):
-            if set(research.get(field, {})) - {role}:
-                raise ValueError(f"Producer {role} cannot write another role's {field}")
-        for field in ("sections", "final"):
-            if field in patch.get("report", {}):
-                value = patch["report"][field]
-                if field in replacements and replacements[field] != value:
-                    raise ValueError(
-                        f"Conflicting parallel report replacement: {field}"
-                    )
-                replacements[field] = value
-        apply_patch(candidate, patch)
-    state.clear()
-    state.update(candidate)
+        tasks = coerce_research_tasks(
+            packet.get("workflow", {}).get("pending_tasks", [])
+        )
+        workflow = workflow_reducer(
+            workflow,
+            {
+                "round": result.round,
+                "completed_tasks": [t for t in tasks if t.target_role == role]
+                if result.round > 1
+                else [],
+            },
+        )
+    state.update(agents=agents, research=graph, runtime=runtime, workflow=workflow)

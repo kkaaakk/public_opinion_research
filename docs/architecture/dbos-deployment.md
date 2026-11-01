@@ -235,3 +235,21 @@ observed state version/key. An SSE disconnect does not cancel execution. The CLI
 prints no credentials, and its events command subscribes without claiming work.
 Rollback stops new admission and preserves Executors for already accepted Phase 5
 Runs; it does not redeliver those Runs into the previous engine or version.
+
+
+## Research role result envelope
+
+Research producers return a Python `ResearchRoleResult`; the existing parallel
+role workflows and native command sequence remain unchanged. Steps now store a
+plain JSON `research_result` instead of a producer State Patch. The research join
+also reads the exact prior `dbos-brief-spec-v1` Patch contract, including already
+committed role outputs and the domain-Artifact/native-ACK window, without running
+models or tools again. Unsupported saved fields fail closed and retain their data.
+See the [contract, recovery evidence and cost audit](../audits/research-role-results-assembly.md).
+
+Stop old admission and old Executors before switching this release. Do not mix
+an old Executor that only understands Patch results with this release. Forward
+reading of the preceding contract does not make backward reading safe: on rollback,
+stop new admission and keep this release to finish its accepted Runs first. Do not
+rewrite journals, copy opaque units or mint new Runs to migrate external effects.
+Earlier application versions still drain on their matching releases.

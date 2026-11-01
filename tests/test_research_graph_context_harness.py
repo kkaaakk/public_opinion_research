@@ -1052,14 +1052,9 @@ def test_graph_agent_path_avoids_legacy_full_history_compression(
             role="public_signal",
         )
     )
-    assert result["agents"]["public_signal"]["report"]["type"] == "override"
-    assert (
-        "bounded graph report" in result["agents"]["public_signal"]["report"]["value"]
-    )
-    assert (
-        result["research"]["working_contexts"]["public_signal"]["recent_progress"]
-        == "updated"
-    )
+    assert result.replace_report is True
+    assert "bounded graph report" in result.report
+    assert result.working_context.recent_progress == "updated"
     assert (
         len([node for node in store.nodes.values() if node.node_type == "Source"]) == 1
     )
