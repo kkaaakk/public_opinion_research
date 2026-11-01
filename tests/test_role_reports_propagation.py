@@ -86,8 +86,8 @@ def test_full_role_report_is_not_replaced_by_compact_memory(monkeypatch) -> None
         )
     )
 
-    formal_report = result["agents"]["public_signal"]["report"]
-    private_memory = result["agents"]["public_signal"]["memory"][0]["content"]
+    formal_report = result.report
+    private_memory = result.memory[0]["content"]
     assert full_report_body in formal_report
     assert len(formal_report) > 1_800
     assert len(private_memory) < len(formal_report)
@@ -163,8 +163,8 @@ def test_business_agent_preserves_private_memory_and_rolling_summary(
         sum("PRIVATE_SENTINEL" in str(message.content) for message in captured_messages)
         == 1
     )
-    assert result["agents"]["public_signal"]["rolling_summary"] == "PRIOR_SUMMARY"
-    assert result["runtime"]["budget"]["model_calls"] >= 1
+    assert result.rolling_summary == "PRIOR_SUMMARY"
+    assert result.budget_delta["model_calls"] >= 1
 
 
 # 验证并行报告按角色分别合并。

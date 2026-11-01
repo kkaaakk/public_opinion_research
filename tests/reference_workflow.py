@@ -9,6 +9,7 @@ from functools import partial
 from typing import Any, Literal, cast
 
 from langchain_core.runnables import RunnableConfig
+from reference_research import legacy_research_patch, merge_research_patches
 
 from open_deep_research.budget import (
     ModelBudgetExceeded,
@@ -28,7 +29,6 @@ from open_deep_research.workflow.python_state import (
     RESEARCH_ROLES,
     apply_patch,
     copy_state,
-    merge_research_patches,
     role_snapshot,
 )
 from open_deep_research.workflow.state_utils import (
@@ -95,7 +95,9 @@ async def _step(
     async def execute() -> Any:
         with budget_capture() as usage:
             try:
-                return await operation(deepcopy(state), config)
+                return legacy_research_patch(
+                    await operation(deepcopy(state), config), state
+                )
             except BaseException as exc:
                 original.append(exc)
                 raise

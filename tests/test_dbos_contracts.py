@@ -243,6 +243,19 @@ def test_native_four_roles_real_sdk_graph_budget_and_history(native_case):
     if case.mode != "rolling":
         assert result["usage"]["total_tokens"] == 291
         assert result["usage"]["model_calls"] == 26
+    from open_deep_research.state import ResearchRoleResult
+
+    for unit in facts().units(run["run_id"]):
+        if unit["name"] not in {"public_signal_agent", "internal_knowledge_agent"}:
+            continue
+        assert "patch" not in unit["artifact"]
+        role_result = ResearchRoleResult.model_validate(
+            unit["artifact"]["research_result"]
+        )
+        assert role_result.role + "_agent" == unit["name"]
+        assert role_result.round == 1
+        assert role_result.budget_delta == unit["usage"]
+        assert role_result.working_context_scope.run_id == run["run_id"]
     archived = case.wait(run, lambda r: r["archive_status"] == "saved")
     saved = case.history.get(archived["history_id"], owner="alice")
     assert saved["run_id"] == run["run_id"]
@@ -1430,3 +1443,63 @@ def test_native_cancelled_vision_keeps_reservation_until_actual_usage_settles(
     assert model.finished.is_set() and len(model.requests) == 1
     assert len(case.models) == 0 and not any(case.calls.values())
     assert case.client.get(run["run_id"], "alice")["usage"] == result["usage"]
+
+
+@pytest.mark.parametrize("slower", ["public_signal", "internal_knowledge"])
+def test_research_results_are_joined_after_both_native_children(
+    native_case, monkeypatch, slower
+):
+    from copy import deepcopy
+    from threading import Event
+
+    from open_deep_research.workflow import dbos_workflow as engine
+    from open_deep_research.workflow.run_facts import RunFacts
+
+    case = native_case
+    original = RunFacts.finish_unit
+    fast_committed = Event()
+    order = []
+    joined = []
+    original_assemble = engine.assemble_research_results
+
+    def assemble(state, results, packets):
+        original_assemble(state, results, packets)
+        joined.append(deepcopy(state))
+
+    monkeypatch.setattr(engine, "assemble_research_results", assemble)
+
+    def finish(repo, unit, permit, **data):
+        value = data.get("artifact", {}).get("research_result")
+        if value and value["role"] == slower:
+            assert fast_committed.wait(10), "Native role children must remain parallel"
+        result = original(repo, unit, permit, **data)
+        if value:
+            order.append(value["role"])
+            if value["role"] != slower:
+                fast_committed.set()
+        return result
+
+    monkeypatch.setattr(RunFacts, "finish_unit", finish)
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "completed", result["error"]
+    assert order == [
+        r for r in ("public_signal", "internal_knowledge") if r != slower
+    ] + [slower]
+    output = case.client.client.list_workflows(
+        workflow_ids=[run["run_id"]], load_input=False, load_output=True
+    )[0].output
+    # DBOS JSON persistence sorts object keys. Observe the actual join before
+    # serialization, then compare persisted values rather than JSON key order.
+    assert len(joined) == 1
+    assert list(joined[0]["research"]["working_contexts"]) == [
+        "public_signal",
+        "internal_knowledge",
+    ]
+    for role in ("public_signal", "internal_knowledge"):
+        assert output["agents"][role] == joined[0]["agents"][role]
+        for field in ("working_contexts", "working_context_scopes"):
+            assert output["research"][field][role] == joined[0]["research"][field][role]
+    assert result["usage"]["model_calls"] == 26
+    assert len(result["role_reports"]) == 4
+    assert len(case.runtimes) == 4

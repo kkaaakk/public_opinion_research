@@ -206,7 +206,9 @@ def configuration(directory):
     )
 
 
-@pytest.mark.parametrize("scenario", ["checkpoint", "lost-receipt"])
+@pytest.mark.parametrize(
+    "scenario", ["checkpoint", "lost-receipt", "legacy-checkpoint", "legacy-artifact"]
+)
 def test_process_kill_journal_recovery_never_replays_unknown_tool(
     pg_database, tmp_path, scenario
 ):
@@ -225,10 +227,32 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             initial(),
         )[0]
         wait(lambda: (directory / scenario).exists(), process, directory)
+        if scenario.startswith("legacy-"):
+            wait(
+                lambda: sum(
+                    bool(u["artifact"])
+                    for u in facts().units(run["run_id"])
+                    if u["name"] in {"public_signal_agent", "internal_knowledge_agent"}
+                )
+                == 2,
+                process,
+                directory,
+            )
+            producers = [
+                u
+                for u in facts().units(run["run_id"])
+                if u["name"] in {"public_signal_agent", "internal_knowledge_agent"}
+            ]
+            assert all(
+                "patch" in u["artifact"] and "research_result" not in u["artifact"]
+                for u in producers
+            )
+            committed_usage = {u["id"]: u["usage"] for u in producers}
+            assert effect_count(directory, "models") == 4
         kill_owned(process)
         before = effect_count(directory)
         assert before >= 1
-        if scenario == "checkpoint":
+        if scenario != "lost-receipt":
             assert before == 2
         (directory / (scenario + ".release")).write_text("continue")
         (directory / "executor-ready").unlink()
@@ -240,10 +264,18 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             directory,
         )
         result = client.get(run["run_id"], "alice")
-        if scenario == "checkpoint":
+        if scenario != "lost-receipt":
             assert result["status"] == "completed", result["error"]
             assert result["report"]
             assert result["usage"]["model_calls"] == 26
+            if scenario.startswith("legacy-"):
+                assert effect_count(directory, "models") == 6
+                after = {u["id"]: u["usage"] for u in facts().units(run["run_id"])}
+                assert all(
+                    after[key] == usage for key, usage in committed_usage.items()
+                )
+                stages = {r["role"] for r in result["role_reports"]}
+                assert {"public_signal", "internal_knowledge"} <= stages
         else:
             assert result["status"] == "interrupted"
             assert result["settlement"] == "unresolved"

@@ -49,9 +49,9 @@ def test_research_subgraph_contract():
     }
     source = (SOURCE_ROOT / "workflow/dbos_workflow.py").read_text(encoding="utf-8")
     assert 'for role in ("risk_assessment", "response_strategy"):' in source
-    assert source.index("merge_research_patches(state, patches)") < source.index(
-        'round_ = state["workflow"]["round"]'
-    )
+    assert source.index(
+        "assemble_research_results(state, results, packets)"
+    ) < source.index('round_ = state["workflow"]["round"]')
     assert "DBOS.wait_first_async" in source
     assert "DBOS.cancel_workflow_async" in source
 

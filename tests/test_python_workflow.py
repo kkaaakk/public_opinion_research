@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
+from reference_research import merge_research_patches
 from reference_workflow import (
     PythonWorkflow,
     WorkflowExecutionError,
@@ -23,7 +24,6 @@ from open_deep_research.workflow import get_workflow, intake, reporting, researc
 from open_deep_research.workflow.python_state import (
     apply_patch,
     copy_state,
-    merge_research_patches,
     role_snapshot,
 )
 

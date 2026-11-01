@@ -393,7 +393,9 @@ def test_real_business_tool_loading_applies_role_allowlist_to_sdk(monkeypatch, r
             },
         )
     )
-    assert "whitelist verified" in patch["agents"][role]["report"]
+    assert "whitelist verified" in (
+        patch.report if role in ROLES[:2] else patch["agents"][role]["report"]
+    )
 
 
 @pytest.mark.parametrize("api", ["responses", "chat_completions"])
