@@ -63,6 +63,43 @@ def install(directory, scenario):
         GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
     )
     patch.setattr(history, "get_history_store", lambda: store)
+    if scenario == "plan-error":
+        from langchain_core.runnables import RunnableLambda
+
+        from open_deep_research.workflow import shared
+        from open_deep_research.workflow.brief import PlanDecision
+
+        service = shared.configurable_model
+
+        class PlanningFault:
+            def with_config(self, cfg):
+                return self
+
+            async def ainvoke(self, *args, **kwargs):
+                return await service.ainvoke(*args, **kwargs)
+
+            def with_structured_output(self, schema, include_raw=False):
+                raw = service.with_structured_output(schema, include_raw)
+
+                async def call(messages, config=None):
+                    response = await raw.ainvoke(messages, config)
+                    if schema is PlanDecision:
+                        with sqlite3.connect(directory / "external.db") as db:
+                            db.execute(
+                                "CREATE TABLE IF NOT EXISTS service_models(id INTEGER PRIMARY KEY)"
+                            )
+                            attempt = db.execute(
+                                "INSERT INTO service_models DEFAULT VALUES"
+                            ).lastrowid
+                        if attempt == 1:
+                            raise RuntimeError(
+                                "Synthetic transient provider failure after usage"
+                            )
+                    return response
+
+                return RunnableLambda(call)
+
+        patch.setattr(shared, "configurable_model", PlanningFault())
     if scenario == "gap-checkpoint":
         from langchain_core.runnables import RunnableLambda
         from test_python_workflow import gap
@@ -145,6 +182,8 @@ def install(directory, scenario):
             with sqlite3.connect(directory / "external.db", timeout=10) as db:
                 db.execute("CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY)")
                 attempt = db.execute("INSERT INTO reviews DEFAULT VALUES").lastrowid
+            if scenario == "retry-nested" and attempt == 2:
+                await asyncio.to_thread(gate, "nested-leaf")
             if attempt <= 2:
                 capture_budget_usage({"model_calls": 1, "input_tokens": 2})
                 raise RuntimeError("Synthetic safe read failure with durable witness")
@@ -154,6 +193,13 @@ def install(directory, scenario):
             if scenario == "retry-before" and workflow_id.endswith(":research"):
                 gate(scenario)
             result = original_rewind(client, workflow_id, **kwargs)
+            if (
+                scenario == "retry-nested"
+                and ":review:" in workflow_id
+                and not (directory / "nested-rewound").exists()
+            ):
+                (directory / "nested-rewound").touch()
+                raise SQLAlchemyError("Synthetic leaf rewind ACK loss")
             if scenario == "retry-between" and workflow_id.endswith(":research"):
                 gate(scenario)
             if (
@@ -178,6 +224,12 @@ def install(directory, scenario):
 
         async def sleep(seconds):
             if (
+                scenario == "retry-nested"
+                and DBOS.workflow_id.endswith(":finalize")
+                and (directory / "nested-rewound").exists()
+            ):
+                await asyncio.to_thread(gate, "retry-nested")
+            if (
                 scenario == "retry-error"
                 and DBOS.workflow_id.endswith(":finalize")
                 and (directory / "retry-error-native").exists()
@@ -192,6 +244,18 @@ def install(directory, scenario):
         patch.setattr(RunClient, "_rewind_safe", apply)
 
     def finish(self, unit, permit, **data):
+        if (
+            scenario == "plan-error"
+            and unit.endswith(":plan:1")
+            and data.get("artifact")
+        ):
+            gate("plan-error")
+        if (
+            scenario == "runner-error"
+            and unit.endswith(":public_signal:1")
+            and data.get("error")
+        ):
+            gate("runner-error")
         value = old_finish(self, unit, permit, **data)
         if (
             scenario == "legacy-artifact"
@@ -214,10 +278,14 @@ def install(directory, scenario):
             gate("gap-checkpoint")
         return old_acquire(self, run_id, unit, name, **kw)
 
-    def operation(self, unit, permit, identity, status="started"):
-        if scenario == "lost-receipt" and status == "returned":
+    def operation(self, unit, permit, identity, status="started", **kwargs):
+        if (
+            scenario == "lost-receipt"
+            and status == "returned"
+            and identity["role"] != "service"
+        ):
             gate("lost-receipt")
-        return old_operation(self, unit, permit, identity, status)
+        return old_operation(self, unit, permit, identity, status, **kwargs)
 
     def check(self, *args, **kwargs):
         try:
@@ -233,13 +301,92 @@ def install(directory, scenario):
     patch.setattr(RunFacts, "acquire", acquire)
     patch.setattr(RunFacts, "operation", operation)
 
+    from open_deep_research.runtime.sdk_context import SDKContextHarness
+
+    original_llm_end = SDKContextHarness.on_llm_end
+    original_tool_end = SDKContextHarness.on_tool_end
+    original_filter = SDKContextHarness.filter_model_input
+    original_settle = SDKContextHarness._settle_on_exit
+
+    if scenario in {"runner-batch", "batch-error-cache"}:
+        from langchain_core.language_models.fake_chat_models import (
+            FakeMessagesListChatModel,
+        )
+
+        original_generate = FakeMessagesListChatModel._generate
+
+        def witnessed_generate(self, *args, **kwargs):
+            with sqlite3.connect(directory / "external.db", timeout=10) as db:
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS lc_models(id INTEGER PRIMARY KEY)"
+                )
+                db.execute("INSERT INTO lc_models DEFAULT VALUES")
+            return original_generate(self, *args, **kwargs)
+
+        patch.setattr(FakeMessagesListChatModel, "_generate", witnessed_generate)
+
+    async def settle(self, reason):
+        if (
+            scenario == "batch-error-cache"
+            and self.scope.role == "public_signal"
+            and reason == "exception"
+        ):
+            await asyncio.to_thread(gate, scenario)
+        return await original_settle(self, reason)
+
+    async def llm_end(self, *args, **kwargs):
+        await original_llm_end(self, *args, **kwargs)
+        if (
+            scenario == "runner-model"
+            and self.scope.role == "public_signal"
+            and self.model_calls == 1
+        ):
+            await asyncio.to_thread(gate, scenario)
+        if (
+            scenario == "runner-model"
+            and self.scope.role == "public_signal"
+            and self.model_calls == 2
+        ):
+            await asyncio.to_thread(gate, "runner-second")
+
+    async def tool_end(self, *args, **kwargs):
+        if scenario == "runner-tool" and self.scope.role == "public_signal":
+            await asyncio.to_thread(gate, scenario)
+        await original_tool_end(self, *args, **kwargs)
+
+    async def model_filter(self, data):
+        result = await original_filter(self, data)
+        if (
+            scenario == "batch-error-cache"
+            and self.scope.role == "public_signal"
+            and self.model_calls == 2
+        ):
+            from open_deep_research.runtime.sdk_context import (
+                ResearchGraphSettlementError,
+            )
+
+            raise ResearchGraphSettlementError(
+                "Controlled context failure after actual ingestion"
+            )
+        if (
+            scenario == "runner-batch"
+            and self.scope.role == "public_signal"
+            and self.model_calls == 2
+        ):
+            await asyncio.to_thread(gate, scenario)
+        return result
+
+    patch.setattr(SDKContextHarness, "on_llm_end", llm_end)
+    patch.setattr(SDKContextHarness, "on_tool_end", tool_end)
+    patch.setattr(SDKContextHarness, "filter_model_input", model_filter)
+    patch.setattr(SDKContextHarness, "_settle_on_exit", settle)
+
     @asynccontextmanager
     async def model(*args, **kwargs):
         def record_model(role):
-            if scenario.startswith("legacy-"):
-                with sqlite3.connect(directory / "external.db", timeout=10) as db:
-                    db.execute("CREATE TABLE IF NOT EXISTS models(role text)")
-                    db.execute("INSERT INTO models VALUES (?)", (role,))
+            with sqlite3.connect(directory / "external.db", timeout=10) as db:
+                db.execute("CREATE TABLE IF NOT EXISTS models(role text)")
+                db.execute("INSERT INTO models VALUES (?)", (role,))
 
         current = {}
 
@@ -249,6 +396,8 @@ def install(directory, scenario):
             )[0]
             current["role"] = role
             record_model(role)
+            if scenario == "runner-error" and role == "public_signal":
+                raise RuntimeError("Synthetic provider exception")
             if scenario == "model-wait" and role == "public_signal":
                 (directory / "model-wait").write_text("ready")
                 while not (directory / "model-wait.release").exists():
@@ -267,8 +416,18 @@ def install(directory, scenario):
             record_model(current["role"])
             return [assistant_message("research complete")]
 
+        async def reply(call):
+            # A provider sees the prepared input, not an in-process script cursor.
+            # DBOS may replay the first response without invoking this model.
+            if any(item.get("type") == "function_call_output" for item in call.input):
+                current["role"] = call.system_instructions.split("<Role>\n", 1)[
+                    1
+                ].split("\n</Role>", 1)[0]
+                return second(call)
+            return await first(call)
+
         yield ScriptedModel(
-            [ModelStep.respond(first), ModelStep.respond(second)],
+            [ModelStep.respond(reply) for _ in range(10)],
             default_usage=TOKENS,
             emit_traces=os.environ.get("POR_TRACING_ENABLED", "").lower() == "true",
         )

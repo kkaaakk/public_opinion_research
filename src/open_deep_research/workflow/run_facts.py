@@ -53,6 +53,9 @@ class RunFacts:
                 "CREATE TABLE IF NOT EXISTS por_domain.units (id text PRIMARY KEY, run_id text NOT NULL REFERENCES por_domain.requests(id), name text NOT NULL, permit text NOT NULL, artifact text, usage text NOT NULL DEFAULT '{}', settled boolean, error text NOT NULL DEFAULT '{}')",
                 "CREATE INDEX IF NOT EXISTS por_unit_run ON por_domain.units(run_id)",
                 "CREATE TABLE IF NOT EXISTS por_domain.operations (id text PRIMARY KEY, unit text NOT NULL REFERENCES por_domain.units(id), fingerprint text NOT NULL, status text NOT NULL, name text NOT NULL)",
+                "ALTER TABLE por_domain.operations ADD COLUMN IF NOT EXISTS usage text NOT NULL DEFAULT '{}'",
+                "ALTER TABLE por_domain.operations ADD COLUMN IF NOT EXISTS admission_permit text",
+                "CREATE INDEX IF NOT EXISTS por_operation_unit ON por_domain.operations(unit)",
                 "CREATE TABLE IF NOT EXISTS por_domain.retries (run_id text NOT NULL REFERENCES por_domain.requests(id), key text NOT NULL, version bigint NOT NULL, generation bigint NOT NULL, PRIMARY KEY(run_id,key))",
                 "ALTER TABLE por_domain.retries ADD COLUMN IF NOT EXISTS outcome text",
                 "CREATE UNIQUE INDEX IF NOT EXISTS por_retry_generation ON por_domain.retries(run_id,generation)",
@@ -97,6 +100,57 @@ class RunFacts:
                 != self.policy()
             ):
                 raise RunConflict("Executors must use the initialized resource policy")
+
+    def migration_inventory(self):
+        """Read native catalog and business quarantine; never change old work."""
+        rows = []
+        offset = 0
+        while True:
+            page = self.client.list_workflows(
+                status=["PENDING", "ENQUEUED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED"],
+                application_name=APP,
+                load_input=False,
+                load_output=False,
+                limit=500,
+                offset=offset,
+            )
+            rows.extend(
+                dict(
+                    workflow_id=w.workflow_id,
+                    name=w.name,
+                    version=w.app_version,
+                    status=w.status,
+                )
+                for w in page
+                if w.name.startswith("por.") and w.app_version != VERSION
+            )
+            if len(page) < 500:
+                break
+            offset += len(page)
+        with self.engine.connect() as db:
+            quarantined = db.execute(
+                text(
+                    "SELECT r.id,r.value FROM por_domain.requests r WHERE r.occupied OR EXISTS(SELECT 1 FROM por_domain.units u WHERE u.run_id=r.id AND u.settled IS NOT TRUE)"
+                )
+            )
+            for run_id, value in quarantined:
+                version_ = loads(value).get("version")
+                if version_ != VERSION:
+                    rows.append(
+                        dict(
+                            workflow_id=run_id,
+                            name="domain_reconciliation",
+                            version=version_,
+                            status="UNRESOLVED",
+                        )
+                    )
+        return rows
+
+    def require_matching_journals(self):
+        if self.migration_inventory():
+            raise RunConflict(
+                "Incompatible unfinished DBOS journals: stop admission and drain/cancel/settle with the original release; run --migration-check"
+            )
 
     def quarantine_pending(self, run_id):
         with self.engine.begin() as db:
@@ -243,7 +297,7 @@ class RunFacts:
                 self.publish(db, run_id, "approval_ended", decision="expired")
             return decision == "expired"
 
-    def acquire(self, run_id, unit_id, name, *, safe=False):
+    def acquire(self, run_id, unit_id, name, *, safe=False, native_replay=False):
         permit = uuid4().hex
         with self.engine.begin() as db:
             req = self.request(run_id, db=db)
@@ -266,8 +320,6 @@ class RunFacts:
                 .mappings()
                 .one()
             )
-            if row["artifact"]:
-                return row["permit"], loads(row["artifact"]), loads(row["usage"])
             # Rotate before rejecting recovery, fencing an old still-alive executor.
             db.execute(
                 text(
@@ -275,7 +327,13 @@ class RunFacts:
                 ),
                 {"id": unit_id, "p": permit},
             )
-            deny = not created and (not safe or row["settled"] is not True)
+            # Native replay re-enters the deterministic stage. Each external
+            # boundary checks its own durable intent; no State/Artifact resume.
+            deny = (
+                not native_replay
+                and not created
+                and (not safe or row["settled"] is not True)
+            )
             if deny:
                 db.execute(
                     text(
@@ -293,6 +351,14 @@ class RunFacts:
             )
         return permit, None, old_usage
 
+    def failed_usage(self, unit_id, fallback):
+        from open_deep_research.budget import diff_budget_usage
+
+        actual, _ = self.physical_usage(unit_id)
+        # Only costs without a physical receipt are carried. A replayed failed
+        # native Step already supplies its own attempted usage again in memory.
+        return diff_budget_usage(fallback, actual)
+
     def check(self, unit_id, permit, *, db=None, locked=False, allow_cancel=False):
         if db is None:
             with self.engine.connect() as conn:
@@ -306,6 +372,7 @@ class RunFacts:
         ).first()
         if not row or row[0] != permit or (row[1] and not allow_cancel):
             raise ExecutionRevoked("Business execution permission was revoked")
+        return bool(row[1])
 
     @contextmanager
     def effect_guard(self, unit_id, permit):
@@ -315,7 +382,7 @@ class RunFacts:
             self.check(unit_id, permit, db=db, locked=True, allow_cancel=True)
             yield
 
-    def operation(self, unit_id, permit, identity, status="started"):
+    def operation(self, unit_id, permit, identity, status="started", usage=None):
         operation_id = digest(
             {
                 "unit": unit_id,
@@ -334,18 +401,37 @@ class RunFacts:
         fingerprint = digest(identity.get("arguments", ""))
         with self.engine.begin() as db:
             self.check(
-                unit_id, permit, db=db, locked=True, allow_cancel=status != "started"
+                unit_id,
+                permit,
+                db=db,
+                locked=True,
+                allow_cancel=status != "started" or identity.get("settlement", False),
             )
             if status == "started":
+                if db.execute(
+                    text(
+                        "SELECT EXISTS(SELECT 1 FROM por_domain.operations WHERE unit=:u AND status IN ('started','uncertain') AND admission_permit IS DISTINCT FROM :p)"
+                    ),
+                    {"u": unit_id, "p": permit},
+                ).scalar_one():
+                    raise RunConflict(
+                        "Unconfirmed work from an earlier executor requires authoritative reconciliation"
+                    )
                 inserted = db.execute(
                     text(
-                        "INSERT INTO por_domain.operations VALUES (:id,:u,:f,'started',:n) ON CONFLICT DO NOTHING"
+                        "INSERT INTO por_domain.operations(id,unit,fingerprint,status,name,usage,admission_permit) VALUES (:id,:u,:f,'started',:n,:usage,:p) ON CONFLICT DO NOTHING"
                     ),
                     {
                         "id": operation_id,
                         "u": unit_id,
                         "f": fingerprint,
                         "n": identity["name"],
+                        "p": permit,
+                        "usage": dumps(
+                            {"model_calls": 1}
+                            if identity["name"] in {"llm", "llm_sync", "sdk_model"}
+                            else {}
+                        ),
                     },
                 ).rowcount
                 if inserted != 1:
@@ -355,12 +441,35 @@ class RunFacts:
             else:
                 changed = db.execute(
                     text(
-                        "UPDATE por_domain.operations SET status=:s WHERE id=:id AND fingerprint=:f AND status='started'"
+                        "UPDATE por_domain.operations SET status=:s,usage=:usage WHERE id=:id AND fingerprint=:f AND status='started'"
                     ),
-                    {"id": operation_id, "f": fingerprint, "s": status},
+                    {
+                        "id": operation_id,
+                        "f": fingerprint,
+                        "s": status,
+                        "usage": dumps(usage or {}),
+                    },
                 ).rowcount
                 if changed != 1:
+                    row = db.execute(
+                        text(
+                            "SELECT fingerprint,status,usage FROM por_domain.operations WHERE id=:id"
+                        ),
+                        {"id": operation_id},
+                    ).first()
+                    if (
+                        row
+                        and row[0] == fingerprint
+                        and row[1] == status
+                        and row[2] == dumps(usage or {})
+                    ):
+                        # A lost ACK may repeat only the exact already committed
+                        # receipt, after the current permit check above. No event
+                        # is published a second time and started is never reused.
+                        return operation_id
                     raise RunConflict("Tool receipt identity or state mismatch")
+            if identity["role"] == "service":
+                return operation_id
             run_id = db.execute(
                 text("SELECT run_id FROM por_domain.units WHERE id=:id"),
                 {"id": unit_id},
@@ -389,32 +498,94 @@ class RunFacts:
             )
         return operation_id
 
+    def physical_usage(self, unit_id):
+        from open_deep_research.budget import merge_budget_usage
+
+        with self.engine.connect() as db:
+            rows = list(
+                db.execute(
+                    text("SELECT name,usage FROM por_domain.operations WHERE unit=:id"),
+                    {"id": unit_id},
+                )
+            )
+        actual = {}
+        for _, value in rows:
+            actual = merge_budget_usage(actual, loads(value))
+        return actual, any(name in {"llm", "llm_sync", "sdk_model"} for name, _ in rows)
+
+    def accounted_usage(self, unit_id, observed, carry=None):
+        """Receipts account physical attempts; replayed hooks rebuild local state.
+
+        Receipt totals are a lower bound when a provider withholds token usage.
+        They are never added to the same costs already in a business result.
+        """
+        from open_deep_research.budget import diff_budget_usage, merge_budget_usage
+
+        actual, has_models = self.physical_usage(unit_id)
+        if carry is None:
+            carry = diff_budget_usage(observed, actual)
+        billed = merge_budget_usage(actual, carry)
+        value = dict(observed)
+        if has_models:
+            for key in (
+                "model_calls",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "input_token_details",
+                "output_token_details",
+            ):
+                value[key] = billed.get(key, {} if key.endswith("_details") else 0)
+        for key in ("tool_calls", "search_calls"):
+            value[key] = max(value.get(key, 0), billed.get(key, 0))
+        return value
+
     def finish_unit(
         self, unit_id, permit, *, artifact=None, usage=None, settled=True, error=None
     ):
+        usage = self.accounted_usage(unit_id, usage or {})
         with self.engine.begin() as db:
             self.check(unit_id, permit, db=db, locked=True, allow_cancel=True)
+            # Only public business deliverables are retained, not execution
+            # return values, followup packets, memory or State patches.
+            projection = None
+            if artifact is not None:
+                patch = artifact.get("patch", {})
+                projection = {
+                    "completed": True,
+                    "delivery_ids": artifact.get("delivery_ids", []),
+                    "patch": {k: patch[k] for k in ("agents", "report") if k in patch},
+                }
+                if result := artifact.get("research_result"):
+                    projection["patch"]["agents"] = {
+                        result["role"]: {"report": result["report"]}
+                    }
+                elif "agents" in projection["patch"]:
+                    projection["patch"]["agents"] = {
+                        role: {"report": value["report"]}
+                        for role, value in patch["agents"].items()
+                        if isinstance(value, dict) and "report" in value
+                    }
             confirmed = db.execute(
                 text("SELECT artifact FROM por_domain.units WHERE id=:id"),
                 {"id": unit_id},
             ).scalar_one()
-            if confirmed is not None:
-                if artifact is not None and confirmed != dumps(artifact):
-                    raise RunConflict("Confirmed business result identity changed")
-                return
+            already_projected = projection is not None and confirmed == dumps(
+                projection
+            )
             db.execute(
                 text(
-                    "UPDATE por_domain.units SET artifact=:a,usage=:u,settled=:s,error=:e WHERE id=:id"
+                    "UPDATE por_domain.units SET artifact=coalesce(:a,artifact),usage=:u,settled=:s,error=:e WHERE id=:id"
                 ),
                 {
                     "id": unit_id,
-                    "a": dumps(artifact) if artifact is not None else None,
+                    "a": dumps(projection) if projection is not None else None,
                     "u": dumps(usage or {}),
                     "s": settled,
                     "e": dumps(error or {}),
                 },
             )
-            if artifact is not None:
+            if artifact is not None and not already_projected:
                 row = db.execute(
                     text("SELECT run_id,name FROM por_domain.units WHERE id=:id"),
                     {"id": unit_id},

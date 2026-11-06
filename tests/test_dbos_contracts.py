@@ -248,10 +248,12 @@ def test_native_four_roles_real_sdk_graph_budget_and_history(native_case):
     for unit in facts().units(run["run_id"]):
         if unit["name"] not in {"public_signal_agent", "internal_knowledge_agent"}:
             continue
-        assert "patch" not in unit["artifact"]
-        role_result = ResearchRoleResult.model_validate(
-            unit["artifact"]["research_result"]
-        )
+        assert "research_result" not in unit["artifact"]
+        assert set(
+            unit["artifact"]["patch"]["agents"][unit["name"].removesuffix("_agent")]
+        ) == {"report"}
+        saved_result = case.client.client.retrieve_workflow(unit["id"]).get_result()
+        role_result = ResearchRoleResult.model_validate(saved_result["research_result"])
         assert role_result.role + "_agent" == unit["name"]
         assert role_result.round == 1
         assert role_result.budget_delta == unit["usage"]
@@ -452,8 +454,11 @@ def test_tool_operation_identity_never_authorizes_unknown_replay(pg_database):
         )
         assert "secret-body" not in str(dict(row))
     repo.operation(unit, permit, identity, "returned")
+    assert repo.operation(unit, permit, identity, "returned") == operation
     with pytest.raises(RunConflict):
-        repo.operation(unit, permit, identity, "returned")
+        repo.operation(unit, permit, identity, "returned", usage={"model_calls": 999})
+    with pytest.raises(RunConflict):
+        repo.operation(unit, permit, identity)
 
 
 @pytest.mark.parametrize("entrypoint", ["/api/runs", "/api/research", "cli"])
@@ -940,12 +945,12 @@ def test_cancellation_during_real_receipt_commit_drains_harness(
     returned = set()
     lock = threading.Lock()
 
-    def operation(repo, unit, permit, identity, status="started"):
-        if status == "returned":
+    def operation(repo, unit, permit, identity, status="started", **kwargs):
+        if status == "returned" and identity["role"] != "service":
             with lock:
                 returned.add(identity["role"])
             assert release.wait(20), "Receipt gate was not released"
-        return original(repo, unit, permit, identity, status)
+        return original(repo, unit, permit, identity, status, **kwargs)
 
     monkeypatch.setattr(RunFacts, "operation", operation)
     run = case.create()
@@ -962,7 +967,39 @@ def test_cancellation_during_real_receipt_commit_drains_harness(
     finally:
         release.set()
     result = case.wait(run)
-    assert result["status"] == "cancelled"
+    if result["status"] != "cancelled":
+        print(
+            "receipt settlements:",
+            [str(rt.harness.last_settlement) for rt in case.runtimes],
+        )
+        print(
+            "receipt cleanup errors:",
+            [
+                (
+                    getattr(rt.harness, "_exit_error_type", "none"),
+                    rt.harness.events[-5:],
+                )
+                for rt in case.runtimes
+            ],
+        )
+        print(
+            "receipt unit errors:", [u["error"] for u in facts().units(run["run_id"])]
+        )
+        print(
+            "receipt sdk failures:",
+            [
+                e
+                for e in case.client.read_events(run["run_id"], "alice", 0, 1000)
+                if e.get("event") in {"model_failed", "agent_failed"}
+            ],
+        )
+    assert result["status"] == "cancelled", {
+        "error": result["error"],
+        "settlements": [rt.harness.last_settlement for rt in case.runtimes],
+        "units": [
+            (u["name"], u["settled"], u["error"]) for u in facts().units(run["run_id"])
+        ],
+    }
     assert result["settlement"] == "settled"
     assert len(case.models) == 2
     assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
@@ -988,7 +1025,10 @@ def test_persisted_cancel_intent_survives_lost_web_cancel_rpc(native_case):
         )
     result = case.wait(run)
     assert result["native_status"] == "CANCELLED"
-    assert result["status"] == "cancelled"
+    assert result["status"] == "cancelled", {
+        "error": result["error"],
+        "settlements": [rt.harness.last_settlement for rt in case.runtimes],
+    }
     assert result["settlement"] == "settled"
     assert len(case.models) == 2
 
@@ -1102,12 +1142,12 @@ def test_tool_control_storage_errors_are_fatal_not_model_observations(
 
     original = RunFacts.operation
 
-    def fail(repo, unit, permit, identity, status="started"):
-        if status == "started":
+    def fail(repo, unit, permit, identity, status="started", **kwargs):
+        if status == "started" and identity["role"] != "service":
             raise OperationalError(
                 "Synthetic admission outage", None, Exception("unavailable")
             )
-        return original(repo, unit, permit, identity, status)
+        return original(repo, unit, permit, identity, status, **kwargs)
 
     monkeypatch.setattr(RunFacts, "operation", fail)
     run = native_case.create()
@@ -1350,7 +1390,24 @@ def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypat
     assert unit["settled"] and unit["artifact"]
     assert unit["usage"]["model_calls"] == 1
     assert unit["usage"]["total_tokens"] == 15
-    assert unit["artifact"]["patch"]["runtime"]["budget"] == unit["usage"]
+    assert "runtime" not in unit["artifact"]["patch"]
+    plans = case.client.client.list_workflows(
+        workflow_id_prefix=run["run_id"],
+        name="por.plan",
+        load_input=False,
+        load_output=False,
+    )
+    outputs = [
+        step["output"]
+        for p in plans
+        for step in case.client.client.list_workflow_steps(p.workflow_id)
+        if step["function_name"] == "por.stage_result"
+    ]
+    assert any(
+        value["value"].get("patch", {}).get("runtime", {}).get("budget")
+        == unit["usage"]
+        for value in outputs
+    )
     assert case.client.get(run["run_id"], "alice")["usage"] == result["usage"]
     assert len(model.requests) == 1
 

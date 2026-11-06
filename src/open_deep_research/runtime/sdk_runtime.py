@@ -109,6 +109,13 @@ class _RunBudget:
     def add(self, usage: Any) -> None:
         """Merge one actual usage delta with the existing accounting rules."""
         self.delta = merge_budget_usage(self.delta, usage)
+        from open_deep_research.workflow.durability import tool_usage
+
+        local = tool_usage.get()
+        if local is not None:
+            merged = merge_budget_usage(local, usage)
+            local.clear()
+            local.update(merged)
 
 
 class _BusinessAgentHarness(SDKContextHarness):
@@ -138,19 +145,24 @@ class _BusinessAgentHarness(SDKContextHarness):
         self.items = list(data.model_data.input)
         filtered = await super().filter_model_input(data)
         if not can_spend_model_call(
-            self.config, self.run_budget.projected(), reserve_final_report_call=True
-        ) or is_over_budget(self.config, self.run_budget.projected()):
+            self.config, self._filter_budget(), reserve_final_report_call=True
+        ) or is_over_budget(self.config, self._filter_budget()):
             raise _ReasoningStopped(
                 "Business budget stopped SDK reasoning before another request."
             )
         filtered = await self._compact_history(filtered, data.agent)
         if not can_spend_model_call(
-            self.config, self.run_budget.projected(), reserve_final_report_call=True
-        ) or is_over_budget(self.config, self.run_budget.projected()):
+            self.config, self._filter_budget(), reserve_final_report_call=True
+        ) or is_over_budget(self.config, self._filter_budget()):
             raise _ReasoningStopped(
                 "Rolling compaction used the remaining reasoning allowance."
             )
         return filtered
+
+    def _filter_budget(self):
+        return merge_budget_usage(
+            self.run_budget.projected(), getattr(self, "_filter_usage", None)
+        )
 
     def _estimate(self, data: ModelInputData, agent: Agent[Any]) -> int:
         return estimate_text_tokens(
@@ -545,6 +557,10 @@ class SDKAgentRuntime:
                 operation_id = await observe_execution(
                     "tool_started", identity=identity
                 )
+                context.context.results[
+                    context.tool_call_id
+                ].operation_id = operation_id
+                context.context.results[context.tool_call_id].effect_status = "started"
                 call_config = runtime_config
                 if operation_id is not None:
                     call_config = {
@@ -568,16 +584,26 @@ class SDKAgentRuntime:
                         )
                     except BaseException:
                         await observe_execution(
-                            "tool_finished", identity=identity, status="uncertain"
+                            "tool_finished",
+                            identity=identity,
+                            status="uncertain",
+                            usage=increment,
                         )
+                        context.context.results[
+                            context.tool_call_id
+                        ].effect_status = "uncertain"
                         raise
                     finally:
                         budget.add(captured)
                 # The receipt states that the external invoker returned. The
                 # Harness separately validates business success/evidence status.
                 await observe_execution(
-                    "tool_finished", identity=identity, status="returned"
+                    "tool_finished",
+                    identity=identity,
+                    status="returned",
+                    usage=increment,
                 )
+                context.context.results[context.tool_call_id].effect_status = "returned"
                 if isinstance(output, ToolMessage):
                     if output.status == "error":
                         raise _ToolRejected(_text(output.content))

@@ -27,9 +27,22 @@ def test_main_graph_contract():
         "por.plan",
         "por.research",
         "por.role",
+        "por.review",
+        "por.report",
         "por.events",
         "por.finalize",
     }
+    business = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "business_step"
+    )
+    assert not any(
+        isinstance(d, ast.Call)
+        and isinstance(d.func, ast.Attribute)
+        and d.func.attr == "step"
+        for d in business.decorator_list
+    )
 
 
 def test_research_subgraph_contract():

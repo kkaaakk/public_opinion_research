@@ -1,5 +1,7 @@
 # 业务执行与 Agent Loop
 
+> 2026-11-05：当前执行持久化边界已改为官方 DBOSRunner、显式工具 Step 与八个阶段 Workflow，见[统一改造](dbosrunner-unification.md)。本页下方 Phase 5/Brief 快照保留历史背景。
+
 > 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
 
 当前架构为 DBOS 3.3.0 + OpenAI Agents SDK 0.24.0 + Research Graph Context Harness。

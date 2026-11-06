@@ -10,14 +10,38 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from agents.items import ModelResponse
 from dbos import Serializer
 from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
-from open_deep_research.state import ResearchReview, ResearchTask, Section
+from open_deep_research.llm.errors import ModelInvocationError
+from open_deep_research.state import (
+    ClarifyWithUser,
+    ResearchQuestion,
+    ResearchReview,
+    ResearchTask,
+    Section,
+    Sections,
+    Summary,
+)
+from open_deep_research.workflow.brief import PlanDecision
 
 TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted"})
-_MODELS = {c.__name__: c for c in (Section, ResearchReview, ResearchTask)}
+_MODELS = {
+    c.__name__: c
+    for c in (
+        Section,
+        Sections,
+        ResearchReview,
+        ResearchTask,
+        ClarifyWithUser,
+        ResearchQuestion,
+        Summary,
+        PlanDecision,
+    )
+}
+_SDK_RESPONSE = TypeAdapter(ModelResponse)
 
 
 class RunConflict(ValueError):
@@ -35,7 +59,34 @@ class ExecutionRevoked(RunConflict):
 
 
 def _json_default(value: Any) -> Any:
+    if isinstance(value, ModelResponse):
+        return {
+            "__por_sdk_response__": _SDK_RESPONSE.dump_python(
+                value, mode="json", exclude_unset=True
+            )
+        }
     if isinstance(value, BaseException):
+        from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
+
+        if isinstance(value, _ReasoningStopped):
+            return {"__por_reasoning_stop__": str(value)}
+        if isinstance(value, ModelInvocationError):
+            return {
+                "__por_model_error__": {
+                    "error_type": value.error_type,
+                    "context_limit": value.context_limit,
+                    "budget_usage": value.budget_usage,
+                }
+            }
+        from open_deep_research.budget import ModelBudgetExceeded
+        from open_deep_research.workflow.execution import ExecutionControlError
+
+        if isinstance(value, (ModelBudgetExceeded, ExecutionControlError)):
+            return {
+                "__por_control_error__": type(value).__name__,
+                "budget_usage": getattr(value, "budget_usage", {}),
+                "unknown_outcome": getattr(value, "unknown_outcome", False),
+            }
         return {"__dbos_error__": type(value).__name__}
     if isinstance(value, BaseMessage):
         return {"__p4_message__": message_to_dict(value)}
@@ -56,6 +107,26 @@ def loads(value: str) -> Any:
     """Restore known state types without importing names from stored input."""
 
     def restore(item):
+        if "__por_reasoning_stop__" in item:
+            from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
+
+            return _ReasoningStopped(item["__por_reasoning_stop__"])
+        if "__por_model_error__" in item:
+            return ModelInvocationError(**item["__por_model_error__"])
+        if "__por_control_error__" in item:
+            from open_deep_research.budget import ModelBudgetExceeded
+            from open_deep_research.workflow.execution import ExecutionControlError
+
+            cls = {
+                "ModelBudgetExceeded": ModelBudgetExceeded,
+                "ExecutionControlError": ExecutionControlError,
+            }[item["__por_control_error__"]]
+            error = cls(item["__por_control_error__"])
+            error.budget_usage = item["budget_usage"]
+            error.unknown_outcome = item.get("unknown_outcome", False)
+            return error
+        if "__por_sdk_response__" in item:
+            return _SDK_RESPONSE.validate_python(item["__por_sdk_response__"])
         if "__dbos_error__" in item:
             return RuntimeError(item["__dbos_error__"])
         if "__p4_message__" in item:

@@ -285,19 +285,36 @@ async def _write_sections_parallel(
             )
         return section, response_budget
 
+    from dbos import DBOS
+
+    from open_deep_research.workflow.durability import in_durable_workflow
+
+    sequential = in_durable_workflow() and DBOS.step_id is None
+    results = []
     try:
-        results = list(
-            (
-                await gather_owned(
-                    {
-                        str(index): _write_one(section)
-                        for index, section in enumerate(sections)
-                    }
-                )
-            ).values()
-        )
+        if sequential:
+            # DBOS rewind truncates a suffix. Serial native chapter calls keep
+            # every successful chapter before the one a safe retry replaces.
+            # Producer parallelism and standalone service behavior are unchanged.
+            for section in sections:
+                results.append(await _write_one(section))
+        else:
+            results = list(
+                (
+                    await gather_owned(
+                        {
+                            str(index): _write_one(section)
+                            for index, section in enumerate(sections)
+                        }
+                    )
+                ).values()
+            )
     except BaseException as exc:
         usage: dict[str, Any] = {}
+        if sequential:
+            for _, response_budget in results:
+                usage = merge_budget_usage(usage, response_budget)
+            usage = merge_budget_usage(usage, getattr(exc, "budget_usage", {}))
         for _, response_budget in getattr(exc, "parallel_results", {}).values():
             usage = merge_budget_usage(usage, response_budget)
         for failure in getattr(exc, "parallel_errors", {}).values():
@@ -328,9 +345,16 @@ async def _persist_report(
     state: AgentState, config: RunnableConfig, report: str, usage: dict[str, Any]
 ) -> None:
     """Preserve report costs if the existing memory write fails; never replay it."""
-    try:
+    from open_deep_research.workflow.durability import begin_call, checkpoint, end_call
+
+    async def persist():
+        identity = await begin_call("report_memory")
         async with execution_effect():
             await maybe_persist_chat_memory(state, config, report)
+        await end_call(identity)
+
+    try:
+        await checkpoint("por.report_memory", persist)
     except BaseException as exc:
         setattr(
             exc,
@@ -345,7 +369,8 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     """Write report sections from role evidence in public-opinion mode.
 
     For each research=True section, extract evidence from role_reports based on
-    the section's agent_role field, then write the section content in parallel.
+    the section's agent_role field. Durable calls are ordered so native retry
+    preserves completed chapters; standalone callers retain parallel execution.
     """
     configurable = Configuration.from_runnable_config(config)
     sections = report_state(state).get("sections", [])
@@ -398,7 +423,7 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
             "runtime": {"budget": fallback_budget},
         }
 
-    # Write sections in parallel using section_writer_model
+    # Reuse the existing writer; the durable boundary orders chapter checkpoints.
     writer_model_name = (
         configurable.section_writer_model or configurable.final_report_model
     )

@@ -38,7 +38,9 @@ def persist_conversation_memory(
     if not configurable.rag_memory_write_enabled:
         return 0
     if not configurable.rag_memory_mysql_url:
-        raise ValueError("rag_memory_mysql_url is required when memory writing is enabled.")
+        raise ValueError(
+            "rag_memory_mysql_url is required when memory writing is enabled."
+        )
 
     conversation_id = get_conversation_id(runtime_config)
     user_id = get_user_id(runtime_config)
@@ -111,7 +113,9 @@ def _refresh_memory_index(
         )
         pipeline.index_pending_memories()
     except Exception:  # pragma: no cover - depends on external DB/vector DB
-        LOGGER.exception("Failed to refresh memory RAG index; continuing in background.")
+        LOGGER.exception(
+            "Failed to refresh memory RAG index; continuing in background."
+        )
 
 
 # 移除临时图片解析消息，避免把派生上下文保存为原始对话。
@@ -119,7 +123,9 @@ def _messages_without_query_image_context(messages):
     return [
         message
         for message in messages
-        if not bool(getattr(message, "additional_kwargs", {}).get("rag_query_image_context"))
+        if not bool(
+            getattr(message, "additional_kwargs", {}).get("rag_query_image_context")
+        )
     ]
 
 
@@ -153,4 +159,10 @@ async def maybe_persist_chat_memory(
             },
         )
     except Exception:  # pragma: no cover - depends on external MySQL/vector DB
-        LOGGER.exception("Failed to persist chat memory; continuing without persistence.")
+        from open_deep_research.workflow.durability import in_durable_workflow
+
+        if in_durable_workflow():
+            raise
+        LOGGER.exception(
+            "Failed to persist chat memory; continuing without persistence."
+        )

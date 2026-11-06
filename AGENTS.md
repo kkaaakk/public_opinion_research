@@ -4,7 +4,7 @@
 
 Phase 5 retires the LangGraph business workflow and handwritten Agent loop.
 The only new research chain is FastAPI/CLI Run API -> native DBOS 3.3.0
-Workflow/Step/Queue -> SDKAgentRuntime -> OpenAI Agents SDK 0.24.0 Runner ->
+Workflow/Step/Queue -> SDKAgentRuntime -> official DBOSRunner 0.3.0 -> OpenAI Agents SDK 0.24.0 ->
 Research Graph Context Harness -> existing business tools.
 
 Read `docs/audits/openai-agents-phase5.md`, the migration plan,
@@ -21,7 +21,7 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `dbos-brief-spec-v1` (see `docs/architecture/research-brief.md`; pending `dbos-phase5-studio-v1` journals must drain on their matching release), SDK runtime version `sdk-phase5-v1`.
+Application version is `dbosrunner-unified-v1` (see `docs/architecture/dbosrunner-unification.md`; pending `dbos-brief-spec-v1` and earlier journals must drain on their matching release), SDK runtime version `sdk-phase5-v1`.
 The Studio relay waits for its terminal-event manifest before acknowledging
 delivery. Pending `dbos-phase5-v1` journals must drain on their matching release;
 the new Executor must not replay those older relay command sequences.
@@ -34,8 +34,11 @@ extraction/compaction and memory model calls remain bounded single-purpose
 LangChain business services. They do not execute an Agent/tool loop. RAG and
 Research Graph retain separate ownership. Unknown model aliases use a 32,768-token
 application window unless explicitly configured; this is not a provider claim.
-DBOSRunner turn-level replay, a new workflow engine, multi-tenant identity and
-cross-service exactly-once guarantees are outside this migration.
+DBOSRunner owns SDK model checkpoints; explicit tool and bounded Context Steps
+rebuild the Harness. Plan/Review/Report use native dynamic model Steps. A new
+workflow engine, multi-tenant identity and cross-service exactly-once guarantees
+remain outside this migration. Read `docs/architecture/dbosrunner-unification.md`
+before changing these boundaries; domain report projections must never resume work.
 
 DeerFlow is retired. Its local environments, Docker deployment, branch
 `codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's

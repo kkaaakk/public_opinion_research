@@ -31,6 +31,7 @@ def launch(executor_id, *, queues=None):
     assert callable(dbos_workflow.run_workflow)
     cfg = settings()
     facts().verify_policy()
+    facts().require_matching_journals()
     tracing = initialize_telemetry()
     DBOS(
         config={
@@ -69,12 +70,18 @@ def main():
     parser.add_argument("--initialize-only", action="store_true")
     parser.add_argument("--executor-id", default=os.environ.get("DBOS_EXECUTOR_ID"))
     parser.add_argument("--health", action="store_true")
+    parser.add_argument("--migration-check", action="store_true")
     parser.add_argument("--reconcile-run")
     parser.add_argument("--owner", default="operator")
     parser.add_argument("--state-version", type=int)
     parser.add_argument("--worker-stopped", action="store_true")
     parser.add_argument("--note", default="")
     args = parser.parse_args()
+    if args.migration_check:
+        import json
+
+        print(json.dumps(facts().migration_inventory(), ensure_ascii=False, indent=2))
+        return
     if args.initialize_only:
         DBOS.migrate(settings().url, schema="por_dbos")
         facts().initialize()
