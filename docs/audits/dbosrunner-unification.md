@@ -38,6 +38,7 @@
 - 首轮 POC 使用错误的 DBOS 构造/查询参数，2 failed；按 3.3.0 公开源码修正后通过。
 - 第一次广泛 native 矩阵 15 failed /72 passed；包括已退役的完整 Artifact 白盒合同、工具 spy 未接收新增 usage 参数，也包括真实取消、预算、消息 UUID 和追踪回归。保留业务/费用/清算断言，修复实现后复测。
 - 默认 Chromium 不存在，7 个浏览器用例未能启动。改用机器已有 Chrome，未修改断言；中间 Chrome 轮次 6 passed /1 failed，暴露 Context Step 的 DBOS 原生取消清算问题。
+- PR #40 首次远端浏览器CI使用新版 ubuntu-latest（26.04.1），锁定 Playwright1.56.1 在安装阶段明确报不支持 ubuntu26.04-x64，尚未进入测试。仅将browser job固定为受支持的ubuntu-24.04，保留同一锁版本、Chromium安装和全部E2E断言，不以skip或删测试通过。源码质量、offline与frontend job此前均已通过。
 - 独立审查报告 6 个 P1 及额外恢复窗口：Context 暂存费用未进入 SDK 准入、受控预算停止回执/重放、provider 失败重试、失败费用重复、DBOS 取消异常分类、初始化读取清算保护，以及 nested leaf rewind 的 Finalizer 崩溃窗口。后续额外费用、取消和未知批次窗口均实际修复并回归，见下表与源码。
 - 结束回执变成精确幂等 ACK 后，原“重复 finished 必须报错”的白盒断言已更新为精确 ACK 不重新授权；started、不同费用及旧 permit 仍拒绝。另把 lost-receipt 注入点限定为工具，避免新增模型账单回执使原工具故障测试提前停止于 Plan。未删除或放宽未知效果、费用、证据、权限断言。
 
