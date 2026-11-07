@@ -325,7 +325,10 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                 batch_result = stage.extraction.batches[stage.written]
                 write_started_at = time.perf_counter()
                 with business_span("research_graph_write"):
-                    receipt = workspace.store.write_delta(batch_result.delta)
+                    from open_deep_research.workflow.execution import execution_effect
+
+                    async with execution_effect():
+                        receipt = workspace.store.write_delta(batch_result.delta)
                     annotate(nodes=len(receipt.node_ids), edges=len(receipt.edge_ids))
                 if not receipt.has_complete_node_references or (
                     receipt.run_id,

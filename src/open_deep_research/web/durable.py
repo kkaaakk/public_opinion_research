@@ -64,6 +64,7 @@ class RunClient:
                 run_id = old[0]
                 created = False
             else:
+                repo.require_matching_journals()
                 if session_id:
                     owners = (
                         db.execute(
@@ -495,12 +496,48 @@ class RunClient:
         """Identify one native failed execution, never a reusable Run-level grant."""
         steps = self.client.list_workflow_steps(status.workflow_id)
         errors = [s["function_id"] for s in steps if s.get("error") is not None]
+        stage_start = max(
+            (
+                s["function_id"]
+                for s in steps
+                if s["function_name"] == "por.stage_started"
+            ),
+            default=0,
+        )
+        if stage_start:
+            errors = [
+                s["function_id"]
+                for s in steps
+                if s["function_id"] >= stage_start and s.get("error") is not None
+            ]
+        stage_result = any(
+            s["function_name"] == "por.stage_result"
+            and s["function_id"] > stage_start
+            and s.get("error") is None
+            for s in steps
+        )
+        models = [
+            s["function_id"]
+            for s in steps
+            if s["function_name"] in {"por.llm", "por.llm_sync"}
+            and s["function_id"] > stage_start
+        ]
+        # Bounded ordinary phases execute calls in order. Only their final call
+        # can be the unresolved model/response-validation failure. Earlier errors
+        # may already have been handled, and earlier chapters must be retained.
+        start = (
+            max((s["function_id"] for s in steps), default=0) + 1
+            if stage_result
+            else max(models)
+            if models
+            else min(errors)
+            if errors
+            else max((s["function_id"] for s in steps), default=0) + 1
+        )
         return {
             "workflow_id": status.workflow_id,
             "queue": queue,
-            "start_step": min(errors)
-            if errors
-            else max((s["function_id"] for s in steps), default=0) + 1,
+            "start_step": start,
             "failure": digest(
                 {
                     "version": status.app_version,
@@ -576,6 +613,17 @@ class RunClient:
                 ):
                     continue
                 if target["queue"] == BUSINESS and self.facts.unresolved(run_id, db):
+                    # A previously rewound leaf may have started while the
+                    # Finalizer was down. Wait for its owned settlement; this
+                    # original grant is not yet acknowledged or blocked.
+                    pending = db.execute(
+                        text(
+                            "SELECT EXISTS(SELECT 1 FROM por_domain.units WHERE run_id=:id AND settled IS NULL)"
+                        ),
+                        {"id": run_id},
+                    ).scalar_one()
+                    if pending:
+                        return {"retryable": True}
                     return {"generation": row[1], "outcome": "blocked"}
                 self.client.rewind_workflow(
                     target["workflow_id"],
@@ -621,9 +669,23 @@ class RunClient:
                     load_output=False,
                 )
                 targets = [
-                    self._failure_target(c, BUSINESS)
-                    for c in children
-                    if c.name in {"por.plan", "por.research"}
+                    self._failure_target(
+                        c,
+                        RECOVERY
+                        if c.name in {"por.review", "por.report"}
+                        else BUSINESS,
+                    )
+                    for c in sorted(
+                        children,
+                        key=lambda c: {
+                            "por.review": 0,
+                            "por.report": 0,
+                            "por.plan": 1,
+                            "por.research": 2,
+                        }.get(c.name, 3),
+                    )
+                    if c.name
+                    in {"por.plan", "por.research", "por.review", "por.report"}
                 ]
                 root = self.native(run_id)
                 if root.status != "ERROR" or root.app_version != VERSION or not targets:

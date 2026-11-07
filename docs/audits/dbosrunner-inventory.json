@@ -1,0 +1,522 @@
+{
+  "workflows": [
+    {
+      "name": "por.role",
+      "function": "role_workflow",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 602
+    },
+    {
+      "name": "por.review",
+      "function": "review_workflow",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 610
+    },
+    {
+      "name": "por.report",
+      "function": "report_workflow",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 619
+    },
+    {
+      "name": "por.plan",
+      "function": "planning_workflow",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 663
+    },
+    {
+      "name": "por.research",
+      "function": "research_workflow",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 695
+    },
+    {
+      "name": "por.run",
+      "function": "run_workflow",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 793
+    },
+    {
+      "name": "por.events",
+      "function": "events_workflow",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 945
+    },
+    {
+      "name": "por.finalize",
+      "function": "finalize_workflow",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 1126
+    }
+  ],
+  "steps": [
+    {
+      "name": "reserve_step",
+      "function": "reserve_step",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 640
+    },
+    {
+      "name": "release_step",
+      "function": "release_step",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 652
+    },
+    {
+      "name": "cleanup_children",
+      "function": "cleanup_children",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 683
+    },
+    {
+      "name": "load_request",
+      "function": "load_request",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 779
+    },
+    {
+      "name": "approval_deadline",
+      "function": "approval_deadline",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 786
+    },
+    {
+      "name": "interaction_clock",
+      "function": "interaction_clock",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 938
+    },
+    {
+      "name": "public_event",
+      "function": "public_event",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 1015
+    },
+    {
+      "name": "completion_facts",
+      "function": "completion_facts",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 1021
+    },
+    {
+      "name": "archive_step",
+      "function": "archive_step",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 1065
+    },
+    {
+      "name": "retry_execution",
+      "function": "retry_execution",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 1095
+    }
+  ],
+  "call_boundaries": [
+    {
+      "target": "checkpoint_sync",
+      "file": "src/open_deep_research/budget.py",
+      "line": 635,
+      "boundary": "por.llm_sync"
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/budget.py",
+      "line": 535,
+      "boundary": "por.llm"
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/budget.py",
+      "line": 472,
+      "boundary": null
+    },
+    {
+      "target": "invoke_model_with_budget",
+      "file": "src/open_deep_research/rag/loaders/knowledge.py",
+      "line": 934,
+      "boundary": null
+    },
+    {
+      "target": "invoke_model_with_budget",
+      "file": "src/open_deep_research/rag/query_rewriter.py",
+      "line": 68,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/research_graph/compaction.py",
+      "line": 179,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/research_graph/context_manager.py",
+      "line": 90,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/research_graph/extractor.py",
+      "line": 281,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/research_graph/strategy.py",
+      "line": 203,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/runtime/business_agent.py",
+      "line": 302,
+      "boundary": null
+    },
+    {
+      "target": "self.model.get_response",
+      "file": "src/open_deep_research/runtime/durable_agent.py",
+      "line": 65,
+      "boundary": null
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/runtime/sdk_context.py",
+      "line": 315,
+      "boundary": "por.agent_context"
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/runtime/sdk_context.py",
+      "line": 1112,
+      "boundary": "por.agent_settlement"
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/runtime/sdk_context.py",
+      "line": 490,
+      "boundary": "por.agent_tool"
+    },
+    {
+      "target": "runner.run",
+      "file": "src/open_deep_research/runtime/sdk_context.py",
+      "line": 1207,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/search/tavily.py",
+      "line": 245,
+      "boundary": null
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 457,
+      "boundary": "por.stage_started"
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 530,
+      "boundary": "por.stage_result"
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/workflow/dbos_workflow.py",
+      "line": 274,
+      "boundary": "por.sdk_observation"
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/workflow/durability.py",
+      "line": 138,
+      "boundary": "por.sdk_transcript"
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/intake.py",
+      "line": 213,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/intake.py",
+      "line": 307,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/intake.py",
+      "line": 395,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/intake.py",
+      "line": 506,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/reporting.py",
+      "line": 986,
+      "boundary": null
+    },
+    {
+      "target": "checkpoint",
+      "file": "src/open_deep_research/workflow/reporting.py",
+      "line": 357,
+      "boundary": "por.report_memory"
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/reporting.py",
+      "line": 257,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/reporting.py",
+      "line": 815,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/reporting.py",
+      "line": 615,
+      "boundary": null
+    },
+    {
+      "target": "ainvoke_model_with_budget",
+      "file": "src/open_deep_research/workflow/research.py",
+      "line": 216,
+      "boundary": null
+    }
+  ],
+  "source_stats": {
+    "python_files": 119,
+    "nonblank_noncomment_lines": 29526
+  },
+  "baseline": {
+    "workflows": [
+      {
+        "name": "por.role",
+        "function": "role_workflow",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 343
+      },
+      {
+        "name": "por.plan",
+        "function": "planning_workflow",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 368
+      },
+      {
+        "name": "por.research",
+        "function": "research_workflow",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 400
+      },
+      {
+        "name": "por.run",
+        "function": "run_workflow",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 529
+      },
+      {
+        "name": "por.events",
+        "function": "events_workflow",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 681
+      },
+      {
+        "name": "por.finalize",
+        "function": "finalize_workflow",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 862
+      }
+    ],
+    "steps": [
+      {
+        "name": "business_step",
+        "function": "business_step",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 78
+      },
+      {
+        "name": "reserve_step",
+        "function": "reserve_step",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 350
+      },
+      {
+        "name": "release_step",
+        "function": "release_step",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 357
+      },
+      {
+        "name": "cleanup_children",
+        "function": "cleanup_children",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 388
+      },
+      {
+        "name": "load_request",
+        "function": "load_request",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 515
+      },
+      {
+        "name": "approval_deadline",
+        "function": "approval_deadline",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 522
+      },
+      {
+        "name": "interaction_clock",
+        "function": "interaction_clock",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 674
+      },
+      {
+        "name": "public_event",
+        "function": "public_event",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 751
+      },
+      {
+        "name": "completion_facts",
+        "function": "completion_facts",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 757
+      },
+      {
+        "name": "archive_step",
+        "function": "archive_step",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 801
+      },
+      {
+        "name": "retry_execution",
+        "function": "retry_execution",
+        "file": "src/open_deep_research/workflow/dbos_workflow.py",
+        "line": 831
+      }
+    ],
+    "call_boundaries": [
+      {
+        "target": "invoke_model_with_budget",
+        "file": "src/open_deep_research/rag/loaders/knowledge.py",
+        "line": 934,
+        "boundary": null
+      },
+      {
+        "target": "invoke_model_with_budget",
+        "file": "src/open_deep_research/rag/query_rewriter.py",
+        "line": 68,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/research_graph/compaction.py",
+        "line": 179,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/research_graph/context_manager.py",
+        "line": 90,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/research_graph/extractor.py",
+        "line": 281,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/research_graph/strategy.py",
+        "line": 203,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/runtime/business_agent.py",
+        "line": 302,
+        "boundary": null
+      },
+      {
+        "target": "Runner.run",
+        "file": "src/open_deep_research/runtime/sdk_context.py",
+        "line": 953,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/search/tavily.py",
+        "line": 245,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/intake.py",
+        "line": 213,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/intake.py",
+        "line": 307,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/intake.py",
+        "line": 395,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/intake.py",
+        "line": 506,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/reporting.py",
+        "line": 961,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/reporting.py",
+        "line": 257,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/reporting.py",
+        "line": 790,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/reporting.py",
+        "line": 590,
+        "boundary": null
+      },
+      {
+        "target": "ainvoke_model_with_budget",
+        "file": "src/open_deep_research/workflow/research.py",
+        "line": 216,
+        "boundary": null
+      }
+    ],
+    "source_stats": {
+      "python_files": 117,
+      "nonblank_noncomment_lines": 28335
+    }
+  }
+}

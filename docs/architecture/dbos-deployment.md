@@ -1,5 +1,7 @@
 # DBOS production execution — Phase 5
 
+> 2026-11-05 当前持久化版本为 `dbosrunner-unified-v1`，使用官方 DBOSRunner、八个阶段 Workflow 和动态模型 Steps。先阅读[统一改造与发布前检查](dbosrunner-unification.md)及[验收记录](../audits/dbosrunner-unification.md)。`--migration-check` 和 Executor 启动门禁拒绝未完成旧版本 journal；下文 Brief/Phase 5 版本记录为历史。不要用新代码恢复旧 `por.role` 的单 Step journal。
+
 > 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
 
 All new research uses PostgreSQL + DBOS. Web, `/api/runs`, `/api/research` and

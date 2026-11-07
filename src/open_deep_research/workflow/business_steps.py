@@ -13,9 +13,13 @@ from langchain_core.runnables import RunnableConfig
 from open_deep_research.budget import (
     ModelBudgetExceeded,
     budget_capture,
+    diff_budget_usage,
+    merge_budget_usage,
 )
+from open_deep_research.llm.errors import ModelInvocationError
 from open_deep_research.observability.telemetry import annotate, business_span
 from open_deep_research.state import DeepResearchState
+from open_deep_research.workflow.durability import is_cancellation
 from open_deep_research.workflow.execution import ExecutionControlError
 
 
@@ -28,12 +32,14 @@ def failure_kind(error: BaseException) -> str:
         cause = getattr(cause, "__cause__", None)
         if cause is None:
             break
-    if isinstance(error, asyncio.CancelledError):
+    if is_cancellation(error) or getattr(error, "business_cancelled", False):
         return "cancelled"
     if isinstance(error, TimeoutError):
         return "timeout"
     if isinstance(error, ModelBudgetExceeded):
         return "budget_exhausted"
+    if isinstance(error, ModelInvocationError):
+        return "model_error"
     if type(error).__name__ in {"ResearchGraphSettlementError", "ToolCallError"}:
         return "tool_or_settlement_error"
     if type(error).__module__.startswith(("agents", "openai")):
@@ -57,7 +63,12 @@ async def _step(
             if name == "research_review"
             else "report_generation"
             if name
-            in {"section_writer", "write_final_sections", "compile_final_report", "generate_final_report"}
+            in {
+                "section_writer",
+                "write_final_sections",
+                "compile_final_report",
+                "generate_final_report",
+            }
             else None
         )
         observation = (
@@ -103,7 +114,14 @@ async def _step(
         setattr(exc, "workflow_step", name)
         # SDK Runtime already owns all its nested accounting. Ordinary business
         # steps use the existing ambient capture, including failed model calls.
-        setattr(exc, "budget_usage", getattr(source, "budget_usage", captured))
+        # Fine-grained errors carry a single call; ambient capture can include
+        # earlier calls, while SDK/parallel owners can carry a larger total.
+        source_usage = getattr(source, "budget_usage", {})
+        setattr(
+            exc,
+            "budget_usage",
+            merge_budget_usage(captured, diff_budget_usage(source_usage, captured)),
+        )
         setattr(exc, "context_settlement", getattr(source, "context_settlement", None))
         setattr(exc, "context_harness", getattr(source, "context_harness", None))
         # A business step can own parallel section calls internally. Its public

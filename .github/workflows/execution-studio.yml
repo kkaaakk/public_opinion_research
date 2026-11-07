@@ -59,7 +59,9 @@ jobs:
   browser:
     name: studio-browser-native-chain
     needs: frontend
-    runs-on: ubuntu-latest
+    # Playwright 1.56.1 cannot install Chromium dependencies on ubuntu-26.04.
+    # Keep the existing locked browser and full E2E checks on its supported OS.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17.6

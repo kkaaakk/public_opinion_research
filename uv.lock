@@ -853,6 +853,19 @@ otel = [
 ]
 
 [[package]]
+name = "dbos-openai-agents"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dbos" },
+    { name = "openai-agents" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/70/38/3fe529a9539e5a48eb7caa8558e6ec2c745050ac33f8d4c4c0bea4ca7d13/dbos_openai_agents-0.3.0.tar.gz", hash = "sha256:bc8da5cb9b652ccc4b7f3da419d655d793e4a3f9ff1ca6b576a40a210448ee48", size = 148367, upload-time = "2026-02-02T23:08:21.576Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bc/f9/68b5f8a25efd03f33234ae29b872117a0cfd4465827f3f18c7d9d7b947bf/dbos_openai_agents-0.3.0-py3-none-any.whl", hash = "sha256:13609dab5c868e03d25096282adbb58e7abbc33a204eadb9fb01c0f452b5f156", size = 5195, upload-time = "2026-02-02T23:08:19.522Z" },
+]
+
+[[package]]
 name = "debugpy"
 version = "1.8.14"
 source = { registry = "https://pypi.org/simple" }
@@ -3431,6 +3444,7 @@ version = "0.0.16"
 source = { editable = "." }
 dependencies = [
     { name = "dbos", extra = ["otel"] },
+    { name = "dbos-openai-agents" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -3491,6 +3505,7 @@ web = [
 [package.metadata]
 requires-dist = [
     { name = "dbos", extras = ["otel"], specifier = "==3.3.0" },
+    { name = "dbos-openai-agents", specifier = "==0.3.0" },
     { name = "faiss-cpu", specifier = ">=1.8.0" },
     { name = "fastapi", specifier = ">=0.138.0" },
     { name = "httpx", specifier = ">=0.24.0" },

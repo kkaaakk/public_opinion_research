@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping, cast
 
 from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
@@ -462,6 +463,93 @@ async def ainvoke_model_with_budget(
     ``model_name``/``component``/``structured_output`` are optional LangSmith
     correlation hints; they do not affect the provider call or token accounting.
     """
+    from open_deep_research.workflow.durability import begin_call, checkpoint, end_call
+
+    if isinstance(runnable, _DurableStructured):
+        usage = {}
+        for attempt in range(runnable.attempts):
+            try:
+                response, delta = await ainvoke_model_with_budget(
+                    runnable.raw,
+                    payload,
+                    config=config,
+                    model_name=model_name,
+                    component=component,
+                    structured_output=structured_output,
+                )
+                usage = merge_budget_usage(usage, delta)
+                return require_valid_structured_output(response), usage
+            except Exception as exc:
+                from open_deep_research.workflow.execution import ExecutionControlError
+
+                if isinstance(exc, (ExecutionControlError, ModelBudgetExceeded)):
+                    raise
+                if hasattr(exc, "budget_usage"):
+                    usage = merge_budget_usage(usage, exc.budget_usage)
+                if attempt + 1 == runnable.attempts:
+                    setattr(exc, "budget_usage", usage)
+                    raise
+
+    executed = False
+
+    async def execute():
+        nonlocal executed
+        executed = True
+        identity = await begin_call("llm")
+        try:
+            result, delta = await _ainvoke_model_accounted(
+                runnable,
+                payload,
+                config=config,
+                model_name=model_name,
+                component=component,
+                structured_output=structured_output,
+            )
+        except BaseException as exc:
+            await end_call(
+                identity, usage=getattr(exc, "budget_usage", {}), status="failed"
+            )
+            from open_deep_research.workflow.durability import in_durable_workflow
+            from open_deep_research.workflow.execution import ExecutionControlError
+
+            if (
+                in_durable_workflow()
+                and isinstance(exc, Exception)
+                and not isinstance(exc, (ExecutionControlError, ModelBudgetExceeded))
+            ):
+                from open_deep_research.llm.errors import (
+                    ModelInvocationError,
+                    is_token_limit_exceeded,
+                )
+
+                raise ModelInvocationError(
+                    type(exc).__name__,
+                    context_limit=is_token_limit_exceeded(exc, model_name),
+                    budget_usage=getattr(exc, "budget_usage", {}),
+                ) from exc
+            raise
+        await end_call(identity, usage=delta)
+        return result, delta
+
+    try:
+        response, delta = await checkpoint("por.llm", execute)
+    except BaseException as exc:
+        if not executed:
+            capture_budget_usage(getattr(exc, "budget_usage", {}))
+        raise
+    capture_budget_usage(delta)
+    return response, delta
+
+
+async def _ainvoke_model_accounted(
+    runnable,
+    payload,
+    *,
+    config=None,
+    model_name=None,
+    component=None,
+    structured_output=False,
+):
     merged, counter, usage_handler = model_accounting_config(
         config,
         metadata=_model_langsmith_metadata(
@@ -472,13 +560,12 @@ async def ainvoke_model_with_budget(
     )
     try:
         response = await runnable.ainvoke(payload, config=merged)
-    except BaseException:
-        capture_budget_usage(
-            budget_from_model_accounting(counter.starts, usage_handler)
-        )
+    except BaseException as exc:
+        delta = budget_from_model_accounting(counter.starts, usage_handler)
+        capture_budget_usage(delta)
+        setattr(exc, "budget_usage", delta)
         raise
     delta = budget_from_model_accounting(counter.starts, usage_handler)
-    capture_budget_usage(delta)
     return response, delta
 
 
@@ -497,6 +584,72 @@ def invoke_model_with_budget(
     Mirrors :func:`ainvoke_model_with_budget`, including attempt and usage
     accounting when the call raises.
     """
+    from open_deep_research.workflow.durability import (
+        begin_call_sync,
+        checkpoint_sync,
+        end_call_sync,
+    )
+
+    executed = False
+
+    def execute():
+        nonlocal executed
+        executed = True
+        identity = begin_call_sync("llm_sync")
+        try:
+            response, delta = _invoke_model_accounted(
+                runnable,
+                payload,
+                config=config,
+                model_name=model_name,
+                component=component,
+                structured_output=structured_output,
+            )
+        except BaseException as exc:
+            end_call_sync(
+                identity, usage=getattr(exc, "budget_usage", {}), status="failed"
+            )
+            from open_deep_research.workflow.durability import in_durable_workflow
+            from open_deep_research.workflow.execution import ExecutionControlError
+
+            if (
+                in_durable_workflow()
+                and isinstance(exc, Exception)
+                and not isinstance(exc, (ExecutionControlError, ModelBudgetExceeded))
+            ):
+                from open_deep_research.llm.errors import (
+                    ModelInvocationError,
+                    is_token_limit_exceeded,
+                )
+
+                raise ModelInvocationError(
+                    type(exc).__name__,
+                    context_limit=is_token_limit_exceeded(exc, model_name),
+                    budget_usage=getattr(exc, "budget_usage", {}),
+                ) from exc
+            raise
+        end_call_sync(identity, usage=delta)
+        return response, delta
+
+    try:
+        response, delta = checkpoint_sync("por.llm_sync", execute)
+    except BaseException as exc:
+        if not executed:
+            capture_budget_usage(getattr(exc, "budget_usage", {}))
+        raise
+    capture_budget_usage(delta)
+    return response, delta
+
+
+def _invoke_model_accounted(
+    runnable,
+    payload,
+    *,
+    config=None,
+    model_name=None,
+    component=None,
+    structured_output=False,
+):
     merged, counter, usage_handler = model_accounting_config(
         config,
         metadata=_model_langsmith_metadata(
@@ -507,13 +660,12 @@ def invoke_model_with_budget(
     )
     try:
         response = runnable.invoke(payload, config=merged)
-    except BaseException:
-        capture_budget_usage(
-            budget_from_model_accounting(counter.starts, usage_handler)
-        )
+    except BaseException as exc:
+        delta = budget_from_model_accounting(counter.starts, usage_handler)
+        capture_budget_usage(delta)
+        setattr(exc, "budget_usage", delta)
         raise
     delta = budget_from_model_accounting(counter.starts, usage_handler)
-    capture_budget_usage(delta)
     return response, delta
 
 
@@ -536,6 +688,12 @@ def require_valid_structured_output(envelope: Any) -> Any:
 
 
 # 组合原始响应保留、结构化校验和重试，确保重试覆盖真实模型调用。
+@dataclass(frozen=True)
+class _DurableStructured:
+    raw: Any
+    attempts: int
+
+
 def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -> Any:
     """Build a structured-output chain that keeps raw usage and retries real calls.
 
@@ -543,9 +701,16 @@ def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -
     parsing_error envelope) ``|`` validation, wrapped in ``with_retry`` so the retry
     covers both the model call and parse validation.
     """
-    chain = model.with_structured_output(schema, include_raw=True) | RunnableLambda(
-        require_valid_structured_output
-    )
+    from dbos import DBOS
+
+    from open_deep_research.workflow.durability import in_durable_workflow
+
+    raw = model.with_structured_output(schema, include_raw=True)
+    if in_durable_workflow() and DBOS.step_id is None:
+        # Retry decisions execute in the phase Workflow. Each actual response,
+        # including a malformed structured response, is independently journaled.
+        return _DurableStructured(raw, max(1, max_attempts))
+    chain = raw | RunnableLambda(require_valid_structured_output)
     if max_attempts and max_attempts > 0:
         chain = chain.with_retry(stop_after_attempt=max_attempts)
     return chain

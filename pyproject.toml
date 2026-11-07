@@ -20,6 +20,7 @@ dependencies = [
     "openai>=1.99.2",
     "openai-agents==0.24.0",
     "dbos[otel]==3.3.0",
+    "dbos-openai-agents==0.3.0",
     "psycopg[binary]==3.3.6",
     "jsonschema>=4.24.0,<5",
     "tavily-python>=0.5.0",
