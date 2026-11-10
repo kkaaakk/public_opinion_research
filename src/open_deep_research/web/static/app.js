@@ -341,7 +341,8 @@ async function followDurableRun(request) {
             for (const stage of state.role_reports || []) addLog(stage.role + '_agent', stage.content);
             hydrate = false;
         }
-        if (['awaiting_approval', 'awaiting_clarification'].includes(state.status)) return;
+        if (state.status === 'awaiting_approval' ||
+            (state.status === 'awaiting_clarification' && state.clarification)) return;
         if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status) && state.settlement !== 'pending') {
             researchFailed = state.status !== 'completed';
             if (state.archive_status === 'pending') {
@@ -747,9 +748,17 @@ let durableClarification = null;
 let durableBrief = '';
 function showClarification(state) {
     const panel = document.getElementById('clarification-panel');
-    panel.classList.toggle('hidden', state.status !== 'awaiting_clarification');
-    if (state.status !== 'awaiting_clarification' || !state.clarification || durableClarification?.version === state.clarification.version) return;
-    durableClarification = state.clarification;
+    const pending = state.status === 'awaiting_clarification' ? state.clarification : null;
+    panel.classList.toggle('hidden', !pending);
+    if (!pending) {
+        durableClarification = null;
+        return;
+    }
+    if (durableClarification?.version === pending.version) return;
+    durableClarification = pending;
+    panel.querySelector('h2').textContent = pending.round && pending.max_rounds
+        ? '补充研究需求 · 澄清第 ' + pending.round + '/' + pending.max_rounds + ' 轮'
+        : '补充研究需求';
     const container = document.getElementById('clarification-questions');
     container.replaceChildren();
     for (const question of durableClarification.questions) {

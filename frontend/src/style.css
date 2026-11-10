@@ -1891,6 +1891,10 @@ dialog::backdrop {
   gap: 8px;
   padding: 6px 0;
 }
+.approval-body fieldset input {
+  flex: 0 0 auto;
+  width: auto;
+}
 .tone-awaiting_clarification {
   color: #936413;
 }

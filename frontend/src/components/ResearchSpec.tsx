@@ -136,7 +136,12 @@ function ClarificationForm({
     <section className="panel approval">
       <div className="panel-head">
         <h2>补充研究需求</h2>
-        <span>等待回答 · 研究配额已释放</span>
+        <span>
+          {pending.round && pending.max_rounds
+            ? `澄清第 ${pending.round}/${pending.max_rounds} 轮 · `
+            : ''}
+          等待回答 · 研究配额已释放
+        </span>
       </div>
       <form
         className="approval-body research-form"

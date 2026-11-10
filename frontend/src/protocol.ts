@@ -36,6 +36,8 @@ export type RoleReport = {
 export type Clarification = {
   version: string;
   expires_at: string;
+  round?: number;
+  max_rounds?: number;
   questions: {
     id: string;
     text: string;
@@ -364,6 +366,8 @@ export function parseSnapshot(value: unknown): RunSnapshot {
           return {
             version: string(c.version),
             expires_at: string(c.expires_at),
+            round: c.round === undefined ? undefined : integer(c.round),
+            max_rounds: c.max_rounds === undefined ? undefined : integer(c.max_rounds),
             questions: array(c.questions).map((item) => {
               const q = record(item);
               if (!['single', 'multiple', 'text'].includes(string(q.kind)))

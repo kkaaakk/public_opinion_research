@@ -8,27 +8,33 @@ from open_deep_research.workflow.run_facts import facts
 pytestmark = pytest.mark.integration
 
 
-def test_old_pending_journal_is_inventoried_and_not_deleted(pg_database):
+@pytest.mark.parametrize(
+    "version,workflow,args",
+    [
+        ("dbos-brief-spec-v1", "por.role", ("old", "old:role", "public_signal", {})),
+        ("dbosrunner-unified-v1", "por.run", ("old",)),
+    ],
+)
+def test_old_pending_journal_is_inventoried_and_not_deleted(
+    pg_database, version, workflow, args
+):
     repo = facts()
     assert repo.migration_inventory() == []
     repo.client.enqueue(
         {
-            "workflow_name": "por.role",
+            "workflow_name": workflow,
             "workflow_id": "old-journal-test",
             "queue_name": "por-business",
-            "app_version": "dbos-brief-spec-v1",
+            "app_version": version,
         },
-        "old",
-        "old:role",
-        "public_signal",
-        {},
+        *args,
     )
     inventory = repo.migration_inventory()
     assert inventory == [
         {
             "workflow_id": "old-journal-test",
-            "name": "por.role",
-            "version": "dbos-brief-spec-v1",
+            "name": workflow,
+            "version": version,
             "status": "ENQUEUED",
         }
     ]

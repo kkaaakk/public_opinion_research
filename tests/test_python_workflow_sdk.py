@@ -78,7 +78,24 @@ def test_fixed_fixture_repeated_sdk_runs_preserve_context_and_evidence(
             assert set(context["active_evidence_ids"]).issubset(all_ids)
 
 
-def install_sdk(monkeypatch, tmp_path, mode="normal", *, local_tool=None):
+CLARIFICATION_QUESTIONS = (
+    PlanQuestion(id="brand", text="Which brand?", kind="text", options=[]),
+    PlanQuestion(
+        id="period",
+        text="Which time range?",
+        kind="single",
+        options=["Last 7 days", "Last 30 days"],
+    ),
+    PlanQuestion(id="goal", text="Which decision?", kind="text", options=[]),
+)
+CLARIFICATION_ANSWERS = (
+    {"brand": "Brand A"},
+    {"period": "Last 7 days"},
+    {"goal": "Decide whether to issue a statement"},
+)
+
+
+def install_sdk(monkeypatch, tmp_path, mode="normal", *, local_tool=None, on_plan=None):
     """Replace inference and external tools; keep actual Agent/Runner/Graph services."""
     clear_research_graph_store_cache()
     services = Services()
@@ -117,20 +134,30 @@ def install_sdk(monkeypatch, tmp_path, mode="normal", *, local_tool=None):
             async def reply(messages, config=None):
                 raw = await self.raw.ainvoke(messages, config)
                 parsed = values[schema]
-                if (
-                    schema is PlanDecision
-                    and (mode == "clarify" or "browser-clarify" in str(messages))
-                    and "Clarification allowed: True." in str(messages)
-                ):
-                    parsed = PlanDecision(
-                        action="ask_user",
-                        questions=[
-                            PlanQuestion(
-                                id="brand", text="Which brand?", kind="text", options=[]
-                            )
-                        ],
-                        brief_md="",
-                    )
+                if schema is PlanDecision:
+                    prompt = messages[0].content
+                    if on_plan is not None:
+                        on_plan(prompt)
+                    completed = prompt.count("\nUser response: ")
+                    target = {
+                        "clarify": 1,
+                        "clarify-2": 2,
+                        "clarify-3": 3,
+                    }.get(mode, 0)
+                    if "browser-clarify" in prompt:
+                        target = 2 if "browser-clarify-multi" in prompt else 1
+                    if mode == "clarify-over-limit" or (
+                        completed < target and "Clarification allowed: True." in prompt
+                    ):
+                        parsed = PlanDecision(
+                            action="ask_user",
+                            questions=[
+                                CLARIFICATION_QUESTIONS[
+                                    min(completed, len(CLARIFICATION_QUESTIONS) - 1)
+                                ]
+                            ],
+                            brief_md="",
+                        )
                 return {"raw": raw, "parsed": parsed, "parsing_error": None}
 
             return RunnableLambda(reply)

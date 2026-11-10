@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from open_deep_research.budget import estimate_text_tokens
 
 MAX_BRIEF_TOKENS = 2500
+MAX_CLARIFICATION_ROUNDS = 3
 
 
 def validate_brief(value: str, *, check_size: bool = True) -> str:

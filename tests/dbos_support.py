@@ -114,8 +114,9 @@ class NativeCase:
 
         from open_deep_research.web import history
 
+        self.plan_prompts = []
         self.state, self.cfg, self.runtimes, self.models, self.calls, self.blocked = (
-            install_sdk(patch, directory, mode)
+            install_sdk(patch, directory, mode, on_plan=self.plan_prompts.append)
         )
         self.client = RunClient()
         self.owner = "alice"

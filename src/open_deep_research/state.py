@@ -163,7 +163,6 @@ class WorkflowState(TypedDict, total=False):
     brief_version: str
     brief_hash: str
     brief_revision: int
-    clarification_complete: bool
     round: int
     review: ResearchReview | None
     pending_tasks: list[ResearchTask]
@@ -294,7 +293,6 @@ def workflow_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
         "brief_version",
         "brief_hash",
         "brief_revision",
-        "clarification_complete",
     ):
         if key in incoming:
             merged[key] = incoming[key]
