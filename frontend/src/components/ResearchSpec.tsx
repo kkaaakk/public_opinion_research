@@ -215,7 +215,7 @@ function ClarificationForm({
               submit('clarification', { version: pending.version, answers: {}, skip: true })
             }
           >
-            跳过澄清，直接研究
+            跳过澄清，继续规划
           </button>
           <button
             className="button primary"

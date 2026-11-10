@@ -78,7 +78,7 @@ it('skip does not submit stale local answers', async () => {
     />,
   );
   await user.click(screen.getByLabelText('China'));
-  await user.click(screen.getByRole('button', { name: '跳过澄清，直接研究' }));
+  await user.click(screen.getByRole('button', { name: '跳过澄清，继续规划' }));
   expect(submit).toHaveBeenCalledWith('clarification', {
     version: clarification.version,
     skip: true,
