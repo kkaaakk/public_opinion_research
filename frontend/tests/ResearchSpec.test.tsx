@@ -8,6 +8,8 @@ import { snapshot } from './fixtures';
 const clarification = {
   version: 'c'.repeat(64),
   expires_at: '2026-11-02T00:00:00Z',
+  round: 1,
+  max_rounds: 3,
   questions: [
     { id: 'region', text: 'Which region?', kind: 'single' as const, options: ['China', 'Global'] },
     {
@@ -26,6 +28,7 @@ it('renders persisted clarification and submits mixed answers bound to its versi
     snapshot({ status: 'awaiting_clarification', clarification, events_paused: true }),
   );
   render(<ResearchSpec run={run} busy={false} submit={submit} />);
+  expect(screen.getByText(/澄清第 1\/3 轮/)).toBeVisible();
   await user.click(screen.getByLabelText('China'));
   await user.click(screen.getByLabelText('News'));
   await user.type(screen.getByLabelText('Other constraints?'), 'Do not assume');
@@ -34,6 +37,34 @@ it('renders persisted clarification and submits mixed answers bound to its versi
     version: clarification.version,
     skip: false,
     answers: { region: 'China', sources: ['News'], notes: 'Do not assume' },
+  });
+});
+it('resets answers and renders only the new round even when question IDs are reused', async () => {
+  const submit = vi.fn();
+  const user = userEvent.setup();
+  const run = snapshot({ status: 'awaiting_clarification', clarification });
+  const view = render(<ResearchSpec run={run} busy={false} submit={submit} />);
+  await user.type(screen.getByLabelText('Other constraints?'), 'Old answer');
+
+  const next = {
+    ...clarification,
+    version: 'e'.repeat(64),
+    round: 2,
+    questions: [{ id: 'notes', text: 'New constraints?', kind: 'text' as const, options: [] }],
+  };
+  view.rerender(
+    <ResearchSpec run={{ ...run, clarification: next }} busy={false} submit={submit} />,
+  );
+  expect(screen.queryByLabelText('Other constraints?')).toBeNull();
+  expect(screen.getByText(/澄清第 2\/3 轮/)).toBeVisible();
+  expect(screen.getByLabelText('New constraints?')).toHaveValue('');
+  expect(screen.getByRole('button', { name: '提交回答并继续' })).toBeDisabled();
+  await user.type(screen.getByLabelText('New constraints?'), 'New answer');
+  await user.click(screen.getByRole('button', { name: '提交回答并继续' }));
+  expect(submit).toHaveBeenCalledWith('clarification', {
+    version: next.version,
+    skip: false,
+    answers: { notes: 'New answer' },
   });
 });
 it('skip does not submit stale local answers', async () => {
@@ -47,7 +78,7 @@ it('skip does not submit stale local answers', async () => {
     />,
   );
   await user.click(screen.getByLabelText('China'));
-  await user.click(screen.getByRole('button', { name: '跳过澄清，直接研究' }));
+  await user.click(screen.getByRole('button', { name: '跳过澄清，继续规划' }));
   expect(submit).toHaveBeenCalledWith('clarification', {
     version: clarification.version,
     skip: true,

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('same Run survives clarification reload, Markdown edit, version approval and delivery', async ({
+test('same Run survives a second clarification round and reload, then Brief approval', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -14,14 +14,29 @@ test('same Run survives clarification reload, Markdown edit, version approval an
   await expect(page).toHaveTitle(/Agent Execution Studio/);
   await authenticate();
   await page.getByRole('button', { name: '新建研究', exact: true }).click();
-  await page.getByLabel('研究主题').fill('browser-clarify brand risk with evidence');
+  await page.getByLabel('研究主题').fill('browser-clarify-multi brand risk with evidence');
   await page.getByRole('button', { name: '创建持久 Run' }).click();
   await expect(page.getByRole('heading', { name: '补充研究需求' })).toBeVisible();
+  await expect(page.getByText(/澄清第 1\/3 轮/)).toBeVisible();
   const id = await page.locator('.run-identity strong').textContent();
   await page.reload();
   await authenticate();
   await expect(page.locator('.run-identity strong')).toHaveText(id!);
   await page.getByLabel('Which brand?').fill('Brand A; retain all sources');
+  await page.getByRole('button', { name: '提交回答并继续' }).click();
+  await expect(page.getByText(/澄清第 2\/3 轮/)).toBeVisible();
+  await expect(page.getByLabel('Which brand?')).toHaveCount(0);
+  await page.reload();
+  await authenticate();
+  await expect(page.locator('.run-identity strong')).toHaveText(id!);
+  await expect(page.getByText(/澄清第 2\/3 轮/)).toBeVisible();
+  await expect(page.getByLabel('Which brand?')).toHaveCount(0);
+  await page.screenshot({
+    path: (process.env.BRIEF_SCREENSHOT_DIR ?? '../.tmp') + '/clarification-round-two.png',
+  });
+  const choice = page.getByRole('radio', { name: 'Last 7 days' });
+  expect((await choice.boundingBox())?.width).toBeLessThan(32);
+  await choice.check();
   await page.getByRole('button', { name: '提交回答并继续' }).click();
   await expect(page.getByRole('button', { name: '批准执行', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '编辑 Brief', exact: true }).click();

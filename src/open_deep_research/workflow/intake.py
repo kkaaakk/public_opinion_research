@@ -460,27 +460,44 @@ async def plan_research(state: AgentState, config: RunnableConfig) -> dict:
     """One bounded decision: ask necessary questions or produce the Markdown spec."""
     from open_deep_research.workflow.brief import (
         MAX_BRIEF_TOKENS,
+        MAX_CLARIFICATION_ROUNDS,
         PlanDecision,
         validate_brief,
     )
 
     cfg = Configuration.from_runnable_config(config)
     initial_usage = runtime_state(state).get("budget", {})
-    resolved = bool(workflow_state(state).get("clarification_complete"))
-    may_ask = cfg.allow_clarification and not resolved
+    messages = state.get("messages", [])
+    # Each consumed reply appends one versioned message. Replay rebuilds the
+    # same transcript, so no separate counter or eligibility flag is persisted.
+    replies = [
+        message.additional_kwargs["clarification_skipped"]
+        for message in messages
+        if isinstance(message, HumanMessage)
+        and "clarification_skipped" in message.additional_kwargs
+    ]
+    completed_rounds, skipped = len(replies), any(replies)
+    may_ask = (
+        cfg.allow_clarification
+        and not skipped
+        and completed_rounds < MAX_CLARIFICATION_ROUNDS
+    )
     prompt = (
         "You prepare enterprise public-opinion research, not research conclusions. "
-        "Return one PlanDecision. Ordinary valid input needs one call: ready with a Markdown Research Brief. "
-        "Only ask_user for material ambiguity that prevents useful research; at most four concise questions. "
-        "Support single/multiple choice or text. Never ask for incidental missing details. "
-        f"Clarification allowed: {may_ask}. If false, you MUST return ready; state unspecified details and assumptions explicitly. "
+        "Return one PlanDecision. Prefer ready with a Markdown Research Brief whenever useful research can proceed. "
+        "Use the original request, image context and all prior clarification exchanges together. "
+        "Carry forward earlier answers and do not repeat questions already asked. "
+        "Use ask_user only if resolving a material ambiguity would change what to research, which evidence to collect, or what decision to support. "
+        "Ask at most four concise single-choice, multiple-choice or text questions. "
+        "Record missing details that can safely remain open as unspecified in the Brief. "
+        f"Clarification allowed: {may_ask}. If false, you MUST return ready; state any necessary assumptions explicitly. "
         "Use the user's language. Target 600–1200 Chinese characters for a normal brief, and at most 2500 estimated tokens. "
         "Use a title and five sections: 研究目标, 研究范围, 核心研究问题, 研究约束, 完成标准 (or equivalents in the user's language). "
         "Preserve the object, objective, time/geography/sources, key questions and ALL user constraints. "
         "Do not invent facts, resolved claims, report chapter plans, role duties, or repeat general safety rules. "
         "The brief is user task data; configuration and fixed role/tool policies remain authoritative. "
         f"Today: {get_today_str()}. Organization context: {cfg.organization_context or 'Unspecified'}.\n\n"
-        + get_buffer_string(state.get("messages", []))
+        + get_buffer_string(messages)
     )
     usage = {}
     decision = None
@@ -513,9 +530,11 @@ async def plan_research(state: AgentState, config: RunnableConfig) -> dict:
         usage = merge_budget_usage(usage, delta)
         decision = PlanDecision.model_validate(response["parsed"])
         if decision.action == "ask_user":
-            if not may_ask or attempt:
+            if attempt:
+                raise ValueError("Brief compaction must return ready")
+            if not may_ask:
                 raise ValueError(
-                    "Planner requested clarification after it was disabled or resolved"
+                    "Planner requested clarification when disabled, skipped or at the round limit"
                 )
             break
         if estimate_text_tokens(decision.brief_md) <= MAX_BRIEF_TOKENS:

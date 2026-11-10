@@ -189,6 +189,13 @@ def effect_count(directory, table="invocations"):
         return db.execute("SELECT count(*) FROM " + table).fetchone()[0]
 
 
+def plan_prompts(directory):
+    with sqlite3.connect(directory / "planning.db") as db:
+        return [
+            row[0] for row in db.execute("SELECT prompt FROM plan_requests ORDER BY id")
+        ]
+
+
 def configuration(directory):
     return config(
         research_graph_enabled=True,
@@ -633,60 +640,202 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
                 kill_owned(child)
 
 
-def test_clarification_wait_survives_executor_kill_and_same_run_answer(
-    pg_database, tmp_path
+@pytest.mark.parametrize("scenario", ["planning-release", "clarification-deadline"])
+@pytest.mark.parametrize("pg_database", [{"RUN_APPROVAL_SECONDS": 6}], indirect=True)
+def test_planning_recovers_before_waiting_for_clarification(
+    pg_database, tmp_path, scenario
 ):
-    """Real durable recv replay: no replanning or research effect before the answer."""
     client = RunClient()
-    executor = "brief-wait-" + uuid4().hex
-    process = start(tmp_path, executor, "clarification")
+    executor = "pre-clarification-" + uuid4().hex
+    process = start(tmp_path, executor, scenario)
     restart = None
     try:
         wait(lambda: (tmp_path / "executor-ready").exists(), process, tmp_path)
-        run = client.create(
+        run_id = client.create(
             "alice",
+            "pre-clarification",
+            {"topic": "ambiguous brand"},
+            configuration(tmp_path),
+            initial(),
+        )[0]["run_id"]
+
+        def pending(number):
+            challenge = client.get(run_id, "alice")["clarification"]
+            return challenge if challenge and challenge["round"] == number else None
+
+        if scenario == "planning-release":
+            wait(lambda: pending(1), process, tmp_path)
+            client.clarify(run_id, "alice", pending(1)["version"], {"brand": "Brand A"})
+        wait(lambda: (tmp_path / scenario).exists(), process, tmp_path)
+        kill_owned(process)
+        assert not facts().request(run_id)["occupied"]
+        if scenario == "clarification-deadline":
+            challenge = client.client.get_event(
+                run_id, "clarification", timeout_seconds=0
+            )
+            time.sleep(max(0, challenge["expires_at"] - time.time()) + 0.1)
+            assert client.get(run_id, "alice")["clarification"] is None
+
+        (tmp_path / (scenario + ".release")).write_text("resume")
+        (tmp_path / "executor-ready").unlink()
+        restart = start(tmp_path, executor, scenario)
+        if scenario == "planning-release":
+            wait(lambda: pending(2), restart, tmp_path)
+            assert not facts().request(run_id)["occupied"]
+            assert len(plan_prompts(tmp_path)) == 2
+            client.clarify(run_id, "alice", pending(2)["version"], {}, skip=True)
+
+        wait(
+            lambda: client.get(run_id, "alice")["archive_status"] == "saved",
+            restart,
+            tmp_path,
+        )
+        done = client.get(run_id, "alice")
+        if scenario == "planning-release":
+            assert done["status"] == "completed"
+            assert len(plan_prompts(tmp_path)) == 3
+        else:
+            assert done["status"] == "cancelled" and done["plan"] is None
+            assert len(plan_prompts(tmp_path)) == 1
+            assert effect_count(tmp_path) == 0
+    finally:
+        kill_owned(process)
+        if restart:
+            kill_owned(restart)
+
+
+@pytest.mark.parametrize("crash_round", [1, 2, 3])
+def test_clarification_wait_survives_executor_kill_and_same_run_answer(
+    pg_database, tmp_path, monkeypatch, crash_round
+):
+    """Replay a real recv and model journal with the original Executor identity."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from fastapi.testclient import TestClient
+    from test_python_workflow_sdk import CLARIFICATION_ANSWERS
+
+    from open_deep_research.web import server
+
+    owner = "operator"
+    token = "test-clarification-http-only"
+    monkeypatch.setattr(server, "WEB_API_TOKEN", token)
+    scenario = "clarification" if crash_round == 1 else "multi-clarification"
+    total_rounds = 1 if crash_round == 1 else 3
+    client = RunClient()
+    executor = "brief-wait-" + uuid4().hex
+    process = start(tmp_path, executor, scenario)
+    restart = None
+    try:
+        wait(lambda: (tmp_path / "executor-ready").exists(), process, tmp_path)
+        run_id = client.create(
+            owner,
             "clarification-kill",
             {"topic": "ambiguous brand"},
             configuration(tmp_path),
             initial(),
-        )[0]
+        )[0]["run_id"]
+        versions = []
+
+        def pending_at(number, executor_process):
+            wait(
+                lambda: (client.get(run_id, owner)["clarification"] or {}).get("round")
+                == number,
+                executor_process,
+                tmp_path,
+            )
+            pending = client.get(run_id, owner)
+            assert pending["status"] == "awaiting_clarification"
+            assert not facts().request(run_id)["occupied"]
+            return pending["clarification"]
+
+        def steps(workflow_id, name):
+            return [
+                step
+                for step in client.client.list_workflow_steps(workflow_id)
+                if step["function_name"] == name
+            ]
+
+        for number in range(1, crash_round + 1):
+            versions.append(pending_at(number, process)["version"])
+            if number < crash_round:
+                client.clarify(
+                    run_id, owner, versions[-1], CLARIFICATION_ANSWERS[number - 1]
+                )
         wait(
-            lambda: client.get(run["run_id"], "alice")["status"]
-            == "awaiting_clarification",
+            lambda: len(steps(run_id, "DBOS.sleep")) == crash_round,
             process,
             tmp_path,
         )
-        pending = client.get(run["run_id"], "alice")
-        units = [u["id"] for u in facts().units(run["run_id"])]
-        version = pending["clarification"]["version"]
-        assert not facts().request(run["run_id"])["occupied"]
+        units = [u["id"] for u in facts().units(run_id)]
+        committed = {
+            f"{run_id}:planning:{number}": steps(
+                f"{run_id}:planning:{number}", "por.llm"
+            )
+            for number in range(1, crash_round + 1)
+        }
+        assert all(
+            len(journal) == 1 and journal[0]["output"] for journal in committed.values()
+        )
+
         kill_owned(process)
         assert effect_count(tmp_path) == 0
+        assert len(plan_prompts(tmp_path)) == crash_round
+        assert client.get(run_id, owner)["clarification"]["version"] == versions[-1]
+        if crash_round == 2:
+            # Both identical HTTP requests arrive before the Executor can recv.
+            # The second must acknowledge the first transaction without sending again.
+            with TestClient(
+                server.app, headers={"Authorization": f"Bearer {token}"}
+            ) as http:
+                path = f"/api/runs/{run_id}"
+                body = {"version": versions[-1], "answers": CLARIFICATION_ANSWERS[1]}
+                with ThreadPoolExecutor(2) as pool:
+                    responses = list(
+                        pool.map(
+                            lambda _: http.post(path + "/clarification", json=body),
+                            range(2),
+                        )
+                    )
+                assert [response.status_code for response in responses] == [200, 200]
+                for response in responses:
+                    assert response.json()["run_id"] == run_id
+                    assert response.json()["clarification"] is None
+                assert http.get(path).json()["clarification"] is None
         (tmp_path / "executor-ready").unlink()
-        restart = start(tmp_path, executor, "clarification")
+        restart = start(tmp_path, executor, scenario)
         wait(lambda: (tmp_path / "executor-ready").exists(), restart, tmp_path)
-        restored = client.get(run["run_id"], "alice")
-        assert restored["clarification"]["version"] == version
-        assert [u["id"] for u in facts().units(run["run_id"])] == units
-        client.clarify(run["run_id"], "alice", version, {"brand": "Brand A"})
+        if crash_round != 2:
+            restored = pending_at(crash_round, restart)
+            assert restored["version"] == versions[-1]
+            assert [u["id"] for u in facts().units(run_id)] == units
+            assert len(plan_prompts(tmp_path)) == crash_round
+            client.clarify(
+                run_id, owner, versions[-1], CLARIFICATION_ANSWERS[crash_round - 1]
+            )
+        for number in range(crash_round + 1, total_rounds + 1):
+            versions.append(pending_at(number, restart)["version"])
+            client.clarify(
+                run_id, owner, versions[-1], CLARIFICATION_ANSWERS[number - 1]
+            )
+
         wait(
-            lambda: client.get(run["run_id"], "alice")["archive_status"] == "saved",
+            lambda: client.get(run_id, owner)["archive_status"] == "saved",
             restart,
             tmp_path,
         )
-        result = client.get(run["run_id"], "alice")
+        result = client.get(run_id, owner)
         assert result["status"] == "completed" and result["events_complete"]
         assert result["plan"]["locked"] and effect_count(tmp_path) == 2
-        assert (
-            len(
-                [
-                    u
-                    for u in facts().units(run["run_id"])
-                    if u["name"] == "plan_research"
-                ]
-            )
-            == 2
-        )
+        assert result["completed_steps"].count("plan_research") == total_rounds + 1
+        assert [s["output"]["version"] for s in steps(run_id, "DBOS.recv")] == versions
+        for workflow_id, journal in committed.items():
+            assert steps(workflow_id, "por.llm") == journal
+        prompts = plan_prompts(tmp_path)
+        assert len(prompts) == total_rounds + 1
+        for number, prompt in enumerate(prompts):
+            assert prompt.count("\nUser response: ") == number
+            for answers in CLARIFICATION_ANSWERS[:number]:
+                assert next(iter(answers.values())) in prompt
     finally:
         kill_owned(process)
         if restart:

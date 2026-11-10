@@ -676,7 +676,11 @@ async def planning_workflow(run_id, initial, round_=1):
         apply_patch(state, outcome["patch"])
         return {"state": state, "decision": outcome["decision"]}
     finally:
-        await release_step(run_id)
+        # business_step can reacquire the reservation during recovery, even if
+        # the previous Executor released it just before committing the result.
+        _, cancelled = await owned_io(facts().release, run_id)
+        if cancelled:
+            raise cancelled
 
 
 @DBOS.step()
@@ -782,10 +786,15 @@ async def load_request(run_id):
     return req
 
 
+def _interaction_now():
+    repo = facts()
+    with repo.engine.connect() as db:
+        return repo.now(db)
+
+
 @DBOS.step()
 async def approval_deadline():
-    with facts().engine.connect() as db:
-        return facts().now(db) + facts().settings.approval_seconds
+    return _interaction_now() + facts().settings.approval_seconds
 
 
 @DBOS.workflow(name="por.run")
@@ -793,11 +802,15 @@ async def approval_deadline():
 async def run_workflow(run_id):
     from langchain_core.messages import HumanMessage
 
-    from open_deep_research.workflow.brief import brief_metadata, validate_brief
+    from open_deep_research.workflow.brief import (
+        MAX_CLARIFICATION_ROUNDS,
+        brief_metadata,
+        validate_brief,
+    )
 
     req = await load_request(run_id)
     state = req["data"]["initial"]
-    for round_ in (1, 2):
+    for round_ in range(1, MAX_CLARIFICATION_ROUNDS + 2):
         await DBOS.set_event_async("phase", "planning")
         await send_event(run_id, "run_status", status="running")
         with (
@@ -813,19 +826,24 @@ async def run_workflow(run_id):
         decision = planned["decision"]
         if decision["action"] == "ready":
             break
-        if round_ == 2:
-            raise ValueError(
-                "Planning cannot ask again after clarification was resolved"
-            )
+        if round_ > MAX_CLARIFICATION_ROUNDS:
+            raise ValueError("Planner requested clarification at the round limit")
         challenge = dict(
-            questions=decision["questions"], expires_at=await approval_deadline()
+            questions=decision["questions"],
+            round=round_,
+            max_rounds=MAX_CLARIFICATION_ROUNDS,
+            expires_at=await approval_deadline(),
         )
         challenge["version"] = digest(dict(run_id=run_id, **challenge))
         await DBOS.set_event_async("clarification", challenge)
         await DBOS.set_event_async("phase", "awaiting_clarification")
         await send_event(run_id, "run_status", status="awaiting_clarification")
+        # recv journals both its timer and answer. Use a fresh clock only
+        # for its timeout argument, so a restart before timer setup cannot
+        # start a new full wait for an already expired challenge.
+        remaining = challenge["expires_at"] - await asyncio.to_thread(_interaction_now)
         reply = await DBOS.recv_async(
-            "clarification", timeout_seconds=req["data"]["approval_seconds"]
+            "clarification", timeout_seconds=max(0, remaining)
         )
         if reply is None:
             await DBOS.set_event_async("approval_end", "expired")
@@ -838,7 +856,6 @@ async def run_workflow(run_id):
             raise ValueError(
                 "Clarification continuation does not match the pending request"
             )
-        await DBOS.set_event_async("clarification_resolved", challenge["version"])
         # Structured control was validated by admission. It is task data, never system instructions.
         apply_patch(
             state,
@@ -846,6 +863,7 @@ async def run_workflow(run_id):
                 "messages": [
                     HumanMessage(
                         id="clarification-" + challenge["version"],
+                        additional_kwargs={"clarification_skipped": reply["skip"]},
                         content=(
                             "Clarification questions: "
                             + dumps(challenge["questions"])
@@ -858,7 +876,6 @@ async def run_workflow(run_id):
                         ),
                     )
                 ],
-                "workflow": {"clarification_complete": True},
             },
         )
 
@@ -936,8 +953,7 @@ async def run_workflow(run_id):
 
 @DBOS.step()
 async def interaction_clock():
-    with facts().engine.connect() as db:
-        return facts().now(db)
+    return _interaction_now()
 
 
 @DBOS.workflow(name="por.events")

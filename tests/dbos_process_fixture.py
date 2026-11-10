@@ -56,8 +56,25 @@ from open_deep_research.workflow.run_facts import RunFacts, facts
 
 def install(directory, scenario):
     patch = pytest.MonkeyPatch()
+    plan_mode = {
+        "clarification": "clarify",
+        "clarification-deadline": "clarify",
+        "multi-clarification": "clarify-3",
+        "planning-release": "clarify-2",
+    }.get(scenario, "normal")
+
+    def record_plan(prompt):
+        with sqlite3.connect(directory / "planning.db") as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS plan_requests(id INTEGER PRIMARY KEY, prompt TEXT)"
+            )
+            db.execute("INSERT INTO plan_requests(prompt) VALUES (?)", (prompt,))
+
     install_sdk(
-        patch, directory / "t", "clarify" if scenario == "clarification" else "normal"
+        patch,
+        directory / "t",
+        plan_mode,
+        on_plan=record_plan if plan_mode != "normal" else None,
     )
     store = history.Neo4jHistoryStore(
         GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
@@ -167,6 +184,40 @@ def install(directory, scenario):
         (directory / name).write_text("ready")
         while not (directory / (name + ".release")).exists():
             time.sleep(0.05)
+
+    if scenario == "planning-release":
+        from open_deep_research.workflow import dbos_workflow as engine
+
+        original_release_step = engine.release_step
+        original_release = RunFacts.release
+
+        def release(self, run_id):
+            original_release(self, run_id)
+            if DBOS.workflow_id == run_id + ":planning:2" and DBOS.step_id is None:
+                gate(scenario)
+
+        async def release_step_then_gate(run_id):
+            # If planning uses a native release Step, pause after its journal
+            # has committed. On replay the cached Step cannot release again.
+            await original_release_step(run_id)
+            if DBOS.workflow_id == run_id + ":planning:2":
+                await asyncio.to_thread(gate, scenario)
+
+        patch.setattr(RunFacts, "release", release)
+        patch.setattr(engine, "release_step", release_step_then_gate)
+
+    if scenario == "clarification-deadline":
+        original_recv = DBOS.recv_async
+
+        async def recv(topic=None, timeout_seconds=60):
+            if topic == "clarification":
+                if (directory / (scenario + ".release")).exists():
+                    assert timeout_seconds == 0
+                else:
+                    await asyncio.to_thread(gate, scenario)
+            return await original_recv(topic, timeout_seconds)
+
+        patch.setattr(DBOS, "recv_async", staticmethod(recv))
 
     if scenario.startswith("retry-"):
         from open_deep_research.budget import capture_budget_usage

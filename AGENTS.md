@@ -21,7 +21,10 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `dbosrunner-unified-v1` (see `docs/architecture/dbosrunner-unification.md`; pending `dbos-brief-spec-v1` and earlier journals must drain on their matching release), SDK runtime version `sdk-phase5-v1`.
+Application version is `dbosrunner-clarification-v1`. Pending
+`dbosrunner-unified-v1` and earlier journals must drain on their matching
+release. See `docs/architecture/dbos-deployment.md` for cutover steps.
+SDK runtime version remains `sdk-phase5-v1`.
 The Studio relay waits for its terminal-event manifest before acknowledging
 delivery. Pending `dbos-phase5-v1` journals must drain on their matching release;
 the new Executor must not replay those older relay command sequences.

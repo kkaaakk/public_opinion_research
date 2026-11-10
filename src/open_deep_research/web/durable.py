@@ -168,6 +168,15 @@ class RunClient:
         req = repo.request(run_id, owner)
         status = self.native(run_id)
         units = repo.units(run_id)
+        # Read phase before the payloads it fences: workflows publish payload first.
+        phase = self.client.get_event(run_id, "phase", timeout_seconds=0)
+        clarification = (
+            self.client.get_event(run_id, "clarification", timeout_seconds=0)
+            if status.status == "PENDING"
+            and phase == "awaiting_clarification"
+            and not req["cancel_requested"]
+            else None
+        )
         with repo.engine.connect() as db:
             generation = int(
                 db.execute(
@@ -177,15 +186,30 @@ class RunClient:
                     {"id": run_id},
                 ).scalar_one()
             )
-        # Read phase before the payloads it fences: workflows publish payload first.
-        phase = self.client.get_event(run_id, "phase", timeout_seconds=0)
-        plan = self.client.get_event(run_id, "plan", timeout_seconds=0)
-        clarification = self.client.get_event(
+            # The receipt hides the questions as soon as the transactional send
+            # commits, even if the Executor has yet to receive the answer.
+            if (
+                clarification
+                and db.execute(
+                    text(
+                        "SELECT extract(epoch from clock_timestamp()) >= :expiry OR EXISTS("
+                        "SELECT 1 FROM por_domain.approvals WHERE run_id=:id AND version=:version)"
+                    ),
+                    {
+                        "expiry": clarification["expires_at"],
+                        "id": run_id,
+                        "version": clarification["version"],
+                    },
+                ).scalar_one()
+            ):
+                clarification = None
+        # A later round may have replaced both the challenge and its receipt
+        # during this read. In that case let the next snapshot show the new round.
+        if clarification and clarification != self.client.get_event(
             run_id, "clarification", timeout_seconds=0
-        )
-        resolved = self.client.get_event(
-            run_id, "clarification_resolved", timeout_seconds=0
-        )
+        ):
+            clarification = None
+        plan = self.client.get_event(run_id, "plan", timeout_seconds=0)
         locked_brief = self.client.get_event(run_id, "brief_locked", timeout_seconds=0)
         cursor = (
             self.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0
@@ -305,7 +329,7 @@ class RunClient:
             "clarification": dict(
                 clarification, expires_at=timestamp(clarification["expires_at"])
             )
-            if clarification and resolved != clarification["version"] and not terminal
+            if clarification
             else None,
             "run_id": run_id,
             "owner": req["owner"],
@@ -398,6 +422,12 @@ class RunClient:
                         "reject",
                     }:
                         raise RunConflict("Approval already consumed")
+                    if topic == "clarification":
+                        latest = self.client.get_event(
+                            run_id, "clarification", timeout_seconds=0
+                        )
+                        if latest and latest["version"] != version:
+                            raise RunConflict("Clarification version changed")
                     return  # committed duplicate, including a lost HTTP acknowledgement
                 raise RunConflict("This version already has a different decision")
             current = self.get(run_id, owner)

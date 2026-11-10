@@ -1,8 +1,8 @@
 # Markdown Research Brief workflow
 
-This release uses application version `dbos-brief-spec-v1`; SDK 0.24.0 and runtime
-`sdk-phase5-v1` remain unchanged. It starts from main `338c480e49881852deb0089b32ca0b1ce4124e41`.
-DBOS is the execution authority, Runner owns the four business Agent loops, and
+The multi-round clarification release uses application version
+`dbosrunner-clarification-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
+DBOS owns execution and recovery, Runner owns the four business Agent loops, and
 Research Graph owns evidence. Markdown carries research intent, never execution control.
 
 ## Before and after
@@ -25,10 +25,11 @@ flowchart TD
 ```mermaid
 flowchart TD
   A[por.run] --> B[por.plan: optional image parsing + unified Plan]
-  B -->|ask_user| C[por.run: durable clarification recv]
-  C -->|answer or skip, same Run| D[por.plan: unified Plan, questions disabled]
+  B -->|ask_user, up to 3 rounds| C[por.run: durable clarification recv]
+  C -->|answer or skip, same Run| D[por.plan: unified Plan with full conversation]
+  D -->|material ambiguity and rounds remain| C
   B -->|ready| E[Markdown Brief]
-  D --> E
+  D -->|ready| E
   E --> F[Optional preview / versioned edit / approval recv]
   F --> G[Freeze exact Brief version in research input]
   G --> H[Parallel Public Signal and Internal Knowledge]
@@ -42,8 +43,13 @@ flowchart TD
 `por.plan` remains a BUSINESS child workflow, with no human wait inside its queue
 slot. `por.run` owns native `recv` for clarification and approval on CONTROL.
 Reservations are released after each planning segment and reacquired for research.
-Two planning segments have distinct durable IDs (`:planning:1`, `:planning:2`) and
-unit IDs. Answering never replays the first segment or creates another Run.
+Up to four planning segments use stable child IDs `:planning:1` through
+`:planning:4` and corresponding `:plan:N` unit IDs. The parent replays the
+versioned replies already recorded by native `recv` and appends one message per
+reply with a stable ID. The planner derives the completed count and skip decision
+from this conversation. DBOS reuses completed child results and model Steps.
+Planning releases its reservation on recovery as well as on the first execution
+because the existing business stage can reacquire it while rebuilding state.
 
 ## Plan and Markdown contract
 
@@ -72,23 +78,35 @@ Usage and Trace accounting. The structured Plan output allowance is at least
 4096 tokens to accommodate Markdown plus its decision envelope.
 
 Images retain the existing limits, isolated temporary message and usage capture.
-No image means no Vision request. Only the first planning segment parses images.
-Clarification disabled, answered or skipped still uses unified Plan and requires
-`ready`; an attempted second question set fails closed.
+Only the first planning segment parses images, and every later decision sees that
+context, the original request and all preceding questions and answers. Ask only
+when resolving a material ambiguity changes the research scope, evidence or
+business decision. The Brief can mark other details as unspecified. With
+clarification disabled, after a skip or after three replies, `ask_user` fails the
+planning stage. The usual request takes one Plan decision. Each reply adds one
+decision and its accumulated conversation to the prompt, for at most four
+decisions before accounting for existing structured parsing attempts and one
+optional Brief shortening call.
 
 ## Persistent human interaction
 
 `GET /api/runs/{id}` includes either pending `clarification` or `plan`, independently.
 Native phase is `awaiting_clarification` or `awaiting_approval`; neither is terminal.
 SSE emits a durable status, closes that delivered waiting prefix, and the observer
-continues polling. Refresh/reconnect reads the same native events and cursor.
+continues polling. Refresh/reconnect reads the current `round`, `max_rounds` and
+questions from the native event. A committed answer receipt hides that version
+even if the Executor has yet to receive it.
 
 `POST .../clarification` accepts `{version, answers, skip}`. Answers are validated
 against the pending question IDs/kinds/options. Partial answers are allowed; skip
-must have empty answers. Unknown information stays unspecified. The same existing
-`RUN_APPROVAL_SECONDS` policy bounds each human-interaction stage; approval edits
-do not extend its original deadline. Expiry settles as cancelled, never completed.
-Cancellation uses the existing persisted intent/native cancellation and Finalizer.
+must have empty answers. Unknown information stays unspecified. Each challenge
+gets its own `RUN_APPROVAL_SECONDS` deadline. Brief approval gets a separate
+deadline and its edits keep that deadline. The default is up to 24 hours per
+interaction, or 72 hours across three clarification rounds plus up to 24 hours
+for optional approval. Expiry settles as cancelled. `RUN_TIMEOUT_SECONDS` stays
+start-to-completion for each planning or research child. The parent has no
+overall wall-clock deadline, so queue time and human waits are separate.
+Cancellation uses the existing persisted intent, native cancellation and Finalizer.
 
 `POST .../approval` accepts `{plan_version, decision}` where decision is `approve`,
 `reject`, or `edit`. An edit also supplies `brief_md`, validates it, then publishes
@@ -98,12 +116,13 @@ approve newly edited text. Unsaved edits disable the UI approval button.
 No new tables: the existing locked request row and `por_domain.approvals` hold the
 last accepted interaction receipt, and DBOS stores the transactional continuation
 message and journal. A receipt binds topic, exact version and payload digest.
-Same-payload clarification/edit retransmissions acknowledge the committed command.
-Repeated approve/reject keeps the existing 409 already-consumed contract. A changed payload,
-stale version, cancellation, expiry or wrong owner fails closed. Once a later
-interaction replaces the receipt, an old submission can only be rejected, never
-re-executed. No HTTP path calls rewind. New-release human controls validate the
-accepted application/configuration version before sending any message.
+Same-payload clarification retransmissions acknowledge the committed command
+while it is the latest challenge and receipt. Publishing a later round invalidates
+earlier versions, including identical retransmissions. Same-payload edits
+acknowledge the original save while its receipt remains. Repeated approve/reject
+keeps the existing 409 already-consumed contract. A changed payload, stale
+version, cancellation, expiry or wrong owner blocks new submissions. Human
+controls validate the accepted application and configuration before sending.
 
 ## Brief persistence and context
 
@@ -164,16 +183,11 @@ consumers; they are excluded from production OPERATIONS, not fallback paths.
 
 ## Deployment and rollback
 
-The command sequence of `por.run`, `por.plan` and `por.research` changed. Do not
-allow this executor to recover `dbos-phase5-studio-v1` journals. Stop old admission,
-inventory queued/running/waiting/unknown/archive-pending Runs, retain the old API
-and matching executor ID/release to finish or explicitly cancel/settle them.
-Preserve both PostgreSQL schemas and external receipts. New requests are submitted
-with `dbos-brief-spec-v1`; no domain DDL or data rewrite is required.
-Rollback stops new admission and keeps this release's matching executor for its
-pending journals. Do not redeliver Agent/tool work under the old release or mint
-fresh retry keys to bypass generation authorization. Historical report reads keep
-their previous owner policy. No production cutover was performed by this PR.
+`por.run` and `por.plan` have new command sequences. Finish or explicitly cancel
+and settle unfinished `dbosrunner-unified-v1` and earlier Runs with their original
+API and Executor before admitting new Runs. The new release refuses incompatible
+unfinished journals at Executor startup and at admission. See the
+[deployment and rollback procedure](dbos-deployment.md).
 
 For verification, measurements and remaining limitations see
 [the implementation audit](../audits/research-brief-spec.md).

@@ -92,17 +92,31 @@ def test_overlimit_compacts_at_most_once_without_truncating(monkeypatch, second,
 
 
 @pytest.mark.parametrize(
-    "workflow,cfg",
+    "replies,allowed",
     [
-        ({"clarification_complete": True}, CFG),
-        ({}, {"configurable": {**CFG["configurable"], "allow_clarification": False}}),
+        ([False, False, False], True),
+        ([True], True),
+        ([False, True], True),
+        ([], False),
     ],
+    ids=["round-limit", "initial-skip", "later-skip", "disabled"],
 )
-def test_no_further_questions_after_answer_skip_or_disabled(monkeypatch, workflow, cfg):
+def test_no_further_questions_after_limit_skip_or_disabled(
+    monkeypatch, replies, allowed
+):
+    state = {
+        "messages": [
+            HumanMessage(
+                content="Reply", additional_kwargs={"clarification_skipped": skip}
+            )
+            for skip in replies
+        ]
+    }
+    cfg = {"configurable": {**CFG["configurable"], "allow_clarification": allowed}}
     _script(_tool_step("PlanDecision", ask(), SMALL_USAGE))
     monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
-    with pytest.raises(ValueError, match="disabled or resolved"):
-        asyncio.run(intake.plan_research({"workflow": workflow}, cfg))
+    with pytest.raises(ValueError, match="disabled, skipped or at the round limit"):
+        asyncio.run(intake.plan_research(state, cfg))
 
 
 @pytest.mark.parametrize(
@@ -204,6 +218,20 @@ def test_invalid_model_decision_is_a_billed_failure(monkeypatch):
         with pytest.raises(Exception):
             asyncio.run(intake.plan_research({}, CFG))
     assert usage["model_calls"] == 1 and usage["total_tokens"] == 6
+
+
+def test_brief_compaction_cannot_ask_for_clarification(monkeypatch):
+    _script(
+        _tool_step("PlanDecision", ready(BRIEF + "长" * 10000), SMALL_USAGE),
+        _tool_step("PlanDecision", ask(), SMALL_USAGE),
+    )
+    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
+    with (
+        budget_capture() as usage,
+        pytest.raises(ValueError, match="compaction must return ready"),
+    ):
+        asyncio.run(intake.plan_research({}, CFG))
+    assert usage["model_calls"] == 2
 
 
 def test_invalid_compaction_cannot_hide_extra_structured_retries(monkeypatch):
