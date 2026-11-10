@@ -115,8 +115,23 @@ class NativeCase:
         from open_deep_research.web import history
 
         self.plan_prompts = []
+        self.revision_requests = []
+        self.revision_response = None
+
+        async def revise(data):
+            self.revision_requests.append(data)
+            if self.revision_response is not None:
+                return await self.revision_response(data)
+            return None
+
         self.state, self.cfg, self.runtimes, self.models, self.calls, self.blocked = (
-            install_sdk(patch, directory, mode, on_plan=self.plan_prompts.append)
+            install_sdk(
+                patch,
+                directory,
+                mode,
+                on_plan=self.plan_prompts.append,
+                on_revision=revise,
+            )
         )
         self.client = RunClient()
         self.owner = "alice"

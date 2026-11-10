@@ -13,6 +13,7 @@ pytestmark = pytest.mark.integration
     [
         ("dbos-brief-spec-v1", "por.role", ("old", "old:role", "public_signal", {})),
         ("dbosrunner-unified-v1", "por.run", ("old",)),
+        ("dbosrunner-clarification-v1", "por.run", ("old",)),
     ],
 )
 def test_old_pending_journal_is_inventoried_and_not_deleted(

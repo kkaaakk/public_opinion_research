@@ -125,9 +125,16 @@
         </div>
         <section id="approval-panel" class="api-settings hidden" aria-labelledby="approval-title">
             <h2 id="approval-title">研究计划待审批</h2>
+            <p id="approval-version"></p>
             <pre id="approval-plan"></pre>
+            <p id="brief-revision-status" role="status"></p>
+            <button id="revise-brief-btn" class="btn-action hidden" type="button" onclick="document.getElementById('brief-revision-form').classList.toggle('hidden')">AI 修改 Brief</button>
+            <div id="brief-revision-form" class="hidden">
+                <label>AI 修改意见<textarea id="brief-revision-feedback" rows="4" maxlength="4000" style="width:100%"></textarea></label>
+                <button id="submit-brief-revision-btn" class="btn-action" type="button" onclick="decidePlan('revise')">提交 AI 修改</button>
+            </div>
             <label>编辑 Markdown Brief<textarea id="brief-edit" rows="12" maxlength="30000" style="width:100%"></textarea></label>
-            <button class="btn-action" type="button" onclick="decidePlan('edit')">保存新版本（须重新审批）</button>
+            <button id="edit-plan-btn" class="btn-action" type="button" onclick="decidePlan('edit')">保存新版本（须重新审批）</button>
             <button id="approve-plan-btn" class="btn-action" type="button" onclick="decidePlan('approve')">批准并继续</button>
             <button id="reject-plan-btn" class="btn-action" type="button" onclick="decidePlan('reject')">拒绝计划</button>
         </section>
@@ -187,6 +194,6 @@
         </footer>
     </div>
 
-    <script src="/static/app.js?v=20261031-brief-spec"></script>
+    <script src="/static/app.js?v=20261110-brief-revision"></script>
 </body>
 </html>

@@ -53,6 +53,7 @@ def test_research_subgraph_contract():
     assert set(OPERATIONS) == {
         "enrich_query_images",
         "plan_research",
+        "revise_brief",
         "generate_final_report",
         "plan_report_sections",
         "research_review",

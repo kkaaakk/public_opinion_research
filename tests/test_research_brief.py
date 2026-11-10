@@ -248,6 +248,85 @@ def test_invalid_compaction_cannot_hide_extra_structured_retries(monkeypatch):
     assert usage["model_calls"] == 2 and usage["total_tokens"] == 12
 
 
+@pytest.mark.parametrize("compact", [False, True])
+def test_revision_uses_current_brief_context_and_independent_compaction(
+    monkeypatch, compact
+):
+    import json
+
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    prompts = []
+
+    class Capture(BaseCallbackHandler):
+        def on_chat_model_start(self, serialized, messages, **kwargs):
+            prompts.append(messages[0])
+
+    feedback = "Compare the competitor's support complaints."
+    changed = BRIEF + "\n\n" + feedback
+    long = changed + "\n" + "长" * 10000
+    script = [
+        _tool_step(
+            "BriefRevision", {"brief_md": long if compact else changed}, SMALL_USAGE
+        )
+    ]
+    if compact:
+        script.append(_tool_step("BriefRevision", {"brief_md": changed}, SMALL_USAGE))
+    _script(*script)
+    monkeypatch.setattr(
+        shared, "configurable_model", ScriptedChat(callbacks=[Capture()])
+    )
+    state = {
+        "workflow": {"brief": BRIEF},
+        "messages": [
+            HumanMessage(content="Original subject"),
+            HumanMessage(content="Image context: blue package"),
+            HumanMessage(content="Clarification: only confirmed allegations"),
+        ],
+    }
+    with budget_capture() as usage:
+        result = asyncio.run(intake.revise_brief(state, CFG, feedback=feedback))
+    assert result["revision_error"] is None
+    assert result["patch"]["workflow"]["brief"] == changed
+    assert (
+        result["patch"]["runtime"]["budget"]["model_calls"]
+        == usage["model_calls"]
+        == 1 + compact
+    )
+    for prompt in prompts:
+        assert prompt[0].type == "system"
+        assert feedback not in prompt[0].content
+        data = json.loads(prompt[-1].content)
+        assert data["current_brief"] == BRIEF and data["feedback"] == feedback
+        assert all(
+            part in data["request_context"]
+            for part in ("Original subject", "blue package", "only confirmed")
+        )
+    if compact:
+        assert json.loads(prompts[1][-1].content)["candidate_brief"] == long
+
+
+def test_revision_structured_retry_is_billed_as_two_calls(monkeypatch):
+    _script(
+        _tool_step("BriefRevision", {"brief_md": ""}, SMALL_USAGE),
+        _tool_step("BriefRevision", {"brief_md": BRIEF}, SMALL_USAGE),
+    )
+    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
+    cfg = deepcopy(CFG)
+    cfg["configurable"]["max_structured_output_retries"] = 2
+    with budget_capture() as usage:
+        result = asyncio.run(
+            intake.revise_brief(
+                {"workflow": {"brief": BRIEF}}, cfg, feedback="Keep the scope."
+            )
+        )
+    assert result["revision_error"] is None
+    assert result["patch"]["workflow"]["brief"] == BRIEF
+    assert (
+        result["patch"]["runtime"]["budget"]["model_calls"] == usage["model_calls"] == 2
+    )
+
+
 def test_multiple_choice_answers_remain_bounded_to_declared_options():
     questions = [
         dict(id="sources", text="Sources?", kind="multiple", options=["News", "Social"])

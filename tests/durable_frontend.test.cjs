@@ -140,6 +140,46 @@ test('approval is tied to the saved plan and submitted once without another crea
     assert.ok(view.calls.every(call => call.path !== '/api/runs'));
 });
 
+test('Classic observes the persisted revision and sends feedback only once', async () => {
+    const saved = storage({ key: 'key', request: body, runId, cursor: 0 });
+    const plan = { version: 'version', revision: 1, brief: 'original brief', sections: [],
+        ai_revision: { attempt: 0, used: 0, limit: 3, pending: false } };
+    const revised = { ...plan, version: 'new-version', revision: 2, brief: 'revised brief',
+        ai_revision: { ...plan.ai_revision, attempt: 1, used: 1 } };
+    let submitted = false;
+    let readPending = false;
+    const view = page(saved, (path, options) => {
+        if (path.endsWith('/approval')) {
+            submitted = true;
+            return response(state('running'));
+        }
+        if (path.endsWith('/events')) {
+            assert.equal(view.element('approval-title').textContent, 'AI 正在修改 Brief');
+            assert.equal(view.element('approve-plan-btn').disabled, true);
+            assert.equal(view.element('revise-brief-btn').disabled, true);
+            return stream([]);
+        }
+        if (submitted && !readPending) {
+            readPending = true;
+            return response(state('running', { plan: { ...plan,
+                ai_revision: { ...plan.ai_revision, pending: true } } }));
+        }
+        return response(state('awaiting_approval', { plan: submitted ? revised : plan }));
+    });
+    await view.call('startResearch(true)');
+    view.element('brief-revision-feedback').value = 'Compare competitors.';
+    await view.call("Promise.all([decidePlan('revise'), decidePlan('revise')])");
+    const approvals = view.calls.filter(call => call.path.endsWith('/approval'));
+    assert.equal(approvals.length, 1);
+    assert.deepEqual(JSON.parse(approvals[0].options.body), {
+        plan_version: 'version', decision: 'revise', feedback: 'Compare competitors.', revision_attempt: 0,
+    });
+    assert.ok(view.element('approval-version').textContent.startsWith('v2'));
+    assert.match(view.element('brief-revision-status').textContent, /1 \/ 3/);
+    assert.match(view.element('approval-plan').textContent, /revised brief/);
+    assert.equal(view.element('approve-plan-btn').disabled, false);
+});
+
 test('Stop sends durable cancellation without aborting the subscription', async () => {
     const saved = storage({ key: 'key', request: body, runId, cursor: 0 });
     const view = page(saved, () => response(state('cancelling')));

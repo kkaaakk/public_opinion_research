@@ -11,7 +11,7 @@ export const PHASES = [
     id: 'planning',
     label: 'Planning',
     detail: '统一 Plan / Markdown Brief',
-    steps: ['plan_research', 'write_research_brief', 'plan_report_sections'],
+    steps: ['plan_research', 'revise_brief', 'write_research_brief', 'plan_report_sections'],
   },
   { id: 'approval', label: 'Approval', detail: '不可变计划审批', steps: [] },
   {

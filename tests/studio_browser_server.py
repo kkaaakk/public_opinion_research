@@ -77,7 +77,12 @@ def main():
     settings.cache_clear()
     patch = pytest.MonkeyPatch()
     with tempfile.TemporaryDirectory(prefix="por-studio-browser-") as directory:
-        _, cfg, _, _, _, _ = install_sdk(patch, Path(directory))
+
+        async def revise(data):
+            if "browser-delay-revision" in data["feedback"]:
+                await asyncio.sleep(15)
+
+        _, cfg, _, _, _, _ = install_sdk(patch, Path(directory), on_revision=revise)
         cfg["configurable"].update(
             research_graph_backend="neo4j",
             research_graph_uri=NEO4J,

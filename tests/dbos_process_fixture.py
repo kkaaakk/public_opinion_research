@@ -70,11 +70,16 @@ def install(directory, scenario):
             )
             db.execute("INSERT INTO plan_requests(prompt) VALUES (?)", (prompt,))
 
+    async def record_revision(_):
+        with (directory / "revision-calls").open("a", encoding="utf-8") as log:
+            log.write("call\n")
+
     install_sdk(
         patch,
         directory / "t",
         plan_mode,
         on_plan=record_plan if plan_mode != "normal" else None,
+        on_revision=record_revision if scenario.startswith("revision-") else None,
     )
     store = history.Neo4jHistoryStore(
         GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
@@ -296,6 +301,12 @@ def install(directory, scenario):
 
     def finish(self, unit, permit, **data):
         if (
+            scenario == "revision-ack"
+            and unit.endswith(":brief-revision:1")
+            and data.get("artifact")
+        ):
+            gate(scenario)
+        if (
             scenario == "plan-error"
             and unit.endswith(":plan:1")
             and data.get("artifact")
@@ -330,6 +341,13 @@ def install(directory, scenario):
         return old_acquire(self, run_id, unit, name, **kw)
 
     def operation(self, unit, permit, identity, status="started", **kwargs):
+        if (
+            scenario == "revision-unconfirmed"
+            and unit.endswith(":brief-revision:1")
+            and identity["name"] == "llm"
+            and status == "returned"
+        ):
+            gate(scenario)
         if (
             scenario == "lost-receipt"
             and status == "returned"

@@ -25,7 +25,7 @@ from open_deep_research.state import (
     Sections,
     Summary,
 )
-from open_deep_research.workflow.brief import PlanDecision
+from open_deep_research.workflow.brief import BriefRevision, PlanDecision
 
 TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted"})
 _MODELS = {
@@ -39,6 +39,7 @@ _MODELS = {
         ResearchQuestion,
         Summary,
         PlanDecision,
+        BriefRevision,
     )
 }
 _SDK_RESPONSE = TypeAdapter(ModelResponse)

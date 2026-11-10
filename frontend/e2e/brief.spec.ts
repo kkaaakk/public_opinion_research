@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('same Run survives a second clarification round and reload, then Brief approval', async ({
+test('same Run survives clarification and AI revision reloads, then Brief approval', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -47,6 +47,22 @@ test('same Run survives a second clarification round and reload, then Brief appr
   await expect(page.getByRole('button', { name: '批准执行', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '保存新版本', exact: true }).click();
   await expect(page.locator('.approval .mono').first()).toContainText('v2');
+  await page.getByRole('button', { name: 'AI 修改 Brief', exact: true }).click();
+  const feedback = 'browser-delay-revision: compare competitor after-sales complaints.';
+  await page.getByLabel('AI 修改意见').fill(feedback);
+  await page.getByRole('button', { name: '提交 AI 修改', exact: true }).click();
+  await expect(page.getByText('AI 正在修改 Brief')).toBeVisible();
+  await page.reload();
+  await authenticate();
+  await expect(page.locator('.run-identity strong')).toHaveText(id!);
+  await expect(page.getByText('AI 正在修改 Brief')).toBeVisible();
+  await expect(page.getByRole('button', { name: '批准执行', exact: true })).toHaveCount(0);
+  await expect(page.locator('.approval .mono').first()).toContainText('v3');
+  await expect(page.getByText(/AI 修改：1 \/ 3 次/)).toBeVisible();
+  await expect(page.locator('.approval .markdown')).toContainText(feedback);
+  await expect(page.locator('.approval .markdown')).toContainText(
+    'explicitly report unknown facts',
+  );
   await page.screenshot({
     path: process.env.BRIEF_SCREENSHOT_DIR
       ? process.env.BRIEF_SCREENSHOT_DIR + '/brief-approval.png'

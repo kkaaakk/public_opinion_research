@@ -35,7 +35,7 @@ from open_deep_research.state import (
     Sections,
 )
 from open_deep_research.workflow import shared
-from open_deep_research.workflow.brief import PlanDecision, PlanQuestion
+from open_deep_research.workflow.brief import BriefRevision, PlanDecision, PlanQuestion
 
 
 def test_fixed_fixture_repeated_sdk_runs_preserve_context_and_evidence(
@@ -95,7 +95,15 @@ CLARIFICATION_ANSWERS = (
 )
 
 
-def install_sdk(monkeypatch, tmp_path, mode="normal", *, local_tool=None, on_plan=None):
+def install_sdk(
+    monkeypatch,
+    tmp_path,
+    mode="normal",
+    *,
+    local_tool=None,
+    on_plan=None,
+    on_revision=None,
+):
     """Replace inference and external tools; keep actual Agent/Runner/Graph services."""
     clear_research_graph_store_cache()
     services = Services()
@@ -111,6 +119,22 @@ def install_sdk(monkeypatch, tmp_path, mode="normal", *, local_tool=None, on_pla
 
     class WorkflowServices(Services):
         def with_structured_output(self, schema, include_raw=False):
+            if schema is BriefRevision:
+
+                async def reply(messages, config=None):
+                    raw = await self.raw.ainvoke(messages, config)
+                    assert messages[0].type == "system" and messages[-1].type == "human"
+                    data = json.loads(messages[-1].content)
+                    parsed = (
+                        await on_revision(data) if on_revision is not None else None
+                    )
+                    if parsed is None:
+                        parsed = BriefRevision(
+                            brief_md=data["current_brief"] + "\n\n" + data["feedback"]
+                        )
+                    return {"raw": raw, "parsed": parsed, "parsing_error": None}
+
+                return RunnableLambda(reply)
             values = {
                 PlanDecision: PlanDecision(
                     action="ready",

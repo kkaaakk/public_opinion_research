@@ -129,6 +129,78 @@ it('edits Markdown, prevents approval of unsaved text, then approves only the ne
     decision: 'approve',
   });
 });
+it('submits revision feedback against its attempt and restores pending and limit states', async () => {
+  const user = userEvent.setup();
+  const submit = vi.fn();
+  const plan = {
+    version: 'f'.repeat(64),
+    revision: 2,
+    brief: '# Brief\n\n## Scope\nCurrent research scope',
+    sections: [],
+    expires_at: clarification.expires_at,
+    ai_revision: { attempt: 1, used: 1, limit: 3, pending: false },
+  };
+  const run = parseSnapshot(snapshot({ status: 'awaiting_approval', plan }));
+  const view = render(<ResearchSpec run={run} busy={false} submit={submit} />);
+  await user.click(screen.getByRole('button', { name: 'AI 修改 Brief' }));
+  await user.type(screen.getByLabelText('AI 修改意见'), 'Compare competitors.');
+  await user.click(screen.getByRole('button', { name: '提交 AI 修改' }));
+  expect(submit).toHaveBeenCalledWith('approval', {
+    plan_version: plan.version,
+    decision: 'revise',
+    revision_attempt: 1,
+    feedback: 'Compare competitors.',
+  });
+  view.rerender(
+    <ResearchSpec
+      run={parseSnapshot(
+        snapshot({
+          status: 'running',
+          plan: { ...plan, ai_revision: { ...plan.ai_revision, pending: true } },
+        }),
+      )}
+      busy={false}
+      submit={submit}
+    />,
+  );
+  expect(screen.getByText('AI 正在修改 Brief')).toBeVisible();
+  expect(screen.getByText('Current research scope')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '批准执行' })).toBeNull();
+
+  view.rerender(
+    <ResearchSpec
+      run={snapshot({
+        status: 'awaiting_approval',
+        plan: { ...plan, ai_revision: { ...plan.ai_revision, attempt: 2, error: 'model_error' } },
+      })}
+      busy={false}
+      submit={submit}
+    />,
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent('已保留当前 Brief');
+  expect(screen.getByRole('button', { name: '提交 AI 修改' })).toBeEnabled();
+
+  view.rerender(
+    <ResearchSpec
+      run={snapshot({
+        status: 'awaiting_approval',
+        plan: {
+          ...plan,
+          version: 'e'.repeat(64),
+          revision: 4,
+          ai_revision: { ...plan.ai_revision, attempt: 4, used: 3 },
+        },
+      })}
+      busy={false}
+      submit={submit}
+    />,
+  );
+  expect(screen.getByText(/AI 修改：3 \/ 3 次/)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'AI 修改 Brief' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '编辑 Brief' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: '批准执行' })).toBeEnabled();
+});
+
 it('renders Markdown with raw HTML disabled and no active remote image', async () => {
   render(
     <ResearchSpec

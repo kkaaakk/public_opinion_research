@@ -1,8 +1,8 @@
 # DBOS production execution — Phase 5
 
-> 2026-11-10 当前应用版本为 `dbosrunner-clarification-v1`。`por.run` 和 `por.plan`
-> 的命令序列已变更。最多三轮澄清的行为见 [Markdown Research Brief](research-brief.md)，
-> 上线和回滚步骤见[多轮澄清版本切换](#多轮澄清版本切换)。
+> 2026-11-10 当前应用版本为 `dbosrunner-brief-revision-v1`。Brief AI 修改使用
+> 既有 `por.run` 审批循环和 `por.plan` 业务子 Workflow，命令序列已变更。
+> 交互合同见 [Markdown Research Brief](research-brief.md)，上线和回滚见[版本切换](#brief-ai-修改版本切换)。
 
 > 2026-11-05 的 `dbosrunner-unified-v1` 引入官方 DBOSRunner、八个阶段 Workflow 和动态模型 Steps。见[统一改造](dbosrunner-unification.md)及[验收记录](../audits/dbosrunner-unification.md)。
 
@@ -88,18 +88,18 @@ EOF from SSE means reconnect/read status, not success. `--health` checks the
 PostgreSQL native catalog. Process liveness is separately supervised by the
 operator; there is no claimed application heartbeat endpoint for Executors.
 
-## 多轮澄清版本切换
+## Brief AI 修改版本切换
 
 1. 停止旧 API 接收新研究，保留旧 API 的澄清、审批和取消入口。使用原发行版、
    匹配的应用版本和 Executor 身份，完成或明确取消并清算
-   `dbosrunner-unified-v1` 及更早版本的排队、执行、等待、待重试、未决效果
+   `dbosrunner-clarification-v1` 及更早版本的排队、执行、等待、待重试、未决效果
    和待归档任务。保留 PostgreSQL 两个 schema 和外部回执。
 2. 部署根锁后运行 `python -m open_deep_research.web.executor --migration-check`
    检查旧 journal 和未决资源。
    未完成旧版本 journal 会阻止新 Executor 启动和新 Run 准入。使用现有
    `--initialize-only` 初始化新环境即可，本次无需数据改写或新增业务表。
-3. 用 `dbosrunner-clarification-v1` 启动 API 和 Executor，核对当前澄清版本、
-   等待期间的资源释放及后续 Brief 审批。回滚时先停新准入，再由本版完成
+3. 用 `dbosrunner-brief-revision-v1` 启动 API 和 Executor，核对澄清、Brief
+   版本审批、AI 修改与审批截止时间，以及等待期间的资源释放。回滚时先停新准入，再由本版完成
    或取消并清算本版任务，之后恢复旧版。每个版本只恢复自己的 journal。
    [DBOS 版本匹配规则](https://docs.dbos.dev/python/tutorials/upgrading-workflows#versioning)
 

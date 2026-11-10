@@ -6,6 +6,12 @@ import { exportMarkdown, time } from './common';
 
 type Submit = (action: 'approval' | 'clarification', body: object) => void;
 
+const revisionErrors: Record<string, string> = {
+  budget_exhausted: '模型预算不足，已保留当前 Brief。',
+  model_error: 'AI 修改调用失败，已保留当前 Brief。',
+  invalid_brief: 'AI 修改未生成符合要求的 Markdown，已保留当前 Brief。',
+};
+
 function BriefEditor({
   plan,
   pending,
@@ -20,16 +26,23 @@ function BriefEditor({
   const [draft, setDraft] = useState(plan.brief);
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedback, setFeedback] = useState('');
   const changed = draft.trim() !== plan.brief;
+  const revision = plan.ai_revision;
+  const revising = revision?.pending ?? false;
+  const canRevise = Boolean(revision && revision.used < revision.limit && !busy && !changed);
   return (
     <section className="panel approval">
       <div className="panel-head">
-        <strong>{pending ? '研究计划待审批' : 'Markdown Research Brief'}</strong>
+        <strong>
+          {revising ? 'AI 正在修改 Brief' : pending ? '研究计划待审批' : 'Markdown Research Brief'}
+        </strong>
         <span className="mono">
           v{plan.revision ?? 1} · {plan.version.slice(0, 12)}
           {plan.locked ? ' · 已锁定' : ''}
         </span>
-        {!pending && (
+        {!pending && !revising && (
           <button
             className="text-button"
             aria-expanded={expanded}
@@ -39,7 +52,7 @@ function BriefEditor({
           </button>
         )}
       </div>
-      {(pending || expanded) && (
+      {(pending || revising || expanded) && (
         <div className="approval-body">
           {editing ? (
             <label>
@@ -70,15 +83,63 @@ function BriefEditor({
             研究规范作为任务输入；预算、工具权限和角色规则由系统配置控制。修改后须保存并审批新版本。上限为
             2500 个应用估算 Token。
           </p>
+          {revision && (
+            <p className="note">
+              AI 修改：{revision.used} / {revision.limit} 次
+            </p>
+          )}
+          {revision?.error && !revising && (
+            <p className="note" role="alert">
+              {revisionErrors[revision.error] ?? 'AI 修改未完成，已保留当前 Brief。'}
+            </p>
+          )}
+          {pending && !revising && showFeedback && revision && revision.used < revision.limit && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!canRevise || !feedback.trim()) return;
+                submit('approval', {
+                  plan_version: plan.version,
+                  decision: 'revise',
+                  revision_attempt: revision.attempt,
+                  feedback: feedback.trim(),
+                });
+              }}
+            >
+              <label>
+                AI 修改意见
+                <textarea
+                  rows={4}
+                  maxLength={4000}
+                  value={feedback}
+                  onChange={(event) => setFeedback(event.target.value)}
+                  disabled={!canRevise}
+                />
+              </label>
+              <button className="button" disabled={!canRevise || !feedback.trim()}>
+                提交 AI 修改
+              </button>
+            </form>
+          )}
           <div className="form-actions">
             <button className="button" onClick={() => exportMarkdown(draft, 'research-brief')}>
               导出 Brief
             </button>
-            {pending && (
+            {pending && !revising && (
               <>
                 <button className="button" disabled={busy} onClick={() => setEditing(!editing)}>
                   {editing ? '预览 Markdown' : '编辑 Brief'}
                 </button>
+                {revision && (
+                  <button
+                    className="button"
+                    disabled={!canRevise}
+                    aria-expanded={showFeedback}
+                    onClick={() => setShowFeedback(!showFeedback)}
+                  >
+                    AI 修改 Brief
+                  </button>
+                )}
                 {changed && (
                   <button
                     className="button"

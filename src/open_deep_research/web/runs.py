@@ -24,6 +24,7 @@ from open_deep_research.web.run_data import (
     RunNotFound,
     public_run,
 )
+from open_deep_research.workflow.brief import MAX_BRIEF_FEEDBACK_CHARS
 
 router = APIRouter(prefix="/api/runs")
 
@@ -182,8 +183,12 @@ class Approval(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     plan_version: str = Field(pattern=r"^[a-f0-9]{64}$")
-    decision: Literal["approve", "reject", "edit"]
+    decision: Literal["approve", "reject", "edit", "revise"]
     brief_md: str | None = Field(default=None, max_length=30000)
+    feedback: str | None = Field(
+        default=None, max_length=MAX_BRIEF_FEEDBACK_CHARS, strict=True
+    )
+    revision_attempt: int | None = Field(default=None, ge=0, strict=True)
 
 
 @router.post("/{run_id}/approval")
@@ -198,6 +203,8 @@ def approve(run_id: str, body: Approval, raw: Request) -> dict:
             body.plan_version,
             body.decision,
             body.brief_md,
+            feedback=body.feedback,
+            revision_attempt=body.revision_attempt,
         )
     )
 

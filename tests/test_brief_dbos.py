@@ -1,6 +1,8 @@
 """Actual PostgreSQL/DBOS/SDK/Neo4j interactions; inference only is scripted."""
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -62,6 +64,7 @@ def test_accepted_report_topology_is_frozen_across_operator_default_changes(
     assert done["status"] == "completed"
     assert done["plan"]["brief"].startswith("# ")
     assert done["completed_steps"].count("plan_research") == 1
+    assert not c.revision_requests
     assert (
         len(c.plan_prompts) == 1
         and "Clarification allowed: False." in c.plan_prompts[0]
@@ -303,6 +306,7 @@ def test_edit_cas_old_approval_and_execution_uses_frozen_brief(native_case):
     )
     assert done["plan"]["version"] == version and done["plan"]["locked"]
     assert done["status"] == "completed" and len(c.models) == 4
+    assert not c.revision_requests
     # Initial user item is protected by SDK history compaction, and present once.
     for runtime in c.runtimes:
         for request in runtime.model.calls:
@@ -346,6 +350,282 @@ def test_clarification_timeout_cancels_without_success_or_research(native_case, 
     assert done["clarification"] is None and len(c.plan_prompts) == number
     with pytest.raises(RunConflict):
         c.client.clarify(run["run_id"], "alice", pending["version"], {}, True)
+
+
+def pending_brief(case, run, attempt=0):
+    return case.wait(
+        run,
+        lambda r: r["status"] == "awaiting_approval"
+        and r["plan"]
+        and not r["plan"]["ai_revision"]["pending"]
+        and r["plan"]["ai_revision"]["attempt"] == attempt,
+    )["plan"]
+
+
+def revise(case, run, plan, feedback):
+    return case.client.approve(
+        run["run_id"],
+        run["owner"],
+        plan["version"],
+        "revise",
+        feedback=feedback,
+        revision_attempt=plan["ai_revision"]["attempt"],
+    )
+
+
+@pytest.mark.parametrize("native_case", ["clarify-3"], indirect=True)
+def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_approve(
+    native_case,
+):
+    c = native_case
+    c.state["messages"].append(
+        HumanMessage(
+            content="Image context: packaging code X9",
+            additional_kwargs={"rag_query_image_context": True},
+        )
+    )
+    run = c.create(approval=True)
+    run_id = run["run_id"]
+    for number, answer in enumerate(CLARIFICATION_ANSWERS, 1):
+        challenge = waiting_for_round(c, run, number)
+        c.client.clarify(run_id, "alice", challenge["version"], answer)
+
+    plan = initial = pending_brief(c, run)
+    assert initial["ai_revision"]["used"] == 0 and not c.revision_requests
+    for n in range(1, 4):
+        feedback = f"Require competitor comparison dimension {n}."
+        revise(c, run, plan, feedback)
+        next_plan = pending_brief(c, run, n)
+        assert next_plan["version"] != plan["version"]
+        assert next_plan["content_hash"] != plan["content_hash"]
+        assert next_plan["revision"] == n + 1 and next_plan["ai_revision"]["used"] == n
+        assert next_plan["expires_at"] == initial["expires_at"]
+        assert feedback in next_plan["brief"] and plan["brief"] in next_plan["brief"]
+        assert c.revision_requests[-1]["current_brief"] == plan["brief"]
+        context = c.revision_requests[-1]["request_context"]
+        assert "packaging code X9" in context and "brand recall" in context
+        assert all(
+            next(iter(answer.values())) in context for answer in CLARIFICATION_ANSWERS
+        )
+        with pytest.raises(RunConflict):
+            c.client.approve(run_id, "alice", plan["version"], "approve")
+        plan = next_plan
+
+    with pytest.raises(RunConflict, match="limit"):
+        revise(c, run, plan, "Fourth revision is forbidden.")
+    with pytest.raises(RunConflict):
+        revise(c, run, initial, "Stale brief.")
+    assert len(c.revision_requests) == 3 and len(c.plan_prompts) == 4
+    assert not c.models and not c.calls and not facts().request(run_id)["occupied"]
+
+    edited = plan["brief"] + "\n\nExplicit manual constraint."
+    c.client.approve(run_id, "alice", plan["version"], "edit", edited)
+    manual = c.wait(run, lambda r: r["plan"] and r["plan"]["revision"] == 5)["plan"]
+    assert (
+        manual["ai_revision"]["used"] == 3
+        and manual["expires_at"] == initial["expires_at"]
+    )
+    c.client.approve(run_id, "alice", manual["version"], "approve")
+    done = c.wait(
+        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
+    )
+    assert done["status"] == "completed" and done["plan"]["locked"]
+    assert done["plan"]["brief"] == edited and done["report"]
+    assert len(c.revision_requests) == 3
+
+
+def test_concurrent_revision_receipt_and_http_retry_are_atomic(
+    native_case, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from open_deep_research.web import server
+
+    c = native_case
+    release = Event()
+
+    async def wait_for_release(_):
+        assert await asyncio.to_thread(release.wait, 20)
+
+    c.revision_response = wait_for_release
+    run = c.create(owner="operator", approval=True)
+    plan = pending_brief(c, run)
+    base = {
+        "plan_version": plan["version"],
+        "decision": "revise",
+        "revision_attempt": 0,
+    }
+    path = "/api/runs/" + run["run_id"]
+    monkeypatch.setattr(server, "WEB_API_TOKEN", "revision-http-test-only")
+    with TestClient(
+        server.app, headers={"Authorization": "Bearer revision-http-test-only"}
+    ) as http:
+        assert (
+            http.post(path + "/approval", json=dict(base, feedback="  ")).status_code
+            == 409
+        )
+        assert (
+            http.post(
+                path + "/approval",
+                json=dict(base, feedback="ok", revision_attempt=True),
+            ).status_code
+            == 400
+        )
+        try:
+            bodies = [
+                dict(base, feedback=f"Compare service channel {n}.") for n in (1, 2)
+            ]
+            with ThreadPoolExecutor(2) as pool:
+                responses = list(
+                    pool.map(
+                        lambda body: http.post(path + "/approval", json=body), bodies
+                    )
+                )
+            assert sorted(response.status_code for response in responses) == [200, 409]
+            winner = bodies[
+                next(
+                    i
+                    for i, response in enumerate(responses)
+                    if response.status_code == 200
+                )
+            ]
+            waiting = http.get(path).json()["plan"]
+            assert (
+                waiting["version"] == plan["version"]
+                and waiting["ai_revision"]["pending"]
+            )
+            assert http.post(path + "/approval", json=winner).status_code == 200
+            assert (
+                http.post(
+                    path + "/approval",
+                    json={"plan_version": plan["version"], "decision": "approve"},
+                ).status_code
+                == 409
+            )
+            c.wait(run, lambda r: bool(c.revision_requests))
+            assert facts().request(run["run_id"])["occupied"]
+        finally:
+            release.set()
+        result = pending_brief(c, run, 1)
+        assert (
+            result["ai_revision"]["used"] == 1 and winner["feedback"] in result["brief"]
+        )
+        assert http.post(path + "/approval", json=winner).status_code == 200
+        assert len(c.revision_requests) == 1
+
+
+@pytest.mark.parametrize(
+    "mode,expected,calls",
+    [
+        ("provider", "model_error", 1),
+        ("budget", "budget_exhausted", 0),
+        ("oversize", "invalid_brief", 2),
+        ("compact", None, 2),
+    ],
+)
+def test_revision_failure_keeps_old_version_and_compaction_bills_once(
+    native_case, mode, expected, calls
+):
+    c = native_case
+
+    async def respond(data):
+        if mode == "provider":
+            raise RuntimeError("Scripted provider failure")
+        brief = data["current_brief"] + "\n\n" + data["feedback"]
+        if mode == "oversize" or "candidate_brief" not in data:
+            brief += "\n" + "长" * 10000
+        return {"brief_md": brief}
+
+    if mode == "budget":
+        c.cfg["configurable"]["max_model_calls"] = (
+            c.state["runtime"]["budget"]["model_calls"] + 2
+        )
+    c.revision_response = respond
+    run = c.create(approval=True)
+    old = pending_brief(c, run)
+    feedback = "Add explicit comparison of support response times."
+    revise(c, run, old, feedback)
+    result = pending_brief(c, run, 1)
+    assert result["ai_revision"]["error"] == expected
+    assert result["expires_at"] == old["expires_at"]
+    assert len(c.revision_requests) == calls
+    unit = next(u for u in facts().units(run["run_id"]) if u["name"] == "revise_brief")
+    assert unit["settled"] is True and unit["usage"].get("model_calls", 0) == calls
+    assert (
+        not c.models and not c.calls and not facts().request(run["run_id"])["occupied"]
+    )
+    if expected is None:
+        assert (
+            result["version"] != old["version"] and result["ai_revision"]["used"] == 1
+        )
+        assert feedback in result["brief"]
+        return
+    assert result["version"] == old["version"] and result["brief"] == old["brief"]
+    assert result["ai_revision"]["used"] == 0
+    revise(c, run, old, feedback)  # Lost ACK acknowledges the same failed attempt.
+    assert len(c.revision_requests) == calls
+    if mode == "provider":
+        c.revision_response = None
+        revise(c, run, result, feedback)
+        recovered = pending_brief(c, run, 2)
+        assert (
+            recovered["ai_revision"]["used"] == 1
+            and recovered["ai_revision"]["error"] is None
+        )
+        assert recovered["revision"] == old["revision"] + 1
+        assert len(c.revision_requests) == 2
+
+
+@pytest.mark.parametrize("pg_database", [{"RUN_APPROVAL_SECONDS": 5}], indirect=True)
+@pytest.mark.parametrize("cancel", [False, True], ids=["expiry", "cancel"])
+def test_revision_in_flight_cannot_publish_after_expiry_or_cancel(
+    native_case, cancel, monkeypatch
+):
+    c = native_case
+
+    async def blocked(_):
+        await asyncio.Event().wait()
+
+    c.revision_response = blocked
+    run = c.create(approval=True)
+    old = pending_brief(c, run)
+    revise(c, run, old, "Add competitor scope.")
+    c.wait(
+        run, lambda r: r["plan"]["ai_revision"]["pending"] and bool(c.revision_requests)
+    )
+    lost_expiry = []
+    if cancel:
+        c.client.cancel(run["run_id"], "alice")
+    else:
+        repo = facts()
+        original_cancel = repo.client.cancel_workflow
+
+        def lose_first_expiry_ack(run_id, **kwargs):
+            if run_id == run["run_id"] and not lost_expiry:
+                lost_expiry.append(run_id)
+                raise RuntimeError("Lost expiry cancel RPC")
+            return original_cancel(run_id, **kwargs)
+
+        monkeypatch.setattr(repo.client, "cancel_workflow", lose_first_expiry_ack)
+    done = c.wait(
+        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
+    )
+    if not cancel:
+        assert lost_expiry == [run["run_id"]]
+    assert done["status"] == "cancelled" and done["settlement"] == "settled"
+    assert (
+        done["plan"]["version"] == old["version"]
+        and done["plan"]["brief"] == old["brief"]
+    )
+    assert (
+        done["plan"]["ai_revision"]["used"] == 0
+        and not done["plan"]["ai_revision"]["pending"]
+    )
+    assert (
+        not c.models and not c.calls and not facts().request(run["run_id"])["occupied"]
+    )
+    with pytest.raises(RunConflict):
+        revise(c, run, old, "Late feedback.")
 
 
 def test_single_synthesis_failure_retries_without_repeating_roles(

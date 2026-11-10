@@ -20,6 +20,7 @@ from open_deep_research.budget import (
     merge_budget_usage,
 )
 from open_deep_research.configuration import Configuration
+from open_deep_research.llm.errors import ModelInvocationError
 from open_deep_research.observability.telemetry import (
     annotate,
     correlation,
@@ -70,6 +71,7 @@ from open_deep_research.workflow.state_utils import agents_for_new_run
 OPERATIONS = {
     "enrich_query_images": intake.enrich_query_images,
     "plan_research": intake.plan_research,
+    "revise_brief": intake.revise_brief,
     "generate_final_report": reporting.generate_final_report,
     "plan_report_sections": intake.section_plan_step,
     "research_review": research.research_review,
@@ -95,7 +97,7 @@ async def confirm_cancel(repo, run_id):
 
 
 @dbos_scope
-async def business_step(run_id, unit_id, name, state):
+async def business_step(run_id, unit_id, name, state, *, revision_request=None):
     """Rebuild a business stage in Workflow context; only its I/O uses Steps.
 
     The historical name remains for callers. This is deliberately NOT a Step:
@@ -168,6 +170,14 @@ async def business_step(run_id, unit_id, name, state):
                     raise ModelBudgetExceeded(
                         "Physical call receipts exhausted the research budget"
                     )
+                if (
+                    revision_request is not None
+                    and await asyncio.to_thread(_interaction_now)
+                    >= revision_request["expires_at"]
+                ):
+                    # This guard runs inside the native model Step, so cached
+                    # results replay without authorizing an expired provider call.
+                    raise ModelInvocationError("BriefApprovalExpired")
 
             async def write_receipt():
                 deadline = time.monotonic() + FACT_WRITE_GRACE_SECONDS
@@ -456,6 +466,8 @@ async def business_step(run_id, unit_id, name, state):
 
         await checkpoint("por.stage_started", start)
         operation = OPERATIONS.get(name) or getattr(research, name)
+        if revision_request is not None:
+            operation = partial(operation, feedback=revision_request["feedback"])
         operation_started = True
         result = await _step(
             name,
@@ -472,7 +484,7 @@ async def business_step(run_id, unit_id, name, state):
             usage = merge_budget_usage(past, result.budget_delta)
             artifact = {"research_result": result.model_dump(mode="json")}
             artifact["research_result"]["budget_delta"] = usage
-        elif name == "plan_research":
+        elif name in {"plan_research", "revise_brief"}:
             artifact = result
         elif hasattr(result, "goto"):
             artifact = {"patch": result.update or {}, "goto": result.goto}
@@ -660,11 +672,21 @@ async def reserve(run_id):
 
 @DBOS.workflow(name="por.plan")
 @dbos_scope
-async def planning_workflow(run_id, initial, round_=1):
+async def planning_workflow(run_id, initial, round_=1, *, revision_request=None):
     # No durable human wait holds a BUSINESS queue slot or resource reservation.
     await reserve(run_id)
     state = copy_state(initial)
     try:
+        if revision_request is not None:
+            outcome = await business_step(
+                run_id,
+                DBOS.workflow_id,
+                "revise_brief",
+                state,
+                revision_request=revision_request,
+            )
+            apply_patch(state, outcome["patch"])
+            return {"state": state, "revision_error": outcome["revision_error"]}
         if round_ == 1:
             outcome = await business_step(
                 run_id, run_id + ":enrich_query_images", "enrich_query_images", state
@@ -797,12 +819,19 @@ async def approval_deadline():
     return _interaction_now() + facts().settings.approval_seconds
 
 
+async def end_approval(run_id, reason):
+    await DBOS.set_event_async("approval_end", reason)
+    await send_event(run_id, "approval_ended", decision=reason)
+    return {"approval": reason}
+
+
 @DBOS.workflow(name="por.run")
 @dbos_scope
 async def run_workflow(run_id):
     from langchain_core.messages import HumanMessage
 
     from open_deep_research.workflow.brief import (
+        MAX_BRIEF_REVISIONS,
         MAX_CLARIFICATION_ROUNDS,
         brief_metadata,
         validate_brief,
@@ -886,9 +915,12 @@ async def run_workflow(run_id):
         expires_at=await approval_deadline(),
         **brief_metadata(brief, 1, run_id),
     )
+    needs_approval = req["data"]["config"]["configurable"]["allow_plan_feedback"]
+    if needs_approval:
+        plan["ai_revision"] = {"attempt": 0, "used": 0, "error": None}
     while True:
         await DBOS.set_event_async("plan", plan)
-        if not req["data"]["config"]["configurable"]["allow_plan_feedback"]:
+        if not needs_approval:
             break
         await DBOS.set_event_async("phase", "awaiting_approval")
         await send_event(
@@ -902,11 +934,8 @@ async def run_workflow(run_id):
             "approval",
             timeout_seconds=max(0, plan["expires_at"] - await interaction_clock()),
         )
-        if command is None or command.get("decision") == "reject":
-            reason = "expired" if command is None else "reject"
-            await DBOS.set_event_async("approval_end", reason)
-            await send_event(run_id, "approval_ended", decision=reason)
-            return {"approval": reason}
+        if command is None:
+            return await end_approval(run_id, "expired")
         if (
             command.get("owner") != req["owner"]
             or command.get("version") != plan["version"]
@@ -914,14 +943,57 @@ async def run_workflow(run_id):
             raise ValueError(
                 "Approval continuation does not match the current Brief version"
             )
+        if command["decision"] == "reject":
+            return await end_approval(run_id, "reject")
         if command["decision"] == "edit":
             brief = validate_brief(command["brief_md"])
             plan = dict(
+                plan,
                 brief=brief,
-                sections=[],
-                expires_at=plan["expires_at"],
+                ai_revision=dict(plan["ai_revision"], error=None),
                 **brief_metadata(brief, plan["revision"] + 1, run_id),
             )
+            continue
+        if command["decision"] == "revise":
+            revision = plan["ai_revision"]
+            if (
+                command["revision_attempt"] != revision["attempt"]
+                or revision["used"] >= MAX_BRIEF_REVISIONS
+            ):
+                raise ValueError("Brief revision continuation no longer authorized")
+            if await interaction_clock() >= plan["expires_at"]:
+                return await end_approval(run_id, "expired")
+            await DBOS.set_event_async("phase", "revising_brief")
+            await send_event(run_id, "run_status", status="running")
+            apply_patch(state, {"workflow": {"brief": plan["brief"]}})
+            attempt = revision["attempt"] + 1
+            with (
+                SetWorkflowID(f"{run_id}:brief-revision:{attempt}"),
+                SetEnqueueOptions(queue_partition_key=req["owner"]),
+                SetWorkflowTimeout(req["data"]["run_seconds"]),
+            ):
+                handle = await DBOS.enqueue_workflow_async(
+                    BUSINESS,
+                    planning_workflow,
+                    run_id,
+                    state,
+                    revision_request={
+                        "feedback": command["feedback"],
+                        "expires_at": plan["expires_at"],
+                    },
+                )
+            revised = await handle.get_result()
+            state = revised["state"]
+            if await interaction_clock() >= plan["expires_at"]:
+                return await end_approval(run_id, "expired")
+            error = revised["revision_error"]
+            plan = dict(plan, ai_revision=dict(revision, attempt=attempt, error=error))
+            if error is None:
+                brief = validate_brief(state["workflow"]["brief"])
+                plan.update(
+                    brief=brief, **brief_metadata(brief, plan["revision"] + 1, run_id)
+                )
+                plan["ai_revision"]["used"] += 1
             continue
         if command["decision"] != "approve":
             raise ValueError("Unknown approval decision")
@@ -1039,8 +1111,12 @@ async def completion_facts(run_id, cleanup_expired=False):
 
     client = RunClient(facts())
     result = await asyncio.to_thread(client.get, run_id, None)
-    if result["status"] == "awaiting_approval" and result["plan"]:
-        if await asyncio.to_thread(facts().expire_approval, run_id, result["plan"]):
+    plan = result["plan"]
+    if plan and (
+        result["status"] == "awaiting_approval"
+        or (plan.get("ai_revision") or {}).get("pending")
+    ):
+        if await asyncio.to_thread(facts().expire_approval, run_id, plan):
             await asyncio.to_thread(
                 facts().client.cancel_workflow, run_id, cancel_children=True
             )
