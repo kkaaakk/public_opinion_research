@@ -53,6 +53,13 @@ export type Plan = {
   brief: string;
   sections: { name: string }[];
   expires_at: string;
+  ai_revision?: {
+    attempt: number;
+    used: number;
+    limit: number;
+    pending: boolean;
+    error?: string;
+  };
 };
 export type RunSnapshot = {
   run_id: string;
@@ -332,6 +339,7 @@ export function parseSnapshot(value: unknown): RunSnapshot {
   let plan: Plan | null = null;
   if (v.plan) {
     const p = record(v.plan);
+    const revision = p.ai_revision == null ? null : record(p.ai_revision);
     plan = {
       version: string(p.version),
       revision: p.revision === undefined ? undefined : integer(p.revision),
@@ -340,6 +348,15 @@ export function parseSnapshot(value: unknown): RunSnapshot {
       brief: string(p.brief),
       expires_at: string(p.expires_at),
       sections: array(p.sections).map((s) => ({ name: string(record(s).name) })),
+      ai_revision: revision
+        ? {
+            attempt: integer(revision.attempt),
+            used: integer(revision.used),
+            limit: integer(revision.limit),
+            pending: boolean(revision.pending),
+            error: revision.error == null ? undefined : string(revision.error),
+          }
+        : undefined,
     };
   }
   return {

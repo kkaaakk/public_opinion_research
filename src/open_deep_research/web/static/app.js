@@ -302,14 +302,52 @@ function showDurableState(state) {
     renderUsage(state.usage || {});
     if (state.history_id) handleEvent({ type: 'history_saved', id: state.history_id,
         status: state.status, completed_at: state.terminated_at });
-    document.getElementById('approval-panel').classList.toggle('hidden', state.status !== 'awaiting_approval');
+    showBriefApproval(state);
     showClarification(state);
-    if (state.status === 'awaiting_approval') {
-        if (durablePlanVersion !== state.plan.version) document.getElementById('brief-edit').value = state.plan.brief;
-        durablePlanVersion = state.plan.version;
-        durableBrief = state.plan.brief;
-        document.getElementById('approval-plan').textContent = state.plan.brief + '\n\n'
-            + state.plan.sections.map(section => section.name + '\n' + section.description).join('\n\n');
+}
+
+function showBriefApproval(state) {
+    const plan = state.plan;
+    const revision = plan?.ai_revision;
+    const visible = plan && (state.status === 'awaiting_approval' || revision?.pending);
+    document.getElementById('approval-panel').classList.toggle('hidden', !visible);
+    if (!visible) {
+        durablePlanVersion = null;
+        durableAiRevision = null;
+        return;
+    }
+    if (durablePlanVersion !== plan.version) {
+        document.getElementById('brief-edit').value = plan.brief;
+        document.getElementById('brief-revision-feedback').value = '';
+        document.getElementById('brief-revision-form').classList.add('hidden');
+    }
+    durablePlanVersion = plan.version;
+    durableBrief = plan.brief;
+    durableAiRevision = revision;
+    document.getElementById('approval-title').textContent = revision?.pending ? 'AI 正在修改 Brief' : '研究计划待审批';
+    document.getElementById('approval-version').textContent = 'v' + (plan.revision ?? 1) + ' · ' + plan.version.slice(0, 12);
+    document.getElementById('approval-plan').textContent = plan.brief + '\n\n'
+        + plan.sections.map(section => section.name + '\n' + section.description).join('\n\n');
+    const errors = {budget_exhausted: '模型预算不足', model_error: '模型调用失败', invalid_brief: 'Markdown 未通过校验'};
+    document.getElementById('brief-revision-status').textContent = revision
+        ? 'AI 修改：' + revision.used + ' / ' + revision.limit + ' 次'
+            + (revision.error && !revision.pending ? ' · ' + (errors[revision.error] || 'AI 修改未完成') + '，已保留当前 Brief。' : '')
+        : '';
+    document.getElementById('revise-brief-btn').classList.toggle('hidden', !revision);
+    if (revision && (revision.pending || revision.used >= revision.limit)) {
+        document.getElementById('brief-revision-form').classList.add('hidden');
+    }
+    updateApprovalControls();
+}
+
+function updateApprovalControls() {
+    const disabled = approvalSubmitting || Boolean(durableAiRevision?.pending);
+    for (const id of ['edit-plan-btn', 'approve-plan-btn', 'reject-plan-btn', 'brief-edit']) {
+        document.getElementById(id).disabled = disabled;
+    }
+    const revision = durableAiRevision;
+    for (const id of ['revise-brief-btn', 'submit-brief-revision-btn', 'brief-revision-feedback']) {
+        document.getElementById(id).disabled = disabled || !revision || revision.used >= revision.limit;
     }
 }
 
@@ -341,7 +379,7 @@ async function followDurableRun(request) {
             for (const stage of state.role_reports || []) addLog(stage.role + '_agent', stage.content);
             hydrate = false;
         }
-        if (state.status === 'awaiting_approval' ||
+        if ((state.status === 'awaiting_approval' && !state.plan?.ai_revision?.pending) ||
             (state.status === 'awaiting_clarification' && state.clarification)) return;
         if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status) && state.settlement !== 'pending') {
             researchFailed = state.status !== 'completed';
@@ -390,23 +428,35 @@ async function followDurableRun(request) {
 }
 
 async function decidePlan(decision) {
-    if (!durableRun?.runId || !durablePlanVersion || approvalSubmitting) return;
-    if (decision === 'approve' && durableBrief !== document.getElementById('brief-edit').value.trim()) {
-        statusText.textContent = '请先保存 Brief 新版本，再批准执行'; return;
+    if (!durableRun?.runId || !durablePlanVersion || approvalSubmitting || durableAiRevision?.pending) return;
+    const draft = document.getElementById('brief-edit').value;
+    if ((decision === 'approve' || decision === 'revise') && durableBrief !== draft.trim()) {
+        statusText.textContent = '请先保存手动修改的 Brief 新版本'; return;
+    }
+    const body = {plan_version: durablePlanVersion, decision};
+    if (decision === 'edit') body.brief_md = draft;
+    if (decision === 'revise') {
+        if (!durableAiRevision || durableAiRevision.used >= durableAiRevision.limit) return;
+        body.feedback = document.getElementById('brief-revision-feedback').value.trim();
+        body.revision_attempt = durableAiRevision.attempt;
+        if (!body.feedback) {
+            statusText.textContent = '请填写 AI 修改意见'; return;
+        }
     }
     approvalSubmitting = true;
-    const buttons = ['approve-plan-btn', 'reject-plan-btn'].map(id => document.getElementById(id));
-    buttons.forEach(button => { button.disabled = true; });
+    updateApprovalControls();
     try {
         await durableRequest('/api/runs/' + durableRun.runId + '/approval', { method: 'POST',
-            body: JSON.stringify({ plan_version: durablePlanVersion, decision, ...(decision === 'edit' ? {brief_md: document.getElementById('brief-edit').value} : {}) }) });
-        durablePlanVersion = null;
-        document.getElementById('approval-panel').classList.add('hidden');
+            body: JSON.stringify(body) });
+        if (decision !== 'revise') {
+            durablePlanVersion = null;
+            document.getElementById('approval-panel').classList.add('hidden');
+        }
         await startResearch(true);
     } catch (error) { statusText.textContent = error.message; }
     finally {
         approvalSubmitting = false;
-        buttons.forEach(button => { button.disabled = false; });
+        updateApprovalControls();
     }
 }
 
@@ -746,6 +796,7 @@ function toast(msg) {
 
 let durableClarification = null;
 let durableBrief = '';
+let durableAiRevision = null;
 function showClarification(state) {
     const panel = document.getElementById('clarification-panel');
     const pending = state.status === 'awaiting_clarification' ? state.clarification : null;

@@ -10,6 +10,7 @@ import sqlite3
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Barrier
 
 os.environ.update(
     PYTHON_DOTENV_DISABLED="1",
@@ -70,11 +71,16 @@ def install(directory, scenario):
             )
             db.execute("INSERT INTO plan_requests(prompt) VALUES (?)", (prompt,))
 
+    async def record_revision(_):
+        with (directory / "revision-calls").open("a", encoding="utf-8") as log:
+            log.write("call\n")
+
     install_sdk(
         patch,
         directory / "t",
         plan_mode,
         on_plan=record_plan if plan_mode != "normal" else None,
+        on_revision=record_revision if scenario.startswith("revision-") else None,
     )
     store = history.Neo4jHistoryStore(
         GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
@@ -179,6 +185,7 @@ def install(directory, scenario):
     old_acquire = RunFacts.acquire
     old_operation = RunFacts.operation
     old_check = RunFacts.check
+    lost_receipt_producers = Barrier(2)
 
     def gate(name):
         (directory / name).write_text("ready")
@@ -296,6 +303,12 @@ def install(directory, scenario):
 
     def finish(self, unit, permit, **data):
         if (
+            scenario == "revision-ack"
+            and unit.endswith(":brief-revision:1")
+            and data.get("artifact")
+        ):
+            gate(scenario)
+        if (
             scenario == "plan-error"
             and unit.endswith(":plan:1")
             and data.get("artifact")
@@ -331,11 +344,21 @@ def install(directory, scenario):
 
     def operation(self, unit, permit, identity, status="started", **kwargs):
         if (
+            scenario == "revision-unconfirmed"
+            and unit.endswith(":brief-revision:1")
+            and identity["name"] == "llm"
+            and status == "returned"
+        ):
+            gate(scenario)
+        if (
             scenario == "lost-receipt"
             and status == "returned"
-            and identity["role"] != "service"
+            and identity["role"] in {"public_signal", "internal_knowledge"}
+            and not (directory / (scenario + ".release")).exists()
         ):
-            gate("lost-receipt")
+            # Both producers must be holding uncommitted receipts before the kill.
+            lost_receipt_producers.wait()
+            gate(scenario)
         return old_operation(self, unit, permit, identity, status, **kwargs)
 
     def check(self, *args, **kwargs):

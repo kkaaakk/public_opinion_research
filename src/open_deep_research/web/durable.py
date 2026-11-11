@@ -24,6 +24,11 @@ from open_deep_research.web.run_data import (
     public_payload,
     timestamp,
 )
+from open_deep_research.workflow.brief import (
+    MAX_BRIEF_FEEDBACK_CHARS,
+    MAX_BRIEF_REVISIONS,
+    approval_receipt_version,
+)
 from open_deep_research.workflow.business_steps import SAFE_STEPS
 from open_deep_research.workflow.dbos_config import (
     ARCHIVE,
@@ -177,6 +182,14 @@ class RunClient:
             and not req["cancel_requested"]
             else None
         )
+        plan = self.client.get_event(run_id, "plan", timeout_seconds=0)
+        revision = plan.get("ai_revision") if plan else None
+        revision_active = (
+            revision is not None
+            and status.status == "PENDING"
+            and not req["cancel_requested"]
+        )
+        revision_pending = revision_active and phase == "revising_brief"
         with repo.engine.connect() as db:
             generation = int(
                 db.execute(
@@ -203,13 +216,26 @@ class RunClient:
                 ).scalar_one()
             ):
                 clarification = None
+            if revision_active and phase == "awaiting_approval":
+                # Show a submitted revision even if the Executor has not received it yet.
+                revision_pending = db.execute(
+                    text(
+                        "SELECT EXISTS(SELECT 1 FROM por_domain.approvals "
+                        "WHERE run_id=:id AND version=:slot AND decision LIKE 'revise:%')"
+                    ),
+                    {
+                        "id": run_id,
+                        "slot": approval_receipt_version(
+                            plan["version"], revision["attempt"]
+                        ),
+                    },
+                ).scalar_one()
         # A later round may have replaced both the challenge and its receipt
         # during this read. In that case let the next snapshot show the new round.
         if clarification and clarification != self.client.get_event(
             run_id, "clarification", timeout_seconds=0
         ):
             clarification = None
-        plan = self.client.get_event(run_id, "plan", timeout_seconds=0)
         locked_brief = self.client.get_event(run_id, "brief_locked", timeout_seconds=0)
         cursor = (
             self.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0
@@ -366,6 +392,11 @@ class RunClient:
                     for s in plan["sections"]
                 ],
                 expires_at=timestamp(plan["expires_at"]),
+                ai_revision=dict(
+                    revision, limit=MAX_BRIEF_REVISIONS, pending=revision_pending
+                )
+                if revision is not None
+                else None,
             )
             if plan
             else None,
@@ -405,7 +436,7 @@ class RunClient:
         Only the last accepted interaction receipt is needed: old duplicates either
         acknowledge the same payload or fail closed, never create a new continuation.
         """
-        receipt = topic + ":" + digest(payload)
+        receipt = (decision if decision == "revise" else topic) + ":" + digest(payload)
         with self.facts.engine.begin() as db:
             req = self.facts.request(run_id, owner, db=db, lock=True)
             self.facts.validate(req)
@@ -415,27 +446,34 @@ class RunClient:
                 ),
                 {"id": run_id},
             ).first()
-            if old and old[0] == version:
+            pending = self.client.get_event(
+                run_id,
+                "plan" if topic == "approval" else "clarification",
+                timeout_seconds=0,
+            )
+            revision = (pending or {}).get("ai_revision") or {}
+            attempt = payload.get("revision_attempt", revision.get("attempt", 0))
+            slot = (
+                approval_receipt_version(version, attempt)
+                if topic == "approval"
+                else version
+            )
+            if old and old[0] == slot:
                 if old[1] == receipt:
                     if topic == "approval" and payload.get("decision") in {
                         "approve",
                         "reject",
                     }:
                         raise RunConflict("Approval already consumed")
-                    if topic == "clarification":
-                        latest = self.client.get_event(
-                            run_id, "clarification", timeout_seconds=0
-                        )
-                        if latest and latest["version"] != version:
-                            raise RunConflict("Clarification version changed")
+                    if (
+                        topic == "clarification"
+                        and pending
+                        and pending["version"] != version
+                    ):
+                        raise RunConflict("Clarification version changed")
                     return  # committed duplicate, including a lost HTTP acknowledgement
                 raise RunConflict("This version already has a different decision")
             current = self.get(run_id, owner)
-            pending = self.client.get_event(
-                run_id,
-                "plan" if topic == "approval" else "clarification",
-                timeout_seconds=0,
-            )
             phase = (
                 "awaiting_approval" if topic == "approval" else "awaiting_clarification"
             )
@@ -449,6 +487,11 @@ class RunClient:
                 raise RunConflict(
                     "Interaction expired, was cancelled, or its version changed"
                 )
+            if decision == "revise":
+                if not revision or attempt != revision["attempt"]:
+                    raise RunConflict("Brief revision attempt changed")
+                if revision["used"] >= MAX_BRIEF_REVISIONS:
+                    raise RunConflict("Brief AI revision limit reached")
             if topic == "clarification":
                 from open_deep_research.workflow.brief import validate_answers
 
@@ -462,20 +505,46 @@ class RunClient:
                 text(
                     "INSERT INTO por_domain.approvals VALUES (:id,:v,:d) ON CONFLICT (run_id) DO UPDATE SET version=EXCLUDED.version,decision=EXCLUDED.decision"
                 ),
-                {"id": run_id, "v": version, "d": receipt},
+                {"id": run_id, "v": slot, "d": receipt},
             )
             self.client.send_in_transaction(
                 db,
                 run_id,
                 dict(owner=owner, version=version, **payload),
                 topic=topic,
-                idempotency_key=topic + ":" + version,
+                idempotency_key=topic + ":" + slot,
             )
 
-    def approve(self, run_id, owner, plan_version, decision, brief_md=None):
-        if decision not in {"approve", "reject", "edit"}:
+    def approve(
+        self,
+        run_id,
+        owner,
+        plan_version,
+        decision,
+        brief_md=None,
+        *,
+        feedback=None,
+        revision_attempt=None,
+    ):
+        if decision not in {"approve", "reject", "edit", "revise"}:
             raise RunConflict("Invalid approval decision")
         payload = dict(decision=decision)
+        if decision == "revise":
+            if (
+                not isinstance(feedback, str)
+                or not feedback.strip()
+                or len(feedback) > MAX_BRIEF_FEEDBACK_CHARS
+                or type(revision_attempt) is not int
+                or revision_attempt < 0
+            ):
+                raise RunConflict(
+                    "Brief revision requires bounded feedback and the current attempt"
+                )
+            payload.update(feedback=feedback.strip(), revision_attempt=revision_attempt)
+        elif feedback is not None or revision_attempt is not None:
+            raise RunConflict(
+                "Revision fields are only accepted with a revise decision"
+            )
         if decision == "edit":
             from open_deep_research.workflow.brief import validate_brief
 

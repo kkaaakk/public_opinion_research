@@ -258,9 +258,8 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             assert effect_count(directory, "models") == 4
         kill_owned(process)
         before = effect_count(directory)
-        assert before >= 1
-        if scenario != "lost-receipt":
-            assert before == 2
+        assert before == 2
+        assert effect_count(directory, "effects") == before
         (directory / (scenario + ".release")).write_text("continue")
         (directory / "executor-ready").unlink()
         restart = start(directory, executor, scenario)
@@ -638,6 +637,106 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
         for child in (process, restart):
             if child:
                 kill_owned(child)
+
+
+@pytest.mark.parametrize(
+    "scenario", ["revision-queued", "revision-ack", "revision-unconfirmed"]
+)
+def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
+    from open_deep_research.web.run_data import RunConflict
+
+    client = RunClient()
+    executor = "brief-revision-" + uuid4().hex
+    process = start(tmp_path, executor, scenario)
+    restart = None
+    try:
+        wait(lambda: (tmp_path / "executor-ready").exists(), process, tmp_path)
+        cfg = configuration(tmp_path)
+        cfg["configurable"]["allow_plan_feedback"] = True
+        run_id = client.create(
+            "alice", "revision-kill", {"topic": "brand recall"}, cfg, initial()
+        )[0]["run_id"]
+
+        def snapshot():
+            return client.get(run_id, "alice")
+
+        wait(lambda: snapshot()["status"] == "awaiting_approval", process, tmp_path)
+        old = snapshot()["plan"]
+        feedback = "Compare documented competitor product quality."
+        child_id = run_id + ":brief-revision:1"
+
+        def submit():
+            return client.approve(
+                run_id,
+                "alice",
+                old["version"],
+                "revise",
+                feedback=feedback,
+                revision_attempt=0,
+            )
+
+        def journal():
+            return [
+                step
+                for step in client.client.list_workflow_steps(child_id)
+                if step["function_name"] == "por.llm"
+            ]
+
+        if scenario == "revision-queued":
+            kill_owned(process)
+            assert submit()["plan"]["ai_revision"]["pending"]
+            assert submit()["plan"]["ai_revision"]["pending"]
+            assert not (tmp_path / "revision-calls").exists()
+        else:
+            submit()
+            wait(lambda: (tmp_path / scenario).exists(), process, tmp_path)
+            assert snapshot()["plan"]["ai_revision"]["pending"]
+            assert facts().request(run_id)["occupied"]
+            kill_owned(process)
+            assert (tmp_path / "revision-calls").read_text().splitlines() == ["call"]
+
+        committed = journal()
+        if scenario == "revision-ack":
+            assert len(committed) == 1 and committed[0]["output"]
+        else:
+            assert not committed
+
+        (tmp_path / (scenario + ".release")).write_text("resume")
+        (tmp_path / "executor-ready").unlink()
+        restart = start(tmp_path, executor, scenario)
+        if scenario == "revision-unconfirmed":
+            wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)
+            done = snapshot()
+            assert (
+                done["status"] == "interrupted" and done["settlement"] == "unresolved"
+            )
+            assert done["plan"]["version"] == old["version"]
+            assert done["plan"]["ai_revision"]["used"] == 0 and not done["retry_safe"]
+            assert facts().request(run_id)["occupied"]
+            with pytest.raises(RunConflict):
+                client.approve(run_id, "alice", old["version"], "approve")
+        else:
+            wait(
+                lambda: snapshot()["status"] == "awaiting_approval"
+                and snapshot()["plan"]["ai_revision"]["used"] == 1,
+                restart,
+                tmp_path,
+            )
+            plan = snapshot()["plan"]
+            assert plan["revision"] == old["revision"] + 1 and feedback in plan["brief"]
+            assert plan["expires_at"] == old["expires_at"]
+            assert not facts().request(run_id)["occupied"]
+            if committed:
+                assert journal() == committed
+            assert submit()["plan"]["version"] == plan["version"]
+            client.approve(run_id, "alice", plan["version"], "approve")
+            wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)
+            assert snapshot()["status"] == "completed" and snapshot()["plan"]["locked"]
+        assert (tmp_path / "revision-calls").read_text().splitlines() == ["call"]
+    finally:
+        kill_owned(process)
+        if restart:
+            kill_owned(restart)
 
 
 @pytest.mark.parametrize("scenario", ["planning-release", "clarification-deadline"])

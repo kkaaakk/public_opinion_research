@@ -138,6 +138,7 @@ SAFE_STEPS = frozenset(
     {
         "enrich_query_images",
         "plan_research",
+        "revise_brief",
         "generate_final_report",
         "clarify_with_user",
         "write_research_brief",

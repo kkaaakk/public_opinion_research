@@ -277,17 +277,28 @@ class RunFacts:
     def expire_approval(self, run_id, plan):
         from datetime import datetime
 
+        from open_deep_research.workflow.brief import approval_receipt_version
+
         with self.engine.begin() as db:
             self.request(run_id, db=db, lock=True)
             if self.now(db) < datetime.fromisoformat(plan["expires_at"]).timestamp():
+                return False
+            attempt = (plan.get("ai_revision") or {}).get("attempt", 0)
+            latest = self.client.get_event(run_id, "plan", timeout_seconds=0)
+            if (
+                not latest
+                or latest["version"] != plan["version"]
+                or (latest.get("ai_revision") or {}).get("attempt", 0) != attempt
+            ):
                 return False
             inserted = db.execute(
                 text(
                     "INSERT INTO por_domain.approvals VALUES (:id,:v,'expired') "
                     "ON CONFLICT (run_id) DO UPDATE SET version=EXCLUDED.version,decision='expired' "
-                    "WHERE por_domain.approvals.version<>EXCLUDED.version"
+                    "WHERE por_domain.approvals.version<>EXCLUDED.version "
+                    "OR por_domain.approvals.decision LIKE 'revise:%'"
                 ),
-                {"id": run_id, "v": plan["version"]},
+                {"id": run_id, "v": approval_receipt_version(plan["version"], attempt)},
             ).rowcount
             decision = db.execute(
                 text("SELECT decision FROM por_domain.approvals WHERE run_id=:id"),

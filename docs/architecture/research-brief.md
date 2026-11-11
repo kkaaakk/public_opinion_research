@@ -1,7 +1,7 @@
 # Markdown Research Brief workflow
 
-The multi-round clarification release uses application version
-`dbosrunner-clarification-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
+The Brief AI revision release uses application version
+`dbosrunner-brief-revision-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
 DBOS owns execution and recovery, Runner owns the four business Agent loops, and
 Research Graph owns evidence. Markdown carries research intent, never execution control.
 
@@ -30,7 +30,7 @@ flowchart TD
   D -->|material ambiguity and rounds remain| C
   B -->|ready| E[Markdown Brief]
   D -->|ready| E
-  E --> F[Optional preview / versioned edit / approval recv]
+  E --> F[Optional preview / edit / AI revision / approval recv]
   F --> G[Freeze exact Brief version in research input]
   G --> H[Parallel Public Signal and Internal Knowledge]
   H --> I[Review against Brief and Graph / bounded Producer Gap rounds]
@@ -109,7 +109,7 @@ overall wall-clock deadline, so queue time and human waits are separate.
 Cancellation uses the existing persisted intent, native cancellation and Finalizer.
 
 `POST .../approval` accepts `{plan_version, decision}` where decision is `approve`,
-`reject`, or `edit`. An edit also supplies `brief_md`, validates it, then publishes
+`reject`, `edit`, or `revise`. An edit also supplies `brief_md`, validates it, then publishes
 a new version. Saving and approving are separate commands: an old approval cannot
 approve newly edited text. Unsaved edits disable the UI approval button.
 
@@ -123,6 +123,68 @@ acknowledge the original save while its receipt remains. Repeated approve/reject
 keeps the existing 409 already-consumed contract. A changed payload, stale
 version, cancellation, expiry or wrong owner blocks new submissions. Human
 controls validate the accepted application and configuration before sending.
+
+## AI revision during approval
+
+Send `{"plan_version":"…","decision":"revise","feedback":"Compare product quality","revision_attempt":0}`
+to the existing approval endpoint. Use the current `plan.ai_revision.attempt` from
+the Run snapshot. Feedback is trimmed, must be nonempty, and is limited to 4,000
+characters. The snapshot carries the pending flag, success count, limit, and any
+settled revision error.
+
+The existing request-row lock serializes approval controls. The receipt and
+native send are committed together. The receipt binds the Brief version,
+revision attempt and feedback digest. Retrying the identical command while its
+receipt is current acknowledges the original operation. A different command
+cannot claim that slot. A settled failure advances the attempt while retaining
+the version and success count, so a deliberate retry must use the new attempt.
+
+`por.run` enqueues `:brief-revision:N` on BUSINESS as a revision-mode `por.plan`
+child. The model sees the current saved Brief, original conversation, image and
+clarification context, and feedback as task data beneath fixed instructions.
+Only the full validated result creates a new Brief revision and consumes one
+of the three AI successes. The parent then waits for approval of that version.
+Clarification rounds and manual version increments do not consume the AI quota.
+
+The original approval deadline covers the queue, execution and return to
+preview. A new provider call checks the database clock at admission, and the
+parent checks it before accepting the result. The existing Finalizer expires
+an active revision and cancels its native children when the deadline passes.
+A cancelled or expired approval cannot authorize research, even when a result
+checked before the deadline is replayed later. Already issued provider requests
+can still incur charges.
+
+### Cost and persistence
+
+Without AI feedback, planning uses its existing calls and no revision child.
+A normal feedback attempt adds one provider call. Structured retries and the
+single allowed compaction are billed separately. Failed attempts can also
+incur usage. The compaction input includes the candidate, current Brief and
+explicit feedback. Provider context limits can reject large inputs. The
+planner retains the original context and surfaces that failure to the user.
+
+There is no schema migration. The approval snapshot adds small counters, and
+a pending approval read can check the indexed receipt. Each accepted revision
+writes the same transactional receipt and native message as an approval. Its
+child adds a reservation, stage checkpoints, native `por.llm` output, physical
+usage receipts and settlement. The parent writes the updated plan event and
+continues its existing approval loop.
+
+Committed model Steps are reused after Executor restart. If a provider returned
+before its native result committed, the external-effect guard blocks automatic
+reissue when it has an intent receipt but no native result. The earlier request
+may have been billed, and any later authorized provider call incurs its own
+cost. The Run retains its prior Brief and follows the existing reconciliation
+boundary for unconfirmed effects.
+
+One local PostgreSQL run with scripted inference measured 341 estimated text
+input tokens for the initial plan and 281, 285, and 289 for three revisions.
+Those estimates exclude provider schema overhead. Submit to preview took
+1.57–1.86 seconds per revision in this sample, including the queue and status
+reads. Three revisions added 36 root journal records. The first revision
+child recorded a reserve Step, stage-start Step, one model Step and a
+stage-result Step. These are simulated-inference measurements on a local
+test database.
 
 ## Brief persistence and context
 
@@ -184,7 +246,7 @@ consumers; they are excluded from production OPERATIONS, not fallback paths.
 ## Deployment and rollback
 
 `por.run` and `por.plan` have new command sequences. Finish or explicitly cancel
-and settle unfinished `dbosrunner-unified-v1` and earlier Runs with their original
+and settle unfinished `dbosrunner-clarification-v1` and earlier Runs with their original
 API and Executor before admitting new Runs. The new release refuses incompatible
 unfinished journals at Executor startup and at admission. See the
 [deployment and rollback procedure](dbos-deployment.md).
