@@ -233,18 +233,7 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             configuration(directory),
             initial(),
         )[0]
-        # Both producer effects must be in the lost-ack window before the kill.
-        # A sibling's first call after recovery would otherwise change the count.
-        markers = (
-            ("lost-receipt-public_signal", "lost-receipt-internal_knowledge")
-            if scenario == "lost-receipt"
-            else (scenario,)
-        )
-        wait(
-            lambda: all((directory / name).exists() for name in markers),
-            process,
-            directory,
-        )
+        wait(lambda: (directory / scenario).exists(), process, directory)
         if scenario.startswith("legacy-"):
             wait(
                 lambda: sum(

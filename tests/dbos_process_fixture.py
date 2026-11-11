@@ -10,6 +10,7 @@ import sqlite3
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Barrier
 
 os.environ.update(
     PYTHON_DOTENV_DISABLED="1",
@@ -184,9 +185,10 @@ def install(directory, scenario):
     old_acquire = RunFacts.acquire
     old_operation = RunFacts.operation
     old_check = RunFacts.check
+    lost_receipt_producers = Barrier(2)
 
-    def gate(name, *, marker=None):
-        (directory / (marker or name)).write_text("ready")
+    def gate(name):
+        (directory / name).write_text("ready")
         while not (directory / (name + ".release")).exists():
             time.sleep(0.05)
 
@@ -352,8 +354,11 @@ def install(directory, scenario):
             scenario == "lost-receipt"
             and status == "returned"
             and identity["role"] in {"public_signal", "internal_knowledge"}
+            and not (directory / (scenario + ".release")).exists()
         ):
-            gate(scenario, marker=f"{scenario}-{identity['role']}")
+            # Both producers must be holding uncommitted receipts before the kill.
+            lost_receipt_producers.wait()
+            gate(scenario)
         return old_operation(self, unit, permit, identity, status, **kwargs)
 
     def check(self, *args, **kwargs):
