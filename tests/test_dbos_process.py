@@ -492,6 +492,7 @@ def test_actual_postgresql_outage_fails_closed(pg_database, tmp_path, monkeypatc
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+    from sqlalchemy import text
 
     from open_deep_research.web import runs, server
 
@@ -544,6 +545,15 @@ def test_actual_postgresql_outage_fails_closed(pg_database, tmp_path, monkeypatc
             )
             assert response.status_code == 503
             assert "completed" not in response.text
+            rejected = http.post(
+                "/api/runs",
+                json={"topic": "database outage", "model": "openai:gpt-4.1"},
+                headers={
+                    "Authorization": "Bearer outage-test-token",
+                    "Idempotency-Key": "submit-during-outage",
+                },
+            )
+            assert rejected.status_code == 503
         (directory / "model-wait.release").write_text("continue")
         # Establish a real failed SDK control read, not merely a connection
         # that waits for PostgreSQL to return and then legitimately succeeds.
@@ -574,6 +584,22 @@ def test_actual_postgresql_outage_fails_closed(pg_database, tmp_path, monkeypatc
         assert not result["report"]
         assert result["status"] != "completed"
         assert effect_count(directory) == before
+        native = client.client.list_workflows(
+            name=["por.run", "por.events", "por.finalize"],
+            load_input=False,
+            load_output=False,
+        )
+        run_id = run["run_id"]
+        assert {w.workflow_id for w in native} == {
+            run_id,
+            run_id + ":events",
+            run_id + ":finalize",
+        }
+        with facts().engine.connect() as db:
+            assert (
+                db.execute(text("SELECT count(*) FROM por_domain.requests")).scalar_one()
+                == 1
+            )
     finally:
         if stopped:
             subprocess.run(
@@ -640,7 +666,8 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
 
 
 @pytest.mark.parametrize(
-    "scenario", ["revision-queued", "revision-ack", "revision-unconfirmed"]
+    "scenario",
+    ["revision-queued", "revision-before-result", "revision-ack", "revision-unconfirmed"],
 )
 def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
     from open_deep_research.web.run_data import RunConflict
@@ -696,8 +723,14 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             assert (tmp_path / "revision-calls").read_text().splitlines() == ["call"]
 
         committed = journal()
-        if scenario == "revision-ack":
+        if scenario in {"revision-before-result", "revision-ack"}:
             assert len(committed) == 1 and committed[0]["output"]
+            saved_results = [
+                step
+                for step in client.client.list_workflow_steps(child_id)
+                if step["function_name"] == "por.stage_result"
+            ]
+            assert len(saved_results) == (1 if scenario == "revision-ack" else 0)
         else:
             assert not committed
 
@@ -728,6 +761,12 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             assert not facts().request(run_id)["occupied"]
             if committed:
                 assert journal() == committed
+                accounting = (tmp_path / "revision-accounting").read_text().splitlines()
+                # Both crashes reuse the model. Only a result callback without
+                # a native checkpoint may run its receipt aggregation again.
+                assert accounting == ["billed"] * (
+                    2 if scenario == "revision-before-result" else 1
+                )
             assert submit()["plan"]["version"] == plan["version"]
             client.approve(run_id, "alice", plan["version"], "approve")
             wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)

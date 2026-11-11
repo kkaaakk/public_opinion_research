@@ -115,6 +115,14 @@ def test_unreceipted_prior_business_cost_is_retained_without_recounting(monkeypa
             [
                 ("por.stage_started", False),
                 ("por.llm", False),
+                ("por.stage_result", True),
+            ],
+            3,
+        ),
+        (
+            [
+                ("por.stage_started", False),
+                ("por.llm", False),
                 ("por.stage_result", False),
             ],
             4,

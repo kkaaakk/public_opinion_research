@@ -120,25 +120,39 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
             initial(),
         )[0]
         wait(lambda: (tmp_path / window).exists(), proc, tmp_path)
-        if window in {
-            "runner-model",
-            "runner-tool",
-            "runner-batch",
-            "batch-error-cache",
-        }:
-            # Isolate this committed-boundary window from an unrelated sibling
-            # that could still be in the middle of an external evidence write.
-            wait(
-                lambda: any(
-                    u["name"] == "internal_knowledge_agent"
-                    and u["artifact"]
-                    and u["settled"] is True
-                    for u in facts().units(run["run_id"])
-                ),
-                proc,
-                tmp_path,
-            )
-        steps = facts().client.list_workflow_steps(run["run_id"] + ":public_signal:1")
+        run_id = run["run_id"]
+        public_id = run_id + ":public_signal:1"
+        internal_id = run_id + ":internal_knowledge:1"
+
+        def children():
+            return {
+                w.workflow_id: w
+                for w in client.client.list_workflows(
+                    name="por.role",
+                    parent_workflow_id=run_id + ":research",
+                    load_input=False,
+                    load_output=True,
+                )
+            }
+
+        # Kill with one producer still running and its sibling result committed.
+        wait(
+            lambda: internal_id in (roles := children())
+            and roles[internal_id].status == "SUCCESS",
+            proc,
+            tmp_path,
+        )
+        before = children()
+        assert set(before) == {public_id, internal_id}
+        assert before[public_id].status == "PENDING"
+        committed = before[internal_id].output
+        assert committed["research_result"]["role"] == "internal_knowledge"
+        assert any(
+            u["id"] == internal_id and u["artifact"] and u["settled"] is True
+            for u in facts().units(run_id)
+        )
+
+        steps = facts().client.list_workflow_steps(public_id)
         assert any("_model_call_step" in s["function_name"] for s in steps)
         if window == "runner-tool":
             assert any(
@@ -196,6 +210,16 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
             assert result["usage"]["tool_calls"] == 2
             assert effect_count(tmp_path, "models") == 6
             assert result["report"]
+            assert len(result["role_reports"]) == 4
+            assert {
+                report["stage_id"]
+                for report in result["role_reports"]
+                if report["role"] in {"public_signal", "internal_knowledge"}
+            } == {public_id, internal_id}
+            after = children()
+            assert after[public_id].status == after[internal_id].status == "SUCCESS"
+            assert after[internal_id].output == committed
+            assert after[internal_id].completed_at == before[internal_id].completed_at
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == 2
     finally:
         kill_owned(proc)
