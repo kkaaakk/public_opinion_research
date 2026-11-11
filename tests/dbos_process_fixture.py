@@ -185,8 +185,8 @@ def install(directory, scenario):
     old_operation = RunFacts.operation
     old_check = RunFacts.check
 
-    def gate(name):
-        (directory / name).write_text("ready")
+    def gate(name, *, marker=None):
+        (directory / (marker or name)).write_text("ready")
         while not (directory / (name + ".release")).exists():
             time.sleep(0.05)
 
@@ -351,9 +351,9 @@ def install(directory, scenario):
         if (
             scenario == "lost-receipt"
             and status == "returned"
-            and identity["role"] != "service"
+            and identity["role"] in {"public_signal", "internal_knowledge"}
         ):
-            gate("lost-receipt")
+            gate(scenario, marker=f"{scenario}-{identity['role']}")
         return old_operation(self, unit, permit, identity, status, **kwargs)
 
     def check(self, *args, **kwargs):
