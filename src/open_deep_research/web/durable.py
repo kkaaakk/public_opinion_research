@@ -609,11 +609,14 @@ class RunClient:
                 for s in steps
                 if s["function_id"] >= stage_start and s.get("error") is not None
             ]
-        stage_result = any(
-            s["function_name"] == "por.stage_result"
-            and s["function_id"] > stage_start
-            and s.get("error") is None
-            for s in steps
+        stage_result = next(
+            (
+                s
+                for s in reversed(steps)
+                if s["function_name"] == "por.stage_result"
+                and s["function_id"] > stage_start
+            ),
+            None,
         )
         models = [
             s["function_id"]
@@ -624,15 +627,22 @@ class RunClient:
         # Bounded ordinary phases execute calls in order. Only their final call
         # can be the unresolved model/response-validation failure. Earlier errors
         # may already have been handled, and earlier chapters must be retained.
-        start = (
-            max((s["function_id"] for s in steps), default=0) + 1
-            if stage_result
-            else max(models)
-            if models
-            else min(errors)
-            if errors
-            else max((s["function_id"] for s in steps), default=0) + 1
-        )
+        if stage_result:
+            # Reapply the public projection after a saved result, or rerun only
+            # result accounting if that Step failed. Keep the committed models.
+            start = (
+                max(s["function_id"] for s in steps) + 1
+                if stage_result.get("error") is None
+                else stage_result["function_id"]
+            )
+        else:
+            start = (
+                max(models)
+                if models
+                else min(errors)
+                if errors
+                else max((s["function_id"] for s in steps), default=0) + 1
+            )
         return {
             "workflow_id": status.workflow_id,
             "queue": queue,
@@ -715,13 +725,7 @@ class RunClient:
                     # A previously rewound leaf may have started while the
                     # Finalizer was down. Wait for its owned settlement; this
                     # original grant is not yet acknowledged or blocked.
-                    pending = db.execute(
-                        text(
-                            "SELECT EXISTS(SELECT 1 FROM por_domain.units WHERE run_id=:id AND settled IS NULL)"
-                        ),
-                        {"id": run_id},
-                    ).scalar_one()
-                    if pending:
+                    if self.facts.pending_settlement(run_id, db=db):
                         return {"retryable": True}
                     return {"generation": row[1], "outcome": "blocked"}
                 self.client.rewind_workflow(

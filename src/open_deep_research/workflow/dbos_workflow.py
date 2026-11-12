@@ -104,15 +104,10 @@ async def business_step(run_id, unit_id, name, state, *, revision_request=None):
     DBOSRunner and bounded LangChain calls need independent native checkpoints.
     """
     repo = facts()
-    req = await asyncio.to_thread(repo.request, run_id)
-    repo.validate(req)
-    if req["cancel_requested"]:
-        await owned_io(repo.client.cancel_workflow, run_id, cancel_children=True)
-        raise asyncio.CancelledError()
     try:
-        while not await asyncio.to_thread(repo.reserve, run_id):
+        while (req := await asyncio.to_thread(repo.reserve, run_id)) is None:
             await asyncio.sleep(0.5)
-        permit, artifact, past = await asyncio.to_thread(
+        permit, _, past = await asyncio.to_thread(
             repo.acquire,
             run_id,
             unit_id,
@@ -371,6 +366,7 @@ async def business_step(run_id, unit_id, name, state, *, revision_request=None):
                     raise
                 await asyncio.sleep(0.5)
 
+    artifact = None
     observed_usage = past
     operation_started = False
     operation_returned = False
@@ -406,7 +402,7 @@ async def business_step(run_id, unit_id, name, state, *, revision_request=None):
 
     watcher = asyncio.create_task(watch_cancellation())
 
-    def generation():
+    def read_generation():
         from sqlalchemy import text
 
         with repo.engine.connect() as db:
@@ -424,27 +420,10 @@ async def business_step(run_id, unit_id, name, state, *, revision_request=None):
             state = deepcopy(state)
             runtime = state.setdefault("runtime", {})
             runtime["budget"] = merge_budget_usage(runtime.get("budget", {}), past)
-        generation_token = durable_generation.set(await asyncio.to_thread(generation))
+        generation = await asyncio.to_thread(read_generation)
+        generation_token = durable_generation.set(generation)
         if telemetry_enabled():
-            # Read existing accepted generation as RunClient.get does. Keep this
-            # cancellable telemetry read inside the original settlement boundary.
-            def read_generation():
-                from sqlalchemy import text
-
-                with repo.engine.connect() as db:
-                    return db.execute(
-                        text(
-                            "SELECT coalesce(max(generation),0) FROM por_domain.retries WHERE run_id=:id"
-                        ),
-                        {"id": run_id},
-                    ).scalar_one()
-
-            try:
-                generation = await asyncio.to_thread(read_generation)
-            except Exception:
-                pass  # No generation claim on a failed telemetry-only read.
-            else:
-                identity.enter_context(correlation(generation=generation))
+            identity.enter_context(correlation(generation=generation))
 
         def started():
             with repo.engine.begin() as db:
@@ -522,25 +501,30 @@ async def business_step(run_id, unit_id, name, state, *, revision_request=None):
             artifact["followup"] = research.followup_assignments(
                 reviewed, Configuration.from_runnable_config(cfg)
             )
-        usage = await asyncio.to_thread(repo.accounted_usage, unit_id, usage, past)
-        if "research_result" in artifact:
-            artifact["research_result"]["budget_delta"] = usage
-        elif usage:
-            patch.setdefault("runtime", {})["budget"] = usage
         observed_usage = usage
         artifact["delivery_ids"] = sorted(delivery_ids)
 
         async def freeze_result():
+            billed = await asyncio.to_thread(repo.accounted_usage, unit_id, usage, past)
+            if "research_result" in artifact:
+                artifact["research_result"]["budget_delta"] = billed
+            elif billed:
+                patch.setdefault("runtime", {})["budget"] = billed
             if "messages" in patch:
                 patch["messages"] = copy_state({"messages": patch["messages"]})[
                     "messages"
                 ]
             return artifact
 
-        # Native result first, repeatable business projection second. On replay
-        # this restores settlement without using the domain row as a checkpoint.
+        # DBOS saves the result and its billed usage once. On replay, the
+        # permit holder only needs to restore the public settlement projection.
         artifact = await checkpoint("por.stage_result", freeze_result)
-        cancelled = await persist(artifact=artifact, usage=usage)
+        observed_usage = (
+            artifact["research_result"]["budget_delta"]
+            if "research_result" in artifact
+            else artifact["patch"].get("runtime", {}).get("budget", {})
+        )
+        cancelled = await persist(artifact=artifact, usage=observed_usage)
         if cancelled:
             raise cancelled
         return artifact
@@ -554,8 +538,9 @@ async def business_step(run_id, unit_id, name, state, *, revision_request=None):
                 if hasattr(exc, field):
                     setattr(control_failure, field, getattr(exc, field))
             exc = control_failure
+        kind = failure_kind(exc)
         annotate(
-            failure_kind=failure_kind(exc),
+            failure_kind=kind,
             status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
         )
         harness = getattr(exc, "context_harness", None)
@@ -579,11 +564,11 @@ async def business_step(run_id, unit_id, name, state, *, revision_request=None):
         usage = await asyncio.to_thread(repo.accounted_usage, unit_id, usage, past)
         try:
             await persist(
-                artifact=artifact if operation_returned else None,
+                artifact=artifact,
                 usage=usage,
                 settled=settled,
                 error={
-                    "kind": failure_kind(exc),
+                    "kind": kind,
                     "error_type": type(exc).__name__,
                     "step": name,
                     "usage_complete": settled,
@@ -650,10 +635,8 @@ async def report_workflow(run_id, initial):
 
 @DBOS.step()
 async def reserve_step(run_id):
-    req = await asyncio.to_thread(facts().request, run_id)
-    facts().validate(req)
     try:
-        return await asyncio.to_thread(facts().reserve, run_id)
+        return await asyncio.to_thread(facts().reserve, run_id) is not None
     except ExecutionRevoked:
         if await confirm_cancel(facts(), run_id):
             raise asyncio.CancelledError()
@@ -709,8 +692,7 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
 async def cleanup_children(run_id):
     # DBOS terminal status can precede SDK's bounded drain. This is domain settlement.
     for _ in range(int(SETTLEMENT_GRACE_SECONDS * 10)):
-        units = await asyncio.to_thread(facts().units, run_id)
-        if all(u["settled"] is not None for u in units):
+        if not await asyncio.to_thread(facts().pending_settlement, run_id):
             return
         await asyncio.sleep(0.1)
     await asyncio.to_thread(facts().quarantine_pending, run_id)

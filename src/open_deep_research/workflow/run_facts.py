@@ -223,13 +223,15 @@ class RunFacts:
             )
 
     def reserve(self, run_id):
+        """Return the accepted request once capacity is held for the Run."""
         with self.engine.begin() as db:
             self.lock(db)
             req = self.request(run_id, db=db, lock=True)
+            self.validate(req)
             if req["cancel_requested"]:
                 raise ExecutionRevoked("Cancellation requested")
             if req["occupied"]:
-                return True
+                return req
             active = (
                 db.execute(
                     text(
@@ -245,12 +247,24 @@ class RunFacts:
                 >= self.settings.owner_active
                 or any(r["session"] == req["session"] for r in active)
             ):
-                return False
+                return None
             db.execute(
                 text("UPDATE por_domain.requests SET occupied=true WHERE id=:id"),
                 {"id": run_id},
             )
-            return True
+            return req
+
+    def pending_settlement(self, run_id, *, db=None):
+        if db is None:
+            with self.engine.connect() as conn:
+                return self.pending_settlement(run_id, db=conn)
+        return db.execute(
+            text(
+                "SELECT EXISTS(SELECT 1 FROM por_domain.units "
+                "WHERE run_id=:id AND settled IS NULL)"
+            ),
+            {"id": run_id},
+        ).scalar_one()
 
     def unresolved(self, run_id, db=None):
         if db is None:
@@ -314,60 +328,50 @@ class RunFacts:
             req = self.request(run_id, db=db)
             if req["cancel_requested"]:
                 raise ExecutionRevoked("Cancellation requested")
-            created = (
-                db.execute(
-                    text(
-                        "INSERT INTO por_domain.units(id,run_id,name,permit) VALUES (:id,:r,:n,:p) ON CONFLICT DO NOTHING"
-                    ),
-                    {"id": unit_id, "r": run_id, "n": name, "p": permit},
-                ).rowcount
-                == 1
-            )
-            row = (
-                db.execute(
-                    text("SELECT * FROM por_domain.units WHERE id=:id FOR UPDATE"),
-                    {"id": unit_id},
-                )
-                .mappings()
-                .one()
-            )
-            # Rotate before rejecting recovery, fencing an old still-alive executor.
+            usage = db.execute(
+                text(
+                    "INSERT INTO por_domain.units(id,run_id,name,permit) "
+                    "VALUES (:id,:r,:n,:p) ON CONFLICT DO NOTHING RETURNING usage"
+                ),
+                {"id": unit_id, "r": run_id, "n": name, "p": permit},
+            ).scalar_one_or_none()
+            if usage is not None:
+                # The insert already holds the new permit and pending settlement.
+                return permit, None, loads(usage)
+            settled, usage = db.execute(
+                text("SELECT settled,usage FROM por_domain.units WHERE id=:id FOR UPDATE"),
+                {"id": unit_id},
+            ).one()
+            # Native recovery is checked at each external boundary. Standalone
+            # callers must still fail closed on an opaque interrupted unit.
+            deny = not native_replay and (not safe or settled is not True)
             db.execute(
                 text(
-                    "UPDATE por_domain.units SET permit=:p,settled=NULL,error='{}' WHERE id=:id"
+                    "UPDATE por_domain.units SET permit=:p,settled=:s,error=:e WHERE id=:id"
                 ),
-                {"id": unit_id, "p": permit},
+                {
+                    "id": unit_id,
+                    "p": permit,
+                    "s": False if deny else None,
+                    "e": dumps({"kind": "unknown_effect", "usage_complete": False})
+                    if deny
+                    else "{}",
+                },
             )
-            # Native replay re-enters the deterministic stage. Each external
-            # boundary checks its own durable intent; no State/Artifact resume.
-            deny = (
-                not native_replay
-                and not created
-                and (not safe or row["settled"] is not True)
-            )
-            if deny:
-                db.execute(
-                    text(
-                        "UPDATE por_domain.units SET settled=false,error=:e WHERE id=:id"
-                    ),
-                    {
-                        "id": unit_id,
-                        "e": dumps({"kind": "unknown_effect", "usage_complete": False}),
-                    },
-                )
-            old_usage = loads(row["usage"])
+            prior_usage = loads(usage)
+        # Commit the revocation before reporting the denial.
         if deny:
             raise ExecutionRevoked(
                 "Unconfirmed business step requires authoritative reconciliation"
             )
-        return permit, None, old_usage
+        return permit, None, prior_usage
 
     def failed_usage(self, unit_id, fallback):
         from open_deep_research.budget import diff_budget_usage
 
-        actual, _ = self.physical_usage(unit_id)
         # Only costs without a physical receipt are carried. A replayed failed
         # native Step already supplies its own attempted usage again in memory.
+        actual = self.physical_usage(unit_id)[0] if fallback else {}
         return diff_budget_usage(fallback, actual)
 
     def check(self, unit_id, permit, *, db=None, locked=False, allow_cancel=False):
@@ -524,17 +528,15 @@ class RunFacts:
             actual = merge_budget_usage(actual, loads(value))
         return actual, any(name in {"llm", "llm_sync", "sdk_model"} for name, _ in rows)
 
-    def accounted_usage(self, unit_id, observed, carry=None):
+    def accounted_usage(self, unit_id, observed, carry):
         """Receipts account physical attempts; replayed hooks rebuild local state.
 
         Receipt totals are a lower bound when a provider withholds token usage.
         They are never added to the same costs already in a business result.
         """
-        from open_deep_research.budget import diff_budget_usage, merge_budget_usage
+        from open_deep_research.budget import merge_budget_usage
 
         actual, has_models = self.physical_usage(unit_id)
-        if carry is None:
-            carry = diff_budget_usage(observed, actual)
         billed = merge_budget_usage(actual, carry)
         value = dict(observed)
         if has_models:
@@ -552,56 +554,49 @@ class RunFacts:
         return value
 
     def finish_unit(
-        self, unit_id, permit, *, artifact=None, usage=None, settled=True, error=None
+        self, unit_id, permit, *, usage, artifact=None, settled=True, error=None
     ):
-        usage = self.accounted_usage(unit_id, usage or {})
+        """Commit resource settlement, billed usage and public deliverables."""
+        projection = None
+        if artifact is not None:
+            patch = artifact.get("patch", {})
+            reports = {
+                role: {"report": value["report"]}
+                for role, value in patch.get("agents", {}).items()
+                if isinstance(value, dict) and "report" in value
+            }
+            if result := artifact.get("research_result"):
+                reports = {result["role"]: {"report": result["report"]}}
+            projected_patch = {}
+            if "report" in patch:
+                projected_patch["report"] = patch["report"]
+            if reports or "agents" in patch:
+                projected_patch["agents"] = reports
+            projection = dumps(
+                {
+                    "delivery_ids": artifact.get("delivery_ids", []),
+                    "patch": projected_patch,
+                }
+            )
         with self.engine.begin() as db:
             self.check(unit_id, permit, db=db, locked=True, allow_cancel=True)
-            # Only public business deliverables are retained, not execution
-            # return values, followup packets, memory or State patches.
-            projection = None
-            if artifact is not None:
-                patch = artifact.get("patch", {})
-                projection = {
-                    "completed": True,
-                    "delivery_ids": artifact.get("delivery_ids", []),
-                    "patch": {k: patch[k] for k in ("agents", "report") if k in patch},
-                }
-                if result := artifact.get("research_result"):
-                    projection["patch"]["agents"] = {
-                        result["role"]: {"report": result["report"]}
-                    }
-                elif "agents" in projection["patch"]:
-                    projection["patch"]["agents"] = {
-                        role: {"report": value["report"]}
-                        for role, value in patch["agents"].items()
-                        if isinstance(value, dict) and "report" in value
-                    }
-            confirmed = db.execute(
-                text("SELECT artifact FROM por_domain.units WHERE id=:id"),
+            run_id, name, previous_projection = db.execute(
+                text("SELECT run_id,name,artifact FROM por_domain.units WHERE id=:id"),
                 {"id": unit_id},
-            ).scalar_one()
-            already_projected = projection is not None and confirmed == dumps(
-                projection
-            )
+            ).one()
             db.execute(
                 text(
                     "UPDATE por_domain.units SET artifact=coalesce(:a,artifact),usage=:u,settled=:s,error=:e WHERE id=:id"
                 ),
                 {
                     "id": unit_id,
-                    "a": dumps(projection) if projection is not None else None,
-                    "u": dumps(usage or {}),
+                    "a": projection,
+                    "u": dumps(usage),
                     "s": settled,
                     "e": dumps(error or {}),
                 },
             )
-            if artifact is not None and not already_projected:
-                row = db.execute(
-                    text("SELECT run_id,name FROM por_domain.units WHERE id=:id"),
-                    {"id": unit_id},
-                ).one()
-                run_id, name = row
+            if projection is not None and projection != previous_projection:
                 skipped = artifact.get("observation", {}).get("skipped") is True
                 self.publish(
                     db,
@@ -612,12 +607,8 @@ class RunFacts:
                     execution_id=digest({"unit": unit_id, "permit": permit}),
                     **({"reason": "role_disabled"} if skipped else {}),
                 )
-                patch = artifact.get("patch", {})
-                reports = patch.get("agents", {})
-                if result := artifact.get("research_result"):
-                    reports = {result["role"]: {"report": result["report"]}}
                 for role, role_data in reports.items():
-                    if isinstance(role_data, dict) and role_data.get("report"):
+                    if role_data["report"]:
                         report = role_data["report"]
                         report = (
                             report.get("value", "")
@@ -646,15 +637,11 @@ class RunFacts:
                         else review,
                     )
             elif error:
-                row = db.execute(
-                    text("SELECT run_id,name FROM por_domain.units WHERE id=:id"),
-                    {"id": unit_id},
-                ).one()
                 self.publish(
                     db,
-                    row[0],
+                    run_id,
                     "step_failed",
-                    step=row[1],
+                    step=name,
                     unit_id=unit_id,
                     execution_id=digest({"unit": unit_id, "permit": permit}),
                     error_kind=error.get("kind", "execution_error"),

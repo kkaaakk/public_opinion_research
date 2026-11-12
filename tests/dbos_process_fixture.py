@@ -192,6 +192,20 @@ def install(directory, scenario):
         while not (directory / (name + ".release")).exists():
             time.sleep(0.05)
 
+    if scenario in {"revision-ack", "revision-before-result"}:
+        original_account = RunFacts.accounted_usage
+
+        def account(self, unit, observed, carry):
+            billed = original_account(self, unit, observed, carry)
+            if unit.endswith(":brief-revision:1"):
+                with (directory / "revision-accounting").open("a", encoding="utf-8") as log:
+                    log.write("billed\n")
+                if scenario == "revision-before-result":
+                    gate(scenario)
+            return billed
+
+        patch.setattr(RunFacts, "accounted_usage", account)
+
     if scenario == "planning-release":
         from open_deep_research.workflow import dbos_workflow as engine
 

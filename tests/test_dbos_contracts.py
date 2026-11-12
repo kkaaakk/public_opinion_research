@@ -268,12 +268,31 @@ def test_native_four_roles_real_sdk_graph_budget_and_history(native_case):
 def test_concurrent_acceptance_is_idempotent_and_conflicts_are_atomic(native_case):
     case = native_case
     key = uuid4().hex
+
+    def submit(_):
+        return case.client.create(
+            "alice", key, {"topic": "brand recall"}, case.cfg, case.state
+        )
+
     with ThreadPoolExecutor(max_workers=5) as pool:
-        values = list(pool.map(lambda _: case.create(key=key), range(8)))
-    assert len({r["run_id"] for r in values}) == 1
+        values = list(pool.map(submit, range(8)))
+    assert sum(created for _, created in values) == 1
+    run_id = values[0][0]["run_id"]
+    assert {run["run_id"] for run, _ in values} == {run_id}
+    native = case.client.client.list_workflows(
+        name=["por.run", "por.events", "por.finalize"],
+        load_input=False,
+        load_output=False,
+    )
+    assert len(native) == 3
+    assert {w.name: w.workflow_id for w in native} == {
+        "por.run": run_id,
+        "por.events": run_id + ":events",
+        "por.finalize": run_id + ":finalize",
+    }
     with pytest.raises(RunConflict, match="another request"):
         case.client.create("alice", key, {"topic": "different"}, case.cfg, case.state)
-    case.wait(values[0])
+    case.wait(values[0][0])
 
 
 @pytest.mark.parametrize(
@@ -570,7 +589,13 @@ def test_api_contract_create_auth_cancel_and_sse(
                 run = case.client.get(response.headers["x-run-id"], "operator")
             else:
                 run = response.json()
-        assert http.post("/api/runs", json=body, headers=headers).status_code == 200
+        repeated = http.post("/api/runs", json=body, headers=headers)
+        assert repeated.status_code == 200
+        assert repeated.json()["run_id"] == run["run_id"]
+        conflict = http.post(
+            "/api/runs", json=dict(body, topic="another topic"), headers=headers
+        )
+        assert conflict.status_code == 409
         case.wait(dict(run, owner="operator"), lambda r: r["archive_status"] == "saved")
         replay = http.get("/api/runs/" + run["run_id"] + "/events", headers=headers)
         assert "id: 1" in replay.text
@@ -762,7 +787,13 @@ def test_domain_artifact_and_native_enqueue_rollback_are_atomic(
             db.execute(text("SELECT count(*) FROM por_domain.requests")).scalar_one()
             == 0
         )
-    assert not repo.client.list_workflows(name="por.run")
+    assert not repo.client.list_workflows(
+        name=["por.run", "por.events", "por.finalize"],
+        load_input=False,
+        load_output=False,
+    )
+    run, created = client.create("alice", "a", {"topic": "a"}, config(), initial())
+    assert created and run["native_status"] == "ENQUEUED"
 
 
 @pytest.mark.parametrize(
@@ -1089,6 +1120,48 @@ def test_approval_expiry_gap_before_recv_is_still_enforced(native_case, monkeypa
             ).scalar_one()
             == "expired"
         )
+
+
+def test_retry_after_failed_result_accounting_keeps_committed_model(
+    native_case, monkeypatch
+):
+    from sqlalchemy.exc import OperationalError
+
+    from open_deep_research.workflow.run_facts import RunFacts
+
+    original = RunFacts.accounted_usage
+    failures = []
+
+    def account(repo, unit, observed, carry):
+        if unit.endswith(":plan:1") and not failures:
+            failures.append(unit)
+            raise OperationalError("Stage accounting unavailable", None, RuntimeError())
+        return original(repo, unit, observed, carry)
+
+    monkeypatch.setattr(RunFacts, "accounted_usage", account)
+    case = native_case
+    run = case.create()
+    failed = case.wait(
+        run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
+    )
+    assert failures == [run["run_id"] + ":plan:1"]
+    workflow_id = run["run_id"] + ":planning:1"
+
+    def steps():
+        return case.client.client.list_workflow_steps(workflow_id)
+
+    model = [s for s in steps() if s["function_name"] == "por.llm"]
+    assert len(model) == 1 and model[0]["output"]
+    assert any(s["function_name"] == "por.stage_result" and s["error"] for s in steps())
+    retry_observed_failure(case, run, "result-accounting", failed)
+    done = case.wait(
+        run, lambda r: r["status"] == "completed" and r["archive_status"] == "saved"
+    )
+    assert done["generation"] == 1
+    assert done["usage"]["model_calls"] == 26
+    assert done["usage"]["total_tokens"] == 291
+    assert len(case.plan_prompts) == 1
+    assert [s for s in steps() if s["function_name"] == "por.llm"] == model
 
 
 def test_committed_role_ack_loss_does_not_repeat_sdk_or_drop_usage(
