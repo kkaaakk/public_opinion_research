@@ -196,7 +196,7 @@ class Approval(BaseModel):
 
 @router.post("/{run_id}/approval")
 def approve(run_id: str, body: Approval, raw: Request) -> dict:
-    """Consume an approval once and persist the continuation delivery atomically."""
+    """Submit a version-bound decision and return the current Run snapshot."""
     owner = trusted_owner(raw)
     key = _key(raw) if body.decision == "revise" else raw.headers.get("idempotency-key")
     return public_run(

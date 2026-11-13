@@ -17,6 +17,8 @@ pytestmark = pytest.mark.integration
         ("dbosrunner-brief-revision-v1", "por.plan", ("old", {}, 1)),
         ("dbosrunner-stage-settlement-v1", "por.run", ("old",)),
         ("dbosrunner-stage-settlement-v1", "por.plan", ("old", {}, 1)),
+        ("dbosrunner-brief-idempotency-v1", "por.run", ("old",)),
+        ("dbosrunner-brief-idempotency-v1", "por.plan", ("old", {}, 1)),
     ],
 )
 def test_old_pending_journal_is_inventoried_and_not_deleted(
@@ -66,78 +68,63 @@ def test_old_pending_journal_is_inventoried_and_not_deleted(
     )
 
 
-def test_brief_receipt_migration_preserves_legacy_plan_and_approval(native_case):
-    from datetime import datetime
-
+def test_native_interactions_ignore_optional_legacy_tables(native_case):
     from sqlalchemy import text
 
-    from open_deep_research.web.run_data import digest, dumps
-
-    case = native_case
-    run = case.create(approval=True)
-    run_id = run["run_id"]
-    original = case.wait(run, lambda r: r["status"] == "awaiting_approval")["plan"]
-    case.client.cancel(run_id, "alice")
-    case.wait(run, lambda r: r["archive_status"] == "saved")
     repo = facts()
-    plan = dict(
-        original,
-        expires_at=datetime.fromisoformat(original["expires_at"]).timestamp(),
-        ai_revision={"attempt": 2, "used": 1, "error": "model_error"},
-    )
-    old_slot = digest(dict(plan_version=plan["version"], revision_attempt=1))
-    old_decision = "revise:" + digest(
-        dict(decision="revise", feedback="Add scope.", revision_attempt=1)
-    )
+    case = native_case
     with repo.engine.begin() as db:
-        request = repo.request(run_id, db=db)["data"]
-        request["version"] = "dbosrunner-stage-settlement-v1"
+        # Fresh installs have neither application receipt table.
+        for name in ("approvals", "brief_revision_receipts"):
+            assert (
+                db.execute(
+                    text("SELECT to_regclass(:name)"), {"name": f"por_domain.{name}"}
+                ).scalar_one()
+                is None
+            )
         db.execute(
-            text("UPDATE por_domain.requests SET value=:value WHERE id=:id"),
-            {"id": run_id, "value": dumps(request)},
+            text(
+                "CREATE TABLE por_domain.approvals (run_id text PRIMARY KEY, version text, decision text)"
+            )
         )
         db.execute(
             text(
-                "UPDATE por_dbos.workflow_events SET value=:value WHERE workflow_uuid=:id AND key='plan'"
-            ),
-            {"id": run_id, "value": dumps(plan)},
+                "CREATE TABLE por_domain.brief_revision_receipts (run_id text, key_hash text, fingerprint text, PRIMARY KEY(run_id,key_hash))"
+            )
         )
         db.execute(
-            text("INSERT INTO por_domain.approvals VALUES (:id,:version,:decision)"),
-            {"id": run_id, "version": old_slot, "decision": old_decision},
+            text("INSERT INTO por_domain.approvals VALUES ('old','old-slot','expired')")
         )
-        db.execute(text("DROP TABLE por_domain.brief_revision_receipts"))
+        db.execute(
+            text(
+                "INSERT INTO por_domain.brief_revision_receipts VALUES ('old','old-key','old-fingerprint')"
+            )
+        )
 
-    # --initialize-only uses this additive, idempotent application migration.
     repo.initialize()
-    repo.initialize()
+    run = case.create(approval=True)
+    run_id = run["run_id"]
+    plan = case.wait(run, lambda r: r["status"] == "awaiting_approval")["plan"]
+    case.client.approve(
+        run_id, "alice", plan["version"], "revise", feedback="Add scope.", key="native"
+    )
+    revised = case.wait(
+        run,
+        lambda r: r["status"] == "awaiting_approval"
+        and r["plan"]["version"] != plan["version"],
+    )["plan"]
+    case.client.approve(run_id, "alice", revised["version"], "approve")
+    assert (
+        case.wait(run, lambda r: r["archive_status"] == "saved")["status"]
+        == "completed"
+    )
     with repo.engine.connect() as db:
-        assert tuple(repo.approval_receipt(db, run_id)) == (old_slot, old_decision)
-        assert (
-            db.execute(
-                text("SELECT count(*) FROM por_domain.brief_revision_receipts")
-            ).scalar_one()
-            == 0
-        )
-    snapshot = case.client.get(run_id, "alice")
-    assert snapshot["workflow_version"] == "dbosrunner-stage-settlement-v1"
-    assert snapshot["plan"]["brief"] == original["brief"]
-    assert snapshot["plan"]["version"] == original["version"]
-    assert snapshot["plan"]["ai_revision"] == {
-        "used": 1,
-        "error": "model_error",
-        "limit": 3,
-        "pending": False,
-    }
-    with pytest.raises(RunConflict, match="original executor"):
-        case.client.approve(
-            run_id,
-            "alice",
-            original["version"],
-            "revise",
-            feedback="Add scope.",
-            key="new-key",
-        )
+        assert db.execute(text("SELECT * FROM por_domain.approvals")).all() == [
+            ("old", "old-slot", "expired")
+        ]
+        assert db.execute(
+            text("SELECT * FROM por_domain.brief_revision_receipts")
+        ).all() == [("old", "old-key", "old-fingerprint")]
 
 
 def test_historical_unit_projection_remains_readable(pg_database):

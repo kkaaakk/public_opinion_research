@@ -123,24 +123,41 @@ test('known Run reload only subscribes and deduplicates durable event sequences'
     assert.equal(view.element('report-content').textContent, 'report');
 });
 
-test('approval is tied to the saved plan and submitted once without another create', async () => {
+test('approval stays on the same Run and disables a simultaneous click', async () => {
     const saved = storage({ key: 'key', request: body, runId, cursor: 0 });
     let approved = false;
-    const view = page(saved, (path, options) => {
-        if (path.endsWith('/approval')) { approved = true; return response(state('queued')); }
+    let submitted = false;
+    let confirmSubmit;
+    const hold = new Promise(resolve => { confirmSubmit = resolve; });
+    let painted;
+    const waiting = new Promise(resolve => { painted = resolve; });
+    const view = page(saved, async (path, options) => {
+        if (path.endsWith('/approval')) {
+            submitted = true;
+            assert.equal(view.element('approve-plan-btn').disabled, true);
+            await hold;
+            approved = true;
+            return response(state('running'));
+        }
+        if (path.endsWith('/events')) { painted(); return stream([]); }
         return response(approved ? state('completed', { report: 'approved report' })
             : state('awaiting_approval', { plan: { version: 'version', brief: 'immutable brief', sections: [] } }));
     });
-    await view.call('startResearch(true)');
+    const observation = view.call('startResearch(true)');
+    await waiting;
     assert.ok(view.element('approval-plan').textContent.includes('immutable brief'));
-    await view.call("Promise.all([decidePlan('approve'), decidePlan('approve')])");
+    const commands = view.call("Promise.all([decidePlan('approve'), decidePlan('approve')])");
+    assert.ok(submitted);
+    confirmSubmit();
+    await commands;
+    await observation;
     const approvals = view.calls.filter(call => call.path.endsWith('/approval'));
     assert.equal(approvals.length, 1);
     assert.deepEqual(JSON.parse(approvals[0].options.body), { plan_version: 'version', decision: 'approve' });
     assert.ok(view.calls.every(call => call.path !== '/api/runs'));
 });
 
-test('Classic observes the persisted revision and sends feedback only once', async () => {
+test('Classic observes an accepted revision without storing the request key or feedback', async () => {
     const saved = storage({ key: 'key', request: body, runId, cursor: 0 });
     const plan = { version: '1'.repeat(64), revision: 1, brief: 'original brief', sections: [],
         ai_revision: { used: 0, limit: 3, pending: false } };
@@ -148,15 +165,23 @@ test('Classic observes the persisted revision and sends feedback only once', asy
         ai_revision: { ...plan.ai_revision, used: 1 } };
     let submitted = false;
     let readPending = false;
-    const view = page(saved, (path, options) => {
+    let painted, resume;
+    const waiting = new Promise(resolve => { painted = resolve; });
+    const hold = new Promise(resolve => { resume = resolve; });
+    const view = page(saved, async (path) => {
         if (path.endsWith('/approval')) {
             submitted = true;
             return response(state('running'));
         }
         if (path.endsWith('/events')) {
-            assert.equal(view.element('approval-title').textContent, 'AI 正在修改 Brief');
-            assert.equal(view.element('approve-plan-btn').disabled, true);
-            assert.equal(view.element('revise-brief-btn').disabled, true);
+            if (!submitted) {
+                painted();
+                await hold;
+            } else {
+                assert.equal(view.element('approval-title').textContent, 'AI 正在修改 Brief');
+                assert.equal(view.element('approve-plan-btn').disabled, true);
+                assert.equal(view.element('revise-brief-btn').disabled, true);
+            }
             return stream([]);
         }
         if (submitted && !readPending) {
@@ -164,21 +189,26 @@ test('Classic observes the persisted revision and sends feedback only once', asy
             return response(state('running', { plan: { ...plan,
                 ai_revision: { ...plan.ai_revision, pending: true } } }));
         }
-        return response(state('awaiting_approval', { plan: submitted ? revised : plan }));
+        return response(state(submitted ? 'completed' : 'awaiting_approval', {
+            plan: submitted ? revised : plan,
+        }));
     });
-    await view.call('startResearch(true)');
+    const observation = view.call('startResearch(true)');
+    await waiting;
     view.element('brief-revision-feedback').value = 'Compare competitors.';
     await view.call("Promise.all([decidePlan('revise'), decidePlan('revise')])");
+    resume();
+    await observation;
     const approvals = view.calls.filter(call => call.path.endsWith('/approval'));
     assert.equal(approvals.length, 1);
     assert.deepEqual(JSON.parse(approvals[0].options.body), {
         version: plan.version, decision: 'revise', feedback: 'Compare competitors.',
     });
-    assert.ok(view.element('approval-version').textContent.startsWith('v2'));
-    assert.match(view.element('brief-revision-status').textContent, /1 \/ 3/);
-    assert.ok(approvals[0].options.headers['Idempotency-Key']);
-    assert.match(view.element('approval-plan').textContent, /revised brief/);
-    assert.equal(view.element('approve-plan-btn').disabled, false);
+    const key = approvals[0].options.headers['Idempotency-Key'];
+    assert.ok(key);
+    assert.ok(!saved.getItem(storageKey).includes(key));
+    assert.ok(!saved.getItem(storageKey).includes('Compare competitors.'));
+    assert.equal(readPending, true);
 });
 
 test('Stop sends durable cancellation without aborting the subscription', async () => {

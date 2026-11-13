@@ -51,7 +51,7 @@ export type BriefRevisionRequest = {
   feedback: string;
 };
 export type HumanCommand =
-  ['approval' | 'clarification', object] | ['revise', BriefRevisionRequest?];
+  ['approval' | 'clarification', object] | ['revise', BriefRevisionRequest];
 
 export type Plan = {
   revision?: number;

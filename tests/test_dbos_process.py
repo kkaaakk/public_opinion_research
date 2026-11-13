@@ -753,8 +753,8 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             expected_calls.append("call")
         if scenario == "revision-queued":
             kill_owned(process)
-            assert submit()["plan"]["ai_revision"]["pending"]
-            assert submit()["plan"]["ai_revision"]["pending"]
+            assert submit()["status"] == "awaiting_approval"
+            assert submit()["status"] == "awaiting_approval"
             assert not (tmp_path / "revision-calls").exists()
         else:
             submit(key)
@@ -817,9 +817,9 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
                         "revision-retry": 3,
                     }[scenario]
                 )
-            assert submit(key)["plan"]["version"] == plan["version"]
+            with pytest.raises(RunConflict, match="version changed"):
+                submit(key)
             if scenario == "revision-retry":
-                assert submit()["plan"]["version"] == plan["version"]
                 assert (
                     client.client.list_workflows(workflow_ids=[first_child])[0].output
                     == original.output
@@ -981,7 +981,7 @@ def test_clarification_wait_survives_executor_kill_and_same_run_answer(
         assert client.get(run_id, owner)["clarification"]["version"] == versions[-1]
         if crash_round == 2:
             # Both identical HTTP requests arrive before the Executor can recv.
-            # The second must acknowledge the first transaction without sending again.
+            # DBOS accepts only one message with the derived command key.
             with TestClient(
                 server.app, headers={"Authorization": f"Bearer {token}"}
             ) as http:
@@ -997,8 +997,8 @@ def test_clarification_wait_survives_executor_kill_and_same_run_answer(
                 assert [response.status_code for response in responses] == [200, 200]
                 for response in responses:
                     assert response.json()["run_id"] == run_id
-                    assert response.json()["clarification"] is None
-                assert http.get(path).json()["clarification"] is None
+                    assert response.json()["clarification"]["version"] == versions[-1]
+                assert http.get(path).json()["clarification"]["version"] == versions[-1]
         (tmp_path / "executor-ready").unlink()
         restart = start(tmp_path, executor, scenario)
         wait(lambda: (tmp_path / "executor-ready").exists(), restart, tmp_path)

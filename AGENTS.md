@@ -21,9 +21,10 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `dbosrunner-brief-idempotency-v1`. Pending
+Application version is `dbosrunner-native-interaction-v1`. Pending
 `dbosrunner-stage-settlement-v1` and earlier journals must drain on their matching
-release. See `docs/architecture/dbos-deployment.md` for cutover steps.
+release. The earlier PR #44 preview `dbosrunner-brief-idempotency-v1`, if deployed,
+also needs its matching release. See `docs/architecture/dbos-deployment.md`.
 SDK runtime version remains `sdk-phase5-v1`.
 The Studio relay waits for its terminal-event manifest before acknowledging
 delivery. Pending `dbos-phase5-v1` journals must drain on their matching release;

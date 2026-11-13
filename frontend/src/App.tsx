@@ -519,12 +519,7 @@ export default function App() {
                   </div>
                 )}
                 {run && replayCursor === null && (
-                  <ResearchSpec
-                    run={run}
-                    busy={busy}
-                    pendingRevision={session.briefRevisions?.[run.run_id]}
-                    submit={(...args) => void command(...args)}
-                  />
+                  <ResearchSpec run={run} busy={busy} submit={(...args) => void command(...args)} />
                 )}
                 <div className="tabs" role="tablist" aria-label="运行视图">
                   {tabs.map(([id, label]) => (

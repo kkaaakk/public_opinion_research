@@ -1,7 +1,8 @@
 # DBOS production execution — Phase 5
 
-> 当前应用版本为 `dbosrunner-brief-idempotency-v1`。Brief AI 修改的子 Workflow ID
-> 绑定 HTTP 请求 Key。见[切换步骤](#brief-请求键版本切换)及 [Brief API 合同](research-brief.md#ai-revision-during-approval)。
+> 当前应用版本为 `dbosrunner-native-interaction-v1`。澄清与 Brief 审批使用
+> DBOS 原生消息和等待。见[切换步骤](#原生人机交互版本切换)及
+> [Brief API 合同](research-brief.md#persistent-human-interaction)。
 >
 > `dbosrunner-stage-settlement-v1` 将阶段费用随 `por.stage_result` Step 持久化。
 > 见[阶段清算版本切换](#阶段清算版本切换)和[职责审查](../audits/run-execution-reliability.md)。
@@ -94,22 +95,23 @@ EOF from SSE means reconnect/read status, not success. `--health` checks the
 PostgreSQL native catalog. Process liveness is separately supervised by the
 operator; there is no claimed application heartbeat endpoint for Executors.
 
-## Brief 请求键版本切换
+## 原生人机交互版本切换
 
-1. 停止旧 API 的新研究准入。保留原 API、前端和匹配的 Executor，
-   完成或取消并清算 `dbosrunner-stage-settlement-v1` 及更早版本的任务。
-   清点等待审批的 Brief、已提交但尚未接收的审批消息、运行中的修改子 Workflow、
-   重试、待归档及未确认外部效果。按原版本核对外部回执，并备份两个 PostgreSQL schema
-   及关联业务存储。
-2. 用新发行版运行 `python -m open_deep_research.web.executor --migration-check`。
-   该命令打印原生 journal 和占位清单，确认输出为 `[]` 后再切换。旧版本未完成的
-   `por.run`、`por.plan` 及未清算占位会阻止新版 Executor 启动和新 Run 准入。
-3. 用迁移角色运行 `--initialize-only`，增量创建 `por_domain.brief_revision_receipts`，
-   为运行角色补齐该表的 DML 权限，再一起部署新版 API、Studio、Classic 与 Executor。
-   旧 `approvals`、Brief 快照和子 Workflow ID 原样保留。旧回执没有 HTTP Key，
-   无法回填历史 Key，旧审批消息由原发行版消费。
-4. 回滚时先停新版准入，由新版完成或取消并清算已接纳的任务，再恢复旧 API 与
-   Executor。保留新增回执表及各版本原生 journal，避免失去延迟重发的请求身份。
+1. 停止旧 API 的新研究准入。保留匹配的 API、前端和 Executor，让
+   `dbosrunner-stage-settlement-v1` 及更早版本完成或取消并清算所有任务。
+   如果部署过 PR #44 的预览版 `dbosrunner-brief-idempotency-v1`，也由预览版清算。
+   清点待澄清、待审批、已投递消息、排队或执行中的 AI 修改、待归档及未知外部效果。
+   备份 PostgreSQL 两个 schema 和相关业务存储。
+2. 用新版本运行 `python -m open_deep_research.web.executor --migration-check`。
+   确认输出为 `[]` 后再切换。新的接收循环与审批截止处理改变了持久化命令序列。
+   旧版本的未完成 Workflow 或未清算占位会阻止新版 Executor 启动和新 Run 准入。
+3. 新数据库沿用 `--initialize-only`。已有数据库无需数据改写或新增业务表。
+   新版不创建或读写 `por_domain.approvals`、`por_domain.brief_revision_receipts`。
+   如果库中已有这些表，原样保留以便回滚。只有在旧任务全部清算且确定无需回滚后，
+   才可把清理作为独立的数据库维护操作。现有原生消息、journal 和历史 Brief 原样保留。
+4. 同步切换 API、Studio、Classic 与 Executor。回滚前先由新版完成或清算其已接纳的任务。
+   若回滚目标需要旧审批表，而数据库最初由新版初始化，先用目标版本的
+   `--initialize-only` 建齐所需表。每个版本恢复自己的 journal。
    [DBOS 版本匹配规则](https://docs.dbos.dev/python/tutorials/upgrading-workflows#versioning)
 
 ## 阶段清算版本切换

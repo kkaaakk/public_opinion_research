@@ -2,13 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, StudioApi } from './api';
 import { RunObserver, type Connection } from './observer';
 import type { HumanCommand, RunEvent, RunRequest, RunSnapshot } from './protocol';
-import {
-  persist,
-  restore,
-  type PendingBriefRevision,
-  type PendingCreate,
-  type PendingRetry,
-} from './session';
+import { persist, restore, type PendingCreate, type PendingRetry } from './session';
 
 /** Owns tab-local request identity and the subscriber; DBOS owns execution. */
 export function useRunSession() {
@@ -112,30 +106,12 @@ export function useRunSession() {
       setBusy(false);
     }
   }
-  function saveBriefRevision(id: string, pending?: PendingBriefRevision) {
-    const briefRevisions = { ...session.briefRevisions };
-    if (pending) briefRevisions[id] = pending;
-    else delete briefRevisions[id];
-    commit({ ...session, briefRevisions });
-  }
   async function command(...[action, payload]: HumanCommand | ['cancel' | 'retry']) {
     if (!run || run.run_id !== runId || busyRef.current) return;
-    const pendingRevision = session.briefRevisions?.[run.run_id];
-    if (action === 'approval' && pendingRevision) return;
     busyRef.current = true;
     setBusy(true);
     setMessage('');
-    let revisionRequest: PendingBriefRevision | undefined;
     try {
-      if (action === 'revise') {
-        if (pendingRevision) revisionRequest = pendingRevision;
-        else {
-          if (!payload) return;
-          const pending = { key: crypto.randomUUID(), request: payload };
-          saveBriefRevision(run.run_id, pending);
-          revisionRequest = pending;
-        }
-      }
       let retry: PendingRetry | undefined;
       if (action === 'retry') {
         retry =
@@ -152,15 +128,15 @@ export function useRunSession() {
       const result = await api.command(
         run.run_id,
         action === 'revise' ? 'approval' : action,
-        revisionRequest?.request ?? (retry ? { state_version: retry.state_version } : payload),
-        revisionRequest?.key ?? retry?.key,
+        retry ? { state_version: retry.state_version } : payload,
+        action === 'revise' ? crypto.randomUUID() : retry?.key,
       );
-      if (revisionRequest) saveBriefRevision(run.run_id);
       if (action === 'retry') commit({ ...session, retry: undefined });
-      setRun(result);
-      // The observer already polls approval. Keep the same editor and feedback
-      // draft mounted while a revision runs or returns a settled failure.
-      if (action !== 'revise') refresh();
+      // The observer reads the revision's progress and keeps the Brief draft mounted.
+      if (action !== 'revise') {
+        setRun(result);
+        refresh();
+      }
       setMessage(
         action === 'cancel'
           ? '取消请求已提交；继续观察 SDK 清算与归档。'
@@ -173,24 +149,6 @@ export function useRunSession() {
                 : '审批或 Brief 版本修改已提交。',
       );
     } catch (error) {
-      if (action === 'revise') {
-        if (
-          revisionRequest &&
-          error instanceof ApiError &&
-          [400, 409, 413, 422].includes(error.status)
-        ) {
-          try {
-            saveBriefRevision(run.run_id);
-            revisionRequest = undefined;
-          } catch {
-            // Keep the stored identity available if the browser cannot clear it.
-          }
-        }
-        setMessage(
-          revisionRequest ? '提交结果待确认，请确认原 AI 修改请求。' : (error as Error).message,
-        );
-        return;
-      }
       // Authentication/rate-limit failures cannot acknowledge an earlier lost ACK.
       const uncertainExistingGrant = session.retry?.runId === run.run_id;
       const transientControlFailure =
@@ -204,7 +162,13 @@ export function useRunSession() {
         !transientControlFailure
       )
         commit({ ...session, retry: undefined });
-      setMessage((error as Error).message);
+      const humanCommand =
+        action === 'approval' || action === 'clarification' || action === 'revise';
+      setMessage(
+        humanCommand && (!(error instanceof ApiError) || error.status >= 500)
+          ? '提交结果未确认，请重新读取当前 Run 状态。'
+          : (error as Error).message,
+      );
     } finally {
       busyRef.current = false;
       setBusy(false);

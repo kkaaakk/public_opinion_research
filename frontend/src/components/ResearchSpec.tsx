@@ -2,7 +2,6 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { HumanCommand, Plan, RunSnapshot } from '../protocol';
-import type { PendingBriefRevision } from '../session';
 import { exportMarkdown, time } from './common';
 
 type Submit = (...args: HumanCommand) => void;
@@ -17,29 +16,22 @@ function BriefEditor({
   plan,
   pending,
   busy,
-  pendingRevision,
   submit,
 }: {
   plan: Plan;
   pending: boolean;
   busy: boolean;
-  pendingRevision?: PendingBriefRevision;
   submit: Submit;
 }) {
   const [draft, setDraft] = useState(plan.brief);
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const originalFeedback =
-    pendingRevision?.request.version === plan.version ? pendingRevision.request.feedback : '';
-  const [showFeedback, setShowFeedback] = useState(Boolean(originalFeedback));
-  const [feedback, setFeedback] = useState(originalFeedback);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedback, setFeedback] = useState('');
   const changed = draft.trim() !== plan.brief;
   const revision = plan.ai_revision;
   const revising = revision?.pending ?? false;
-  const approvalDisabled = busy || Boolean(pendingRevision);
-  const canRevise = Boolean(
-    revision && revision.used < revision.limit && !approvalDisabled && !changed,
-  );
+  const canRevise = Boolean(revision && revision.used < revision.limit && !busy && !changed);
   return (
     <section className="panel approval">
       <div className="panel-head">
@@ -50,7 +42,7 @@ function BriefEditor({
           v{plan.revision ?? 1} · {plan.version.slice(0, 12)}
           {plan.locked ? ' · 已锁定' : ''}
         </span>
-        {!pending && !revising && !pendingRevision && (
+        {!pending && !revising && (
           <button
             className="text-button"
             aria-expanded={expanded}
@@ -60,7 +52,7 @@ function BriefEditor({
           </button>
         )}
       </div>
-      {(pending || revising || pendingRevision || expanded) && (
+      {(pending || revising || expanded) && (
         <div className="approval-body">
           {editing ? (
             <label>
@@ -101,54 +93,40 @@ function BriefEditor({
               {revisionErrors[revision.error] ?? 'AI 修改未完成，已保留当前 Brief。'}
             </p>
           )}
-          {pendingRevision && (
-            <button className="button" disabled={busy} onClick={() => submit('revise')}>
-              确认原 AI 修改请求
-            </button>
+          {pending && !revising && showFeedback && revision && revision.used < revision.limit && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!canRevise || !feedback.trim()) return;
+                submit('revise', {
+                  version: plan.version,
+                  decision: 'revise',
+                  feedback: feedback.trim(),
+                });
+              }}
+            >
+              <label>
+                AI 修改意见
+                <textarea
+                  rows={4}
+                  maxLength={4000}
+                  value={feedback}
+                  onChange={(event) => setFeedback(event.target.value)}
+                  disabled={!canRevise}
+                />
+              </label>
+              <button className="button" disabled={!canRevise || !feedback.trim()}>
+                {revision.error ? '重试 AI 修改' : '提交 AI 修改'}
+              </button>
+            </form>
           )}
-          {pending &&
-            !revising &&
-            !pendingRevision &&
-            showFeedback &&
-            revision &&
-            revision.used < revision.limit && (
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!canRevise || !feedback.trim()) return;
-                  submit('revise', {
-                    version: plan.version,
-                    decision: 'revise',
-                    feedback: feedback.trim(),
-                  });
-                }}
-              >
-                <label>
-                  AI 修改意见
-                  <textarea
-                    rows={4}
-                    maxLength={4000}
-                    value={feedback}
-                    onChange={(event) => setFeedback(event.target.value)}
-                    disabled={!canRevise}
-                  />
-                </label>
-                <button className="button" disabled={!canRevise || !feedback.trim()}>
-                  {revision.error ? '重试 AI 修改' : '提交 AI 修改'}
-                </button>
-              </form>
-            )}
           <div className="form-actions">
             <button className="button" onClick={() => exportMarkdown(draft, 'research-brief')}>
               导出 Brief
             </button>
             {pending && !revising && (
               <>
-                <button
-                  className="button"
-                  disabled={approvalDisabled}
-                  onClick={() => setEditing(!editing)}
-                >
+                <button className="button" disabled={busy} onClick={() => setEditing(!editing)}>
                   {editing ? '预览 Markdown' : '编辑 Brief'}
                 </button>
                 {revision && (
@@ -164,7 +142,7 @@ function BriefEditor({
                 {changed && (
                   <button
                     className="button"
-                    disabled={approvalDisabled}
+                    disabled={busy}
                     onClick={() =>
                       submit('approval', {
                         plan_version: plan.version,
@@ -178,7 +156,7 @@ function BriefEditor({
                 )}
                 <button
                   className="button"
-                  disabled={approvalDisabled}
+                  disabled={busy}
                   onClick={() =>
                     submit('approval', { plan_version: plan.version, decision: 'reject' })
                   }
@@ -187,7 +165,7 @@ function BriefEditor({
                 </button>
                 <button
                   className="button primary"
-                  disabled={approvalDisabled || changed}
+                  disabled={busy || changed}
                   onClick={() =>
                     submit('approval', { plan_version: plan.version, decision: 'approve' })
                   }
@@ -314,12 +292,10 @@ function ClarificationForm({
 export function ResearchSpec({
   run,
   busy,
-  pendingRevision,
   submit,
 }: {
   run: RunSnapshot;
   busy: boolean;
-  pendingRevision?: PendingBriefRevision;
   submit: Submit;
 }) {
   if (run.status === 'awaiting_clarification' && run.clarification)
@@ -333,7 +309,6 @@ export function ResearchSpec({
         plan={run.plan}
         pending={run.status === 'awaiting_approval'}
         busy={busy}
-        pendingRevision={pendingRevision}
         submit={submit}
       />
     );

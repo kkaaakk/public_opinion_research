@@ -88,7 +88,7 @@ test('same Run survives clarification and AI revision reloads, then Brief approv
 
 for (const surface of ['studio', 'classic'] as const) {
   test(
-    surface + ' confirms a lost revision response after reload and retries a settled failure',
+    surface + ' refreshes after a lost revision response and retries a settled failure',
     async ({ page }) => {
       const studio = surface === 'studio';
       const errors: string[] = [];
@@ -139,7 +139,6 @@ for (const surface of ['studio', 'classic'] as const) {
       const renderedBrief = page.locator(studio ? '.approval .markdown' : '#approval-plan');
       const edit = page.getByRole('button', { name: 'AI 修改 Brief', exact: true });
       const opinion = page.getByLabel('AI 修改意见');
-      const confirm = page.getByRole('button', { name: '确认原 AI 修改请求', exact: true });
       const approve = page.getByRole('button', {
         name: studio ? '批准执行' : '批准并继续',
         exact: true,
@@ -152,27 +151,22 @@ for (const surface of ['studio', 'classic'] as const) {
         'browser-fail-once-revision ' + randomUUID() + ': compare service response times.';
       await opinion.fill(feedback);
       await page.getByRole('button', { name: '提交 AI 修改', exact: true }).click();
-      await expect(confirm).toBeEnabled();
+      await expect(page.getByText(/提交结果未确认，请/)).toBeVisible();
       expect(submissions).toHaveLength(1);
 
       await page.reload();
       await authenticate();
       if (!studio) await page.getByRole('button', { name: '恢复后台进度' }).click();
-      await expect(confirm).toBeEnabled();
       await expect(page.getByText(/已保留当前 Brief/)).toBeVisible();
       await expect(page.getByText(/AI 修改：0 \/ 3 次/)).toBeVisible();
       await expect(version).toHaveText(initialVersion);
       await expect(renderedBrief).toHaveText(initialBrief);
-      await expect(approve).toBeDisabled();
-      expect(submissions).toHaveLength(1);
-      await confirm.click();
-      await expect(confirm).toBeHidden();
-      expect(submissions[0].key).toMatch(/^[a-f0-9-]{36}$/);
-      expect(submissions[1]).toEqual(submissions[0]);
-
       await expect(approve).toBeEnabled();
-      if (!(await opinion.isVisible())) await edit.click();
-      await expect(opinion).toHaveValue(feedback);
+      expect(submissions).toHaveLength(1);
+      await edit.click();
+      await expect(opinion).toHaveValue('');
+      await opinion.fill(feedback);
+      await opinion.scrollIntoViewIfNeeded();
       await page.screenshot({
         path:
           (process.env.BRIEF_SCREENSHOT_DIR ?? '../.tmp') +
@@ -184,10 +178,11 @@ for (const surface of ['studio', 'classic'] as const) {
       await expect(page.getByText(/AI 修改：1 \/ 3 次/)).toBeVisible();
       await expect(version).toContainText('v2');
       await expect(renderedBrief).toContainText(feedback);
-      expect(submissions).toHaveLength(3);
-      expect(submissions[2].body).toEqual(submissions[0].body);
-      expect(submissions[2].key).toMatch(/^[a-f0-9-]{36}$/);
-      expect(submissions[2].key).not.toBe(submissions[0].key);
+      expect(submissions).toHaveLength(2);
+      expect(submissions[1].body).toEqual(submissions[0].body);
+      expect(submissions[0].key).toMatch(/^[a-f0-9-]{36}$/);
+      expect(submissions[1].key).toMatch(/^[a-f0-9-]{36}$/);
+      expect(submissions[1].key).not.toBe(submissions[0].key);
       await expect(approve).toBeEnabled();
       await approve.click();
       if (studio) await expect(version).toContainText('已锁定');
