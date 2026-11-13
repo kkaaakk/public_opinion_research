@@ -60,6 +60,7 @@ class RunFacts:
                 "ALTER TABLE por_domain.retries ADD COLUMN IF NOT EXISTS outcome text",
                 "CREATE UNIQUE INDEX IF NOT EXISTS por_retry_generation ON por_domain.retries(run_id,generation)",
                 "CREATE TABLE IF NOT EXISTS por_domain.approvals (run_id text PRIMARY KEY REFERENCES por_domain.requests(id), version text NOT NULL, decision text NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS por_domain.brief_revision_receipts (run_id text NOT NULL REFERENCES por_domain.requests(id), key_hash text NOT NULL, fingerprint text NOT NULL, PRIMARY KEY(run_id,key_hash))",
             ):
                 db.execute(text(ddl))
             policy = self.policy()
@@ -288,31 +289,31 @@ class RunFacts:
                     {"id": run_id},
                 )
 
+    @staticmethod
+    def approval_receipt(db, run_id):
+        return db.execute(
+            text("SELECT version,decision FROM por_domain.approvals WHERE run_id=:id"),
+            {"id": run_id},
+        ).first()
+
     def expire_approval(self, run_id, plan):
         from datetime import datetime
-
-        from open_deep_research.workflow.brief import approval_receipt_version
 
         with self.engine.begin() as db:
             self.request(run_id, db=db, lock=True)
             if self.now(db) < datetime.fromisoformat(plan["expires_at"]).timestamp():
                 return False
-            attempt = (plan.get("ai_revision") or {}).get("attempt", 0)
             latest = self.client.get_event(run_id, "plan", timeout_seconds=0)
-            if (
-                not latest
-                or latest["version"] != plan["version"]
-                or (latest.get("ai_revision") or {}).get("attempt", 0) != attempt
-            ):
+            if not latest or latest["version"] != plan["version"]:
                 return False
             inserted = db.execute(
                 text(
-                    "INSERT INTO por_domain.approvals VALUES (:id,:v,'expired') "
+                    "INSERT INTO por_domain.approvals (run_id,version,decision) VALUES (:id,:v,'expired') "
                     "ON CONFLICT (run_id) DO UPDATE SET version=EXCLUDED.version,decision='expired' "
                     "WHERE por_domain.approvals.version<>EXCLUDED.version "
                     "OR por_domain.approvals.decision LIKE 'revise:%'"
                 ),
-                {"id": run_id, "v": approval_receipt_version(plan["version"], attempt)},
+                {"id": run_id, "v": plan["version"]},
             ).rowcount
             decision = db.execute(
                 text("SELECT decision FROM por_domain.approvals WHERE run_id=:id"),

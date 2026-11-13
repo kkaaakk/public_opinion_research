@@ -52,7 +52,7 @@ function page(sessionStorage, transport) {
     element('rag-enabled').checked = true;
     const calls = [];
     const context = vm.createContext({ console, sessionStorage, crypto: webcrypto, TextDecoder,
-        AbortController, URL, URLSearchParams, Date, Blob,
+        AbortController, AbortSignal, URL, URLSearchParams, Date, Blob,
         setInterval: () => 1, clearInterval() {}, clearTimeout() {}, setTimeout: fn => { queueMicrotask(fn); return 1; },
         document: { getElementById: element, createElement: () => element('created-' + elements.size), body: { appendChild() {} } },
         window: { location: { href: 'http://localhost/' }, history: { replaceState() {} } },
@@ -142,10 +142,10 @@ test('approval is tied to the saved plan and submitted once without another crea
 
 test('Classic observes the persisted revision and sends feedback only once', async () => {
     const saved = storage({ key: 'key', request: body, runId, cursor: 0 });
-    const plan = { version: 'version', revision: 1, brief: 'original brief', sections: [],
-        ai_revision: { attempt: 0, used: 0, limit: 3, pending: false } };
+    const plan = { version: '1'.repeat(64), revision: 1, brief: 'original brief', sections: [],
+        ai_revision: { used: 0, limit: 3, pending: false } };
     const revised = { ...plan, version: 'new-version', revision: 2, brief: 'revised brief',
-        ai_revision: { ...plan.ai_revision, attempt: 1, used: 1 } };
+        ai_revision: { ...plan.ai_revision, used: 1 } };
     let submitted = false;
     let readPending = false;
     const view = page(saved, (path, options) => {
@@ -172,10 +172,11 @@ test('Classic observes the persisted revision and sends feedback only once', asy
     const approvals = view.calls.filter(call => call.path.endsWith('/approval'));
     assert.equal(approvals.length, 1);
     assert.deepEqual(JSON.parse(approvals[0].options.body), {
-        plan_version: 'version', decision: 'revise', feedback: 'Compare competitors.', revision_attempt: 0,
+        version: plan.version, decision: 'revise', feedback: 'Compare competitors.',
     });
     assert.ok(view.element('approval-version').textContent.startsWith('v2'));
     assert.match(view.element('brief-revision-status').textContent, /1 \/ 3/);
+    assert.ok(approvals[0].options.headers['Idempotency-Key']);
     assert.match(view.element('approval-plan').textContent, /revised brief/);
     assert.equal(view.element('approve-plan-btn').disabled, false);
 });

@@ -264,14 +264,25 @@ function resetUI() {
     startBtn.disabled = Boolean(durableRun && !durableRun.finished);
 }
 
-// Only a tab-local request identity/cursor is retained. Credentials stay in the
+// Request identity, payload and cursor stay in the tab. Credentials stay in the
 // existing password input and must be entered again after a page reload.
 function readDurableRun() {
     try {
         const value = JSON.parse(sessionStorage.getItem(DURABLE_STORAGE_KEY));
         if (value && typeof value.key === 'string' && typeof value.request?.topic === 'string'
             && Number.isSafeInteger(value.cursor) && value.cursor >= 0
-            && (value.runId === null || /^[a-f0-9]{32}$/.test(value.runId))) return value;
+            && (value.runId === null || /^[a-f0-9]{32}$/.test(value.runId))) {
+            const pending = value.briefRevision;
+            if (pending && !(value.runId
+                && typeof pending.key === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(pending.key)
+                && pending.request?.decision === 'revise'
+                && typeof pending.request.version === 'string' && /^[a-f0-9]{64}$/.test(pending.request.version)
+                && typeof pending.request.feedback === 'string'
+                && pending.request.feedback.trim() && pending.request.feedback.length <= 4000)) {
+                delete value.briefRevision;
+            }
+            return value;
+        }
     } catch { /* Missing/invalid tab-local data never starts a request. */ }
     return null;
 }
@@ -279,6 +290,17 @@ function readDurableRun() {
 function saveDurableRun() {
     if (durableRun) sessionStorage.setItem(DURABLE_STORAGE_KEY, JSON.stringify(durableRun));
     else sessionStorage.removeItem(DURABLE_STORAGE_KEY);
+}
+
+function saveBriefRevision(pending) {
+    const previous = durableRun.briefRevision;
+    durableRun.briefRevision = pending;
+    try {
+        saveDurableRun();
+    } catch (error) {
+        durableRun.briefRevision = previous;
+        throw error;
+    }
 }
 
 async function durableRequest(path, options = {}) {
@@ -309,7 +331,8 @@ function showDurableState(state) {
 function showBriefApproval(state) {
     const plan = state.plan;
     const revision = plan?.ai_revision;
-    const visible = plan && (state.status === 'awaiting_approval' || revision?.pending);
+    const pending = durableRun?.briefRevision;
+    const visible = plan && (state.status === 'awaiting_approval' || revision?.pending || pending);
     document.getElementById('approval-panel').classList.toggle('hidden', !visible);
     if (!visible) {
         durablePlanVersion = null;
@@ -318,10 +341,12 @@ function showBriefApproval(state) {
     }
     if (durablePlanVersion !== plan.version) {
         document.getElementById('brief-edit').value = plan.brief;
-        document.getElementById('brief-revision-feedback').value = '';
+        document.getElementById('brief-revision-feedback').value =
+            pending?.request.version === plan.version ? pending.request.feedback : '';
         document.getElementById('brief-revision-form').classList.add('hidden');
     }
     durablePlanVersion = plan.version;
+    durableApprovalOpen = state.status === 'awaiting_approval';
     durableBrief = plan.brief;
     durableAiRevision = revision;
     document.getElementById('approval-title').textContent = revision?.pending ? 'AI 正在修改 Brief' : '研究计划待审批';
@@ -333,15 +358,21 @@ function showBriefApproval(state) {
         ? 'AI 修改：' + revision.used + ' / ' + revision.limit + ' 次'
             + (revision.error && !revision.pending ? ' · ' + (errors[revision.error] || 'AI 修改未完成') + '，已保留当前 Brief。' : '')
         : '';
-    document.getElementById('revise-brief-btn').classList.toggle('hidden', !revision);
-    if (revision && (revision.pending || revision.used >= revision.limit)) {
+    document.getElementById('revise-brief-btn').classList.toggle('hidden', !revision || !durableApprovalOpen);
+    document.getElementById('submit-brief-revision-btn').textContent =
+        revision?.error ? '重试 AI 修改' : '提交 AI 修改';
+    if (revision && (revision.pending || pending || revision.used >= revision.limit)) {
         document.getElementById('brief-revision-form').classList.add('hidden');
     }
     updateApprovalControls();
 }
 
 function updateApprovalControls() {
-    const disabled = approvalSubmitting || Boolean(durableAiRevision?.pending);
+    const pending = durableRun?.briefRevision;
+    const confirm = document.getElementById('confirm-brief-revision-btn');
+    confirm.classList.toggle('hidden', !pending);
+    confirm.disabled = approvalSubmitting;
+    const disabled = !durableApprovalOpen || approvalSubmitting || Boolean(durableAiRevision?.pending || pending);
     for (const id of ['edit-plan-btn', 'approve-plan-btn', 'reject-plan-btn', 'brief-edit']) {
         document.getElementById(id).disabled = disabled;
     }
@@ -428,33 +459,60 @@ async function followDurableRun(request) {
 }
 
 async function decidePlan(decision) {
-    if (!durableRun?.runId || !durablePlanVersion || approvalSubmitting || durableAiRevision?.pending) return;
-    const draft = document.getElementById('brief-edit').value;
-    if ((decision === 'approve' || decision === 'revise') && durableBrief !== draft.trim()) {
-        statusText.textContent = '请先保存手动修改的 Brief 新版本'; return;
-    }
-    const body = {plan_version: durablePlanVersion, decision};
-    if (decision === 'edit') body.brief_md = draft;
-    if (decision === 'revise') {
-        if (!durableAiRevision || durableAiRevision.used >= durableAiRevision.limit) return;
-        body.feedback = document.getElementById('brief-revision-feedback').value.trim();
-        body.revision_attempt = durableAiRevision.attempt;
-        if (!body.feedback) {
-            statusText.textContent = '请填写 AI 修改意见'; return;
+    if (!durableRun?.runId || approvalSubmitting) return;
+    const revising = decision === 'revise';
+    let pending = durableRun.briefRevision;
+    let body;
+    if (!(revising && pending)) {
+        if (!durablePlanVersion || !durableApprovalOpen || durableAiRevision?.pending || pending) return;
+        const draft = document.getElementById('brief-edit').value;
+        if ((decision === 'approve' || revising) && durableBrief !== draft.trim()) {
+            statusText.textContent = '请先保存手动修改的 Brief 新版本'; return;
+        }
+        body = {plan_version: durablePlanVersion, decision};
+        if (decision === 'edit') body.brief_md = draft;
+        if (revising) {
+            if (!durableAiRevision || durableAiRevision.used >= durableAiRevision.limit) return;
+            const feedback = document.getElementById('brief-revision-feedback').value.trim();
+            if (!feedback) {
+                statusText.textContent = '请填写 AI 修改意见'; return;
+            }
+            body = {version: durablePlanVersion, decision, feedback};
         }
     }
+
     approvalSubmitting = true;
     updateApprovalControls();
     try {
-        await durableRequest('/api/runs/' + durableRun.runId + '/approval', { method: 'POST',
-            body: JSON.stringify(body) });
-        if (decision !== 'revise') {
+        if (revising && !pending) {
+            const request = {key: crypto.randomUUID(), request: body};
+            saveBriefRevision(request);
+            pending = request;
+        }
+        const response = await durableRequest('/api/runs/' + durableRun.runId + '/approval', {
+            method: 'POST',
+            headers: pending ? {'Idempotency-Key': pending.key} : undefined,
+            body: JSON.stringify(pending?.request ?? body),
+            signal: pending ? AbortSignal.timeout(30000) : undefined,
+        });
+        if (pending) {
+            const state = await response.json();
+            saveBriefRevision(undefined);
+            showDurableState(state);
+        } else {
             durablePlanVersion = null;
             document.getElementById('approval-panel').classList.add('hidden');
         }
         await startResearch(true);
-    } catch (error) { statusText.textContent = error.message; }
-    finally {
+    } catch (error) {
+        if (pending && [400, 409, 413, 422].includes(error.httpStatus)) {
+            try { saveBriefRevision(undefined); }
+            catch { /* The stored identity can still be confirmed. */ }
+        }
+        statusText.textContent = durableRun.briefRevision
+            ? '提交结果待确认，请确认原 AI 修改请求。'
+            : error.message;
+    } finally {
         approvalSubmitting = false;
         updateApprovalControls();
     }
@@ -797,6 +855,7 @@ function toast(msg) {
 let durableClarification = null;
 let durableBrief = '';
 let durableAiRevision = null;
+let durableApprovalOpen = false;
 function showClarification(state) {
     const panel = document.getElementById('clarification-panel');
     const pending = state.status === 'awaiting_clarification' ? state.clarification : null;

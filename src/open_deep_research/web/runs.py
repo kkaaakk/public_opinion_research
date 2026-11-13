@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.configuration import (
@@ -19,6 +19,7 @@ from open_deep_research.configuration import (
 )
 from open_deep_research.web.durable import get_run_client
 from open_deep_research.web.run_data import (
+    IDEMPOTENCY_KEY_PATTERN,
     TERMINAL,
     RunConflict,
     RunNotFound,
@@ -61,7 +62,7 @@ def _call(operation, *args, **kwargs):
 
 def _key(raw: Request) -> str:
     key = raw.headers.get("idempotency-key", "")
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", key):
+    if not IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
         raise HTTPException(400, "A bounded Idempotency-Key header is required.")
     return key
 
@@ -182,29 +183,32 @@ class Approval(BaseModel):
     """Bind one owner decision to the exact immutable plan shown to the user."""
 
     model_config = ConfigDict(extra="forbid")
-    plan_version: str = Field(pattern=r"^[a-f0-9]{64}$")
+    version: str = Field(
+        pattern=r"^[a-f0-9]{64}$",
+        validation_alias=AliasChoices("version", "plan_version"),
+    )
     decision: Literal["approve", "reject", "edit", "revise"]
     brief_md: str | None = Field(default=None, max_length=30000)
     feedback: str | None = Field(
         default=None, max_length=MAX_BRIEF_FEEDBACK_CHARS, strict=True
     )
-    revision_attempt: int | None = Field(default=None, ge=0, strict=True)
 
 
 @router.post("/{run_id}/approval")
 def approve(run_id: str, body: Approval, raw: Request) -> dict:
     """Consume an approval once and persist the continuation delivery atomically."""
     owner = trusted_owner(raw)
+    key = _key(raw) if body.decision == "revise" else raw.headers.get("idempotency-key")
     return public_run(
         _call(
             _store().approve,
             run_id,
             owner,
-            body.plan_version,
+            body.version,
             body.decision,
             body.brief_md,
             feedback=body.feedback,
-            revision_attempt=body.revision_attempt,
+            key=key,
         )
     )
 

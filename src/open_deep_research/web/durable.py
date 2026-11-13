@@ -16,6 +16,7 @@ from open_deep_research.observability.telemetry import (
 )
 from open_deep_research.runtime.sdk_runtime import SDK_RUNTIME_VERSION
 from open_deep_research.web.run_data import (
+    IDEMPOTENCY_KEY_PATTERN,
     RunConflict,
     RunNotFound,
     digest,
@@ -27,7 +28,6 @@ from open_deep_research.web.run_data import (
 from open_deep_research.workflow.brief import (
     MAX_BRIEF_FEEDBACK_CHARS,
     MAX_BRIEF_REVISIONS,
-    approval_receipt_version,
 )
 from open_deep_research.workflow.business_steps import SAFE_STEPS
 from open_deep_research.workflow.dbos_config import (
@@ -40,6 +40,17 @@ from open_deep_research.workflow.dbos_config import (
 )
 from open_deep_research.workflow.python_state import copy_state
 from open_deep_research.workflow.run_facts import facts
+
+
+def _revision_unacknowledged(plan, receipt):
+    """The latest submitted revision has yet to publish its result in the plan event."""
+    return bool(
+        receipt
+        and receipt.version == plan["version"]
+        and receipt.decision.startswith("revise:")
+        and receipt.decision.removeprefix("revise:")
+        != plan.get("last_revision_key_hash")
+    )
 
 
 class RunClient:
@@ -218,18 +229,9 @@ class RunClient:
                 clarification = None
             if revision_active and phase == "awaiting_approval":
                 # Show a submitted revision even if the Executor has not received it yet.
-                revision_pending = db.execute(
-                    text(
-                        "SELECT EXISTS(SELECT 1 FROM por_domain.approvals "
-                        "WHERE run_id=:id AND version=:slot AND decision LIKE 'revise:%')"
-                    ),
-                    {
-                        "id": run_id,
-                        "slot": approval_receipt_version(
-                            plan["version"], revision["attempt"]
-                        ),
-                    },
-                ).scalar_one()
+                revision_pending = _revision_unacknowledged(
+                    plan, repo.approval_receipt(db, run_id)
+                )
         # A later round may have replaced both the challenge and its receipt
         # during this read. In that case let the next snapshot show the new round.
         if clarification and clarification != self.client.get_event(
@@ -393,7 +395,10 @@ class RunClient:
                 ],
                 expires_at=timestamp(plan["expires_at"]),
                 ai_revision=dict(
-                    revision, limit=MAX_BRIEF_REVISIONS, pending=revision_pending
+                    used=revision["used"],
+                    error=revision.get("error"),
+                    limit=MAX_BRIEF_REVISIONS,
+                    pending=revision_pending,
                 )
                 if revision is not None
                 else None,
@@ -430,40 +435,54 @@ class RunClient:
                 )
         return result
 
-    def _human_command(self, run_id, owner, version, decision, topic, payload):
-        """Reuse the existing locked approval receipt and native transactional message.
+    def _human_command(self, run_id, owner, version, topic, payload, *, key=None):
+        """Commit a human receipt and its native message under the same Run lock."""
+        repo = self.facts
+        command = dict(owner=owner, version=version, **payload)
+        receipt = topic + ":" + digest(payload)
+        message_key = topic + ":" + version
+        with repo.engine.begin() as db:
+            req = repo.request(run_id, owner, db=db, lock=True)
+            if key is not None:
+                key_hash = digest(dict(run_id=run_id, owner=owner, key=key))
+                fingerprint = digest(dict(run_id=run_id, **command))
+                previous = db.execute(
+                    text(
+                        "SELECT fingerprint FROM por_domain.brief_revision_receipts "
+                        "WHERE run_id=:id AND key_hash=:key"
+                    ),
+                    {"id": run_id, "key": key_hash},
+                ).scalar_one_or_none()
+                if previous is not None:
+                    if previous != fingerprint:
+                        raise RunConflict(
+                            "Idempotency-Key was used for a different Brief revision"
+                        )
+                    return  # Even after later revisions or approval, acknowledge the original send.
+                receipt = "revise:" + key_hash
+                message_key = receipt
+                command.update(
+                    revision_key_hash=key_hash, feedback=payload["feedback"].strip()
+                )
 
-        Only the last accepted interaction receipt is needed: old duplicates either
-        acknowledge the same payload or fail closed, never create a new continuation.
-        """
-        receipt = (decision if decision == "revise" else topic) + ":" + digest(payload)
-        with self.facts.engine.begin() as db:
-            req = self.facts.request(run_id, owner, db=db, lock=True)
-            self.facts.validate(req)
-            old = db.execute(
-                text(
-                    "SELECT version,decision FROM por_domain.approvals WHERE run_id=:id"
-                ),
-                {"id": run_id},
-            ).first()
+            repo.validate(req)
+            old = repo.approval_receipt(db, run_id)
+            # Read the phase before the payload it fences. The receipt covers the
+            # gap before recv and until the parent publishes the revision result.
+            active = self.native(run_id).status == "PENDING"
+            phase = self.client.get_event(run_id, "phase", timeout_seconds=0)
             pending = self.client.get_event(
                 run_id,
                 "plan" if topic == "approval" else "clarification",
                 timeout_seconds=0,
             )
-            revision = (pending or {}).get("ai_revision") or {}
-            attempt = payload.get("revision_attempt", revision.get("attempt", 0))
-            slot = (
-                approval_receipt_version(version, attempt)
-                if topic == "approval"
-                else version
-            )
-            if old and old[0] == slot:
-                if old[1] == receipt:
-                    if topic == "approval" and payload.get("decision") in {
-                        "approve",
-                        "reject",
-                    }:
+            if (
+                old
+                and old.version == version
+                and not old.decision.startswith("revise:")
+            ):
+                if old.decision == receipt:
+                    if payload.get("decision") in {"approve", "reject"}:
                         raise RunConflict("Approval already consumed")
                     if (
                         topic == "clarification"
@@ -471,27 +490,42 @@ class RunClient:
                         and pending["version"] != version
                     ):
                         raise RunConflict("Clarification version changed")
-                    return  # committed duplicate, including a lost HTTP acknowledgement
+                    return
                 raise RunConflict("This version already has a different decision")
-            current = self.get(run_id, owner)
-            phase = (
+            if (
+                active
+                and topic == "approval"
+                and (
+                    phase == "revising_brief"
+                    or (pending and _revision_unacknowledged(pending, old))
+                )
+            ):
+                raise RunConflict("Brief AI revision is already in progress")
+            expected_phase = (
                 "awaiting_approval" if topic == "approval" else "awaiting_clarification"
             )
             if (
                 req["cancel_requested"]
-                or current["status"] != phase
+                or not active
+                or phase != expected_phase
                 or not pending
                 or pending["version"] != version
-                or self.facts.now(db) >= pending["expires_at"]
+                or repo.now(db) >= pending["expires_at"]
             ):
                 raise RunConflict(
                     "Interaction expired, was cancelled, or its version changed"
                 )
-            if decision == "revise":
-                if not revision or attempt != revision["attempt"]:
-                    raise RunConflict("Brief revision attempt changed")
-                if revision["used"] >= MAX_BRIEF_REVISIONS:
+            if key is not None:
+                revision = pending.get("ai_revision")
+                if revision is None or revision["used"] >= MAX_BRIEF_REVISIONS:
                     raise RunConflict("Brief AI revision limit reached")
+                db.execute(
+                    text(
+                        "INSERT INTO por_domain.brief_revision_receipts "
+                        "(run_id,key_hash,fingerprint) VALUES (:id,:key,:fingerprint)"
+                    ),
+                    {"id": run_id, "key": key_hash, "fingerprint": fingerprint},
+                )
             if topic == "clarification":
                 from open_deep_research.workflow.brief import validate_answers
 
@@ -503,16 +537,13 @@ class RunClient:
                     raise RunConflict(str(exc)) from exc
             db.execute(
                 text(
-                    "INSERT INTO por_domain.approvals VALUES (:id,:v,:d) ON CONFLICT (run_id) DO UPDATE SET version=EXCLUDED.version,decision=EXCLUDED.decision"
+                    "INSERT INTO por_domain.approvals (run_id,version,decision) VALUES (:id,:v,:d) "
+                    "ON CONFLICT (run_id) DO UPDATE SET version=EXCLUDED.version,decision=EXCLUDED.decision"
                 ),
-                {"id": run_id, "v": slot, "d": receipt},
+                {"id": run_id, "v": version, "d": receipt},
             )
             self.client.send_in_transaction(
-                db,
-                run_id,
-                dict(owner=owner, version=version, **payload),
-                topic=topic,
-                idempotency_key=topic + ":" + slot,
+                db, run_id, command, topic=topic, idempotency_key=message_key
             )
 
     def approve(
@@ -524,27 +555,25 @@ class RunClient:
         brief_md=None,
         *,
         feedback=None,
-        revision_attempt=None,
+        key=None,
     ):
         if decision not in {"approve", "reject", "edit", "revise"}:
             raise RunConflict("Invalid approval decision")
         payload = dict(decision=decision)
         if decision == "revise":
+            if not isinstance(key, str) or not IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
+                raise RunConflict(
+                    "A bounded Idempotency-Key is required for Brief revision"
+                )
             if (
                 not isinstance(feedback, str)
                 or not feedback.strip()
                 or len(feedback) > MAX_BRIEF_FEEDBACK_CHARS
-                or type(revision_attempt) is not int
-                or revision_attempt < 0
             ):
-                raise RunConflict(
-                    "Brief revision requires bounded feedback and the current attempt"
-                )
-            payload.update(feedback=feedback.strip(), revision_attempt=revision_attempt)
-        elif feedback is not None or revision_attempt is not None:
-            raise RunConflict(
-                "Revision fields are only accepted with a revise decision"
-            )
+                raise RunConflict("Brief revision requires bounded feedback")
+            payload["feedback"] = feedback
+        elif feedback is not None or key is not None:
+            raise RunConflict("Feedback and Idempotency-Key require a revise decision")
         if decision == "edit":
             from open_deep_research.workflow.brief import validate_brief
 
@@ -556,7 +585,7 @@ class RunClient:
             raise RunConflict(
                 "Brief edits must be saved before approving their new version"
             )
-        self._human_command(run_id, owner, plan_version, decision, "approval", payload)
+        self._human_command(run_id, owner, plan_version, "approval", payload, key=key)
         return self.get(run_id, owner)
 
     def clarify(self, run_id, owner, version, answers, skip=False):
@@ -564,7 +593,6 @@ class RunClient:
             run_id,
             owner,
             version,
-            "answer",
             "clarification",
             dict(answers=answers, skip=skip),
         )

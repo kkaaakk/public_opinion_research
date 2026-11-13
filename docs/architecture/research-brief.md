@@ -1,7 +1,8 @@
 # Markdown Research Brief workflow
 
-The Brief AI revision release uses application version
-`dbosrunner-brief-revision-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
+The Brief request-key release uses application version
+`dbosrunner-brief-idempotency-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
+See the [cutover steps](dbos-deployment.md#brief-请求键版本切换).
 DBOS owns execution and recovery, Runner owns the four business Agent loops, and
 Research Graph owns evidence. Markdown carries research intent, never execution control.
 
@@ -108,14 +109,14 @@ start-to-completion for each planning or research child. The parent has no
 overall wall-clock deadline, so queue time and human waits are separate.
 Cancellation uses the existing persisted intent, native cancellation and Finalizer.
 
-`POST .../approval` accepts `{plan_version, decision}` where decision is `approve`,
-`reject`, `edit`, or `revise`. An edit also supplies `brief_md`, validates it, then publishes
-a new version. Saving and approving are separate commands: an old approval cannot
-approve newly edited text. Unsaved edits disable the UI approval button.
+`POST .../approval` accepts `{version, decision}` and retains the `plan_version` input
+alias for existing callers. An `edit` supplies `brief_md` and publishes a new version
+after validation. The user then approves that exact version in a separate command.
+Unsaved edits disable the UI approval button.
 
-No new tables: the existing locked request row and `por_domain.approvals` hold the
-last accepted interaction receipt, and DBOS stores the transactional continuation
-message and journal. A receipt binds topic, exact version and payload digest.
+The existing locked request row and `por_domain.approvals` hold the latest
+interaction receipt. DBOS stores the transactional continuation message and journal.
+A clarification, manual edit or approval receipt binds topic, version and payload digest.
 Same-payload clarification retransmissions acknowledge the committed command
 while it is the latest challenge and receipt. Publishing a later round invalidates
 earlier versions, including identical retransmissions. Same-payload edits
@@ -126,20 +127,29 @@ controls validate the accepted application and configuration before sending.
 
 ## AI revision during approval
 
-Send `{"plan_version":"…","decision":"revise","feedback":"Compare product quality","revision_attempt":0}`
-to the existing approval endpoint. Use the current `plan.ai_revision.attempt` from
-the Run snapshot. Feedback is trimmed, must be nonempty, and is limited to 4,000
-characters. The snapshot carries the pending flag, success count, limit, and any
-settled revision error.
+Send `{"version":"…","decision":"revise","feedback":"Compare product quality"}`
+with an `Idempotency-Key` header to the same approval endpoint. The key accepts
+1–128 characters from `[A-Za-z0-9_.:-]`. Feedback must be nonempty after trimming
+and is limited to 4,000 characters. The Run snapshot shows the pending flag, success
+count, limit and any settled error.
 
-The existing request-row lock serializes approval controls. The receipt and
-native send are committed together. The receipt binds the Brief version,
-revision attempt and feedback digest. Retrying the identical command while its
-receipt is current acknowledges the original operation. A different command
-cannot claim that slot. A settled failure advances the attempt while retaining
-the version and success count, so a deliberate retry must use the new attempt.
+The request-row lock serializes approval controls. RunClient commits the latest
+approval receipt, the keyed receipt and the native message in one transaction.
+The keyed receipt binds Run, owner, exact version, decision and submitted feedback.
+An identical retransmission acknowledges the earlier submission and returns the
+current Run snapshot, even after later revisions or approval. A different payload
+using that key returns HTTP 409. The approval endpoint reserves the key header for
+AI revision submissions. New keys require the current open version, an
+unexpired deadline and available AI revision quota. An outstanding revision blocks
+other approval actions until the parent publishes its result.
 
-`por.run` enqueues `:brief-revision:N` on BUSINESS as a revision-mode `por.plan`
+Studio and Classic save the key and exact request in the current tab before sending.
+After a timeout or lost response, the confirmation action resends that identity.
+A deliberate retry after a settled failure creates a new key. The original Brief
+and `used` stay intact, and the user can still approve that version.
+
+The DBOS approval message carries the scoped key digest. `por.run` uses it to
+enqueue `{run_id}:brief-revision:{key_hash}` on BUSINESS as a revision-mode `por.plan`
 child. The model sees the current saved Brief, original conversation, image and
 clarification context, and feedback as task data beneath fixed instructions.
 Only the full validated result creates a new Brief revision and consumes one
@@ -163,12 +173,12 @@ incur usage. The compaction input includes the candidate, current Brief and
 explicit feedback. Provider context limits can reject large inputs. The
 planner retains the original context and surfaces that failure to the user.
 
-There is no schema migration. The approval snapshot adds small counters, and
-a pending approval read can check the indexed receipt. Each accepted revision
-writes the same transactional receipt and native message as an approval. Its
-child adds a reservation, stage checkpoints, native `por.llm` output, physical
-usage receipts and settlement. The parent writes the updated plan event and
-continues its existing approval loop.
+`--initialize-only` adds `por_domain.brief_revision_receipts` with a unique
+`(run_id, key_hash)` primary key. It stores accepted request fingerprints for
+as long as the Run is retained, including failed revisions. The child uses the
+existing reservation, native model and result Steps, usage receipts and
+settlement. The parent records the consumed key digest with the result in the
+native plan event so the same Brief version can accept a new user command.
 
 Committed model Steps are reused after Executor restart. If a provider returned
 before its native result committed, the external-effect guard blocks automatic

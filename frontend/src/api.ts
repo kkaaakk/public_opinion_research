@@ -81,6 +81,7 @@ export class StudioApi {
         method: 'POST',
         headers: key ? { 'Idempotency-Key': key } : undefined,
         body: body ? JSON.stringify(body) : undefined,
+        signal: action === 'approval' && key ? AbortSignal.timeout(30000) : undefined,
       }),
     );
   }

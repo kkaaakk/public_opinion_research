@@ -27,6 +27,7 @@ from open_deep_research.state import (
 )
 from open_deep_research.workflow.brief import BriefRevision, PlanDecision
 
+IDEMPOTENCY_KEY_PATTERN = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted"})
 _MODELS = {
     c.__name__: c

@@ -128,6 +128,7 @@
             <p id="approval-version"></p>
             <pre id="approval-plan"></pre>
             <p id="brief-revision-status" role="status"></p>
+            <button id="confirm-brief-revision-btn" class="btn-action hidden" type="button" onclick="decidePlan('revise')">确认原 AI 修改请求</button>
             <button id="revise-brief-btn" class="btn-action hidden" type="button" onclick="document.getElementById('brief-revision-form').classList.toggle('hidden')">AI 修改 Brief</button>
             <div id="brief-revision-form" class="hidden">
                 <label>AI 修改意见<textarea id="brief-revision-feedback" rows="4" maxlength="4000" style="width:100%"></textarea></label>
@@ -194,6 +195,6 @@
         </footer>
     </div>
 
-    <script src="/static/app.js?v=20261110-brief-revision"></script>
+    <script src="/static/app.js?v=20261113-brief-idempotency"></script>
 </body>
 </html>

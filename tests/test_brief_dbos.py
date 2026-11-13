@@ -7,10 +7,11 @@ from threading import Event
 import pytest
 from langchain_core.messages import HumanMessage
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from test_python_workflow_sdk import CLARIFICATION_ANSWERS, CLARIFICATION_QUESTIONS
 from test_research_brief import BRIEF
 
-from open_deep_research.web.run_data import RunConflict
+from open_deep_research.web.run_data import RunConflict, RunNotFound, digest
 from open_deep_research.workflow.run_facts import facts
 
 pytestmark = pytest.mark.integration
@@ -34,6 +35,9 @@ def test_prior_edit_receipt_cannot_block_current_brief_expiration(
     original = repo.now
     with monkeypatch.context() as patch:
         patch.setattr(repo, "now", lambda db: original(db) + 90000)
+        with pytest.raises(RunConflict, match="expired"):
+            revise(c, run, current, "Late feedback", key="expired")
+        assert not c.revision_requests
         assert repo.expire_approval(run["run_id"], current)
         assert repo.expire_approval(run["run_id"], current)
     with repo.engine.connect() as db:
@@ -352,24 +356,25 @@ def test_clarification_timeout_cancels_without_success_or_research(native_case, 
         c.client.clarify(run["run_id"], "alice", pending["version"], {}, True)
 
 
-def pending_brief(case, run, attempt=0):
+def pending_brief(case, run, used=0, *, error=None):
     return case.wait(
         run,
         lambda r: r["status"] == "awaiting_approval"
         and r["plan"]
         and not r["plan"]["ai_revision"]["pending"]
-        and r["plan"]["ai_revision"]["attempt"] == attempt,
+        and r["plan"]["ai_revision"]["used"] == used
+        and r["plan"]["ai_revision"]["error"] == error,
     )["plan"]
 
 
-def revise(case, run, plan, feedback):
+def revise(case, run, plan, feedback, *, key):
     return case.client.approve(
         run["run_id"],
         run["owner"],
         plan["version"],
         "revise",
         feedback=feedback,
-        revision_attempt=plan["ai_revision"]["attempt"],
+        key=key,
     )
 
 
@@ -394,7 +399,7 @@ def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_a
     assert initial["ai_revision"]["used"] == 0 and not c.revision_requests
     for n in range(1, 4):
         feedback = f"Require competitor comparison dimension {n}."
-        revise(c, run, plan, feedback)
+        revise(c, run, plan, feedback, key=f"revise-{n}")
         next_plan = pending_brief(c, run, n)
         assert next_plan["version"] != plan["version"]
         assert next_plan["content_hash"] != plan["content_hash"]
@@ -412,9 +417,9 @@ def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_a
         plan = next_plan
 
     with pytest.raises(RunConflict, match="limit"):
-        revise(c, run, plan, "Fourth revision is forbidden.")
+        revise(c, run, plan, "Fourth revision is forbidden.", key="fourth")
     with pytest.raises(RunConflict):
-        revise(c, run, initial, "Stale brief.")
+        revise(c, run, initial, "Stale brief.", key="stale")
     assert len(c.revision_requests) == 3 and len(c.plan_prompts) == 4
     assert not c.models and not c.calls and not facts().request(run_id)["occupied"]
 
@@ -434,9 +439,8 @@ def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_a
     assert len(c.revision_requests) == 3
 
 
-def test_concurrent_revision_receipt_and_http_retry_are_atomic(
-    native_case, monkeypatch
-):
+@pytest.mark.parametrize("same_key", [True, False], ids=["same-key", "different-keys"])
+def test_concurrent_http_revision_and_lost_response(native_case, monkeypatch, same_key):
     from fastapi.testclient import TestClient
 
     from open_deep_research.web import server
@@ -450,68 +454,161 @@ def test_concurrent_revision_receipt_and_http_retry_are_atomic(
     c.revision_response = wait_for_release
     run = c.create(owner="operator", approval=True)
     plan = pending_brief(c, run)
-    base = {
-        "plan_version": plan["version"],
-        "decision": "revise",
-        "revision_attempt": 0,
-    }
+    base = {"version": plan["version"], "decision": "revise"}
     path = "/api/runs/" + run["run_id"]
     monkeypatch.setattr(server, "WEB_API_TOKEN", "revision-http-test-only")
     with TestClient(
         server.app, headers={"Authorization": "Bearer revision-http-test-only"}
     ) as http:
-        assert (
-            http.post(path + "/approval", json=dict(base, feedback="  ")).status_code
-            == 409
-        )
+
+        def submit(key, feedback, **fields):
+            return http.post(
+                path + "/approval",
+                json=(base | dict(feedback=feedback) | fields),
+                headers={"Idempotency-Key": key},
+            )
+
+        feedback = "Compare service channels."
         assert (
             http.post(
-                path + "/approval",
-                json=dict(base, feedback="ok", revision_attempt=True),
+                path + "/approval", json=dict(base, feedback=feedback)
             ).status_code
             == 400
         )
+        assert submit("has space", feedback).status_code == 400
+        assert submit("k" * 129, feedback).status_code == 400
+        assert submit("blank", "  ").status_code == 409
+        assert submit("obsolete", feedback, revision_attempt=0).status_code == 400
         try:
-            bodies = [
-                dict(base, feedback=f"Compare service channel {n}.") for n in (1, 2)
-            ]
+            keys = ["revision-1", "revision-1" if same_key else "revision-2"]
             with ThreadPoolExecutor(2) as pool:
-                responses = list(
-                    pool.map(
-                        lambda body: http.post(path + "/approval", json=body), bodies
-                    )
-                )
-            assert sorted(response.status_code for response in responses) == [200, 409]
-            winner = bodies[
-                next(
-                    i
-                    for i, response in enumerate(responses)
-                    if response.status_code == 200
-                )
-            ]
-            waiting = http.get(path).json()["plan"]
-            assert (
-                waiting["version"] == plan["version"]
-                and waiting["ai_revision"]["pending"]
+                responses = list(pool.map(lambda key: submit(key, feedback), keys))
+            assert sorted(response.status_code for response in responses) == (
+                [200, 200] if same_key else [200, 409]
             )
-            assert http.post(path + "/approval", json=winner).status_code == 200
+            key = next(
+                k for k, response in zip(keys, responses) if response.status_code == 200
+            )
+            waiting = http.get(path).json()["plan"]
+            assert waiting["version"] == plan["version"]
+            assert waiting["ai_revision"]["pending"]
+            assert submit(key, feedback).status_code == 200
+            for changed in (
+                submit(key, "Different feedback."),
+                submit(key, feedback, version="a" * 64),
+                submit(key, feedback + " "),
+            ):
+                assert changed.status_code == 409
+                assert "different Brief revision" in changed.json()["detail"]
+            conflict = submit("new-key", feedback)
+            assert conflict.status_code == 409
+            assert "in progress" in conflict.json()["detail"]
             assert (
                 http.post(
-                    path + "/approval",
-                    json={"plan_version": plan["version"], "decision": "approve"},
+                    path + "/approval", json=dict(base, decision="approve")
                 ).status_code
                 == 409
             )
+            with pytest.raises(RunNotFound):
+                c.client.approve(
+                    run["run_id"],
+                    "other-owner",
+                    plan["version"],
+                    "revise",
+                    feedback=feedback,
+                    key=key,
+                )
             c.wait(run, lambda r: bool(c.revision_requests))
             assert facts().request(run["run_id"])["occupied"]
         finally:
             release.set()
         result = pending_brief(c, run, 1)
-        assert (
-            result["ai_revision"]["used"] == 1 and winner["feedback"] in result["brief"]
-        )
-        assert http.post(path + "/approval", json=winner).status_code == 200
+        assert feedback in result["brief"]
+        # Ignore the original POST response and retransmit after the model has
+        # completed and the version has advanced.
+        assert submit(key, feedback).json()["plan"]["version"] == result["version"]
+        assert submit("new-key", feedback).status_code == 409
         assert len(c.revision_requests) == 1
+        children = facts().client.list_workflows(
+            workflow_id_prefix=run["run_id"] + ":brief-revision:"
+        )
+        key_hash = digest(dict(run_id=run["run_id"], owner="operator", key=key))
+        assert [w.workflow_id for w in children] == [
+            f"{run['run_id']}:brief-revision:{key_hash}"
+        ]
+
+
+def test_revision_receipts_and_native_message_rollback_together(
+    native_case, monkeypatch
+):
+    c = native_case
+    run = c.create(approval=True)
+    run_id = run["run_id"]
+    plan = pending_brief(c, run)
+    key = "lost-transaction"
+    feedback = "Add support as a research dimension."
+    key_hash = digest(dict(run_id=run_id, owner=run["owner"], key=key))
+    repo = facts()
+
+    def counts():
+        with repo.engine.connect() as db:
+            return db.execute(
+                text(
+                    "SELECT (SELECT count(*) FROM por_domain.approvals WHERE run_id=:id),"
+                    " (SELECT count(*) FROM por_domain.brief_revision_receipts WHERE run_id=:id),"
+                    " (SELECT count(*) FROM por_dbos.notifications WHERE message_uuid=:message)"
+                ),
+                {"id": run_id, "message": f"revise:{key_hash}::{run_id}"},
+            ).one()
+
+    send = c.client.client.send_in_transaction
+
+    def fail_after_insert(*args, **kwargs):
+        send(*args, **kwargs)
+        raise SQLAlchemyError("Simulated rollback after the real transactional send")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(c.client.client, "send_in_transaction", fail_after_insert)
+        with pytest.raises(SQLAlchemyError, match="Simulated rollback"):
+            revise(c, run, plan, feedback, key=key)
+    assert tuple(counts()) == (0, 0, 0)
+    assert not c.revision_requests
+
+    revise(c, run, plan, feedback, key=key)
+    pending_brief(c, run, 1)
+    revise(c, run, plan, feedback, key=key)
+    assert tuple(counts()) == (1, 1, 1)
+    assert len(c.revision_requests) == 1
+
+
+def test_delayed_keys_survive_repeated_failed_revisions_and_approval(native_case):
+    c = native_case
+
+    async def fail(_):
+        raise RuntimeError("Scripted provider failure")
+
+    c.revision_response = fail
+    run = c.create(approval=True)
+    plan = pending_brief(c, run)
+    feedback = "Add support as a research dimension."
+    for n in range(1, 5):
+        revise(c, run, plan, feedback, key=f"failure-{n}")
+        result = pending_brief(c, run, error="model_error")
+        assert result["version"] == plan["version"] and result["brief"] == plan["brief"]
+        assert len(c.revision_requests) == n
+    assert not facts().request(run["run_id"])["occupied"]
+    result = revise(c, run, plan, feedback, key="failure-1")
+    assert not result["plan"]["ai_revision"]["pending"]
+    assert len(c.revision_requests) == 4
+    c.client.approve(run["run_id"], "alice", plan["version"], "approve")
+    done = c.wait(run, lambda r: r["archive_status"] == "saved")
+    assert done["status"] == "completed" and done["plan"]["locked"]
+    assert done["plan"]["version"] == plan["version"]
+    assert revise(c, run, plan, feedback, key="failure-2")["status"] == "completed"
+    children = facts().client.list_workflows(
+        workflow_id_prefix=run["run_id"] + ":brief-revision:"
+    )
+    assert len(children) == 4 and all(w.status == "SUCCESS" for w in children)
 
 
 @pytest.mark.parametrize(
@@ -544,8 +641,8 @@ def test_revision_failure_keeps_old_version_and_compaction_bills_once(
     run = c.create(approval=True)
     old = pending_brief(c, run)
     feedback = "Add explicit comparison of support response times."
-    revise(c, run, old, feedback)
-    result = pending_brief(c, run, 1)
+    revise(c, run, old, feedback, key="first")
+    result = pending_brief(c, run, int(expected is None), error=expected)
     assert result["ai_revision"]["error"] == expected
     assert result["expires_at"] == old["expires_at"]
     assert len(c.revision_requests) == calls
@@ -562,12 +659,12 @@ def test_revision_failure_keeps_old_version_and_compaction_bills_once(
         return
     assert result["version"] == old["version"] and result["brief"] == old["brief"]
     assert result["ai_revision"]["used"] == 0
-    revise(c, run, old, feedback)  # Lost ACK acknowledges the same failed attempt.
+    revise(c, run, old, feedback, key="first")  # Acknowledge the same failed request.
     assert len(c.revision_requests) == calls
     if mode == "provider":
         c.revision_response = None
-        revise(c, run, result, feedback)
-        recovered = pending_brief(c, run, 2)
+        revise(c, run, result, feedback, key="new-key")
+        recovered = pending_brief(c, run, 1)
         assert (
             recovered["ai_revision"]["used"] == 1
             and recovered["ai_revision"]["error"] is None
@@ -589,7 +686,7 @@ def test_revision_in_flight_cannot_publish_after_expiry_or_cancel(
     c.revision_response = blocked
     run = c.create(approval=True)
     old = pending_brief(c, run)
-    revise(c, run, old, "Add competitor scope.")
+    revise(c, run, old, "Add competitor scope.", key="pending")
     c.wait(
         run, lambda r: r["plan"]["ai_revision"]["pending"] and bool(c.revision_requests)
     )
@@ -625,7 +722,7 @@ def test_revision_in_flight_cannot_publish_after_expiry_or_cancel(
         not c.models and not c.calls and not facts().request(run["run_id"])["occupied"]
     )
     with pytest.raises(RunConflict):
-        revise(c, run, old, "Late feedback.")
+        revise(c, run, old, "Late feedback.", key="late")
 
 
 def test_single_synthesis_failure_retries_without_repeating_roles(

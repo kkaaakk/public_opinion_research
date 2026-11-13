@@ -899,7 +899,7 @@ async def run_workflow(run_id):
     )
     needs_approval = req["data"]["config"]["configurable"]["allow_plan_feedback"]
     if needs_approval:
-        plan["ai_revision"] = {"attempt": 0, "used": 0, "error": None}
+        plan["ai_revision"] = {"used": 0, "error": None}
     while True:
         await DBOS.set_event_async("plan", plan)
         if not needs_approval:
@@ -938,19 +938,16 @@ async def run_workflow(run_id):
             continue
         if command["decision"] == "revise":
             revision = plan["ai_revision"]
-            if (
-                command["revision_attempt"] != revision["attempt"]
-                or revision["used"] >= MAX_BRIEF_REVISIONS
-            ):
+            if revision["used"] >= MAX_BRIEF_REVISIONS:
                 raise ValueError("Brief revision continuation no longer authorized")
             if await interaction_clock() >= plan["expires_at"]:
                 return await end_approval(run_id, "expired")
             await DBOS.set_event_async("phase", "revising_brief")
             await send_event(run_id, "run_status", status="running")
             apply_patch(state, {"workflow": {"brief": plan["brief"]}})
-            attempt = revision["attempt"] + 1
+            key_hash = command["revision_key_hash"]
             with (
-                SetWorkflowID(f"{run_id}:brief-revision:{attempt}"),
+                SetWorkflowID(f"{run_id}:brief-revision:{key_hash}"),
                 SetEnqueueOptions(queue_partition_key=req["owner"]),
                 SetWorkflowTimeout(req["data"]["run_seconds"]),
             ):
@@ -969,7 +966,13 @@ async def run_workflow(run_id):
             if await interaction_clock() >= plan["expires_at"]:
                 return await end_approval(run_id, "expired")
             error = revised["revision_error"]
-            plan = dict(plan, ai_revision=dict(revision, attempt=attempt, error=error))
+            # Acknowledge the consumed message with the plan publication. A
+            # settled failure reopens approval at the same Brief version.
+            plan = dict(
+                plan,
+                last_revision_key_hash=key_hash,
+                ai_revision=dict(revision, error=error),
+            )
             if error is None:
                 brief = validate_brief(state["workflow"]["brief"])
                 plan.update(

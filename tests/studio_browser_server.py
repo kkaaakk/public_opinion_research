@@ -77,10 +77,18 @@ def main():
     settings.cache_clear()
     patch = pytest.MonkeyPatch()
     with tempfile.TemporaryDirectory(prefix="por-studio-browser-") as directory:
+        failed_feedback = set()
 
         async def revise(data):
-            if "browser-delay-revision" in data["feedback"]:
+            feedback = data["feedback"]
+            if "browser-delay-revision" in feedback:
                 await asyncio.sleep(15)
+            if (
+                "browser-fail-once-revision" in feedback
+                and feedback not in failed_feedback
+            ):
+                failed_feedback.add(feedback)
+                raise RuntimeError("Controlled revision provider failure")
 
         _, cfg, _, _, _, _ = install_sdk(patch, Path(directory), on_revision=revise)
         cfg["configurable"].update(

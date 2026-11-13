@@ -1,7 +1,10 @@
 # DBOS production execution — Phase 5
 
-> 当前应用版本为 `dbosrunner-stage-settlement-v1`。阶段费用随现有
-> `por.stage_result` Step 持久化。见[切换步骤](#阶段清算版本切换)和[职责审查](../audits/run-execution-reliability.md)。
+> 当前应用版本为 `dbosrunner-brief-idempotency-v1`。Brief AI 修改的子 Workflow ID
+> 绑定 HTTP 请求 Key。见[切换步骤](#brief-请求键版本切换)及 [Brief API 合同](research-brief.md#ai-revision-during-approval)。
+>
+> `dbosrunner-stage-settlement-v1` 将阶段费用随 `por.stage_result` Step 持久化。
+> 见[阶段清算版本切换](#阶段清算版本切换)和[职责审查](../audits/run-execution-reliability.md)。
 >
 > 2026-11-10 的 `dbosrunner-brief-revision-v1`。Brief AI 修改使用
 > 既有 `por.run` 审批循环和 `por.plan` 业务子 Workflow，命令序列已变更。
@@ -90,6 +93,24 @@ outage fails admission/control writes closed. API storage failures return503;
 EOF from SSE means reconnect/read status, not success. `--health` checks the
 PostgreSQL native catalog. Process liveness is separately supervised by the
 operator; there is no claimed application heartbeat endpoint for Executors.
+
+## Brief 请求键版本切换
+
+1. 停止旧 API 的新研究准入。保留原 API、前端和匹配的 Executor，
+   完成或取消并清算 `dbosrunner-stage-settlement-v1` 及更早版本的任务。
+   清点等待审批的 Brief、已提交但尚未接收的审批消息、运行中的修改子 Workflow、
+   重试、待归档及未确认外部效果。按原版本核对外部回执，并备份两个 PostgreSQL schema
+   及关联业务存储。
+2. 用新发行版运行 `python -m open_deep_research.web.executor --migration-check`。
+   该命令打印原生 journal 和占位清单，确认输出为 `[]` 后再切换。旧版本未完成的
+   `por.run`、`por.plan` 及未清算占位会阻止新版 Executor 启动和新 Run 准入。
+3. 用迁移角色运行 `--initialize-only`，增量创建 `por_domain.brief_revision_receipts`，
+   为运行角色补齐该表的 DML 权限，再一起部署新版 API、Studio、Classic 与 Executor。
+   旧 `approvals`、Brief 快照和子 Workflow ID 原样保留。旧回执没有 HTTP Key，
+   无法回填历史 Key，旧审批消息由原发行版消费。
+4. 回滚时先停新版准入，由新版完成或取消并清算已接纳的任务，再恢复旧 API 与
+   Executor。保留新增回执表及各版本原生 journal，避免失去延迟重发的请求身份。
+   [DBOS 版本匹配规则](https://docs.dbos.dev/python/tutorials/upgrading-workflows#versioning)
 
 ## 阶段清算版本切换
 

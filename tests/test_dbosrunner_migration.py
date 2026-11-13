@@ -15,26 +15,41 @@ pytestmark = pytest.mark.integration
         ("dbosrunner-unified-v1", "por.run", ("old",)),
         ("dbosrunner-clarification-v1", "por.run", ("old",)),
         ("dbosrunner-brief-revision-v1", "por.plan", ("old", {}, 1)),
+        ("dbosrunner-stage-settlement-v1", "por.run", ("old",)),
+        ("dbosrunner-stage-settlement-v1", "por.plan", ("old", {}, 1)),
     ],
 )
 def test_old_pending_journal_is_inventoried_and_not_deleted(
     pg_database, version, workflow, args
 ):
+    from test_python_workflow import config, initial
+
+    from open_deep_research.web.durable import RunClient
+    from open_deep_research.web.executor import launch
+
     repo = facts()
     assert repo.migration_inventory() == []
-    repo.client.enqueue(
-        {
-            "workflow_name": workflow,
-            "workflow_id": "old-journal-test",
-            "queue_name": "por-business",
-            "app_version": version,
-        },
-        *args,
+    workflow_id = (
+        "old-journal-test:brief-revision:1"
+        if workflow == "por.plan"
+        else "old-journal-test"
     )
+    options = dict(
+        workflow_name=workflow,
+        workflow_id=workflow_id,
+        queue_name="por-business",
+        app_version=version,
+    )
+    revision = (
+        {"revision_request": {"feedback": "Add scope.", "expires_at": 1}}
+        if workflow == "por.plan"
+        else {}
+    )
+    repo.client.enqueue(options, *args, **revision)
     inventory = repo.migration_inventory()
     assert inventory == [
         {
-            "workflow_id": "old-journal-test",
+            "workflow_id": workflow_id,
             "name": workflow,
             "version": version,
             "status": "ENQUEUED",
@@ -42,10 +57,87 @@ def test_old_pending_journal_is_inventoried_and_not_deleted(
     ]
     with pytest.raises(RunConflict, match="original release"):
         repo.require_matching_journals()
+    with pytest.raises(RunConflict, match="original release"):
+        launch("new-version-executor")
+    with pytest.raises(RunConflict, match="original release"):
+        RunClient().create("alice", "new-run", {"topic": "a"}, config(), initial())
     assert (
-        repo.client.list_workflows(workflow_ids=["old-journal-test"])[0].status
-        == "ENQUEUED"
+        repo.client.list_workflows(workflow_ids=[workflow_id])[0].status == "ENQUEUED"
     )
+
+
+def test_brief_receipt_migration_preserves_legacy_plan_and_approval(native_case):
+    from datetime import datetime
+
+    from sqlalchemy import text
+
+    from open_deep_research.web.run_data import digest, dumps
+
+    case = native_case
+    run = case.create(approval=True)
+    run_id = run["run_id"]
+    original = case.wait(run, lambda r: r["status"] == "awaiting_approval")["plan"]
+    case.client.cancel(run_id, "alice")
+    case.wait(run, lambda r: r["archive_status"] == "saved")
+    repo = facts()
+    plan = dict(
+        original,
+        expires_at=datetime.fromisoformat(original["expires_at"]).timestamp(),
+        ai_revision={"attempt": 2, "used": 1, "error": "model_error"},
+    )
+    old_slot = digest(dict(plan_version=plan["version"], revision_attempt=1))
+    old_decision = "revise:" + digest(
+        dict(decision="revise", feedback="Add scope.", revision_attempt=1)
+    )
+    with repo.engine.begin() as db:
+        request = repo.request(run_id, db=db)["data"]
+        request["version"] = "dbosrunner-stage-settlement-v1"
+        db.execute(
+            text("UPDATE por_domain.requests SET value=:value WHERE id=:id"),
+            {"id": run_id, "value": dumps(request)},
+        )
+        db.execute(
+            text(
+                "UPDATE por_dbos.workflow_events SET value=:value WHERE workflow_uuid=:id AND key='plan'"
+            ),
+            {"id": run_id, "value": dumps(plan)},
+        )
+        db.execute(
+            text("INSERT INTO por_domain.approvals VALUES (:id,:version,:decision)"),
+            {"id": run_id, "version": old_slot, "decision": old_decision},
+        )
+        db.execute(text("DROP TABLE por_domain.brief_revision_receipts"))
+
+    # --initialize-only uses this additive, idempotent application migration.
+    repo.initialize()
+    repo.initialize()
+    with repo.engine.connect() as db:
+        assert tuple(repo.approval_receipt(db, run_id)) == (old_slot, old_decision)
+        assert (
+            db.execute(
+                text("SELECT count(*) FROM por_domain.brief_revision_receipts")
+            ).scalar_one()
+            == 0
+        )
+    snapshot = case.client.get(run_id, "alice")
+    assert snapshot["workflow_version"] == "dbosrunner-stage-settlement-v1"
+    assert snapshot["plan"]["brief"] == original["brief"]
+    assert snapshot["plan"]["version"] == original["version"]
+    assert snapshot["plan"]["ai_revision"] == {
+        "used": 1,
+        "error": "model_error",
+        "limit": 3,
+        "pending": False,
+    }
+    with pytest.raises(RunConflict, match="original executor"):
+        case.client.approve(
+            run_id,
+            "alice",
+            original["version"],
+            "revise",
+            feedback="Add scope.",
+            key="new-key",
+        )
 
 
 def test_historical_unit_projection_remains_readable(pg_database):

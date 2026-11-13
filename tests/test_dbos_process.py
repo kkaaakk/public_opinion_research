@@ -15,6 +15,7 @@ from dbos_support import NEO4J, NEO4J_PASSWORD  # noqa:F401
 from test_python_workflow import config, initial
 
 from open_deep_research.web.durable import RunClient
+from open_deep_research.web.run_data import digest
 from open_deep_research.workflow.run_facts import facts
 
 pytestmark = pytest.mark.integration
@@ -597,7 +598,9 @@ def test_actual_postgresql_outage_fails_closed(pg_database, tmp_path, monkeypatc
         }
         with facts().engine.connect() as db:
             assert (
-                db.execute(text("SELECT count(*) FROM por_domain.requests")).scalar_one()
+                db.execute(
+                    text("SELECT count(*) FROM por_domain.requests")
+                ).scalar_one()
                 == 1
             )
     finally:
@@ -667,7 +670,13 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
 
 @pytest.mark.parametrize(
     "scenario",
-    ["revision-queued", "revision-before-result", "revision-ack", "revision-unconfirmed"],
+    [
+        "revision-queued",
+        "revision-before-result",
+        "revision-ack",
+        "revision-unconfirmed",
+        "revision-retry",
+    ],
 )
 def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
     from open_deep_research.web.run_data import RunConflict
@@ -690,16 +699,22 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
         wait(lambda: snapshot()["status"] == "awaiting_approval", process, tmp_path)
         old = snapshot()["plan"]
         feedback = "Compare documented competitor product quality."
-        child_id = run_id + ":brief-revision:1"
+        key = "revision-http-request"
+        first_child = (
+            run_id
+            + ":brief-revision:"
+            + digest(dict(run_id=run_id, owner="alice", key=key))
+        )
+        child_id = first_child
 
-        def submit():
+        def submit(key=key):
             return client.approve(
                 run_id,
                 "alice",
                 old["version"],
                 "revise",
                 feedback=feedback,
-                revision_attempt=0,
+                key=key,
             )
 
         def journal():
@@ -709,21 +724,50 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
                 if step["function_name"] == "por.llm"
             ]
 
+        expected_calls = ["call"]
+        if scenario == "revision-retry":
+            submit()
+            wait(
+                lambda: snapshot()["status"] == "awaiting_approval"
+                and not snapshot()["plan"]["ai_revision"]["pending"]
+                and snapshot()["plan"]["ai_revision"]["error"] == "model_error",
+                process,
+                tmp_path,
+            )
+            failed = snapshot()["plan"]
+            assert (
+                failed["version"] == old["version"]
+                and failed["ai_revision"]["used"] == 0
+            )
+            original = client.client.list_workflows(workflow_ids=[first_child])[0]
+            assert (
+                original.status == "SUCCESS"
+                and original.output["revision_error"] == "model_error"
+            )
+            key = "deliberate-retry"
+            child_id = (
+                run_id
+                + ":brief-revision:"
+                + digest(dict(run_id=run_id, owner="alice", key=key))
+            )
+            expected_calls.append("call")
         if scenario == "revision-queued":
             kill_owned(process)
             assert submit()["plan"]["ai_revision"]["pending"]
             assert submit()["plan"]["ai_revision"]["pending"]
             assert not (tmp_path / "revision-calls").exists()
         else:
-            submit()
+            submit(key)
             wait(lambda: (tmp_path / scenario).exists(), process, tmp_path)
             assert snapshot()["plan"]["ai_revision"]["pending"]
             assert facts().request(run_id)["occupied"]
             kill_owned(process)
-            assert (tmp_path / "revision-calls").read_text().splitlines() == ["call"]
+            assert (
+                tmp_path / "revision-calls"
+            ).read_text().splitlines() == expected_calls
 
         committed = journal()
-        if scenario in {"revision-before-result", "revision-ack"}:
+        if scenario in {"revision-before-result", "revision-ack", "revision-retry"}:
             assert len(committed) == 1 and committed[0]["output"]
             saved_results = [
                 step
@@ -764,14 +808,30 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
                 accounting = (tmp_path / "revision-accounting").read_text().splitlines()
                 # Both crashes reuse the model. Only a result callback without
                 # a native checkpoint may run its receipt aggregation again.
-                assert accounting == ["billed"] * (
-                    2 if scenario == "revision-before-result" else 1
+                assert (
+                    accounting
+                    == ["billed"]
+                    * {
+                        "revision-before-result": 2,
+                        "revision-ack": 1,
+                        "revision-retry": 3,
+                    }[scenario]
                 )
-            assert submit()["plan"]["version"] == plan["version"]
+            assert submit(key)["plan"]["version"] == plan["version"]
+            if scenario == "revision-retry":
+                assert submit()["plan"]["version"] == plan["version"]
+                assert (
+                    client.client.list_workflows(workflow_ids=[first_child])[0].output
+                    == original.output
+                )
+            children = client.client.list_workflows(
+                workflow_id_prefix=run_id + ":brief-revision:"
+            )
+            assert {w.workflow_id for w in children} == {first_child, child_id}
             client.approve(run_id, "alice", plan["version"], "approve")
             wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)
             assert snapshot()["status"] == "completed" and snapshot()["plan"]["locked"]
-        assert (tmp_path / "revision-calls").read_text().splitlines() == ["call"]
+        assert (tmp_path / "revision-calls").read_text().splitlines() == expected_calls
     finally:
         kill_owned(process)
         if restart:

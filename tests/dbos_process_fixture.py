@@ -72,8 +72,12 @@ def install(directory, scenario):
             db.execute("INSERT INTO plan_requests(prompt) VALUES (?)", (prompt,))
 
     async def record_revision(_):
-        with (directory / "revision-calls").open("a", encoding="utf-8") as log:
+        path = directory / "revision-calls"
+        first_call = not path.exists()
+        with path.open("a", encoding="utf-8") as log:
             log.write("call\n")
+        if scenario == "revision-retry" and first_call:
+            raise RuntimeError("Settled provider failure before the user's retry")
 
     install_sdk(
         patch,
@@ -192,15 +196,21 @@ def install(directory, scenario):
         while not (directory / (name + ".release")).exists():
             time.sleep(0.05)
 
-    if scenario in {"revision-ack", "revision-before-result"}:
+    if scenario in {"revision-ack", "revision-before-result", "revision-retry"}:
         original_account = RunFacts.accounted_usage
 
         def account(self, unit, observed, carry):
             billed = original_account(self, unit, observed, carry)
-            if unit.endswith(":brief-revision:1"):
-                with (directory / "revision-accounting").open("a", encoding="utf-8") as log:
+            if ":brief-revision:" in unit:
+                with (directory / "revision-accounting").open(
+                    "a", encoding="utf-8"
+                ) as log:
                     log.write("billed\n")
-                if scenario == "revision-before-result":
+                if scenario == "revision-before-result" or (
+                    scenario == "revision-retry"
+                    and (directory / "revision-calls").read_text().splitlines()
+                    == ["call", "call"]
+                ):
                     gate(scenario)
             return billed
 
@@ -318,7 +328,7 @@ def install(directory, scenario):
     def finish(self, unit, permit, **data):
         if (
             scenario == "revision-ack"
-            and unit.endswith(":brief-revision:1")
+            and ":brief-revision:" in unit
             and data.get("artifact")
         ):
             gate(scenario)
@@ -359,7 +369,7 @@ def install(directory, scenario):
     def operation(self, unit, permit, identity, status="started", **kwargs):
         if (
             scenario == "revision-unconfirmed"
-            and unit.endswith(":brief-revision:1")
+            and ":brief-revision:" in unit
             and identity["name"] == "llm"
             and status == "returned"
         ):

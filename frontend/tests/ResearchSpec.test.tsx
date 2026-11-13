@@ -129,7 +129,7 @@ it('edits Markdown, prevents approval of unsaved text, then approves only the ne
     decision: 'approve',
   });
 });
-it('submits revision feedback against its attempt and restores pending and limit states', async () => {
+it('submits revision feedback against its version and restores pending and limit states', async () => {
   const user = userEvent.setup();
   const submit = vi.fn();
   const plan = {
@@ -138,17 +138,16 @@ it('submits revision feedback against its attempt and restores pending and limit
     brief: '# Brief\n\n## Scope\nCurrent research scope',
     sections: [],
     expires_at: clarification.expires_at,
-    ai_revision: { attempt: 1, used: 1, limit: 3, pending: false },
+    ai_revision: { used: 1, limit: 3, pending: false },
   };
   const run = parseSnapshot(snapshot({ status: 'awaiting_approval', plan }));
   const view = render(<ResearchSpec run={run} busy={false} submit={submit} />);
   await user.click(screen.getByRole('button', { name: 'AI 修改 Brief' }));
   await user.type(screen.getByLabelText('AI 修改意见'), 'Compare competitors.');
   await user.click(screen.getByRole('button', { name: '提交 AI 修改' }));
-  expect(submit).toHaveBeenCalledWith('approval', {
-    plan_version: plan.version,
+  expect(submit).toHaveBeenCalledWith('revise', {
+    version: plan.version,
     decision: 'revise',
-    revision_attempt: 1,
     feedback: 'Compare competitors.',
   });
   view.rerender(
@@ -171,14 +170,14 @@ it('submits revision feedback against its attempt and restores pending and limit
     <ResearchSpec
       run={snapshot({
         status: 'awaiting_approval',
-        plan: { ...plan, ai_revision: { ...plan.ai_revision, attempt: 2, error: 'model_error' } },
+        plan: { ...plan, ai_revision: { ...plan.ai_revision, error: 'model_error' } },
       })}
       busy={false}
       submit={submit}
     />,
   );
   expect(screen.getByRole('alert')).toHaveTextContent('已保留当前 Brief');
-  expect(screen.getByRole('button', { name: '提交 AI 修改' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: '重试 AI 修改' })).toBeEnabled();
 
   view.rerender(
     <ResearchSpec
@@ -188,7 +187,7 @@ it('submits revision feedback against its attempt and restores pending and limit
           ...plan,
           version: 'e'.repeat(64),
           revision: 4,
-          ai_revision: { ...plan.ai_revision, attempt: 4, used: 3 },
+          ai_revision: { ...plan.ai_revision, used: 3 },
         },
       })}
       busy={false}
