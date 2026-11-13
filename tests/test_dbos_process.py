@@ -672,12 +672,14 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
     "scenario",
     [
         "revision-queued",
+        "revision-expiry",
         "revision-before-result",
         "revision-ack",
         "revision-unconfirmed",
         "revision-retry",
     ],
 )
+@pytest.mark.parametrize("pg_database", [{"RUN_APPROVAL_SECONDS": 35}], indirect=True)
 def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
     from open_deep_research.web.run_data import RunConflict
 
@@ -751,7 +753,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
                 + digest(dict(run_id=run_id, owner="alice", key=key))
             )
             expected_calls.append("call")
-        if scenario == "revision-queued":
+        if scenario in {"revision-queued", "revision-expiry"}:
             kill_owned(process)
             assert submit()["status"] == "awaiting_approval"
             assert submit()["status"] == "awaiting_approval"
@@ -780,6 +782,33 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
 
         (tmp_path / (scenario + ".release")).write_text("resume")
         (tmp_path / "executor-ready").unlink()
+        if scenario == "revision-expiry":
+            from open_deep_research.workflow.dbos_config import ARCHIVE, CONTROL
+
+            restart = start(tmp_path, executor, scenario, queues=f"{CONTROL},{ARCHIVE}")
+            wait(
+                lambda: any(
+                    w.status == "ENQUEUED"
+                    for w in client.client.list_workflows(workflow_ids=[child_id])
+                ),
+                restart,
+                tmp_path,
+            )
+            assert snapshot()["plan"]["ai_revision"]["pending"]
+            wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)
+            done = snapshot()
+            assert done["status"] == "cancelled" and done["settlement"] == "settled"
+            assert done["plan"]["version"] == old["version"]
+            assert done["plan"]["ai_revision"]["used"] == 0
+            assert client.client.get_event(run_id, "approval_end", 0) == "expired"
+            assert (
+                client.client.list_workflows(workflow_ids=[child_id])[0].status
+                == "CANCELLED"
+            )
+            assert not (tmp_path / "revision-calls").exists()
+            assert not facts().request(run_id)["occupied"]
+            return
+
         restart = start(tmp_path, executor, scenario)
         if scenario == "revision-unconfirmed":
             wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)

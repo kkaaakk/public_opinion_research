@@ -631,10 +631,8 @@ def test_revision_failure_keeps_old_version_and_compaction_bills_once(
 
 
 @pytest.mark.parametrize("pg_database", [{"RUN_APPROVAL_SECONDS": 5}], indirect=True)
-@pytest.mark.parametrize("mode", ["queued", "running", "cancel"])
+@pytest.mark.parametrize("mode", ["running", "cancel"])
 def test_revision_cannot_publish_after_expiry_or_cancel(native_case, mode):
-    from open_deep_research.workflow import dbos_workflow as engine
-
     c = native_case
 
     async def blocked(_):
@@ -646,27 +644,11 @@ def test_revision_cannot_publish_after_expiry_or_cancel(native_case, mode):
     run_id = run["run_id"]
     key_hash = digest(dict(run_id=run_id, owner="alice", key="pending"))
     child_id = f"{run_id}:brief-revision:{key_hash}"
-    if mode == "queued":
-        # Keep the revision in the real BUSINESS queue past the deadline.
-        queue = next(
-            q for q in c.client.client.list_queues() if q.name == engine.BUSINESS
-        )
-        queue.set_worker_concurrency(0)
     revise(c, run, old, "Add competitor scope.", key="pending")
     c.wait(
-        run,
-        lambda r: r["plan"]["ai_revision"]["pending"]
-        and (mode == "queued" or bool(c.revision_requests)),
+        run, lambda r: r["plan"]["ai_revision"]["pending"] and bool(c.revision_requests)
     )
-    if mode == "queued":
-        c.wait(
-            run,
-            lambda _: any(
-                w.status == "ENQUEUED"
-                for w in c.client.client.list_workflows(workflow_ids=[child_id])
-            ),
-        )
-    elif mode == "cancel":
+    if mode == "cancel":
         c.client.cancel(run_id, "alice")
     done = c.wait(
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
@@ -683,9 +665,7 @@ def test_revision_cannot_publish_after_expiry_or_cancel(native_case, mode):
     assert (
         c.client.client.list_workflows(workflow_ids=[child_id])[0].status == "CANCELLED"
     )
-    if mode == "queued":
-        assert not c.revision_requests
-    if mode != "cancel":
+    if mode == "running":
         assert c.client.client.get_event(run_id, "approval_end", 0) == "expired"
     assert not c.models and not c.calls and not facts().request(run_id)["occupied"]
     with pytest.raises(RunConflict):
