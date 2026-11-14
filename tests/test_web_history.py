@@ -385,7 +385,7 @@ def test_failed_sse_run_preserves_nested_role_outputs(native_case, monkeypatch):
 
     case = native_case
 
-    async def fail(*args):
+    async def fail(*args, **kwargs):
         capture_budget_usage({"model_calls": 1})
         raise RuntimeError("SECRET_DSN")
 
@@ -418,14 +418,14 @@ def test_failed_sse_run_preserves_nested_role_outputs(native_case, monkeypatch):
 def test_no_final_report_still_creates_an_incomplete_history_record(
     native_case, monkeypatch
 ):
-    from open_deep_research.workflow.dbos_workflow import OPERATIONS
+    from open_deep_research.workflow import reporting
 
     case = native_case
 
-    async def fail(*args):
+    async def fail(*args, **kwargs):
         raise RuntimeError("Final report generation failed")
 
-    monkeypatch.setitem(OPERATIONS, "generate_final_report", fail)
+    monkeypatch.setattr(reporting, "generate_final_report", fail)
     result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
     record = case.history.get(result["history_id"], owner="alice")
     assert record["status"] == "failed"
@@ -447,13 +447,13 @@ def test_no_final_report_still_creates_an_incomplete_history_record(
 def test_memory_boundary_failure_preserves_committed_report_and_stays_unsafe(
     native_case, monkeypatch
 ):
-    from open_deep_research.workflow.dbos_workflow import OPERATIONS
+    from open_deep_research.workflow import reporting
 
-    async def fail(*args):
+    async def fail(*args, **kwargs):
         raise RuntimeError("Unconfirmed report memory boundary")
 
     case = native_case
-    monkeypatch.setitem(OPERATIONS, "compile_final_report", fail)
+    monkeypatch.setattr(reporting, "maybe_persist_chat_memory", fail)
     result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
     record = case.history.get(result["history_id"], owner="alice")
     assert record["status"] == "incomplete"
@@ -507,7 +507,7 @@ def test_real_dbos_nested_failure_retains_finished_stage(native_case, monkeypatc
 
     case = native_case
 
-    async def fail(*args):
+    async def fail(*args, **kwargs):
         raise RuntimeError("Later strategy failure")
 
     monkeypatch.setattr(research, "response_strategy_agent", fail)

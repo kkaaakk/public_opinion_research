@@ -166,7 +166,6 @@ def test_intake_vision_delta_reaches_success_patch_once(monkeypatch, outcome):
     from test_query_images import PNG_BYTES, _data_url
 
     from open_deep_research.workflow import intake
-    from open_deep_research.workflow.business_steps import _step
     from open_deep_research.workflow.python_state import apply_patch
 
     model = VisionModel(
@@ -197,9 +196,7 @@ def test_intake_vision_delta_reaches_success_patch_once(monkeypatch, outcome):
             "max_model_calls": 4,
         }
     }
-    patch = asyncio.run(
-        _step("enrich_query_images", intake.enrich_query_images, state, config, None)
-    )
+    patch = asyncio.run(intake.enrich_query_images(state, config))
     assert patch["runtime"]["budget"]["model_calls"] == len(model.requests) == 1
     assert patch["runtime"]["budget"]["total_tokens"] == (
         0 if outcome in {"provider_failure", "no_usage"} else 15
@@ -238,7 +235,6 @@ def test_intake_failure_after_vision_preserves_existing_step_error_accounting(
     import asyncio
 
     from open_deep_research.workflow import intake
-    from open_deep_research.workflow.business_steps import _step
 
     model = VisionModel()
     monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
@@ -249,9 +245,7 @@ def test_intake_failure_after_vision_preserves_existing_step_error_accounting(
 
     monkeypatch.setattr(intake.query_images, "build_query_image_context", build)
     with pytest.raises(ValueError, match="local assembly failed") as failure:
-        asyncio.run(
-            _step("enrich_query_images", intake.enrich_query_images, {}, {}, None)
-        )
+        asyncio.run(intake.enrich_query_images({}, {}))
     assert failure.value.budget_usage["model_calls"] == 1
     assert failure.value.budget_usage["total_tokens"] == 15
 
@@ -284,7 +278,6 @@ def test_intake_waits_for_started_vision_before_settling_cancel_or_timeout(
     from test_query_images import _data_url
 
     from open_deep_research.workflow import intake
-    from open_deep_research.workflow.business_steps import _step
 
     model = BlockingVision(
         started=threading.Event(),
@@ -306,19 +299,14 @@ def test_intake_waits_for_started_vision_before_settling_cancel_or_timeout(
     cfg = {"configurable": {"rag_vision_model": "openai:vision-fixture"}}
 
     async def run():
-        task = asyncio.create_task(
-            _step(
-                "enrich_query_images",
-                intake.enrich_query_images,
-                state,
-                cfg,
-                0.1
-                if exit_kind == "timeout"
-                else 10
-                if exit_kind == "repeat_cancel_deadline"
-                else None,
-            )
-        )
+        from open_deep_research.workflow.execution import error_chain, stage_timeout
+
+        async def enrich():
+            timeout = {"timeout": 0.1, "repeat_cancel_deadline": 10}.get(exit_kind)
+            async with stage_timeout(timeout):
+                return await intake.enrich_query_images(state, cfg)
+
+        task = asyncio.create_task(enrich())
         try:
             assert await asyncio.to_thread(model.started.wait, 2)
             if exit_kind != "timeout":
@@ -337,10 +325,13 @@ def test_intake_waits_for_started_vision_before_settling_cancel_or_timeout(
         assert await asyncio.to_thread(model.finished.wait, 2)
         assert not settled_before_provider
         assert len(model.requests) == 1, "Cancellation admitted a later image request"
-        assert failure.value.budget_usage["model_calls"] == 1
-        assert failure.value.budget_usage["total_tokens"] == (
-            0 if provider_error else 15
+        usage = next(
+            error.budget_usage
+            for error in error_chain(failure.value)
+            if hasattr(error, "budget_usage")
         )
+        assert usage["model_calls"] == 1
+        assert usage["total_tokens"] == (0 if provider_error else 15)
 
     asyncio.run(run())
 

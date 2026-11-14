@@ -3,28 +3,110 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+import builtins
+from collections.abc import Coroutine, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 
-# A worker installs one observer for its owned attempt. Parallel asyncio children
-# inherit it; neither Workflow nor Runtime imports the Web/database layer.
-execution_observer: ContextVar[Callable[..., Awaitable[Any]] | None] = ContextVar(
-    "execution_observer", default=None
-)
+from dbos import DBOS
+from dbos import error as dbos_error
+
+# The SDK may finish already owned I/O and evidence after its Workflow is
+# cancelled. That cleanup cannot submit more native commands.
+owned_cleanup: ContextVar[bool] = ContextVar("owned_cleanup", default=False)
 
 
 class ExecutionControlError(RuntimeError):
     """Abort SDK execution when durable permission/storage cannot be confirmed."""
 
 
-async def observe_execution(kind: str, **data: Any) -> Any:
-    """Publish execution facts, awaiting durable admission before external work."""
-    observer = execution_observer.get()
-    if observer is not None:
-        return await observer(kind, **data)
-    return None
+def native_step_available() -> bool:
+    """A Step inside another Step cannot create an independent checkpoint."""
+    return (
+        DBOS.workflow_id is not None
+        and DBOS.step_id is None
+        and not owned_cleanup.get()
+    )
+
+
+def error_chain(error):
+    """Visit causes and grouped errors once, including SDK-wrapped failures."""
+    pending = [error]
+    seen = set()
+    while pending:
+        exc = pending.pop()
+        if exc is None or id(exc) in seen:
+            continue
+        seen.add(id(exc))
+        yield exc
+        pending.extend((exc.__context__, exc.__cause__))
+        pending.extend(getattr(exc, "exceptions", ()))
+
+
+def is_cancellation(error):
+    if isinstance(error, getattr(builtins, "BaseExceptionGroup", ())):
+        return any(is_cancellation(item) for item in error.exceptions)
+    return isinstance(
+        error,
+        (
+            asyncio.CancelledError,
+            dbos_error.DBOSWorkflowCancelledError,
+            dbos_error.DBOSAwaitedWorkflowCancelledError,
+        ),
+    )
+
+
+def failure_kind(error):
+    """Classify business failures without publishing exception contents."""
+    from open_deep_research.budget import ModelBudgetExceeded
+    from open_deep_research.llm.errors import ModelInvocationError
+
+    if any(isinstance(cause, ExecutionControlError) for cause in error_chain(error)):
+        return "execution_control_error"
+    if is_cancellation(error):
+        return "cancelled"
+    if isinstance(
+        error, (TimeoutError, asyncio.TimeoutError, dbos_error.DBOSStepTimeoutError)
+    ):
+        return "timeout"
+    if isinstance(error, ModelBudgetExceeded):
+        return "budget_exhausted"
+    if isinstance(error, ModelInvocationError):
+        return "model_error"
+    if type(error).__name__ in {"ResearchGraphSettlementError", "ToolCallError"}:
+        return "tool_or_settlement_error"
+    if type(error).__module__.startswith(("agents", "openai")):
+        return "model_error"
+    return "error"
+
+
+@asynccontextmanager
+async def stage_timeout(seconds):
+    """Apply the optional per-stage timeout to the live coroutine and its I/O."""
+    if seconds is None:
+        yield
+        return
+    task = asyncio.current_task()
+    cancellations = task.cancelling() if hasattr(task, "cancelling") else 0
+    timed_out = False
+
+    def expire():
+        nonlocal timed_out
+        timed_out = True
+        task.cancel()
+
+    deadline = asyncio.get_running_loop().call_later(seconds, expire)
+    try:
+        yield
+    except asyncio.CancelledError as exc:
+        if timed_out:
+            remaining = task.uncancel() if hasattr(task, "uncancel") else cancellations
+            if remaining <= cancellations:
+                raise TimeoutError("Business stage timed out") from exc
+        raise
+    finally:
+        deadline.cancel()
 
 
 async def gather_owned(calls: Mapping[str, Coroutine[Any, Any, Any]]) -> dict[str, Any]:
@@ -92,23 +174,33 @@ async def gather_owned(calls: Mapping[str, Coroutine[Any, Any, Any]]) -> dict[st
     return ordered_results
 
 
-async def owned_io(operation, *args, **kwargs):
-    """Drain a real control commit even if its asyncio awaiter is cancelled."""
-    task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+async def finish_owned(task):
+    """Wait for an already started receipt write or synchronous I/O to finish."""
     cancellation = None
     while not task.done():
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError as exc:
             cancellation = cancellation or exc
-    result = task.result()
-    return result, cancellation
+    return task.result(), cancellation
+
+
+async def owned_io(operation, *args, **kwargs):
+    """Drain a real control commit even if its asyncio awaiter is cancelled."""
+    return await finish_owned(
+        asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    )
 
 
 @asynccontextmanager
 async def execution_effect():
     """Hold an optional business permission across a Graph/Memory commit."""
-    guard = await observe_execution("effect_guard")
+    from open_deep_research.workflow.run_facts import current_unit
+
+    unit = current_unit.get()
+    if unit is not None and getattr(unit.control_error, "unknown_outcome", False):
+        raise unit.control_error
+    guard = unit.repo.effect_guard(unit.id, unit.permit) if unit is not None else None
     if guard is not None:
         _, cancelled = await owned_io(guard.__enter__)
         if cancelled is not None:

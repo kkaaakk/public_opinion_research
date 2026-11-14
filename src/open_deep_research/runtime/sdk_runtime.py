@@ -23,6 +23,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from open_deep_research.budget import (
+    ModelBudgetExceeded,
     budget_capture,
     budget_from_sdk_usage,
     budget_from_tool_calls,
@@ -39,6 +40,7 @@ from open_deep_research.budget import (
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
+from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
 from open_deep_research.mcp.domain_filter import get_tool_domain
 from open_deep_research.observability.telemetry import (
     annotate,
@@ -47,8 +49,9 @@ from open_deep_research.observability.telemetry import (
 )
 from open_deep_research.research_graph.compaction import summarize_compactable_history
 from open_deep_research.research_graph.workspace import ResearchWorkspace
-from open_deep_research.runtime.sdk_context import SDKContextHarness
-from open_deep_research.workflow.execution import observe_execution
+from open_deep_research.runtime.sdk_context import SDKContextHarness, tool_usage
+from open_deep_research.workflow.execution import ExecutionControlError, owned_io
+from open_deep_research.workflow.run_facts import begin_call, current_unit, end_call
 
 SDK_RUNTIME_VERSION = "sdk-phase5-v1"
 
@@ -92,6 +95,41 @@ def _text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+class MeteredModel(Model):
+    """Write physical receipts inside the official DBOSRunner model Step."""
+
+    def __init__(self, model):
+        self.model = model
+        self.model_name = getattr(model, "model_name", type(model).__name__)
+
+    async def get_response(self, *args, **kwargs):
+        try:
+            identity = await begin_call("sdk_model")
+        except ModelBudgetExceeded as exc:
+            raise _ReasoningStopped(str(exc)) from exc
+        try:
+            response = await self.model.get_response(*args, **kwargs)
+        except BaseException as exc:
+            usage = {"model_calls": 1}
+            await end_call(identity, usage=usage, status="failed")
+            if isinstance(exc, Exception) and not isinstance(
+                exc, (ExecutionControlError, ModelBudgetExceeded)
+            ):
+                raise ModelInvocationError(
+                    type(exc).__name__,
+                    context_limit=is_token_limit_exceeded(exc, self.model_name),
+                    budget_usage=usage,
+                ) from exc
+            raise
+        usage = budget_from_sdk_usage(response.usage)
+        usage["model_calls"] = 1
+        await end_call(identity, usage=usage)
+        return response
+
+    def stream_response(self, *args, **kwargs):
+        raise NotImplementedError("Durable business Agents use DBOSRunner.run")
+
+
 @dataclass
 class _RunBudget:
     """Share only budget data between the Runtime, tools and Context Harness."""
@@ -109,8 +147,6 @@ class _RunBudget:
     def add(self, usage: Any) -> None:
         """Merge one actual usage delta with the existing accounting rules."""
         self.delta = merge_budget_usage(self.delta, usage)
-        from open_deep_research.workflow.durability import tool_usage
-
         local = tool_usage.get()
         if local is not None:
             merged = merge_budget_usage(local, usage)
@@ -554,8 +590,9 @@ class SDKAgentRuntime:
                     tool_call_id=context.tool_call_id,
                     arguments=arguments,
                 )
-                operation_id = await observe_execution(
-                    "tool_started", identity=identity
+                unit = current_unit.get()
+                operation_id = (
+                    await unit.operation(identity, status="started") if unit else None
                 )
                 context.context.results[
                     context.tool_call_id
@@ -583,9 +620,8 @@ class SDKAgentRuntime:
                             call_config,
                         )
                     except BaseException:
-                        await observe_execution(
-                            "tool_finished",
-                            identity=identity,
+                        await end_call(
+                            identity if unit else None,
                             status="uncertain",
                             usage=increment,
                         )
@@ -597,12 +633,7 @@ class SDKAgentRuntime:
                         budget.add(captured)
                 # The receipt states that the external invoker returned. The
                 # Harness separately validates business success/evidence status.
-                await observe_execution(
-                    "tool_finished",
-                    identity=identity,
-                    status="returned",
-                    usage=increment,
-                )
+                await end_call(identity if unit else None, usage=increment)
                 context.context.results[context.tool_call_id].effect_status = "returned"
                 if isinstance(output, ToolMessage):
                     if output.status == "error":
@@ -778,10 +809,11 @@ class SDKAgentRuntime:
                 raise ValueError(f"Duplicate business tool name: {tool.name}")
             names.add(tool.name)
             registered.append(self._register_tool(tool))
+        unit = current_unit.get()
         self.agent = Agent(
             name=self.spec.display_name,
             instructions=self.system_prompt,
-            model=self.model,
+            model=MeteredModel(self.model) if unit else self.model,
             tools=registered,
             output_type=None,
             model_settings=ModelSettings(
@@ -804,10 +836,23 @@ class SDKAgentRuntime:
                 }
             )
         self.sdk_result = None
-        session = await observe_execution(
-            "sdk_session", role=self.role, invocation_id=self.harness.sdk_run_id
-        )
+        session = None
         try:
+            if unit is not None:
+                await unit.observe(
+                    "session_started",
+                    {"role": self.role, "invocation_id": self.harness.sdk_run_id},
+                )
+                if unit.repo.settings.session_path:
+                    from agents import SQLiteSession
+
+                    session, cancelled = await owned_io(
+                        SQLiteSession,
+                        unit.id + ":" + self.harness.sdk_run_id,
+                        unit.repo.settings.session_path,
+                    )
+                    if cancelled is not None:
+                        raise cancelled
             # Graph services and report synthesis retain their existing model
             # adapters. Capture their actual attempts once, including failures.
             with (
@@ -889,6 +934,8 @@ class SDKAgentRuntime:
         finally:
             # Match legacy capture semantics on success and exceptional exits.
             capture_budget_usage(self.budget_usage)
+            if session is not None:
+                await owned_io(session.close)
 
 
 __all__ = ["SDKAgentRuntime", "SDKContextLimitExceeded"]

@@ -16,6 +16,7 @@ from langchain_core.messages import BaseMessage, message_to_dict, messages_from_
 from pydantic import BaseModel, TypeAdapter
 
 from open_deep_research.llm.errors import ModelInvocationError
+from open_deep_research.research_graph.models import RelevantSubgraph
 from open_deep_research.state import (
     ClarifyWithUser,
     ResearchQuestion,
@@ -38,6 +39,7 @@ _MODELS = {
         ResearchTask,
         ClarifyWithUser,
         ResearchQuestion,
+        RelevantSubgraph,
         Summary,
         PlanDecision,
         BriefRevision,

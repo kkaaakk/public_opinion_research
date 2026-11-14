@@ -55,19 +55,18 @@ run_submit                                API; only for a newly accepted Run
 ├─ por.run                                native root Workflow
 │  ├─ por.plan                            native queue and planning Steps
 │  └─ por.research                        native queue
-│     ├─ por.role(public_signal) ── business_step ── sdk_invocation
-│     ├─ por.role(internal_knowledge) ── business_step ── sdk_invocation
-│     ├─ business_step ── research_review
+│     ├─ por.role(public_signal) ── sdk_invocation
+│     ├─ por.role(internal_knowledge) ── sdk_invocation
+│     ├─ por.review ── research_review
 │     ├─ additional Producer rounds / review, when actually scheduled
-│     ├─ por.role(risk_assessment) ── business_step ── sdk_invocation
-│     ├─ por.role(response_strategy) ── business_step ── sdk_invocation
-│     └─ reporting Steps ── report_generation
+│     ├─ por.role(risk_assessment) ── sdk_invocation
+│     ├─ por.role(response_strategy) ── sdk_invocation
+│     └─ por.report ── report_generation
 ├─ por.events                             native durable event relay
 └─ por.finalize                           native settlement/archive/retry
 ```
 
-`run_submit` is short; `por.run` measures the executing Run. Reporting stays in
-the existing research Workflow. Producer workflows are siblings and can overlap.
+`run_submit` measures intake. `por.run` measures execution. Producer workflows are siblings and can overlap.
 Within each invocation OpenInference creates SDK trace/Agent/LLM/Tool spans.
 `sdk_invocation` also covers exit settlement and failures after Runner exits.
 Other business spans are `context_build`, `context_retrieval`,

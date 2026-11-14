@@ -151,7 +151,7 @@ def main():
             )
 
         patch.setattr(business_agent, "sdk_model", model)
-        original_review = dbos_workflow.OPERATIONS["research_review"]
+        original_review = dbos_workflow.research.research_review
         failed = set()
 
         async def review(state, config):
@@ -178,7 +178,7 @@ def main():
                 )
             return result
 
-        patch.setitem(dbos_workflow.OPERATIONS, "research_review", review)
+        patch.setattr(dbos_workflow.research, "research_review", review)
         DBOS.migrate(os.environ["DBOS_DATABASE_URL"], schema="por_dbos")
         facts().initialize()
         launch("studio-browser-" + uuid4().hex)

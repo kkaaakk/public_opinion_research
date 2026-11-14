@@ -679,7 +679,7 @@ def test_single_synthesis_failure_retries_without_repeating_roles(
 
     from open_deep_research.workflow import dbos_workflow as engine
 
-    original = engine.OPERATIONS["generate_final_report"]
+    original = engine.reporting.generate_final_report
     attempts = []
 
     async def fail_once(state, cfg):
@@ -688,7 +688,7 @@ def test_single_synthesis_failure_retries_without_repeating_roles(
             raise RuntimeError("Controlled synthesis failure before request")
         return await original(state, cfg)
 
-    monkeypatch.setitem(engine.OPERATIONS, "generate_final_report", fail_once)
+    monkeypatch.setattr(engine.reporting, "generate_final_report", fail_once)
     c = native_case
     run = c.create()
     failed = c.wait(

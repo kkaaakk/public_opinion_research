@@ -6,8 +6,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from dbos import DBOS
 from langchain_core.messages import HumanMessage, SystemMessage, filter_messages
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
@@ -44,6 +46,7 @@ from open_deep_research.tools.registry import (
     get_raw_search_tool,
     has_external_research_tool,
 )
+from open_deep_research.workflow.execution import native_step_available
 from open_deep_research.workflow.state_utils import (
     agents_state,
     business_context,
@@ -304,7 +307,7 @@ async def _compress_research(
                     [
                         SystemMessage(
                             content=compress_research_system_prompt.format(
-                                date=get_today_str()
+                                date=get_today_str(config)
                             )
                         ),
                         *researcher_messages,
@@ -422,7 +425,40 @@ async def run_business_agent(
         graph_enabled=configurable.research_graph_enabled,
     )
     assignment = _build_business_agent_assignment(state, role, configurable, spec)
-    tools = await _business_agent_tools(config, role, spec)
+    if native_step_available():
+        tools = None
+
+        def catalog(available):
+            descriptions = []
+            for tool in available:
+                if not isinstance(tool, BaseTool):
+                    descriptions.append(tool)
+                    continue
+                schema = tool.tool_call_schema
+                descriptions.append(
+                    {
+                        "name": tool.name,
+                        "domain": get_tool_domain(tool),
+                        "description": tool.description,
+                        "schema": schema
+                        if isinstance(schema, dict)
+                        else schema.model_json_schema(),
+                    }
+                )
+            return descriptions
+
+        async def discover():
+            nonlocal tools
+            tools = await _business_agent_tools(config, role, spec)
+            return catalog(tools)
+
+        admitted = await DBOS.run_step_async(
+            {"name": "por.role_tools", "preemptible": True}, discover
+        )
+        if tools is None and admitted != await discover():
+            raise ValueError("Role tool definitions changed during recovery")
+    else:
+        tools = await _business_agent_tools(config, role, spec)
     # Consumers retrieve their evidence through ResearchWorkspace, so they
     # can synthesize a report without an optional external retrieval tool.
     uses_graph_evidence = strategy.graph_enabled and not strategy.is_producer
@@ -459,7 +495,7 @@ async def run_business_agent(
     system_prompt = spec.format_system_prompt(
         retrieval_tool_prompt=_role_tool_prompt(configurable, spec, tools),
         mcp_prompt=configurable.mcp_prompt or "",
-        date=get_today_str(),
+        date=get_today_str(config),
         organization_context=business_context(configurable),
     )
 

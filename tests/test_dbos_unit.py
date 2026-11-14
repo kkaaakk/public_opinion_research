@@ -3,6 +3,7 @@
 import ast
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -16,9 +17,9 @@ from open_deep_research.web.run_data import (
 from open_deep_research.workflow.dbos_config import ExecutionSettings
 from open_deep_research.workflow.execution import (
     execution_effect,
-    execution_observer,
     owned_io,
 )
+from open_deep_research.workflow.run_facts import current_unit
 
 
 @pytest.mark.parametrize(
@@ -121,19 +122,26 @@ def test_effect_guard_remains_optional_for_legacy_and_is_owned():
         def __exit__(self, *_):
             events.append("exit")
 
-    async def observer(kind, **kw):
-        assert kind == "effect_guard"
+    def guard(unit_id, permit):
+        assert (unit_id, permit) == ("unit", "permit")
         return Guard()
+
+    unit = SimpleNamespace(
+        id="unit",
+        permit="permit",
+        control_error=None,
+        repo=SimpleNamespace(effect_guard=guard),
+    )
 
     async def run():
         async with execution_effect():
             events.append("legacy")
-        token = execution_observer.set(observer)
+        token = current_unit.set(unit)
         try:
             async with execution_effect():
                 events.append("write")
         finally:
-            execution_observer.reset(token)
+            current_unit.reset(token)
 
     asyncio.run(run())
     assert events == ["legacy", "enter", "write", "exit"]

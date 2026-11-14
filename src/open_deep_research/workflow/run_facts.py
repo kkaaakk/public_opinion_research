@@ -6,16 +6,23 @@ DBOS owns execution; these facts prevent unsafe external replay and overbooking.
 
 from __future__ import annotations
 
+import asyncio
+import time
+from collections import defaultdict
 from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib.metadata import version
 from uuid import uuid4
 
-from dbos import DBOSClient
+from dbos import DBOS, DBOSClient
+from dbos import error as dbos_error
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.runtime.sdk_runtime import SDK_RUNTIME_VERSION
+from open_deep_research.llm.errors import ModelInvocationError
 from open_deep_research.web.run_data import (
     ExecutionRevoked,
     RunConflict,
@@ -25,9 +32,26 @@ from open_deep_research.web.run_data import (
     dumps,
     loads,
     public_payload,
+    sdk_observation,
     timestamp,
 )
-from open_deep_research.workflow.dbos_config import APP, SDK_VERSION, VERSION, settings
+from open_deep_research.workflow.dbos_config import (
+    APP,
+    FACT_WRITE_GRACE_SECONDS,
+    SDK_VERSION,
+    VERSION,
+    settings,
+)
+from open_deep_research.workflow.execution import (
+    ExecutionControlError,
+    error_chain,
+    finish_owned,
+    native_step_available,
+    owned_cleanup,
+    owned_io,
+)
+
+MODEL_OPERATIONS = {"llm", "llm_sync", "sdk_model"}
 
 
 class RunFacts:
@@ -196,7 +220,7 @@ class RunFacts:
             raise RunNotFound("Run or Session not found")
         return dict(row) | {"data": loads(row["value"])}
 
-    def publish(self, db, run_id, kind, **payload):
+    def publish(self, db, run_id, kind, *, idempotency_key=None, **payload):
         # Native communication transaction: no application outbox/relay table.
         payload.setdefault("observed_at", timestamp(self.now(db)))
         self.client.send_in_transaction(
@@ -204,9 +228,12 @@ class RunFacts:
             run_id + ":events",
             public_payload(dict(type=kind, **payload)),
             topic="events",
+            idempotency_key=idempotency_key,
         )
 
     def validate(self, request):
+        from open_deep_research.runtime.sdk_runtime import SDK_RUNTIME_VERSION
+
         data = request["data"]
         cfg = data["config"]
         effective = Configuration.from_runnable_config(cfg).model_dump(mode="json")
@@ -303,15 +330,18 @@ class RunFacts:
             if usage is not None:
                 # The insert already holds the new permit and pending settlement.
                 return permit, None, loads(usage)
-            settled, usage = db.execute(
+            settled, usage, artifact, error = db.execute(
                 text(
-                    "SELECT settled,usage FROM por_domain.units WHERE id=:id FOR UPDATE"
+                    "SELECT settled,usage,artifact,error FROM por_domain.units WHERE id=:id FOR UPDATE"
                 ),
                 {"id": unit_id},
             ).one()
             # Native recovery is checked at each external boundary. Standalone
             # callers must still fail closed on an opaque interrupted unit.
             deny = not native_replay and (not safe or settled is not True)
+            # A native save may already be journaled. Rotating its fence on
+            # recovery must not put a committed, settled projection back in limbo.
+            completed = settled is True and artifact is not None and not loads(error)
             db.execute(
                 text(
                     "UPDATE por_domain.units SET permit=:p,settled=:s,error=:e WHERE id=:id"
@@ -319,7 +349,7 @@ class RunFacts:
                 {
                     "id": unit_id,
                     "p": permit,
-                    "s": False if deny else None,
+                    "s": False if deny else True if completed else None,
                     "e": dumps({"kind": "unknown_effect", "usage_complete": False})
                     if deny
                     else "{}",
@@ -355,6 +385,19 @@ class RunFacts:
         if not row or row[0] != permit or (row[1] and not allow_cancel):
             raise ExecutionRevoked("Business execution permission was revoked")
         return bool(row[1])
+
+    def cancellation_requested(self, run_id, unit_id, permit, workflow_id):
+        if self.check(unit_id, permit, allow_cancel=True):
+            self.client.cancel_workflow(run_id, cancel_children=True)
+            return True
+        return bool(
+            self.client.list_workflows(
+                workflow_ids=[workflow_id],
+                status="CANCELLED",
+                load_input=False,
+                load_output=False,
+            )
+        )
 
     @contextmanager
     def effect_guard(self, unit_id, permit):
@@ -399,6 +442,23 @@ class RunFacts:
                     raise RunConflict(
                         "Unconfirmed work from an earlier executor requires authoritative reconciliation"
                     )
+                unit = current_unit.get()
+                if identity["name"] in MODEL_OPERATIONS and unit is not None:
+                    from open_deep_research.budget import (
+                        merge_budget_usage,
+                        require_physical_model_budget,
+                    )
+
+                    # Budget check and the new intent share the unit lock. Parallel
+                    # tool models can see any attempts already admitted here.
+                    require_physical_model_budget(
+                        unit.config,
+                        merge_budget_usage(unit.baseline, unit.carry),
+                        self.physical_usage(unit_id, db=db)[0],
+                        reserve_report=unit.reserve_report,
+                    )
+                    if unit.expires_at is not None and self.now(db) >= unit.expires_at:
+                        raise ModelInvocationError("BriefApprovalExpired")
                 inserted = db.execute(
                     text(
                         "INSERT INTO por_domain.operations(id,unit,fingerprint,status,name,usage,admission_permit) VALUES (:id,:u,:f,'started',:n,:usage,:p) ON CONFLICT DO NOTHING"
@@ -411,7 +471,7 @@ class RunFacts:
                         "p": permit,
                         "usage": dumps(
                             {"model_calls": 1}
-                            if identity["name"] in {"llm", "llm_sync", "sdk_model"}
+                            if identity["name"] in MODEL_OPERATIONS
                             else {}
                         ),
                     },
@@ -480,20 +540,40 @@ class RunFacts:
             )
         return operation_id
 
-    def physical_usage(self, unit_id):
+    def physical_usage(self, unit_id, *, db=None):
         from open_deep_research.budget import merge_budget_usage
 
-        with self.engine.connect() as db:
-            rows = list(
-                db.execute(
-                    text("SELECT name,usage FROM por_domain.operations WHERE unit=:id"),
-                    {"id": unit_id},
-                )
-            )
+        if db is None:
+            with self.engine.connect() as conn:
+                return self.physical_usage(unit_id, db=conn)
         actual = {}
-        for _, value in rows:
+        has_models = False
+        for name, value in db.execute(
+            text("SELECT name,usage FROM por_domain.operations WHERE unit=:id"),
+            {"id": unit_id},
+        ):
             actual = merge_budget_usage(actual, loads(value))
-        return actual, any(name in {"llm", "llm_sync", "sdk_model"} for name, _ in rows)
+            has_models |= name in MODEL_OPERATIONS
+        return actual, has_models
+
+    def unconfirmed_operations(self, unit_id):
+        with self.engine.connect() as db:
+            return db.execute(
+                text(
+                    "SELECT EXISTS(SELECT 1 FROM por_domain.operations "
+                    "WHERE unit=:id AND status IN ('started','uncertain'))"
+                ),
+                {"id": unit_id},
+            ).scalar_one()
+
+    def retry_generation(self, run_id):
+        with self.engine.connect() as db:
+            return db.execute(
+                text(
+                    "SELECT coalesce(max(generation),0) FROM por_domain.retries WHERE run_id=:id"
+                ),
+                {"id": run_id},
+            ).scalar_one()
 
     def accounted_usage(self, unit_id, observed, carry):
         """Receipts account physical attempts; replayed hooks rebuild local state.
@@ -608,6 +688,7 @@ class RunFacts:
                     db,
                     run_id,
                     "step_failed",
+                    idempotency_key=digest([unit_id, permit, "step-failed"]),
                     step=name,
                     unit_id=unit_id,
                     execution_id=digest({"unit": unit_id, "permit": permit}),
@@ -617,7 +698,7 @@ class RunFacts:
 
     def units(self, run_id):
         with self.engine.connect() as db:
-            return [
+            rows = [
                 dict(r)
                 | {
                     "artifact": loads(r["artifact"]) if r["artifact"] else None,
@@ -630,6 +711,32 @@ class RunFacts:
                 ).mappings()
             ]
 
+            # A dead executor may not have had a chance to publish its final
+            # bill. Keep the lower bound from operation intents and receipts.
+            unfinished = {row["id"]: row for row in rows if row["settled"] is not True}
+            if unfinished:
+                from open_deep_research.budget import (
+                    diff_budget_usage,
+                    merge_budget_usage,
+                )
+
+                actual = {}
+                for unit_id, receipt in db.execute(
+                    text(
+                        "SELECT unit,usage FROM por_domain.operations WHERE unit=ANY(:units)"
+                    ),
+                    {"units": list(unfinished)},
+                ):
+                    actual[unit_id] = merge_budget_usage(
+                        actual.get(unit_id, {}), loads(receipt)
+                    )
+                for unit_id, usage in actual.items():
+                    row = unfinished[unit_id]
+                    row["usage"] = merge_budget_usage(
+                        row["usage"], diff_budget_usage(usage, row["usage"])
+                    )
+            return rows
+
     def close(self):
         self.client.destroy()
         self.engine.dispose()
@@ -638,3 +745,182 @@ class RunFacts:
 @lru_cache(maxsize=1)
 def facts():
     return RunFacts()
+
+
+@dataclass
+class UnitReceipts:
+    """The live fence and accounting for one unit's external I/O."""
+
+    repo: RunFacts
+    run_id: str
+    id: str
+    name: str
+    permit: str
+    config: Configuration
+    baseline: dict
+    generation: int
+    carry: dict
+    reserve_report: bool = True
+    expires_at: float | None = None
+    control_error: ExecutionControlError | None = None
+    delivery_ids: set[str] = field(default_factory=set)
+    # Only identify physical calls sharing one Step (e.g. per-URL model calls
+    # inside a tool). The native result alone determines whether a Step runs.
+    _ordinals: dict = field(default_factory=lambda: defaultdict(int))
+
+    @property
+    def execution_id(self):
+        return digest({"unit": self.id, "permit": self.permit})
+
+    def operation_key(self, category):
+        key = (DBOS.workflow_id, DBOS.step_id, category)
+        self._ordinals[key] += 1
+        return f"{key[0]}:{key[1]}:{self._ordinals[key]}:{self.generation}"
+
+    def remember_control_error(self, exc):
+        for error in error_chain(exc):
+            if isinstance(error, ExecutionControlError):
+                self.control_error = self.control_error or error
+                if getattr(error, "unknown_outcome", False):
+                    self.control_error.unknown_outcome = True
+        return self.control_error
+
+    async def write(self, operation, *args, **kwargs):
+        """Retry an idempotent business commit, keeping its actual outcome owned."""
+
+        async def write_receipt():
+            deadline = time.monotonic() + FACT_WRITE_GRACE_SECONDS
+            while True:
+                try:
+                    return await asyncio.to_thread(
+                        operation, self.id, self.permit, *args, **kwargs
+                    )
+                except SQLAlchemyError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    await asyncio.sleep(0.5)
+
+        return await finish_owned(asyncio.create_task(write_receipt()))
+
+    async def operation(self, identity, *, status, usage=None):
+        from open_deep_research.observability.telemetry import annotate
+
+        try:
+            if status == "started":
+                if self.control_error and (
+                    getattr(self.control_error, "unknown_outcome", False)
+                    or not owned_cleanup.get()
+                ):
+                    raise self.control_error
+                result, cancelled = await owned_io(
+                    self.repo.operation, self.id, self.permit, identity
+                )
+                if cancelled is not None:
+                    await self.write(
+                        self.repo.operation, identity, status="not_executed"
+                    )
+                    raise cancelled
+            else:
+                result, _ = await self.write(
+                    self.repo.operation, identity, status=status, usage=usage
+                )
+        except (RunConflict, SQLAlchemyError) as exc:
+            if isinstance(exc, ExecutionRevoked) and await confirm_cancel(
+                self.repo, self.run_id
+            ):
+                raise dbos_error.DBOSWorkflowCancelledError(
+                    "Cancellation requested"
+                ) from exc
+            error = ExecutionControlError(
+                "Durable execution permission/storage unavailable"
+            )
+            error.unknown_outcome = isinstance(exc, RunConflict) and not isinstance(
+                exc, ExecutionRevoked
+            )
+            self.remember_control_error(error)
+            raise error from exc
+        annotate(operation_id=result, effect_status=status)
+        return result
+
+    async def observe(self, kind, payload, *, call_id=None):
+        """Deliver sanitized SDK observations and retain replayable manifest IDs."""
+        allowed = sdk_observation(payload)
+
+        def publish(event_id):
+            with self.repo.engine.begin() as db:
+                self.repo.check(
+                    self.id,
+                    self.permit,
+                    db=db,
+                    locked=True,
+                    allow_cancel=owned_cleanup.get() or kind == "tool_result",
+                )
+                self.repo.publish(
+                    db,
+                    self.run_id,
+                    "sdk_event",
+                    idempotency_key=event_id,
+                    event_id=event_id,
+                    event=kind,
+                    step=self.name,
+                    unit_id=self.id,
+                    execution_id=self.execution_id,
+                    **allowed,
+                )
+            return event_id
+
+        async def send():
+            try:
+                event_id = digest(
+                    [self.id, self.generation, kind, call_id]
+                    if call_id is not None
+                    else [self.id, self.operation_key("event")]
+                )
+                _, cancelled = await owned_io(publish, event_id)
+            except (RunConflict, SQLAlchemyError) as exc:
+                error = ExecutionControlError("Durable SDK observation unavailable")
+                self.remember_control_error(error)
+                raise error from exc
+            if cancelled is not None:
+                raise cancelled
+            return event_id
+
+        event_id = (
+            await DBOS.run_step_async({"name": "por.sdk_observation"}, send)
+            if call_id is None and native_step_available()
+            else await send()
+        )
+        self.delivery_ids.add(event_id)
+
+
+current_unit: ContextVar[UnitReceipts | None] = ContextVar("current_unit", default=None)
+
+
+async def confirm_cancel(repo, run_id):
+    """Deliver an already authorized cancellation before a phase can fail fast."""
+    if (await asyncio.to_thread(repo.request, run_id))["cancel_requested"]:
+        await owned_io(repo.client.cancel_workflow, run_id, cancel_children=True)
+        return True
+    return False
+
+
+async def begin_call(name):
+    unit = current_unit.get()
+    if unit is None:
+        return None
+    identity = {
+        "role": "service",
+        "name": name,
+        "task_id": unit.id,
+        "research_round": 1,
+        "tool_call_id": unit.operation_key("service"),
+        "arguments": "",
+        "settlement": owned_cleanup.get(),
+    }
+    await unit.operation(identity, status="started")
+    return identity
+
+
+async def end_call(identity, *, usage=None, status="returned"):
+    if identity is not None:
+        await current_unit.get().operation(identity, status=status, usage=usage)

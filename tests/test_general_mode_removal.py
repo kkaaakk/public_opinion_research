@@ -9,6 +9,7 @@ Covers:
 5. State: no ConductResearch or general-mode state fields
 """
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,19 @@ from open_deep_research.state import (
     PublicOpinionState,
     ResearchQuestion,
 )
-from open_deep_research.workflow.dbos_workflow import OPERATIONS
+from open_deep_research.workflow import dbos_workflow
+
+
+def business_functions():
+    tree = ast.parse(Path(dbos_workflow.__file__).read_text(encoding="utf-8"))
+    return {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in {"intake", "reporting", "research"}
+    }
+
 
 # ── 1. Unique mode tests ──────────────────────────────────────────────
 
@@ -78,24 +91,21 @@ class TestGraphStructure:
     """Native business topology preserves the single public-opinion workflow."""
 
     def test_no_standalone_supervisor_node(self):
-        assert "supervisor" not in OPERATIONS
-        assert "research_review" in OPERATIONS
+        assert "supervisor" not in business_functions()
+        assert "research_review" in business_functions()
 
     def test_no_standalone_researcher_node(self):
-        assert "researcher" not in OPERATIONS
+        assert "researcher" not in business_functions()
 
     def test_no_mode_router(self):
-        assert not any("route" in name for name in OPERATIONS)
+        assert not any("route" in name for name in business_functions())
 
     def test_no_general_mode_conditional_branching(self):
         source = Path("src/open_deep_research/workflow/dbos_workflow.py").read_text(
             encoding="utf-8"
         )
         assert "business_scenario" not in source
-        assert (
-            'for name in report_steps:'
-            in source
-        )
+        assert "for name, generate in report_steps:" in source
 
     def test_public_opinion_nodes_exist(self):
         assert {
@@ -103,18 +113,18 @@ class TestGraphStructure:
             "plan_research",
             "revise_brief",
             "generate_final_report",
-            "plan_report_sections",
+            "section_plan_step",
             "research_review",
             "section_writer",
             "write_final_sections",
             "compile_final_report",
-        } == set(OPERATIONS)
+        } <= business_functions()
 
     def test_research_phase_is_the_only_public_opinion_wrapper(self):
         from open_deep_research.workflow.dbos_workflow import research_workflow
 
         assert callable(research_workflow)
-        assert not any(name.endswith("_supervisor") for name in OPERATIONS)
+        assert not any(name.endswith("_supervisor") for name in business_functions())
 
     def test_public_opinion_agent_topology_has_dynamic_research_review(self):
         source = Path("src/open_deep_research/workflow/dbos_workflow.py").read_text(

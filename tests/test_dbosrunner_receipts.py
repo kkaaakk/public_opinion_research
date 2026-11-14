@@ -103,7 +103,7 @@ def test_failed_generations_keep_the_final_report_reservation(native_case, monke
         await ainvoke_model_with_budget(Inference(), [HumanMessage(content="brief")])
         raise ValueError("Controlled invalid brief response")
 
-    monkeypatch.setitem(engine.OPERATIONS, "plan_research", invalid_plan)
+    monkeypatch.setattr(engine.intake, "plan_research", invalid_plan)
     case.cfg["configurable"].update(max_model_calls=10, reserve_final_report_call=True)
     run = case.create()
 
