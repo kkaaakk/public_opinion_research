@@ -15,26 +15,43 @@ pytestmark = pytest.mark.integration
         ("dbosrunner-unified-v1", "por.run", ("old",)),
         ("dbosrunner-clarification-v1", "por.run", ("old",)),
         ("dbosrunner-brief-revision-v1", "por.plan", ("old", {}, 1)),
+        ("dbosrunner-stage-settlement-v1", "por.run", ("old",)),
+        ("dbosrunner-stage-settlement-v1", "por.plan", ("old", {}, 1)),
+        ("dbosrunner-brief-idempotency-v1", "por.run", ("old",)),
+        ("dbosrunner-brief-idempotency-v1", "por.plan", ("old", {}, 1)),
     ],
 )
 def test_old_pending_journal_is_inventoried_and_not_deleted(
     pg_database, version, workflow, args
 ):
+    from test_python_workflow import config, initial
+
+    from open_deep_research.web.durable import RunClient
+    from open_deep_research.web.executor import launch
+
     repo = facts()
     assert repo.migration_inventory() == []
-    repo.client.enqueue(
-        {
-            "workflow_name": workflow,
-            "workflow_id": "old-journal-test",
-            "queue_name": "por-business",
-            "app_version": version,
-        },
-        *args,
+    workflow_id = (
+        "old-journal-test:brief-revision:1"
+        if workflow == "por.plan"
+        else "old-journal-test"
     )
+    options = dict(
+        workflow_name=workflow,
+        workflow_id=workflow_id,
+        queue_name="por-business",
+        app_version=version,
+    )
+    revision = (
+        {"revision_request": {"feedback": "Add scope.", "expires_at": 1}}
+        if workflow == "por.plan"
+        else {}
+    )
+    repo.client.enqueue(options, *args, **revision)
     inventory = repo.migration_inventory()
     assert inventory == [
         {
-            "workflow_id": "old-journal-test",
+            "workflow_id": workflow_id,
             "name": workflow,
             "version": version,
             "status": "ENQUEUED",
@@ -42,10 +59,72 @@ def test_old_pending_journal_is_inventoried_and_not_deleted(
     ]
     with pytest.raises(RunConflict, match="original release"):
         repo.require_matching_journals()
+    with pytest.raises(RunConflict, match="original release"):
+        launch("new-version-executor")
+    with pytest.raises(RunConflict, match="original release"):
+        RunClient().create("alice", "new-run", {"topic": "a"}, config(), initial())
     assert (
-        repo.client.list_workflows(workflow_ids=["old-journal-test"])[0].status
-        == "ENQUEUED"
+        repo.client.list_workflows(workflow_ids=[workflow_id])[0].status == "ENQUEUED"
     )
+
+
+def test_native_interactions_ignore_optional_legacy_tables(native_case):
+    from sqlalchemy import text
+
+    repo = facts()
+    case = native_case
+    with repo.engine.begin() as db:
+        # Fresh installs have neither application receipt table.
+        for name in ("approvals", "brief_revision_receipts"):
+            assert (
+                db.execute(
+                    text("SELECT to_regclass(:name)"), {"name": f"por_domain.{name}"}
+                ).scalar_one()
+                is None
+            )
+        db.execute(
+            text(
+                "CREATE TABLE por_domain.approvals (run_id text PRIMARY KEY, version text, decision text)"
+            )
+        )
+        db.execute(
+            text(
+                "CREATE TABLE por_domain.brief_revision_receipts (run_id text, key_hash text, fingerprint text, PRIMARY KEY(run_id,key_hash))"
+            )
+        )
+        db.execute(
+            text("INSERT INTO por_domain.approvals VALUES ('old','old-slot','expired')")
+        )
+        db.execute(
+            text(
+                "INSERT INTO por_domain.brief_revision_receipts VALUES ('old','old-key','old-fingerprint')"
+            )
+        )
+
+    repo.initialize()
+    run = case.create(approval=True)
+    run_id = run["run_id"]
+    plan = case.wait(run, lambda r: r["status"] == "awaiting_approval")["plan"]
+    case.client.approve(
+        run_id, "alice", plan["version"], "revise", feedback="Add scope.", key="native"
+    )
+    revised = case.wait(
+        run,
+        lambda r: r["status"] == "awaiting_approval"
+        and r["plan"]["version"] != plan["version"],
+    )["plan"]
+    case.client.approve(run_id, "alice", revised["version"], "approve")
+    assert (
+        case.wait(run, lambda r: r["archive_status"] == "saved")["status"]
+        == "completed"
+    )
+    with repo.engine.connect() as db:
+        assert db.execute(text("SELECT * FROM por_domain.approvals")).all() == [
+            ("old", "old-slot", "expired")
+        ]
+        assert db.execute(
+            text("SELECT * FROM por_domain.brief_revision_receipts")
+        ).all() == [("old", "old-key", "old-fingerprint")]
 
 
 def test_historical_unit_projection_remains_readable(pg_database):

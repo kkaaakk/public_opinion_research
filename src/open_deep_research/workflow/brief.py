@@ -52,15 +52,6 @@ def brief_metadata(value: str, revision: int, run_id: str) -> dict:
     )
 
 
-def approval_receipt_version(plan_version: str, revision_attempt: int) -> str:
-    """Address one approval slot even if a failed revision leaves the Brief unchanged."""
-    if revision_attempt == 0:
-        return plan_version
-    from open_deep_research.web.run_data import digest
-
-    return digest(dict(plan_version=plan_version, revision_attempt=revision_attempt))
-
-
 class BriefRevision(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     brief_md: str

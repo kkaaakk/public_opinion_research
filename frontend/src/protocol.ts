@@ -45,6 +45,14 @@ export type Clarification = {
     options: string[];
   }[];
 };
+export type BriefRevisionRequest = {
+  version: string;
+  decision: 'revise';
+  feedback: string;
+};
+export type HumanCommand =
+  ['approval' | 'clarification', object] | ['revise', BriefRevisionRequest];
+
 export type Plan = {
   revision?: number;
   content_hash?: string;
@@ -54,7 +62,6 @@ export type Plan = {
   sections: { name: string }[];
   expires_at: string;
   ai_revision?: {
-    attempt: number;
     used: number;
     limit: number;
     pending: boolean;
@@ -350,7 +357,6 @@ export function parseSnapshot(value: unknown): RunSnapshot {
       sections: array(p.sections).map((s) => ({ name: string(record(s).name) })),
       ai_revision: revision
         ? {
-            attempt: integer(revision.attempt),
             used: integer(revision.used),
             limit: integer(revision.limit),
             pending: boolean(revision.pending),

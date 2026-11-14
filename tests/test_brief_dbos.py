@@ -10,40 +10,25 @@ from sqlalchemy import text
 from test_python_workflow_sdk import CLARIFICATION_ANSWERS, CLARIFICATION_QUESTIONS
 from test_research_brief import BRIEF
 
-from open_deep_research.web.run_data import RunConflict
+from open_deep_research.web.run_data import RunConflict, RunNotFound, digest
 from open_deep_research.workflow.run_facts import facts
 
 pytestmark = pytest.mark.integration
 
 
-def test_prior_edit_receipt_cannot_block_current_brief_expiration(
-    native_case, monkeypatch
-):
+@pytest.mark.parametrize("pg_database", [{"RUN_APPROVAL_SECONDS": 5}], indirect=True)
+def test_manual_edit_keeps_original_approval_deadline(native_case):
     c = native_case
     run = c.create(approval=True)
-    old = c.wait(run, lambda r: r["status"] == "awaiting_approval")["plan"]
-    c.client.approve(
-        run["run_id"],
-        "alice",
-        old["version"],
-        "edit",
-        BRIEF + "\nKeep uncertainty explicit.",
-    )
-    current = c.wait(run, lambda r: r["plan"] and r["plan"]["revision"] == 2)["plan"]
-    repo = facts()
-    original = repo.now
-    with monkeypatch.context() as patch:
-        patch.setattr(repo, "now", lambda db: original(db) + 90000)
-        assert repo.expire_approval(run["run_id"], current)
-        assert repo.expire_approval(run["run_id"], current)
-    with repo.engine.connect() as db:
-        receipt = db.execute(
-            text("SELECT version,decision FROM por_domain.approvals WHERE run_id=:id"),
-            {"id": run["run_id"]},
-        ).one()
-    assert tuple(receipt) == (current["version"], "expired")
+    old = pending_brief(c, run)
+    edited = BRIEF + "\nKeep uncertainty explicit."
+    c.client.approve(run["run_id"], "alice", old["version"], "edit", edited)
+    current = c.wait(run, lambda r: r["plan"]["revision"] == 2)["plan"]
+    assert current["expires_at"] == old["expires_at"]
+    done = c.wait(run, lambda r: r["archive_status"] == "saved")
+    assert done["status"] == "cancelled" and done["plan"]["brief"] == edited
+    assert c.client.client.get_event(run["run_id"], "approval_end", 0) == "expired"
     assert not c.models and not c.calls
-    c.client.cancel(run["run_id"], "alice")
 
 
 @pytest.mark.parametrize("native_case", ["clarify"], indirect=True)
@@ -107,10 +92,9 @@ def test_clarification_same_run_releases_quota_and_resumes(
         )
     assert not c.runtimes and not c.calls
     version = pending["clarification"]["version"]
-    for _ in range(2):
-        c.client.clarify(
-            run["run_id"], "alice", version, {} if skip else {"brand": "Brand A"}, skip
-        )
+    c.client.clarify(
+        run["run_id"], "alice", version, {} if skip else {"brand": "Brand A"}, skip
+    )
     approved = c.wait(run, lambda r: r["status"] == "awaiting_approval")
     assert approved["clarification"] is None and approved["run_id"] == run["run_id"]
     c.client.approve(run["run_id"], "alice", approved["plan"]["version"], "approve")
@@ -172,6 +156,14 @@ def test_clarification_rounds_preserve_context_and_versioned_approval(
             assert pending["version"] != old_version
             with pytest.raises(RunConflict, match="version changed"):
                 c.client.clarify(run_id, "alice", old_version, old_answers)
+            # Simulate an older admitted command reaching the mailbox late.
+            c.client.client.send(
+                run_id,
+                dict(
+                    owner="alice", version=old_version, answers=old_answers, skip=False
+                ),
+                topic="clarification",
+            )
         skip_this_round = skip and number == rounds
         answers = {} if skip_this_round else CLARIFICATION_ANSWERS[number - 1]
         c.client.clarify(run_id, "alice", pending["version"], answers, skip_this_round)
@@ -273,34 +265,18 @@ def test_concurrent_runs_keep_clarification_answers_scoped_to_their_run(native_c
             assert expected in prompt
 
 
-def test_edit_cas_old_approval_and_execution_uses_frozen_brief(native_case):
+def test_edit_rejects_old_approval_and_execution_uses_frozen_brief(native_case):
     c = native_case
     run = c.create(approval=True)
     old = c.wait(run, lambda r: r["status"] == "awaiting_approval")["plan"]
     edited = BRIEF.replace("Brand", "User edited Brand")
 
-    def submit(i):
-        try:
-            c.client.approve(
-                run["run_id"],
-                "alice",
-                old["version"],
-                "edit",
-                edited + ("\nExtra constraint" if i else ""),
-            )
-            return True
-        except RunConflict:
-            return False
-
-    with ThreadPoolExecutor(2) as pool:
-        assert sum(pool.map(submit, range(2))) == 1
+    c.client.approve(run["run_id"], "alice", old["version"], "edit", edited)
     pending = c.wait(run, lambda r: r["plan"] and r["plan"]["revision"] == 2)
     with pytest.raises(RunConflict):
         c.client.approve(run["run_id"], "alice", old["version"], "approve")
     version = pending["plan"]["version"]
     c.client.approve(run["run_id"], "alice", version, "approve")
-    with pytest.raises(RunConflict):
-        c.client.approve(run["run_id"], "alice", version, "approve")
     done = c.wait(
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
     )
@@ -352,24 +328,25 @@ def test_clarification_timeout_cancels_without_success_or_research(native_case, 
         c.client.clarify(run["run_id"], "alice", pending["version"], {}, True)
 
 
-def pending_brief(case, run, attempt=0):
+def pending_brief(case, run, used=0, *, error=None):
     return case.wait(
         run,
         lambda r: r["status"] == "awaiting_approval"
         and r["plan"]
         and not r["plan"]["ai_revision"]["pending"]
-        and r["plan"]["ai_revision"]["attempt"] == attempt,
+        and r["plan"]["ai_revision"]["used"] == used
+        and r["plan"]["ai_revision"]["error"] == error,
     )["plan"]
 
 
-def revise(case, run, plan, feedback):
+def revise(case, run, plan, feedback, *, key):
     return case.client.approve(
         run["run_id"],
         run["owner"],
         plan["version"],
         "revise",
         feedback=feedback,
-        revision_attempt=plan["ai_revision"]["attempt"],
+        key=key,
     )
 
 
@@ -394,7 +371,7 @@ def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_a
     assert initial["ai_revision"]["used"] == 0 and not c.revision_requests
     for n in range(1, 4):
         feedback = f"Require competitor comparison dimension {n}."
-        revise(c, run, plan, feedback)
+        revise(c, run, plan, feedback, key=f"revise-{n}")
         next_plan = pending_brief(c, run, n)
         assert next_plan["version"] != plan["version"]
         assert next_plan["content_hash"] != plan["content_hash"]
@@ -412,9 +389,9 @@ def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_a
         plan = next_plan
 
     with pytest.raises(RunConflict, match="limit"):
-        revise(c, run, plan, "Fourth revision is forbidden.")
+        revise(c, run, plan, "Fourth revision is forbidden.", key="fourth")
     with pytest.raises(RunConflict):
-        revise(c, run, initial, "Stale brief.")
+        revise(c, run, initial, "Stale brief.", key="stale")
     assert len(c.revision_requests) == 3 and len(c.plan_prompts) == 4
     assert not c.models and not c.calls and not facts().request(run_id)["occupied"]
 
@@ -434,84 +411,159 @@ def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_a
     assert len(c.revision_requests) == 3
 
 
-def test_concurrent_revision_receipt_and_http_retry_are_atomic(
-    native_case, monkeypatch
+@pytest.mark.parametrize(
+    "duplicate,first_fails",
+    [(True, False), (False, False), (False, True)],
+    ids=["same-key", "distinct-stale", "distinct-same-version"],
+)
+def test_native_revision_admission_race(
+    native_case, monkeypatch, duplicate, first_fails
 ):
     from fastapi.testclient import TestClient
 
     from open_deep_research.web import server
+    from open_deep_research.workflow import dbos_workflow as engine
 
     c = native_case
-    release = Event()
+    recv = engine.receive_interaction
+    gate, release_model = Event(), Event()
 
-    async def wait_for_release(_):
-        assert await asyncio.to_thread(release.wait, 20)
+    async def hold_first_recv(topic, owner, interaction):
+        if topic == "approval":
+            assert await asyncio.to_thread(gate.wait, 30)
+        return await recv(topic, owner, interaction)
 
-    c.revision_response = wait_for_release
-    run = c.create(owner="operator", approval=True)
-    plan = pending_brief(c, run)
-    base = {
-        "plan_version": plan["version"],
-        "decision": "revise",
-        "revision_attempt": 0,
-    }
-    path = "/api/runs/" + run["run_id"]
+    async def respond(_):
+        assert await asyncio.to_thread(release_model.wait, 30)
+        if first_fails and len(c.revision_requests) == 1:
+            raise RuntimeError("Scripted first revision failure")
+
+    monkeypatch.setattr(engine, "receive_interaction", hold_first_recv)
+    c.revision_response = respond
     monkeypatch.setattr(server, "WEB_API_TOKEN", "revision-http-test-only")
+    run = c.create(owner="operator", approval=True)
+    run_id = run["run_id"]
+    plan = pending_brief(c, run)
+    base = {"version": plan["version"], "decision": "revise"}
+    path = f"/api/runs/{run_id}/approval"
     with TestClient(
         server.app, headers={"Authorization": "Bearer revision-http-test-only"}
     ) as http:
-        assert (
-            http.post(path + "/approval", json=dict(base, feedback="  ")).status_code
-            == 409
-        )
+
+        def submit(key, feedback="Compare service channels.", **fields):
+            return http.post(
+                path,
+                json=base | {"feedback": feedback} | fields,
+                headers={"Idempotency-Key": key},
+            )
+
+        try:
+            if duplicate:
+                assert (
+                    http.post(
+                        path, json=base | {"feedback": "Compare services."}
+                    ).status_code
+                    == 400
+                )
+                assert submit("has space").status_code == 400
+                assert submit("k" * 129).status_code == 400
+                assert submit("blank", "  ").status_code == 409
+                assert submit("obsolete", revision_attempt=0).status_code == 400
+                with pytest.raises(RunNotFound):
+                    c.client.approve(
+                        run_id,
+                        "other-owner",
+                        plan["version"],
+                        "revise",
+                        feedback="Compare services.",
+                        key="one",
+                    )
+
+            keys = ["one", "one" if duplicate else "two"]
+            with ThreadPoolExecutor(2) as pool:
+                responses = list(pool.map(submit, keys))
+            assert [r.status_code for r in responses] == [200, 200]
+            assert all(r.json()["status"] == "awaiting_approval" for r in responses)
+            if duplicate:
+                # Native message identity takes precedence. It does not compare payloads.
+                assert submit("one", "Different feedback.").status_code == 200
+            with facts().engine.connect() as db:
+                messages = db.execute(
+                    text(
+                        "SELECT count(*) FROM por_dbos.notifications "
+                        "WHERE destination_uuid=:id AND topic='approval'"
+                    ),
+                    {"id": run_id},
+                ).scalar_one()
+            assert messages == len(set(keys))
+            gate.set()
+            c.wait(
+                run,
+                lambda r: r["plan"]["ai_revision"]["pending"] and c.revision_requests,
+            )
+            assert submit("during").status_code == 409
+            assert (
+                http.post(path, json=base | {"decision": "approve"}).status_code == 409
+            )
+        finally:
+            gate.set()
+            release_model.set()
+
+        # Successful changes invalidate queued requests for the old version.
+        # A settled failure can leave another already-accepted request eligible.
+        result = pending_brief(c, run, 1)
+        assert "Compare service channels." in result["brief"]
+        assert "Different feedback." not in result["brief"]
+        assert submit("one").status_code == 409
         assert (
             http.post(
-                path + "/approval",
-                json=dict(base, feedback="ok", revision_attempt=True),
+                path, json={"version": result["version"], "decision": "approve"}
             ).status_code
-            == 400
+            == 200
         )
-        try:
-            bodies = [
-                dict(base, feedback=f"Compare service channel {n}.") for n in (1, 2)
-            ]
-            with ThreadPoolExecutor(2) as pool:
-                responses = list(
-                    pool.map(
-                        lambda body: http.post(path + "/approval", json=body), bodies
-                    )
-                )
-            assert sorted(response.status_code for response in responses) == [200, 409]
-            winner = bodies[
-                next(
-                    i
-                    for i, response in enumerate(responses)
-                    if response.status_code == 200
-                )
-            ]
-            waiting = http.get(path).json()["plan"]
-            assert (
-                waiting["version"] == plan["version"]
-                and waiting["ai_revision"]["pending"]
-            )
-            assert http.post(path + "/approval", json=winner).status_code == 200
-            assert (
-                http.post(
-                    path + "/approval",
-                    json={"plan_version": plan["version"], "decision": "approve"},
-                ).status_code
-                == 409
-            )
-            c.wait(run, lambda r: bool(c.revision_requests))
-            assert facts().request(run["run_id"])["occupied"]
-        finally:
-            release.set()
-        result = pending_brief(c, run, 1)
-        assert (
-            result["ai_revision"]["used"] == 1 and winner["feedback"] in result["brief"]
+        done = c.wait(run, lambda r: r["archive_status"] == "saved")
+        assert done["status"] == "completed" and done["plan"]["locked"]
+        assert len(c.revision_requests) == (2 if first_fails else 1)
+        children = facts().client.list_workflows(
+            workflow_id_prefix=run_id + ":brief-revision:"
         )
-        assert http.post(path + "/approval", json=winner).status_code == 200
-        assert len(c.revision_requests) == 1
+        assert len(children) == len(c.revision_requests)
+        assert {w.workflow_id for w in children} <= {
+            f"{run_id}:brief-revision:"
+            + digest(dict(run_id=run_id, owner="operator", key=key))
+            for key in keys
+        }
+
+
+def test_repeated_failed_revisions_do_not_spend_success_quota(native_case):
+    c = native_case
+
+    async def fail(_):
+        raise RuntimeError("Scripted provider failure")
+
+    c.revision_response = fail
+    run = c.create(approval=True)
+    plan = pending_brief(c, run)
+    feedback = "Add support as a research dimension."
+    for n in range(1, 5):
+        revise(c, run, plan, feedback, key=f"failure-{n}")
+        result = pending_brief(c, run, error="model_error")
+        assert result["version"] == plan["version"] and result["brief"] == plan["brief"]
+        assert len(c.revision_requests) == n
+    assert not facts().request(run["run_id"])["occupied"]
+    result = revise(c, run, plan, feedback, key="failure-1")
+    assert not result["plan"]["ai_revision"]["pending"]
+    assert len(c.revision_requests) == 4
+    c.client.approve(run["run_id"], "alice", plan["version"], "approve")
+    done = c.wait(run, lambda r: r["archive_status"] == "saved")
+    assert done["status"] == "completed" and done["plan"]["locked"]
+    assert done["plan"]["version"] == plan["version"]
+    with pytest.raises(RunConflict):
+        revise(c, run, plan, feedback, key="failure-2")
+    children = facts().client.list_workflows(
+        workflow_id_prefix=run["run_id"] + ":brief-revision:"
+    )
+    assert len(children) == 4 and all(w.status == "SUCCESS" for w in children)
 
 
 @pytest.mark.parametrize(
@@ -544,8 +596,8 @@ def test_revision_failure_keeps_old_version_and_compaction_bills_once(
     run = c.create(approval=True)
     old = pending_brief(c, run)
     feedback = "Add explicit comparison of support response times."
-    revise(c, run, old, feedback)
-    result = pending_brief(c, run, 1)
+    revise(c, run, old, feedback, key="first")
+    result = pending_brief(c, run, int(expected is None), error=expected)
     assert result["ai_revision"]["error"] == expected
     assert result["expires_at"] == old["expires_at"]
     assert len(c.revision_requests) == calls
@@ -562,12 +614,14 @@ def test_revision_failure_keeps_old_version_and_compaction_bills_once(
         return
     assert result["version"] == old["version"] and result["brief"] == old["brief"]
     assert result["ai_revision"]["used"] == 0
-    revise(c, run, old, feedback)  # Lost ACK acknowledges the same failed attempt.
+    revise(
+        c, run, old, feedback, key="first"
+    )  # DBOS deduplicates the still-current version.
     assert len(c.revision_requests) == calls
     if mode == "provider":
         c.revision_response = None
-        revise(c, run, result, feedback)
-        recovered = pending_brief(c, run, 2)
+        revise(c, run, result, feedback, key="new-key")
+        recovered = pending_brief(c, run, 1)
         assert (
             recovered["ai_revision"]["used"] == 1
             and recovered["ai_revision"]["error"] is None
@@ -577,10 +631,8 @@ def test_revision_failure_keeps_old_version_and_compaction_bills_once(
 
 
 @pytest.mark.parametrize("pg_database", [{"RUN_APPROVAL_SECONDS": 5}], indirect=True)
-@pytest.mark.parametrize("cancel", [False, True], ids=["expiry", "cancel"])
-def test_revision_in_flight_cannot_publish_after_expiry_or_cancel(
-    native_case, cancel, monkeypatch
-):
+@pytest.mark.parametrize("mode", ["running", "cancel"])
+def test_revision_cannot_publish_after_expiry_or_cancel(native_case, mode):
     c = native_case
 
     async def blocked(_):
@@ -589,29 +641,18 @@ def test_revision_in_flight_cannot_publish_after_expiry_or_cancel(
     c.revision_response = blocked
     run = c.create(approval=True)
     old = pending_brief(c, run)
-    revise(c, run, old, "Add competitor scope.")
+    run_id = run["run_id"]
+    key_hash = digest(dict(run_id=run_id, owner="alice", key="pending"))
+    child_id = f"{run_id}:brief-revision:{key_hash}"
+    revise(c, run, old, "Add competitor scope.", key="pending")
     c.wait(
         run, lambda r: r["plan"]["ai_revision"]["pending"] and bool(c.revision_requests)
     )
-    lost_expiry = []
-    if cancel:
-        c.client.cancel(run["run_id"], "alice")
-    else:
-        repo = facts()
-        original_cancel = repo.client.cancel_workflow
-
-        def lose_first_expiry_ack(run_id, **kwargs):
-            if run_id == run["run_id"] and not lost_expiry:
-                lost_expiry.append(run_id)
-                raise RuntimeError("Lost expiry cancel RPC")
-            return original_cancel(run_id, **kwargs)
-
-        monkeypatch.setattr(repo.client, "cancel_workflow", lose_first_expiry_ack)
+    if mode == "cancel":
+        c.client.cancel(run_id, "alice")
     done = c.wait(
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
     )
-    if not cancel:
-        assert lost_expiry == [run["run_id"]]
     assert done["status"] == "cancelled" and done["settlement"] == "settled"
     assert (
         done["plan"]["version"] == old["version"]
@@ -622,10 +663,13 @@ def test_revision_in_flight_cannot_publish_after_expiry_or_cancel(
         and not done["plan"]["ai_revision"]["pending"]
     )
     assert (
-        not c.models and not c.calls and not facts().request(run["run_id"])["occupied"]
+        c.client.client.list_workflows(workflow_ids=[child_id])[0].status == "CANCELLED"
     )
+    if mode == "running":
+        assert c.client.client.get_event(run_id, "approval_end", 0) == "expired"
+    assert not c.models and not c.calls and not facts().request(run_id)["occupied"]
     with pytest.raises(RunConflict):
-        revise(c, run, old, "Late feedback.")
+        revise(c, run, old, "Late feedback.", key="late")
 
 
 def test_single_synthesis_failure_retries_without_repeating_roles(

@@ -801,6 +801,53 @@ async def approval_deadline():
     return _interaction_now() + facts().settings.approval_seconds
 
 
+@DBOS.step()
+async def interaction_clock():
+    return await asyncio.to_thread(_interaction_now)
+
+
+async def receive_interaction(topic, owner, interaction):
+    deadline = interaction["expires_at"]
+    while True:
+        # recv replays its recorded timeout. Use the live clock if the Executor
+        # stopped before arming this wait, including after discarding a message.
+        remaining = deadline - await asyncio.to_thread(_interaction_now)
+        command = await DBOS.recv_async(topic, timeout_seconds=max(0, remaining))
+        if command is None or await interaction_clock() >= deadline:
+            return None
+        if (
+            isinstance(command, dict)
+            and command.get("owner") == owner
+            and command.get("version") == interaction["version"]
+        ):
+            return command
+
+
+async def wait_for_revision(handle, expires_at):
+    async def finished_in_time():
+        # A queued workflow's own timeout starts on dequeue. This bounded read
+        # also covers queue time, using the approval's original deadline.
+        remaining = expires_at - await asyncio.to_thread(_interaction_now)
+        if remaining <= 0:
+            return False
+        timer = asyncio.timeout(remaining)
+        try:
+            async with timer:
+                await facts().client.wait_first_async([handle])
+        except TimeoutError:
+            if not timer.expired():
+                raise
+            return False
+        return True
+
+    if not await DBOS.run_step_async(
+        {"name": "por.wait_for_revision", "preemptible": True}, finished_in_time
+    ):
+        await DBOS.cancel_workflow_async(handle.workflow_id, cancel_children=True)
+        return None
+    return await handle.get_result()
+
+
 async def end_approval(run_id, reason):
     await DBOS.set_event_async("approval_end", reason)
     await send_event(run_id, "approval_ended", decision=reason)
@@ -849,24 +896,11 @@ async def run_workflow(run_id):
         await DBOS.set_event_async("clarification", challenge)
         await DBOS.set_event_async("phase", "awaiting_clarification")
         await send_event(run_id, "run_status", status="awaiting_clarification")
-        # recv journals both its timer and answer. Use a fresh clock only
-        # for its timeout argument, so a restart before timer setup cannot
-        # start a new full wait for an already expired challenge.
-        remaining = challenge["expires_at"] - await asyncio.to_thread(_interaction_now)
-        reply = await DBOS.recv_async(
-            "clarification", timeout_seconds=max(0, remaining)
-        )
+        reply = await receive_interaction("clarification", req["owner"], challenge)
         if reply is None:
             await DBOS.set_event_async("approval_end", "expired")
             await send_event(run_id, "clarification_ended", decision="expired")
             return {"clarification": "expired"}
-        if (
-            reply.get("owner") != req["owner"]
-            or reply.get("version") != challenge["version"]
-        ):
-            raise ValueError(
-                "Clarification continuation does not match the pending request"
-            )
         # Structured control was validated by admission. It is task data, never system instructions.
         apply_patch(
             state,
@@ -899,7 +933,7 @@ async def run_workflow(run_id):
     )
     needs_approval = req["data"]["config"]["configurable"]["allow_plan_feedback"]
     if needs_approval:
-        plan["ai_revision"] = {"attempt": 0, "used": 0, "error": None}
+        plan["ai_revision"] = {"used": 0, "error": None}
     while True:
         await DBOS.set_event_async("plan", plan)
         if not needs_approval:
@@ -911,23 +945,13 @@ async def run_workflow(run_id):
             status="awaiting_approval",
             plan_version=plan["version"],
         )
-        # Edits retain the original deadline; editing cannot extend an approval indefinitely.
-        command = await DBOS.recv_async(
-            "approval",
-            timeout_seconds=max(0, plan["expires_at"] - await interaction_clock()),
-        )
+        command = await receive_interaction("approval", req["owner"], plan)
         if command is None:
             return await end_approval(run_id, "expired")
-        if (
-            command.get("owner") != req["owner"]
-            or command.get("version") != plan["version"]
-        ):
-            raise ValueError(
-                "Approval continuation does not match the current Brief version"
-            )
-        if command["decision"] == "reject":
+        decision = command.get("decision")
+        if decision == "reject":
             return await end_approval(run_id, "reject")
-        if command["decision"] == "edit":
+        if decision == "edit":
             brief = validate_brief(command["brief_md"])
             plan = dict(
                 plan,
@@ -936,21 +960,16 @@ async def run_workflow(run_id):
                 **brief_metadata(brief, plan["revision"] + 1, run_id),
             )
             continue
-        if command["decision"] == "revise":
+        if decision == "revise":
             revision = plan["ai_revision"]
-            if (
-                command["revision_attempt"] != revision["attempt"]
-                or revision["used"] >= MAX_BRIEF_REVISIONS
-            ):
-                raise ValueError("Brief revision continuation no longer authorized")
-            if await interaction_clock() >= plan["expires_at"]:
-                return await end_approval(run_id, "expired")
+            key_hash = command.get("revision_key_hash")
+            if not key_hash or revision["used"] >= MAX_BRIEF_REVISIONS:
+                continue
             await DBOS.set_event_async("phase", "revising_brief")
             await send_event(run_id, "run_status", status="running")
             apply_patch(state, {"workflow": {"brief": plan["brief"]}})
-            attempt = revision["attempt"] + 1
             with (
-                SetWorkflowID(f"{run_id}:brief-revision:{attempt}"),
+                SetWorkflowID(f"{run_id}:brief-revision:{key_hash}"),
                 SetEnqueueOptions(queue_partition_key=req["owner"]),
                 SetWorkflowTimeout(req["data"]["run_seconds"]),
             ):
@@ -964,12 +983,12 @@ async def run_workflow(run_id):
                         "expires_at": plan["expires_at"],
                     },
                 )
-            revised = await handle.get_result()
-            state = revised["state"]
-            if await interaction_clock() >= plan["expires_at"]:
+            revised = await wait_for_revision(handle, plan["expires_at"])
+            if revised is None or await interaction_clock() >= plan["expires_at"]:
                 return await end_approval(run_id, "expired")
+            state = revised["state"]
             error = revised["revision_error"]
-            plan = dict(plan, ai_revision=dict(revision, attempt=attempt, error=error))
+            plan = dict(plan, ai_revision=dict(revision, error=error))
             if error is None:
                 brief = validate_brief(state["workflow"]["brief"])
                 plan.update(
@@ -977,9 +996,8 @@ async def run_workflow(run_id):
                 )
                 plan["ai_revision"]["used"] += 1
             continue
-        if command["decision"] != "approve":
-            raise ValueError("Unknown approval decision")
-        break
+        if decision == "approve":
+            break
     apply_patch(
         state,
         {
@@ -1003,11 +1021,6 @@ async def run_workflow(run_id):
             BUSINESS, research_workflow, run_id, state
         )
     return await handle.get_result()
-
-
-@DBOS.step()
-async def interaction_clock():
-    return _interaction_now()
 
 
 @DBOS.workflow(name="por.events")
@@ -1093,16 +1106,6 @@ async def completion_facts(run_id, cleanup_expired=False):
 
     client = RunClient(facts())
     result = await asyncio.to_thread(client.get, run_id, None)
-    plan = result["plan"]
-    if plan and (
-        result["status"] == "awaiting_approval"
-        or (plan.get("ai_revision") or {}).get("pending")
-    ):
-        if await asyncio.to_thread(facts().expire_approval, run_id, plan):
-            await asyncio.to_thread(
-                facts().client.cancel_workflow, run_id, cancel_children=True
-            )
-            result = await asyncio.to_thread(client.get, run_id, None)
     if (
         result["native_status"]
         in {"SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED"}

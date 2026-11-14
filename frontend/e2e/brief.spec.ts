@@ -1,18 +1,20 @@
-import { test, expect } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
+import { test, expect, type Page } from '@playwright/test';
+
+async function authenticateStudio(page: Page) {
+  await page.locator('.topbar').getByRole('button', { name: '访问设置', exact: true }).click();
+  await page.getByLabel('API 访问令牌').fill('studio-browser-test-only');
+  await page.getByRole('button', { name: '应用并连接' }).click();
+}
 
 test('same Run survives clarification and AI revision reloads, then Brief approval', async ({
   page,
 }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  async function authenticate() {
-    await page.locator('.topbar').getByRole('button', { name: '访问设置', exact: true }).click();
-    await page.getByLabel('API 访问令牌').fill('studio-browser-test-only');
-    await page.getByRole('button', { name: '应用并连接' }).click();
-  }
   await page.goto('/studio');
   await expect(page).toHaveTitle(/Agent Execution Studio/);
-  await authenticate();
+  await authenticateStudio(page);
   await page.getByRole('button', { name: '新建研究', exact: true }).click();
   await page.getByLabel('研究主题').fill('browser-clarify-multi brand risk with evidence');
   await page.getByRole('button', { name: '创建持久 Run' }).click();
@@ -20,14 +22,14 @@ test('same Run survives clarification and AI revision reloads, then Brief approv
   await expect(page.getByText(/澄清第 1\/3 轮/)).toBeVisible();
   const id = await page.locator('.run-identity strong').textContent();
   await page.reload();
-  await authenticate();
+  await authenticateStudio(page);
   await expect(page.locator('.run-identity strong')).toHaveText(id!);
   await page.getByLabel('Which brand?').fill('Brand A; retain all sources');
   await page.getByRole('button', { name: '提交回答并继续' }).click();
   await expect(page.getByText(/澄清第 2\/3 轮/)).toBeVisible();
   await expect(page.getByLabel('Which brand?')).toHaveCount(0);
   await page.reload();
-  await authenticate();
+  await authenticateStudio(page);
   await expect(page.locator('.run-identity strong')).toHaveText(id!);
   await expect(page.getByText(/澄清第 2\/3 轮/)).toBeVisible();
   await expect(page.getByLabel('Which brand?')).toHaveCount(0);
@@ -53,7 +55,7 @@ test('same Run survives clarification and AI revision reloads, then Brief approv
   await page.getByRole('button', { name: '提交 AI 修改', exact: true }).click();
   await expect(page.getByText('AI 正在修改 Brief')).toBeVisible();
   await page.reload();
-  await authenticate();
+  await authenticateStudio(page);
   await expect(page.locator('.run-identity strong')).toHaveText(id!);
   await expect(page.getByText('AI 正在修改 Brief')).toBeVisible();
   await expect(page.getByRole('button', { name: '批准执行', exact: true })).toHaveCount(0);
@@ -83,3 +85,109 @@ test('same Run survives clarification and AI revision reloads, then Brief approv
   });
   expect(errors).toEqual([]);
 });
+
+for (const surface of ['studio', 'classic'] as const) {
+  test(
+    surface + ' refreshes after a lost revision response and retries a settled failure',
+    async ({ page }) => {
+      const studio = surface === 'studio';
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      if (!studio) {
+        await page.route('https://cdn.jsdelivr.net/**', (route) =>
+          route.fulfill({ contentType: 'application/javascript', body: '' }),
+        );
+      }
+      async function authenticate() {
+        if (studio) await authenticateStudio(page);
+        else {
+          const token = page.getByLabel('访问令牌');
+          // Classic's first unauthenticated history read can open this panel.
+          if (!(await token.isVisible())) await page.locator('#api-settings > summary').click();
+          await token.fill('studio-browser-test-only');
+        }
+      }
+
+      const submissions: { key: string | undefined; body: unknown }[] = [];
+      await page.route('**/api/runs/*/approval', async (route) => {
+        const request = route.request();
+        const body = request.postDataJSON();
+        if (body.decision !== 'revise') {
+          await route.continue();
+          return;
+        }
+        submissions.push({ key: request.headers()['idempotency-key'], body });
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        if (submissions.length === 1) await route.abort('timedout');
+        else await route.fulfill({ response });
+      });
+
+      await page.goto('/' + surface);
+      await expect(page).toHaveTitle(studio ? /Agent Execution Studio/ : /Public Opinion Research/);
+      await authenticate();
+      if (studio) {
+        await page.getByRole('button', { name: '新建研究', exact: true }).click();
+        await page.getByLabel('研究主题').fill('brand risk with evidence');
+        await page.getByRole('button', { name: '创建持久 Run' }).click();
+      } else {
+        await page.locator('#topic').fill('brand risk with evidence');
+        await page.getByLabel('开始研究前审批计划').check();
+        await page.getByRole('button', { name: '开始舆情分析' }).click();
+      }
+      const version = page.locator(studio ? '.approval .mono' : '#approval-version').first();
+      const renderedBrief = page.locator(studio ? '.approval .markdown' : '#approval-plan');
+      const edit = page.getByRole('button', { name: 'AI 修改 Brief', exact: true });
+      const opinion = page.getByLabel('AI 修改意见');
+      const approve = page.getByRole('button', {
+        name: studio ? '批准执行' : '批准并继续',
+        exact: true,
+      });
+      await expect(approve).toBeEnabled();
+      const initialVersion = await version.innerText();
+      const initialBrief = await renderedBrief.innerText();
+      await edit.click();
+      const feedback =
+        'browser-fail-once-revision ' + randomUUID() + ': compare service response times.';
+      await opinion.fill(feedback);
+      await page.getByRole('button', { name: '提交 AI 修改', exact: true }).click();
+      await expect(page.getByText(/提交结果未确认，请/)).toBeVisible();
+      expect(submissions).toHaveLength(1);
+
+      await page.reload();
+      await authenticate();
+      if (!studio) await page.getByRole('button', { name: '恢复后台进度' }).click();
+      await expect(page.getByText(/已保留当前 Brief/)).toBeVisible();
+      await expect(page.getByText(/AI 修改：0 \/ 3 次/)).toBeVisible();
+      await expect(version).toHaveText(initialVersion);
+      await expect(renderedBrief).toHaveText(initialBrief);
+      await expect(approve).toBeEnabled();
+      expect(submissions).toHaveLength(1);
+      await edit.click();
+      await expect(opinion).toHaveValue('');
+      await opinion.fill(feedback);
+      await opinion.scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path:
+          (process.env.BRIEF_SCREENSHOT_DIR ?? '../.tmp') +
+          '/studio-brief-retry-' +
+          surface +
+          '.png',
+      });
+      await page.getByRole('button', { name: '重试 AI 修改', exact: true }).click();
+      await expect(page.getByText(/AI 修改：1 \/ 3 次/)).toBeVisible();
+      await expect(version).toContainText('v2');
+      await expect(renderedBrief).toContainText(feedback);
+      expect(submissions).toHaveLength(2);
+      expect(submissions[1].body).toEqual(submissions[0].body);
+      expect(submissions[0].key).toMatch(/^[a-f0-9-]{36}$/);
+      expect(submissions[1].key).toMatch(/^[a-f0-9-]{36}$/);
+      expect(submissions[1].key).not.toBe(submissions[0].key);
+      await expect(approve).toBeEnabled();
+      await approve.click();
+      if (studio) await expect(version).toContainText('已锁定');
+      else await expect(page.locator('#status-text')).toHaveText('已完成');
+      expect(errors).toEqual([]);
+    },
+  );
+}

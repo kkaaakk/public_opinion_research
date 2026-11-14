@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, StudioApi } from './api';
 import { RunObserver, type Connection } from './observer';
-import type { RunEvent, RunRequest, RunSnapshot } from './protocol';
+import type { HumanCommand, RunEvent, RunRequest, RunSnapshot } from './protocol';
 import { persist, restore, type PendingCreate, type PendingRetry } from './session';
 
 /** Owns tab-local request identity and the subscriber; DBOS owns execution. */
@@ -106,11 +106,7 @@ export function useRunSession() {
       setBusy(false);
     }
   }
-  async function command(
-    action: 'cancel' | 'approval' | 'retry' | 'clarification',
-    decision?: 'approve' | 'reject',
-    payload?: object,
-  ) {
+  async function command(...[action, payload]: HumanCommand | ['cancel' | 'retry']) {
     if (!run || run.run_id !== runId || busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
@@ -131,18 +127,16 @@ export function useRunSession() {
       }
       const result = await api.command(
         run.run_id,
-        action,
-        payload ??
-          (action === 'approval'
-            ? { plan_version: run.plan?.version, decision }
-            : action === 'retry'
-              ? { state_version: retry!.state_version }
-              : undefined),
-        retry?.key,
+        action === 'revise' ? 'approval' : action,
+        retry ? { state_version: retry.state_version } : payload,
+        action === 'revise' ? crypto.randomUUID() : retry?.key,
       );
       if (action === 'retry') commit({ ...session, retry: undefined });
-      setRun(result);
-      refresh();
+      // The observer reads the revision's progress and keeps the Brief draft mounted.
+      if (action !== 'revise') {
+        setRun(result);
+        refresh();
+      }
       setMessage(
         action === 'cancel'
           ? '取消请求已提交；继续观察 SDK 清算与归档。'
@@ -150,7 +144,9 @@ export function useRunSession() {
             ? '重试请求已确认；只有 durable Finalizer 可以应用授权。'
             : action === 'clarification'
               ? '澄清回答已提交，继续原研究任务。'
-              : '审批或 Brief 版本修改已提交。',
+              : action === 'revise'
+                ? 'AI 修改请求已确认。'
+                : '审批或 Brief 版本修改已提交。',
       );
     } catch (error) {
       // Authentication/rate-limit failures cannot acknowledge an earlier lost ACK.
@@ -166,7 +162,13 @@ export function useRunSession() {
         !transientControlFailure
       )
         commit({ ...session, retry: undefined });
-      setMessage((error as Error).message);
+      const humanCommand =
+        action === 'approval' || action === 'clarification' || action === 'revise';
+      setMessage(
+        humanCommand && (!(error instanceof ApiError) || error.status >= 500)
+          ? '提交结果未确认，请重新读取当前 Run 状态。'
+          : (error as Error).message,
+      );
     } finally {
       busyRef.current = false;
       setBusy(false);

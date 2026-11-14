@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Plan, RunSnapshot } from '../protocol';
+import type { HumanCommand, Plan, RunSnapshot } from '../protocol';
 import { exportMarkdown, time } from './common';
 
-type Submit = (action: 'approval' | 'clarification', body: object) => void;
+type Submit = (...args: HumanCommand) => void;
 
 const revisionErrors: Record<string, string> = {
   budget_exhausted: '模型预算不足，已保留当前 Brief。',
@@ -98,10 +98,9 @@ function BriefEditor({
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!canRevise || !feedback.trim()) return;
-                submit('approval', {
-                  plan_version: plan.version,
+                submit('revise', {
+                  version: plan.version,
                   decision: 'revise',
-                  revision_attempt: revision.attempt,
                   feedback: feedback.trim(),
                 });
               }}
@@ -117,7 +116,7 @@ function BriefEditor({
                 />
               </label>
               <button className="button" disabled={!canRevise || !feedback.trim()}>
-                提交 AI 修改
+                {revision.error ? '重试 AI 修改' : '提交 AI 修改'}
               </button>
             </form>
           )}

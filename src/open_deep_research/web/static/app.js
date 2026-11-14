@@ -264,14 +264,17 @@ function resetUI() {
     startBtn.disabled = Boolean(durableRun && !durableRun.finished);
 }
 
-// Only a tab-local request identity/cursor is retained. Credentials stay in the
+// Request identity, payload and cursor stay in the tab. Credentials stay in the
 // existing password input and must be entered again after a page reload.
 function readDurableRun() {
     try {
-        const value = JSON.parse(sessionStorage.getItem(DURABLE_STORAGE_KEY));
-        if (value && typeof value.key === 'string' && typeof value.request?.topic === 'string'
-            && Number.isSafeInteger(value.cursor) && value.cursor >= 0
-            && (value.runId === null || /^[a-f0-9]{32}$/.test(value.runId))) return value;
+        const {key, request, runId, cursor, finished} =
+            JSON.parse(sessionStorage.getItem(DURABLE_STORAGE_KEY)) ?? {};
+        if (typeof key === 'string' && typeof request?.topic === 'string'
+            && Number.isSafeInteger(cursor) && cursor >= 0
+            && (runId === null || /^[a-f0-9]{32}$/.test(runId))) {
+            return {key, request, runId, cursor, finished};
+        }
     } catch { /* Missing/invalid tab-local data never starts a request. */ }
     return null;
 }
@@ -334,13 +337,15 @@ function showBriefApproval(state) {
             + (revision.error && !revision.pending ? ' · ' + (errors[revision.error] || 'AI 修改未完成') + '，已保留当前 Brief。' : '')
         : '';
     document.getElementById('revise-brief-btn').classList.toggle('hidden', !revision);
+    document.getElementById('submit-brief-revision-btn').textContent =
+        revision?.error ? '重试 AI 修改' : '提交 AI 修改';
     if (revision && (revision.pending || revision.used >= revision.limit)) {
         document.getElementById('brief-revision-form').classList.add('hidden');
     }
-    updateApprovalControls();
+    updateInteractionControls();
 }
 
-function updateApprovalControls() {
+function updateInteractionControls() {
     const disabled = approvalSubmitting || Boolean(durableAiRevision?.pending);
     for (const id of ['edit-plan-btn', 'approve-plan-btn', 'reject-plan-btn', 'brief-edit']) {
         document.getElementById(id).disabled = disabled;
@@ -348,6 +353,9 @@ function updateApprovalControls() {
     const revision = durableAiRevision;
     for (const id of ['revise-brief-btn', 'submit-brief-revision-btn', 'brief-revision-feedback']) {
         document.getElementById(id).disabled = disabled || !revision || revision.used >= revision.limit;
+    }
+    for (const button of document.getElementById('clarification-panel').querySelectorAll('button')) {
+        button.disabled = approvalSubmitting;
     }
 }
 
@@ -379,8 +387,6 @@ async function followDurableRun(request) {
             for (const stage of state.role_reports || []) addLog(stage.role + '_agent', stage.content);
             hydrate = false;
         }
-        if ((state.status === 'awaiting_approval' && !state.plan?.ai_revision?.pending) ||
-            (state.status === 'awaiting_clarification' && state.clarification)) return;
         if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status) && state.settlement !== 'pending') {
             researchFailed = state.status !== 'completed';
             if (state.archive_status === 'pending') {
@@ -390,6 +396,13 @@ async function followDurableRun(request) {
             durableRun.finished = true;
             saveDurableRun();
             return;
+        }
+        if (['awaiting_approval', 'awaiting_clarification'].includes(state.status)
+            && state.events_paused && durableRun.cursor >= state.event_cursor) {
+            // Native acceptance and consumption are separate. Keep observing the
+            // current wait without resubmitting a command.
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            continue;
         }
         try {
             const response = await durableRequest('/api/runs/' + durableRun.runId + '/events', {
@@ -427,37 +440,46 @@ async function followDurableRun(request) {
     }
 }
 
+async function submitInteraction(topic, body, key) {
+    approvalSubmitting = true;
+    updateInteractionControls();
+    try {
+        await durableRequest('/api/runs/' + durableRun.runId + '/' + topic, {
+            method: 'POST',
+            headers: key ? {'Idempotency-Key': key} : undefined,
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(30000),
+        });
+        void startResearch(true);
+    } catch (error) {
+        toast(!error.httpStatus || error.httpStatus >= 500
+            ? '提交结果未确认，请刷新当前 Run 状态。'
+            : error.message);
+    } finally {
+        approvalSubmitting = false;
+        updateInteractionControls();
+    }
+}
+
 async function decidePlan(decision) {
     if (!durableRun?.runId || !durablePlanVersion || approvalSubmitting || durableAiRevision?.pending) return;
     const draft = document.getElementById('brief-edit').value;
     if ((decision === 'approve' || decision === 'revise') && durableBrief !== draft.trim()) {
-        statusText.textContent = '请先保存手动修改的 Brief 新版本'; return;
+        toast('请先保存手动修改的 Brief 新版本');
+        return;
+    }
+    if (decision === 'revise') {
+        if (!durableAiRevision || durableAiRevision.used >= durableAiRevision.limit) return;
+        const feedback = document.getElementById('brief-revision-feedback').value.trim();
+        if (!feedback) {
+            toast('请填写 AI 修改意见');
+            return;
+        }
+        return submitInteraction('approval', {version: durablePlanVersion, decision, feedback}, crypto.randomUUID());
     }
     const body = {plan_version: durablePlanVersion, decision};
     if (decision === 'edit') body.brief_md = draft;
-    if (decision === 'revise') {
-        if (!durableAiRevision || durableAiRevision.used >= durableAiRevision.limit) return;
-        body.feedback = document.getElementById('brief-revision-feedback').value.trim();
-        body.revision_attempt = durableAiRevision.attempt;
-        if (!body.feedback) {
-            statusText.textContent = '请填写 AI 修改意见'; return;
-        }
-    }
-    approvalSubmitting = true;
-    updateApprovalControls();
-    try {
-        await durableRequest('/api/runs/' + durableRun.runId + '/approval', { method: 'POST',
-            body: JSON.stringify(body) });
-        if (decision !== 'revise') {
-            durablePlanVersion = null;
-            document.getElementById('approval-panel').classList.add('hidden');
-        }
-        await startResearch(true);
-    } catch (error) { statusText.textContent = error.message; }
-    finally {
-        approvalSubmitting = false;
-        updateApprovalControls();
-    }
+    return submitInteraction('approval', body);
 }
 
 // 展示本次运行的输入、输出、总令牌及模型调用次数。
@@ -827,17 +849,11 @@ function showClarification(state) {
 }
 async function answerClarification(skip) {
     if (!durableRun?.runId || !durableClarification || approvalSubmitting) return;
-    approvalSubmitting = true;
-    try {
-        const answers = {};
-        if (!skip) for (const question of durableClarification.questions) {
-            const inputs = Array.from(document.querySelectorAll('#clarification-questions input, #clarification-questions textarea')).filter(input => input.name === question.id);
-            if (question.kind === 'text') {if (inputs[0].value.trim()) answers[question.id] = inputs[0].value;}
-            else {const selected = inputs.filter(input => input.checked).map(input => input.value); if (selected.length) answers[question.id] = question.kind === 'single' ? selected[0] : selected;}
-        }
-        await durableRequest('/api/runs/' + durableRun.runId + '/clarification', {method: 'POST', body: JSON.stringify({version: durableClarification.version, answers, skip})});
-        document.getElementById('clarification-panel').classList.add('hidden');
-        await startResearch(true);
-    } catch (error) {statusText.textContent = error.message;}
-    finally {approvalSubmitting = false;}
+    const answers = {};
+    if (!skip) for (const question of durableClarification.questions) {
+        const inputs = Array.from(document.querySelectorAll('#clarification-questions input, #clarification-questions textarea')).filter(input => input.name === question.id);
+        if (question.kind === 'text') {if (inputs[0].value.trim()) answers[question.id] = inputs[0].value;}
+        else {const selected = inputs.filter(input => input.checked).map(input => input.value); if (selected.length) answers[question.id] = question.kind === 'single' ? selected[0] : selected;}
+    }
+    return submitInteraction('clarification', {version: durableClarification.version, answers, skip});
 }

@@ -141,12 +141,8 @@ export default function App() {
       setTab('workflow');
     }
   }
-  function command(
-    action: 'cancel' | 'approval' | 'retry' | 'clarification',
-    decision?: 'approve' | 'reject',
-    payload?: object,
-  ) {
-    if (replayCursor === null) return studio.command(action, decision, payload);
+  function command(...args: Parameters<typeof studio.command>) {
+    if (replayCursor === null) return studio.command(...args);
   }
   const visibleEvents = useMemo(
     () => (replayCursor === null ? events : events.filter((e) => e.seq <= replayCursor)),
@@ -523,11 +519,7 @@ export default function App() {
                   </div>
                 )}
                 {run && replayCursor === null && (
-                  <ResearchSpec
-                    run={run}
-                    busy={busy}
-                    submit={(action, body) => void command(action, undefined, body)}
-                  />
+                  <ResearchSpec run={run} busy={busy} submit={(...args) => void command(...args)} />
                 )}
                 <div className="tabs" role="tablist" aria-label="运行视图">
                   {tabs.map(([id, label]) => (

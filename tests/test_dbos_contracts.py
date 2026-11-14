@@ -325,12 +325,12 @@ def test_approval_immutable_once_and_no_replanning(native_case, decision):
     with pytest.raises(RunConflict):
         case.client.approve(run["run_id"], "alice", "0" * 64, decision)
     case.client.approve(run["run_id"], "alice", planned["plan"]["version"], decision)
+    result = case.wait(run)
+    assert result["status"] == ("completed" if decision == "approve" else "cancelled")
     with pytest.raises(RunConflict):
         case.client.approve(
             run["run_id"], "alice", planned["plan"]["version"], decision
         )
-    result = case.wait(run)
-    assert result["status"] == ("completed" if decision == "approve" else "cancelled")
     after = [u["id"] for u in facts().units(run["run_id"])]
     assert set(before) <= set(after)
     assert len([k for k in after if ":plan:" in k]) == 1
@@ -1109,17 +1109,16 @@ def test_approval_expiry_gap_before_recv_is_still_enforced(native_case, monkeypa
 
     monkeypatch.setattr(engine, "send_event", delayed)
     run = native_case.create(approval=True)
-    result = native_case.wait(run, lambda r: r["native_status"] == "CANCELLED")
-    assert result["status"] == "cancelled"
-    assert not native_case.runtimes
-    with facts().engine.connect() as db:
-        assert (
-            db.execute(
-                text("SELECT decision FROM por_domain.approvals WHERE run_id=:id"),
-                {"id": run["run_id"]},
-            ).scalar_one()
-            == "expired"
-        )
+    c = native_case
+    paused = c.wait(run, lambda r: r["status"] == "awaiting_approval")
+    run_id = run["run_id"]
+    c.client.approve(run_id, "alice", paused["plan"]["version"], "approve")
+    result = c.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "cancelled" and result["settlement"] == "settled"
+    assert not c.runtimes and not result["plan"]["locked"]
+    assert c.client.client.get_event(run_id, "approval_end", 0) == "expired"
+    with pytest.raises(RunConflict):
+        c.client.approve(run_id, "alice", paused["plan"]["version"], "approve")
 
 
 def test_retry_after_failed_result_accounting_keeps_committed_model(

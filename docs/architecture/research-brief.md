@@ -1,7 +1,8 @@
 # Markdown Research Brief workflow
 
-The Brief AI revision release uses application version
-`dbosrunner-brief-revision-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
+Native human interaction uses application version
+`dbosrunner-native-interaction-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
+See the [cutover steps](dbos-deployment.md#原生人机交互版本切换).
 DBOS owns execution and recovery, Runner owns the four business Agent loops, and
 Research Graph owns evidence. Markdown carries research intent, never execution control.
 
@@ -94,8 +95,8 @@ optional Brief shortening call.
 Native phase is `awaiting_clarification` or `awaiting_approval`; neither is terminal.
 SSE emits a durable status, closes that delivered waiting prefix, and the observer
 continues polling. Refresh/reconnect reads the current `round`, `max_rounds` and
-questions from the native event. A committed answer receipt hides that version
-even if the Executor has yet to receive it.
+questions from the native event. A submitted answer can remain visible until
+`por.run` receives it and changes the phase.
 
 `POST .../clarification` accepts `{version, answers, skip}`. Answers are validated
 against the pending question IDs/kinds/options. Partial answers are allowed; skip
@@ -108,38 +109,49 @@ start-to-completion for each planning or research child. The parent has no
 overall wall-clock deadline, so queue time and human waits are separate.
 Cancellation uses the existing persisted intent, native cancellation and Finalizer.
 
-`POST .../approval` accepts `{plan_version, decision}` where decision is `approve`,
-`reject`, `edit`, or `revise`. An edit also supplies `brief_md`, validates it, then publishes
-a new version. Saving and approving are separate commands: an old approval cannot
-approve newly edited text. Unsaved edits disable the UI approval button.
+`POST .../approval` accepts `{version, decision}` and retains the `plan_version` input
+alias for existing callers. An `edit` supplies `brief_md` and publishes a new version
+after validation. The user then approves that exact version in a separate command.
+Unsaved edits disable the UI approval button.
 
-No new tables: the existing locked request row and `por_domain.approvals` hold the
-last accepted interaction receipt, and DBOS stores the transactional continuation
-message and journal. A receipt binds topic, exact version and payload digest.
-Same-payload clarification retransmissions acknowledge the committed command
-while it is the latest challenge and receipt. Publishing a later round invalidates
-earlier versions, including identical retransmissions. Same-payload edits
-acknowledge the original save while its receipt remains. Repeated approve/reject
-keeps the existing 409 already-consumed contract. A changed payload, stale
-version, cancellation, expiry or wrong owner blocks new submissions. Human
-controls validate the accepted application and configuration before sending.
+RunClient checks the owner, accepted configuration and application version,
+native workflow status, phase, interaction version and deadline. It then calls
+`DBOSClient.send()`. Clarification, edit, approve and reject use a message key
+derived from the topic and canonical command, which includes the version and owner.
+DBOS deduplicates identical sends to the destination workflow and journals each
+receive. `por.run` discards messages for an earlier version or the wrong owner
+and waits within the original deadline. It checks the database clock after a
+receive because a message may be queued when the wait times out.
+
+A successful POST acknowledges native submission and returns a current snapshot.
+Admission reads and send occur separately. A request can be rejected when the
+interaction has advanced even if DBOS accepted the original message. Studio and
+Classic reread the Run after submission or refresh. After an ambiguous network
+failure they prompt the user to check the current state.
 
 ## AI revision during approval
 
-Send `{"plan_version":"…","decision":"revise","feedback":"Compare product quality","revision_attempt":0}`
-to the existing approval endpoint. Use the current `plan.ai_revision.attempt` from
-the Run snapshot. Feedback is trimmed, must be nonempty, and is limited to 4,000
-characters. The snapshot carries the pending flag, success count, limit, and any
-settled revision error.
+Send `{"version":"…","decision":"revise","feedback":"Compare product quality"}`
+with an `Idempotency-Key` header to the same approval endpoint. The key accepts
+1–128 characters from `[A-Za-z0-9_.:-]`. Feedback must be nonempty after trimming
+and is limited to 4,000 characters. The Run snapshot shows the pending flag, success
+count, limit and any settled error.
 
-The existing request-row lock serializes approval controls. The receipt and
-native send are committed together. The receipt binds the Brief version,
-revision attempt and feedback digest. Retrying the identical command while its
-receipt is current acknowledges the original operation. A different command
-cannot claim that slot. A settled failure advances the attempt while retaining
-the version and success count, so a deliberate retry must use the new attempt.
+AI revisions use the digest of the Run, owner and request Key in the
+`approval:revise:<key_hash>` native message identity. DBOS retains the message
+that first used that identity while its native record exists. The API does not
+compare historical bodies or replay an earlier HTTP response. Each explicit
+submit or retry in Studio and Classic creates a new Key. A refresh reads current
+state and never resends a revision on its own.
 
-`por.run` enqueues `:brief-revision:N` on BUSINESS as a revision-mode `por.plan`
+Concurrent requests with different Keys can both enter the mailbox before the
+phase changes. `por.run` processes them in sequence and a new Brief version
+invalidates queued commands for the old version. A settled AI failure preserves
+the version, so an already queued command for that version can still execute
+and incur usage. A fresh request during the observed revision phase is rejected.
+
+The DBOS approval message carries the scoped key digest. `por.run` uses it to
+enqueue `{run_id}:brief-revision:{key_hash}` on BUSINESS as a revision-mode `por.plan`
 child. The model sees the current saved Brief, original conversation, image and
 clarification context, and feedback as task data beneath fixed instructions.
 Only the full validated result creates a new Brief revision and consumes one
@@ -148,11 +160,10 @@ Clarification rounds and manual version increments do not consume the AI quota.
 
 The original approval deadline covers the queue, execution and return to
 preview. A new provider call checks the database clock at admission, and the
-parent checks it before accepting the result. The existing Finalizer expires
-an active revision and cancels its native children when the deadline passes.
-A cancelled or expired approval cannot authorize research, even when a result
-checked before the deadline is replayed later. Already issued provider requests
-can still incur charges.
+parent checks it before accepting the result. The parent bounds its wait on
+native child completion and cancels the child at expiry, including while it is
+still queued. Native cancellation and the Finalizer settle and archive the Run.
+Already issued provider requests can still incur charges.
 
 ### Cost and persistence
 
@@ -163,12 +174,10 @@ incur usage. The compaction input includes the candidate, current Brief and
 explicit feedback. Provider context limits can reject large inputs. The
 planner retains the original context and surfaces that failure to the user.
 
-There is no schema migration. The approval snapshot adds small counters, and
-a pending approval read can check the indexed receipt. Each accepted revision
-writes the same transactional receipt and native message as an approval. Its
-child adds a reservation, stage checkpoints, native `por.llm` output, physical
-usage receipts and settlement. The parent writes the updated plan event and
-continues its existing approval loop.
+The native DBOS message and child journal preserve request and execution
+identity. `por_domain` still owns reservations, physical usage, external operation
+receipts and settlement. The native plan event publishes the current Brief,
+success count and error for preview.
 
 Committed model Steps are reused after Executor restart. If a provider returned
 before its native result committed, the external-effect guard blocks automatic
@@ -179,12 +188,9 @@ boundary for unconfirmed effects.
 
 One local PostgreSQL run with scripted inference measured 341 estimated text
 input tokens for the initial plan and 281, 285, and 289 for three revisions.
-Those estimates exclude provider schema overhead. Submit to preview took
-1.57–1.86 seconds per revision in this sample, including the queue and status
-reads. Three revisions added 36 root journal records. The first revision
-child recorded a reserve Step, stage-start Step, one model Step and a
-stage-result Step. These are simulated-inference measurements on a local
-test database.
+Those historical measurements used the earlier Brief revision release and
+exclude provider schema overhead. Submit to preview took 1.57–1.86 seconds per
+revision in that sample, including the queue and status reads.
 
 ## Brief persistence and context
 
@@ -193,7 +199,7 @@ native `plan` event preserve it; no Markdown filesystem database exists. Plan
 metadata has `revision` (starting at 1), `content_hash` (SHA256 of normalized UTF-8
 Markdown), and `version` (digest binding Run ID, revision and content hash).
 Editing back to earlier text still creates a different version. Approval state is
-derived from native phase/receipts; research records `brief_locked` and copies
+derived from native phase and plan events; research records `brief_locked` and copies
 `brief_version`, `brief_hash`, `brief_revision` into its immutable workflow input.
 The existing reducer preserves those fields across research and Gap packets.
 
