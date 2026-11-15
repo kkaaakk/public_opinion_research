@@ -5,11 +5,13 @@ from datetime import datetime
 
 
 # 返回当前日期的可读字符串，用于提示词和输出展示。
-def get_today_str() -> str:
+def get_today_str(config=None) -> str:
     """Get current date formatted for display in prompts and outputs.
 
     Returns:
         Human-readable date string in format like 'Mon Jan 15, 2024'
     """
+    if config and config.get("research_date"):
+        return config["research_date"]
     now = datetime.now()
     return f"{now:%a} {now:%b} {now.day}, {now:%Y}"

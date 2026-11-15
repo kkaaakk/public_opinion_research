@@ -32,40 +32,28 @@ def test_main_graph_contract():
         "por.events",
         "por.finalize",
     }
-    business = next(
-        n
-        for n in tree.body
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "business_step"
-    )
     assert not any(
-        isinstance(d, ast.Call)
-        and isinstance(d.func, ast.Attribute)
-        and d.func.attr == "step"
-        for d in business.decorator_list
+        isinstance(node, ast.AsyncFunctionDef) and node.name == "business_step"
+        for node in tree.body
     )
+    assert not (SOURCE_ROOT / "workflow/business_steps.py").exists()
+    assert not (SOURCE_ROOT / "workflow/durability.py").exists()
 
 
 def test_research_subgraph_contract():
-    from open_deep_research.workflow.dbos_workflow import OPERATIONS
     from open_deep_research.workflow.python_state import RESEARCH_ROLES
 
     assert RESEARCH_ROLES == ("public_signal", "internal_knowledge")
-    assert set(OPERATIONS) == {
-        "enrich_query_images",
-        "plan_research",
-        "revise_brief",
-        "generate_final_report",
-        "plan_report_sections",
-        "research_review",
-        "section_writer",
-        "write_final_sections",
-        "compile_final_report",
-    }
     source = (SOURCE_ROOT / "workflow/dbos_workflow.py").read_text(encoding="utf-8")
     assert 'for role in ("risk_assessment", "response_strategy"):' in source
     assert source.index(
         "assemble_research_results(state, results, packets)"
     ) < source.index('round_ = state["workflow"]["round"]')
+    assert "await intake.plan_research(" in source
+    assert "await intake.revise_brief(" in source
+    assert "await research.research_review(" in source
+    assert "await reporting.compile_final_report(" in source
+    assert "await save_stage(" in source
     assert "DBOS.wait_first_async" in source
     assert "DBOS.cancel_workflow_async" in source
 

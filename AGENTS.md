@@ -21,9 +21,9 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `dbosrunner-native-interaction-v1`. Pending
-`dbosrunner-stage-settlement-v1` and earlier journals must drain on their matching
-release. The earlier PR #44 preview `dbosrunner-brief-idempotency-v1`, if deployed,
+Application version is `dbos-native-recovery-v1`. Pending
+`dbosrunner-native-interaction-v1` and earlier journals must drain on their
+matching release. The earlier PR #44 preview `dbosrunner-brief-idempotency-v1`, if deployed,
 also needs its matching release. See `docs/architecture/dbos-deployment.md`.
 SDK runtime version remains `sdk-phase5-v1`.
 The Studio relay waits for its terminal-event manifest before acknowledging
@@ -41,8 +41,8 @@ application window unless explicitly configured; this is not a provider claim.
 DBOSRunner owns SDK model checkpoints; explicit tool and bounded Context Steps
 rebuild the Harness. Plan/Review/Report use native dynamic model Steps. A new
 workflow engine, multi-tenant identity and cross-service exactly-once guarantees
-remain outside this migration. Read `docs/architecture/dbosrunner-unification.md`
-before changing these boundaries; domain report projections must never resume work.
+remain outside this migration. Read `docs/architecture/agent-loop.md` and the historical
+`docs/architecture/dbosrunner-unification.md` before changing these boundaries; domain report projections must never resume work.
 
 DeerFlow is retired. Its local environments, Docker deployment, branch
 `codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's

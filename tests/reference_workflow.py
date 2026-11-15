@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine, Mapping
+from contextvars import ContextVar
 from copy import deepcopy
 from functools import partial
 from typing import Any, Literal, cast
@@ -20,11 +21,7 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.state import DeepResearchState
 from open_deep_research.workflow import intake, reporting, research
-from open_deep_research.workflow.execution import (
-    execution_observer,
-    gather_owned,
-    observe_execution,
-)
+from open_deep_research.workflow.execution import gather_owned
 from open_deep_research.workflow.python_state import (
     RESEARCH_ROLES,
     apply_patch,
@@ -35,6 +32,14 @@ from open_deep_research.workflow.state_utils import (
     agents_for_new_run,
     resolve_research_run_id,
 )
+
+execution_observer = ContextVar("reference_execution_observer", default=None)
+
+
+async def observe_execution(kind, **data):
+    observer = execution_observer.get()
+    if observer is not None:
+        await observer(kind, **data)
 
 
 def failure_kind(error: BaseException) -> str:

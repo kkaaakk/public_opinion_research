@@ -4,6 +4,7 @@
 import logging
 from typing import Any
 
+from dbos import DBOS
 from langchain_core.messages import (
     HumanMessage,
 )
@@ -33,6 +34,7 @@ from open_deep_research.state import (
 
 # Initialize a configurable model that we will use throughout the agent
 from open_deep_research.workflow import shared
+from open_deep_research.workflow.execution import native_step_available
 from open_deep_research.workflow.state_utils import (
     agents_state,
     coerce_research_review,
@@ -143,8 +145,15 @@ async def research_review(state: PublicOpinionState, config: RunnableConfig) -> 
     graph_review_metrics: dict[str, Any] = {}
     if configurable.research_graph_enabled:
         run_id = resolve_research_run_id(state, config)
-        review_subgraph = retrieve_research_context(
-            configurable, run_id=run_id, query=workflow_state(state).get("brief", "")
+        query = workflow_state(state).get("brief", "")
+
+        def load_evidence():
+            return retrieve_research_context(configurable, run_id=run_id, query=query)
+
+        review_subgraph = (
+            await DBOS.run_step_async({"name": "por.review_evidence"}, load_evidence)
+            if native_step_available()
+            else load_evidence()
         )
         graph_review_metrics = {
             "graph_retrieval_calls": 1,

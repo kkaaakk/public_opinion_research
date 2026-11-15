@@ -5,6 +5,7 @@ import logging
 import sys
 from typing import Any, Callable
 
+from dbos import DBOS
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -54,7 +55,12 @@ from open_deep_research.time_utils import get_today_str
 
 # Initialize a configurable model that we will use throughout the agent
 from open_deep_research.workflow import shared
-from open_deep_research.workflow.execution import execution_effect, gather_owned
+from open_deep_research.workflow.execution import (
+    execution_effect,
+    gather_owned,
+    native_step_available,
+)
+from open_deep_research.workflow.run_facts import begin_call, end_call
 from open_deep_research.workflow.state_utils import (
     business_context,
     report_state,
@@ -200,7 +206,7 @@ def _graph_section_evidence(
 
 
 # 将研究图及工作上下文整理为受大小限制的报告输入。
-def _graph_report_context(
+async def _graph_report_context(
     state: AgentState,
     config: RunnableConfig,
     *,
@@ -214,7 +220,17 @@ def _graph_report_context(
         for value in (workflow_state(state).get("brief", ""), query_suffix)
         if value
     )
-    subgraph = retrieve_research_context(configurable, run_id=run_id, query=query)
+
+    def load_evidence():
+        return format_relevant_subgraph(
+            retrieve_research_context(configurable, run_id=run_id, query=query)
+        )
+
+    evidence = (
+        await DBOS.run_step_async({"name": "por.report_evidence"}, load_evidence)
+        if native_step_available()
+        else load_evidence()
+    )
     contexts = research_state(state).get("working_contexts", {}) or {}
     context_text = []
     for role, value in contexts.items():
@@ -231,7 +247,7 @@ def _graph_report_context(
         "Research Graph report context (bounded, current run only):\n"
         + ("\n\n".join(context_text) or "No Working Context has been recorded yet.")
         + "\n\n"
-        + format_relevant_subgraph(subgraph)
+        + evidence
     )
 
 
@@ -285,11 +301,7 @@ async def _write_sections_parallel(
             )
         return section, response_budget
 
-    from dbos import DBOS
-
-    from open_deep_research.workflow.durability import in_durable_workflow
-
-    sequential = in_durable_workflow() and DBOS.step_id is None
+    sequential = native_step_available()
     results = []
     try:
         if sequential:
@@ -345,7 +357,6 @@ async def _persist_report(
     state: AgentState, config: RunnableConfig, report: str, usage: dict[str, Any]
 ) -> None:
     """Preserve report costs if the existing memory write fails; never replay it."""
-    from open_deep_research.workflow.durability import begin_call, checkpoint, end_call
 
     async def persist():
         identity = await begin_call("report_memory")
@@ -354,7 +365,12 @@ async def _persist_report(
         await end_call(identity)
 
     try:
-        await checkpoint("por.report_memory", persist)
+        if native_step_available():
+            await DBOS.run_step_async(
+                {"name": "por.report_memory", "preemptible": True}, persist
+            )
+        else:
+            await persist()
     except BaseException as exc:
         setattr(
             exc,
@@ -389,14 +405,24 @@ async def section_writer(state: AgentState, config: RunnableConfig) -> dict:
     if not research_sections:
         return {}
 
-    section_evidence = {
-        section.name: (
-            _graph_section_evidence(section, state, config)
-            if graph_mode
-            else _extract_section_evidence(section, role_report_content)
+    if graph_mode:
+
+        def load_sections():
+            return {
+                section.name: _graph_section_evidence(section, state, config)
+                for section in research_sections
+            }
+
+        section_evidence = (
+            await DBOS.run_step_async({"name": "por.section_evidence"}, load_sections)
+            if native_step_available()
+            else load_sections()
         )
-        for section in research_sections
-    }
+    else:
+        section_evidence = {
+            section.name: _extract_section_evidence(section, role_report_content)
+            for section in research_sections
+        }
 
     # 每个章节写作需要一次调用；并行启动前分配额度，避免只检查一次就整批超支。
     budget_usage = runtime_state(state).get("budget", {})
@@ -490,7 +516,7 @@ async def write_final_sections(state: AgentState, config: RunnableConfig) -> dic
 
     if not context:
         context = (
-            _graph_report_context(state, config, query_suffix="section writing")
+            await _graph_report_context(state, config, query_suffix="section writing")
             if configurable.research_graph_enabled
             else role_context(role_report_map)
         )
@@ -586,7 +612,7 @@ async def compile_final_report(
             if can_spend_model_call(configurable, budget_usage):
                 # 使用当前图证据或完整角色报告补齐缺失内容。
                 findings = (
-                    _graph_report_context(
+                    await _graph_report_context(
                         state, config, query_suffix="missing sections"
                     )
                     if configurable.research_graph_enabled
@@ -599,7 +625,7 @@ async def compile_final_report(
                         organization_context=business_context(configurable),
                         messages=get_buffer_string(state.get("messages", [])),
                         findings=f"已有报告内容:\n{report}\n\n补充证据:\n{findings}",
-                        date=get_today_str(),
+                        date=get_today_str(config),
                     )
                 )
 
@@ -677,7 +703,7 @@ async def _fallback_report_generation(
     """Generate a fallback report from graph context or formal role reports."""
     configurable = Configuration.from_runnable_config(config)
     findings = (
-        _graph_report_context(state, config)
+        await _graph_report_context(state, config)
         if configurable.research_graph_enabled
         else role_context(role_reports(state))
     )
@@ -807,7 +833,7 @@ async def _fallback_report_generation(
                         organization_context=business_context(configurable),
                         messages=messages_text,
                         findings=findings,
-                        date=get_today_str(),
+                        date=get_today_str(config),
                     )
                 )
 
@@ -955,7 +981,7 @@ async def generate_final_report(state: AgentState, config: RunnableConfig) -> di
         if body
     ]
     if cfg.research_graph_enabled:
-        chunks.append(_graph_report_context(state, config))
+        chunks.append(await _graph_report_context(state, config))
     review = workflow_state(state).get("review")
     if review:
         chunks.append(

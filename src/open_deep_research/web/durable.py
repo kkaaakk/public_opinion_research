@@ -29,7 +29,6 @@ from open_deep_research.workflow.brief import (
     MAX_BRIEF_FEEDBACK_CHARS,
     MAX_BRIEF_REVISIONS,
 )
-from open_deep_research.workflow.business_steps import SAFE_STEPS
 from open_deep_research.workflow.dbos_config import (
     ARCHIVE,
     BUSINESS,
@@ -369,10 +368,11 @@ class RunClient:
             if plan
             else None,
             "retry_safe": status.status == "ERROR"
+            and status.app_version == VERSION
             and not req["cancel_requested"]
             and generation == applied
             and not unsettled
-            and any(u["error"] and u["name"] in SAFE_STEPS for u in units),
+            and any(u["error"].get("retry_safe", False) for u in units),
             "created_at": timestamp(req["data"]["created"]),
             "updated_at": timestamp(status.updated_at / 1000),
             "terminated_at": timestamp(status.updated_at / 1000) if terminal else None,
@@ -554,7 +554,19 @@ class RunClient:
         # Bounded ordinary phases execute calls in order. Only their final call
         # can be the unresolved model/response-validation failure. Earlier errors
         # may already have been handled, and earlier chapters must be retained.
-        if stage_result:
+        save_error = next(
+            (
+                s["function_id"]
+                for s in steps
+                if s["function_name"] == "por.save_stage"
+                and s["function_id"] > stage_start
+                and s.get("error") is not None
+            ),
+            None,
+        )
+        if save_error is not None:
+            start = save_error
+        elif stage_result:
             # Reapply the public projection after a saved result, or rerun only
             # result accounting if that Step failed. Keep the committed models.
             start = (

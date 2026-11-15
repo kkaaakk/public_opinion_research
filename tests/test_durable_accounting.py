@@ -8,7 +8,7 @@ from agents.usage import Usage
 from open_deep_research.budget import ModelBudgetExceeded
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
 from open_deep_research.web.run_data import RunJSON
-from open_deep_research.workflow.business_steps import failure_kind
+from open_deep_research.workflow.execution import failure_kind
 from open_deep_research.workflow.run_facts import RunFacts
 
 
@@ -124,6 +124,16 @@ def test_unreceipted_prior_business_cost_is_retained_without_recounting(monkeypa
                 ("por.stage_started", False),
                 ("por.llm", False),
                 ("por.stage_result", False),
+            ],
+            4,
+        ),
+        (
+            [
+                ("por.stage_started", False),
+                ("por.llm", False),
+                ("por.stage_result", False),
+                ("por.save_stage", True),
+                ("release_step", False),
             ],
             4,
         ),

@@ -693,7 +693,7 @@ def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
     from open_deep_research.workflow import dbos_workflow as engine
 
     case = native_case
-    original = engine.OPERATIONS["research_review"]
+    original = engine.research.research_review
     attempts = []
 
     async def flaky(state, cfg):
@@ -705,7 +705,7 @@ def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
             raise RuntimeError("Synthetic safe read failure")
         return await original(state, cfg)
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", flaky)
+    monkeypatch.setattr(engine.research, "research_review", flaky)
     run = case.create()
     failed = case.wait(run)
     assert failed["status"] == "failed"
@@ -1069,7 +1069,7 @@ def test_unknown_memory_commit_is_quarantined_not_retried(native_case, monkeypat
 
     case = native_case
 
-    async def uncertain_memory(state, config):
+    async def uncertain_memory(state, config, report):
         with facts().engine.begin() as db:
             db.execute(
                 text(
@@ -1079,7 +1079,7 @@ def test_unknown_memory_commit_is_quarantined_not_retried(native_case, monkeypat
             db.execute(text("INSERT INTO external_memory_effects VALUES ('one')"))
         raise RuntimeError("Memory committed but acknowledgement is unknown")
 
-    monkeypatch.setitem(engine.OPERATIONS, "compile_final_report", uncertain_memory)
+    monkeypatch.setattr(engine.reporting, "maybe_persist_chat_memory", uncertain_memory)
     run = case.create()
     result = case.wait(run)
     assert result["status"] == "interrupted"
@@ -1249,7 +1249,7 @@ def test_cancel_of_safe_retry_cannot_release_an_active_unsettled_unit(
         entered.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     case = native_case
     run = case.create()
     failed = case.wait(
@@ -1394,7 +1394,7 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
     from open_deep_research.workflow import dbos_workflow as engine
 
     case = native_case
-    original = engine.OPERATIONS["research_review"]
+    original = engine.research.research_review
     entered, release = threading.Event(), threading.Event()
     attempts = []
 
@@ -1407,7 +1407,7 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
             await asyncio.sleep(0.02)
         return await original(state, cfg)
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
     failed = case.wait(
         run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
@@ -1476,8 +1476,7 @@ def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypat
         if step["function_name"] == "por.stage_result"
     ]
     assert any(
-        value["value"].get("patch", {}).get("runtime", {}).get("budget")
-        == unit["usage"]
+        value.get("patch", {}).get("runtime", {}).get("budget") == unit["usage"]
         for value in outputs
     )
     assert case.client.get(run["run_id"], "alice")["usage"] == result["usage"]

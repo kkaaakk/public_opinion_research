@@ -181,8 +181,8 @@ def install(directory, scenario):
             return legacy_research_patch(value, state)
 
         for role in ("public_signal", "internal_knowledge"):
-            patch.setitem(
-                engine.OPERATIONS, role + "_agent", partial(legacy_producer, role=role)
+            patch.setattr(
+                engine.research, role + "_agent", partial(legacy_producer, role=role)
             )
 
     old_finish = RunFacts.finish_unit
@@ -255,7 +255,7 @@ def install(directory, scenario):
         from open_deep_research.web.durable import RunClient
         from open_deep_research.workflow import dbos_workflow as engine
 
-        original_review = engine.OPERATIONS["research_review"]
+        original_review = engine.research.research_review
         original_rewind = DBOSClient.rewind_workflow
         original_apply = RunClient._rewind_safe
         original_sleep = DBOS.sleep_async
@@ -321,7 +321,7 @@ def install(directory, scenario):
             return await original_sleep(seconds)
 
         patch.setattr(DBOS, "sleep_async", staticmethod(sleep))
-        patch.setitem(engine.OPERATIONS, "research_review", retry_review)
+        patch.setattr(engine.research, "research_review", retry_review)
         patch.setattr(DBOSClient, "rewind_workflow", rewind)
         patch.setattr(RunClient, "_rewind_safe", apply)
 

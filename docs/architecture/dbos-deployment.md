@@ -1,6 +1,10 @@
 # DBOS production execution — Phase 5
 
-> 当前应用版本为 `dbosrunner-native-interaction-v1`。澄清与 Brief 审批使用
+> 当前应用版本为 `dbos-native-recovery-v1`。运行中的
+> `dbosrunner-native-interaction-v1` 任务由该版本的 API 与 Executor 排空。
+> 见[执行链切换](#原生执行链版本切换)。
+>
+> `dbosrunner-native-interaction-v1` 的澄清与 Brief 审批使用
 > DBOS 原生消息和等待。见[切换步骤](#原生人机交互版本切换)及
 > [Brief API 合同](research-brief.md#persistent-human-interaction)。
 >
@@ -19,7 +23,7 @@ All new research uses PostgreSQL + DBOS. Web, `/api/runs`, `/api/research` and
 `deep-research` CLI share the durable Run API. No LangGraph Server is started.
 The former `python`/`openai_agents` request values are validated input aliases
 only; Configuration no longer contains runtime/backend selection fields.
-`Runner.run()` and the Context Harness remain the single SDK execution path.
+`DBOSRunner.run()` checkpoints the SDK model calls. The Context Harness preserves tool results and research context.
 
 Optional Langfuse/OTel tracing defaults off and is configured in API and Executor
 environments. It adds no execution database or journal commands. See
@@ -30,6 +34,16 @@ the guarded `tests/langfuse_acceptance_fixture.py` runner with synthetic inferen
 It does not connect test fixtures to an operator's services. See the
 [final review and UI evidence](../audits/langfuse-otel-final-review.md) for ports,
 identity/usage checks, recovery regressions and the precise-head merge gate.
+
+## 原生执行链版本切换
+
+`dbos-native-recovery-v1` 改变了 Plan、Role、Review 和 Report 的 Step
+顺序。阶段结果和费用由 `por.stage_result` 保存，`por.save_stage` 提交业务投影。
+外部效果回执、审批消息、History 和既有 PostgreSQL schema 继续使用原存储。
+
+1. 停止旧 API 准入。使用匹配旧版本的 API 和 Executor，盘点并处理旧版本队列、进行中的研究、待澄清或审批的 Brief、待归档记录及未知效果。
+2. 在新 Executor 上运行 `--migration-check`。完成排空和必要的对账后，启动新版 API 和 Executor。
+3. 回滚时先停止新准入，由本版 Executor 清算已接收的运行。保留旧版本 journal、报告和外部操作回执。
 
 ## Local setup
 

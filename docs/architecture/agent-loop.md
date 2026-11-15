@@ -1,10 +1,10 @@
 # 业务执行与 Agent Loop
 
-> 2026-11-05：当前执行持久化边界已改为官方 DBOSRunner、显式工具 Step 与八个阶段 Workflow，见[统一改造](dbosrunner-unification.md)。本页下方 Phase 5/Brief 快照保留历史背景。
+> 当前执行版本为 `dbos-native-recovery-v1`。各 Workflow 直接调用业务服务。旧版本的演进见[统一改造](dbosrunner-unification.md)。
 
 > 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
 
-当前架构为 DBOS 3.3.0 + OpenAI Agents SDK 0.24.0 + Research Graph Context Harness。
+当前架构使用 DBOS 3.3.0、DBOSRunner 0.3.0、OpenAI Agents SDK 0.24.0 和 Research Graph Context Harness。
 部署见 [DBOS 部署说明](dbos-deployment.md)，实测范围见 [Phase 5 审计](../audits/openai-agents-phase5.md)。
 
 ```text
@@ -14,9 +14,12 @@ Web / CLI → FastAPI Run API → RunClient（身份、幂等和资源准入）
   → Review → 按角色批处理 Gap → 定向补查 → Review
   → Risk → Strategy → 单次综合报告 → 已提交报告 artifact → Memory
 
-por.role → business_step → 原角色函数 → run_business_agent
-  → SDKAgentRuntime → SDKContextHarness → Runner.run → 原业务工具
-  → Research Graph 持久化回执 → Working Context / 压缩 → 角色报告与费用清算
+por.role → 角色函数 → run_business_agent → SDKAgentRuntime → SDKContextHarness
+  → DBOSRunner.run → Agents SDK
+      ├─ 官方模型 Step → MeteredModel → 模型供应商和物理费用回执
+      ├─ por.agent_tool Step → 工具权限、操作回执、结果和费用
+      └─ Context Steps → Evidence、Working Context 和压缩
+  → por.stage_result → por.save_stage
 
 独立 por.events → DBOS Durable Stream → SSE
 独立 por.finalize → History archive / 补偿 / 经授权的安全重试
@@ -51,4 +54,3 @@ Graph Server Auth 导出已退役；`get_workflow` 只返回明确迁移错误�
 
 核心实现：`web/runs.py`、`web/durable.py`、`workflow/dbos_workflow.py`、
 `runtime/sdk_runtime.py`、`runtime/sdk_context.py`、`research_graph/workspace.py`。
-没有新增执行引擎、Agent Loop、SQL Worker 或 DBOSRunner 包装层。

@@ -23,7 +23,7 @@ def test_terminal_delivery_waits_for_reordered_current_generation_usage(
 ):
     """Native messages with tied timestamps need not arrive in send order."""
     case = native_case
-    original_review = engine.OPERATIONS["research_review"]
+    original_review = engine.research.research_review
     original_send = engine.send_event
     original_public = engine.public_event
     received_history = threading.Event()
@@ -55,7 +55,7 @@ def test_terminal_delivery_waits_for_reordered_current_generation_usage(
             assert received_history.is_set()
             await original_send(run_id, "usage", **held.pop(run_id))
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     monkeypatch.setattr(engine, "send_event", send)
     monkeypatch.setattr(engine, "public_event", public)
     run = case.create()
@@ -121,7 +121,7 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
 ):
     """Promote the final-review reproducer, including in-flight and success ACKs."""
     case = native_case
-    original = engine.OPERATIONS["research_review"]
+    original = engine.research.research_review
     entered = {i: threading.Event() for i in (2, 3)}
     release = {i: threading.Event() for i in (2, 3)}
     attempts = []
@@ -138,7 +138,7 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
             raise RuntimeError("Synthetic settled safe read failure")
         return await original(state, cfg)
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
     first = saved(case, run, "failed", 0)
     first_record, _ = assert_consistent(case, run, first)
@@ -265,7 +265,7 @@ def test_concurrent_distinct_keys_authorize_one_native_failure(
     native_case, monkeypatch
 ):
     case = native_case
-    original = engine.OPERATIONS["research_review"]
+    original = engine.research.research_review
     attempts = []
 
     async def review(state, cfg):
@@ -274,7 +274,7 @@ def test_concurrent_distinct_keys_authorize_one_native_failure(
             raise RuntimeError("Safe read failure")
         return await original(state, cfg)
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
     failed = saved(case, run, "failed", 0)
     barrier = threading.Barrier(2)
@@ -309,7 +309,7 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
     native_case, monkeypatch, outcome
 ):
     case = native_case
-    original = engine.OPERATIONS["research_review"]
+    original = engine.research.research_review
     attempts = []
     entered = threading.Event()
 
@@ -322,15 +322,17 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
             await asyncio.Event().wait()
         return await original(state, cfg)
 
-    async def uncertain_memory(state, cfg):
+    async def uncertain_memory(state, cfg, report):
         with facts().engine.begin() as db:
             db.execute(text("CREATE TABLE external_retry_effects(id text PRIMARY KEY)"))
             db.execute(text("INSERT INTO external_retry_effects VALUES ('one')"))
         raise RuntimeError("Actual committed memory effect, acknowledgement unknown")
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     if outcome == "unknown":
-        monkeypatch.setitem(engine.OPERATIONS, "compile_final_report", uncertain_memory)
+        monkeypatch.setattr(
+            engine.reporting, "maybe_persist_chat_memory", uncertain_memory
+        )
     run = case.create()
     failed = saved(case, run, "failed", 0)
     failed = retry_observed_failure(case, run, "only-grant", failed)
@@ -494,7 +496,7 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
 
 def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypatch):
     case = native_case
-    original = engine.OPERATIONS["research_review"]
+    original = engine.research.research_review
     attempts = []
 
     async def review(state, cfg):
@@ -503,7 +505,7 @@ def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypat
             raise RuntimeError("Safe read failure")
         return await original(state, cfg)
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
     observed = case.wait(
         run,
@@ -533,7 +535,7 @@ def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypat
 
 def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeypatch):
     case = native_case
-    original_review = engine.OPERATIONS["research_review"]
+    original_review = engine.research.research_review
     original_save = case.history.save
     unavailable = threading.Event()
     unavailable.set()
@@ -554,7 +556,7 @@ def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeyp
             raise HistoryUnavailable("Committed archive ACK unavailable")
         return result
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     monkeypatch.setattr(case.history, "save", save)
     run = case.create()
     first = saved(case, run, "failed", 0)
@@ -589,7 +591,7 @@ def test_new_retry_requires_delivery_of_the_current_failed_generation(
     native_case, monkeypatch
 ):
     case = native_case
-    original_review = engine.OPERATIONS["research_review"]
+    original_review = engine.research.research_review
     original_event = engine.public_event
     entered, release = threading.Event(), threading.Event()
     attempts = []
@@ -608,7 +610,7 @@ def test_new_retry_requires_delivery_of_the_current_failed_generation(
                 await asyncio.sleep(0.02)
         return await original_event(event)
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     monkeypatch.setattr(engine, "public_event", delayed_event)
     run = case.create()
     first = saved(case, run, "failed", 0)

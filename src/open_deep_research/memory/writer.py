@@ -6,7 +6,6 @@ index refresh after the write; query-time `RAGIndexer.ensure_ready()` still
 remains the fallback if that background refresh has not completed.
 """
 
-import asyncio
 import logging
 import threading
 from typing import Any, Mapping, Sequence
@@ -145,23 +144,24 @@ async def maybe_persist_chat_memory(
     )
     research_brief = str((state.get("workflow", {}) or {}).get("brief") or "").strip()
     memories = [research_brief] if research_brief else []
+    from open_deep_research.workflow.execution import owned_io
+
     try:
-        await asyncio.to_thread(
+        _, cancellation = await owned_io(
             persist_conversation_memory,
             configurable=configurable,
             runtime_config=config,
             chat_content=messages_text,
             summary=final_report_content,
             memories=memories,
-            metadata={
-                "workflow": "deep_researcher",
-                "date": get_today_str(),
-            },
+            metadata={"workflow": "deep_researcher", "date": get_today_str(config)},
         )
+        if cancellation is not None:
+            raise cancellation
     except Exception:  # pragma: no cover - depends on external MySQL/vector DB
-        from open_deep_research.workflow.durability import in_durable_workflow
+        from open_deep_research.workflow.run_facts import current_unit
 
-        if in_durable_workflow():
+        if current_unit.get() is not None:
             raise
         LOGGER.exception(
             "Failed to persist chat memory; continuing without persistence."

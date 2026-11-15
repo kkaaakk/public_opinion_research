@@ -10,12 +10,14 @@ degradation reasons, and per-node budget deltas for the LangGraph reducers.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping, cast
 
+from dbos import DBOS
 from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
 from langchain_core.callbacks.base import BaseCallbackManager
 from langchain_core.messages import AIMessage, HumanMessage
@@ -26,6 +28,7 @@ from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.config import ensure_config, merge_configs
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
 
 LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +56,17 @@ _MODEL_ADMISSION: ContextVar[Callable[[int], None] | None] = ContextVar(
 
 class ModelBudgetExceeded(RuntimeError):
     """Reject a nested model attempt before its provider request starts."""
+
+
+def require_physical_model_budget(config, baseline, actual, *, reserve_report):
+    """Check paid attempts, including prior failures and outstanding receipts."""
+    total = merge_budget_usage(baseline, actual)
+    if is_over_budget(config, total) or not can_spend_model_call(
+        config, total, reserve_final_report_call=reserve_report
+    ):
+        raise ModelBudgetExceeded(
+            "Physical call receipts exhausted the research budget"
+        )
 
 
 @contextmanager
@@ -463,7 +477,11 @@ async def ainvoke_model_with_budget(
     ``model_name``/``component``/``structured_output`` are optional LangSmith
     correlation hints; they do not affect the provider call or token accounting.
     """
-    from open_deep_research.workflow.durability import begin_call, checkpoint, end_call
+    from open_deep_research.workflow.execution import (
+        ExecutionControlError,
+        native_step_available,
+    )
+    from open_deep_research.workflow.run_facts import begin_call, end_call
 
     if isinstance(runnable, _DurableStructured):
         usage = {}
@@ -480,8 +498,6 @@ async def ainvoke_model_with_budget(
                 usage = merge_budget_usage(usage, delta)
                 return require_valid_structured_output(response), usage
             except Exception as exc:
-                from open_deep_research.workflow.execution import ExecutionControlError
-
                 if isinstance(exc, (ExecutionControlError, ModelBudgetExceeded)):
                     raise
                 if hasattr(exc, "budget_usage"):
@@ -509,30 +525,19 @@ async def ainvoke_model_with_budget(
             await end_call(
                 identity, usage=getattr(exc, "budget_usage", {}), status="failed"
             )
-            from open_deep_research.workflow.durability import in_durable_workflow
-            from open_deep_research.workflow.execution import ExecutionControlError
-
-            if (
-                in_durable_workflow()
-                and isinstance(exc, Exception)
-                and not isinstance(exc, (ExecutionControlError, ModelBudgetExceeded))
-            ):
-                from open_deep_research.llm.errors import (
-                    ModelInvocationError,
-                    is_token_limit_exceeded,
-                )
-
-                raise ModelInvocationError(
-                    type(exc).__name__,
-                    context_limit=is_token_limit_exceeded(exc, model_name),
-                    budget_usage=getattr(exc, "budget_usage", {}),
-                ) from exc
+            invocation_error = _durable_model_error(exc, identity, model_name)
+            if invocation_error is not None:
+                raise invocation_error from exc
             raise
         await end_call(identity, usage=delta)
         return result, delta
 
     try:
-        response, delta = await checkpoint("por.llm", execute)
+        response, delta = (
+            await DBOS.run_step_async({"name": "por.llm", "preemptible": True}, execute)
+            if native_step_available()
+            else await execute()
+        )
     except BaseException as exc:
         if not executed:
             capture_budget_usage(getattr(exc, "budget_usage", {}))
@@ -584,18 +589,15 @@ def invoke_model_with_budget(
     Mirrors :func:`ainvoke_model_with_budget`, including attempt and usage
     accounting when the call raises.
     """
-    from open_deep_research.workflow.durability import (
-        begin_call_sync,
-        checkpoint_sync,
-        end_call_sync,
-    )
+    from open_deep_research.workflow.execution import native_step_available
+    from open_deep_research.workflow.run_facts import begin_call, current_unit, end_call
 
     executed = False
 
     def execute():
         nonlocal executed
         executed = True
-        identity = begin_call_sync("llm_sync")
+        identity = asyncio.run(begin_call("llm_sync")) if current_unit.get() else None
         try:
             response, delta = _invoke_model_accounted(
                 runnable,
@@ -606,39 +608,50 @@ def invoke_model_with_budget(
                 structured_output=structured_output,
             )
         except BaseException as exc:
-            end_call_sync(
-                identity, usage=getattr(exc, "budget_usage", {}), status="failed"
-            )
-            from open_deep_research.workflow.durability import in_durable_workflow
-            from open_deep_research.workflow.execution import ExecutionControlError
-
-            if (
-                in_durable_workflow()
-                and isinstance(exc, Exception)
-                and not isinstance(exc, (ExecutionControlError, ModelBudgetExceeded))
-            ):
-                from open_deep_research.llm.errors import (
-                    ModelInvocationError,
-                    is_token_limit_exceeded,
+            if identity is not None:
+                asyncio.run(
+                    end_call(
+                        identity,
+                        usage=getattr(exc, "budget_usage", {}),
+                        status="failed",
+                    )
                 )
-
-                raise ModelInvocationError(
-                    type(exc).__name__,
-                    context_limit=is_token_limit_exceeded(exc, model_name),
-                    budget_usage=getattr(exc, "budget_usage", {}),
-                ) from exc
+            invocation_error = _durable_model_error(exc, identity, model_name)
+            if invocation_error is not None:
+                raise invocation_error from exc
             raise
-        end_call_sync(identity, usage=delta)
+        if identity is not None:
+            asyncio.run(end_call(identity, usage=delta))
         return response, delta
 
     try:
-        response, delta = checkpoint_sync("por.llm_sync", execute)
+        response, delta = (
+            DBOS.run_step({"name": "por.llm_sync"}, execute)
+            if native_step_available()
+            else execute()
+        )
     except BaseException as exc:
         if not executed:
             capture_budget_usage(getattr(exc, "budget_usage", {}))
         raise
     capture_budget_usage(delta)
     return response, delta
+
+
+def _durable_model_error(error, identity, model_name):
+    from open_deep_research.workflow.execution import ExecutionControlError
+
+    if (
+        identity is not None
+        and isinstance(error, Exception)
+        and not isinstance(error, (ExecutionControlError, ModelBudgetExceeded))
+    ):
+        return ModelInvocationError(
+            type(error).__name__,
+            context_limit=is_token_limit_exceeded(error, model_name),
+            budget_usage=getattr(error, "budget_usage", {}),
+        )
+    return None
 
 
 def _invoke_model_accounted(
@@ -701,12 +714,10 @@ def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -
     parsing_error envelope) ``|`` validation, wrapped in ``with_retry`` so the retry
     covers both the model call and parse validation.
     """
-    from dbos import DBOS
-
-    from open_deep_research.workflow.durability import in_durable_workflow
+    from open_deep_research.workflow.execution import native_step_available
 
     raw = model.with_structured_output(schema, include_raw=True)
-    if in_durable_workflow() and DBOS.step_id is None:
+    if native_step_available():
         # Retry decisions execute in the phase Workflow. Each actual response,
         # including a malformed structured response, is independently journaled.
         return _DurableStructured(raw, max(1, max_attempts))

@@ -117,7 +117,6 @@ _BUSINESS_SPANS = frozenset(
         "por.research",
         "por.role",
         "por.finalize",
-        "business_step",
         "sdk_invocation",
         "context_build",
         "context_retrieval",

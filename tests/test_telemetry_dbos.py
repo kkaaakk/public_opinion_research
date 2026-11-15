@@ -106,7 +106,7 @@ def test_cancel_during_telemetry_read_still_settles_the_acquired_safe_unit(
     original = asyncio.to_thread
 
     async def delayed(operation, *args, **kwargs):
-        if getattr(operation, "__name__", "") == "read_generation":
+        if getattr(operation, "__name__", "") == "retry_generation":
             entered.set()
             await asyncio.Event().wait()
         return await original(operation, *args, **kwargs)
@@ -204,7 +204,7 @@ def test_safe_retry_distinguishes_generation_without_repeating_producers(
     traced_case, trace_capture, monkeypatch
 ):
     case = traced_case
-    original = engine.OPERATIONS["research_review"]
+    original = engine.research.research_review
     attempts = []
 
     async def review(state, cfg):
@@ -213,7 +213,7 @@ def test_safe_retry_distinguishes_generation_without_repeating_producers(
             raise RuntimeError("secret-review-error")
         return await original(state, cfg)
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
     first = saved(case, run, "failed")
     case.client.retry(run["run_id"], "alice", "safe-otel-retry", first["state_version"])
@@ -259,7 +259,7 @@ def test_followup_rounds_keep_native_call_and_invocation_identity(
     from test_python_workflow import gap
 
     case = traced_case
-    original = engine.OPERATIONS["research_review"]
+    original = engine.research.research_review
 
     async def review(state, cfg):
         result = await original(state, cfg)
@@ -270,7 +270,7 @@ def test_followup_rounds_keep_native_call_and_invocation_identity(
             }
         return result
 
-    monkeypatch.setitem(engine.OPERATIONS, "research_review", review)
+    monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
     saved(case, run)
     spans = trace_capture.spans()

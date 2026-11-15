@@ -12,7 +12,8 @@ import copy
 import json
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, fields, replace
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -25,6 +26,9 @@ from agents.result import RunResult
 from agents.run import CallModelData, ModelInputData
 from agents.tool import Tool, default_tool_error_function
 from agents.tool_context import ToolContext
+from dbos import DBOS
+from dbos import error as dbos_error
+from dbos_openai_agents import DBOSRunner
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from open_deep_research.budget import (
@@ -46,22 +50,15 @@ from open_deep_research.research_graph.models import (
 )
 from open_deep_research.research_graph.schema import stable_id
 from open_deep_research.research_graph.workspace import ResearchWorkspace, ToolBatchItem
-from open_deep_research.workflow.durability import (
-    ReplayTranscript,
-    begin_call,
-    checkpoint,
-    cleanup_only,
-    durable_unit,
-    end_call,
-    in_durable_workflow,
-    is_cancellation,
-    settling,
-    tool_usage,
-)
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
-    observe_execution,
+    is_cancellation,
+    native_step_available,
+    owned_cleanup,
 )
+from open_deep_research.workflow.run_facts import begin_call, current_unit, end_call
+
+tool_usage: ContextVar[dict | None] = ContextVar("tool_usage", default=None)
 
 ToolStatus = Literal["running", "succeeded", "failed", "cancelled", "unobserved"]
 DEFAULT_EVIDENCE_TOOLS = frozenset({"web_search", "rag_search"})
@@ -146,8 +143,8 @@ class SDKContextHarness(RunHooks):
         self.workspace = workspace
         self.scope = workspace.scope.model_copy(deep=True)
         self.sdk_run_id = (
-            stable_id("SDK", durable_unit.get(), self.scope.task_id)
-            if in_durable_workflow()
+            stable_id("SDK", DBOS.workflow_id, self.scope.task_id)
+            if DBOS.workflow_id is not None
             else uuid4().hex
         )
         self.evidence_tools = frozenset(evidence_tools)
@@ -179,15 +176,21 @@ class SDKContextHarness(RunHooks):
     async def _observe(self, kind: str, **metadata: Any) -> None:
         """Send metadata at existing SDK/Harness seams; never send content."""
         annotate(**metadata)
-        await observe_execution(
-            kind,
-            role=self.scope.role,
-            invocation_id=self.sdk_run_id,
-            task_id=self.scope.task_id,
-            research_round=self.scope.research_round,
-            model_turn=self.model_calls,
-            **metadata,
-        )
+        if unit := current_unit.get():
+            await unit.observe(
+                kind,
+                dict(
+                    role=self.scope.role,
+                    invocation_id=self.sdk_run_id,
+                    task_id=self.scope.task_id,
+                    research_round=self.scope.research_round,
+                    model_turn=self.model_calls,
+                    **metadata,
+                ),
+                # Sibling tools can finish in a different order after replay.
+                # This delivery is idempotent by call ID and uses no native slot.
+                call_id=metadata.get("tool_call_id") if kind == "tool_result" else None,
+            )
 
     def _durable_snapshot(self):
         """Freeze data only; never serialize stores, clients, locks or live tasks."""
@@ -277,14 +280,15 @@ class SDKContextHarness(RunHooks):
         An interrupted evidence transaction is fenced and requires receipts.
         """
         self._check(data.context)
-        if data.agent is not self._agent:
-            raise ValueError("Unbound Agent cannot reuse a durable Harness")
         if hasattr(self, "run_budget"):
             self.items = list(data.model_data.input)
+
+        unit = current_unit.get()
 
         async def prepare():
             from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
 
+            before = set(unit.delivery_ids) if unit else set()
             identity = await begin_call("context_batch")
             stop = None
             try:
@@ -310,9 +314,14 @@ class SDKContextHarness(RunHooks):
                 "state": snapshot,
                 "usage": usage,
                 "stop": stop,
+                "delivery_ids": sorted(unit.delivery_ids - before) if unit else [],
             }
 
-        saved = await checkpoint("por.agent_context", prepare)
+        saved = await DBOS.run_step_async(
+            {"name": "por.agent_context", "preemptible": True}, prepare
+        )
+        if unit:
+            unit.delivery_ids.update(saved["delivery_ids"])
         self._restore_durable_snapshot(saved["state"])
         capture_budget_usage(saved["usage"])
         if saved["stop"] is not None:
@@ -437,7 +446,7 @@ class SDKContextHarness(RunHooks):
             try:
                 output = await invoke(context, arguments)
                 success = is_success(output) if is_success is not None else True
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, dbos_error.DBOSWorkflowCancelledError):
                 self._record(context, "cancelled", None, error_type="CancelledError")
                 raise
             except Exception as exc:
@@ -468,6 +477,8 @@ class SDKContextHarness(RunHooks):
                     self._active.discard(current)
 
         async def observed(context: ToolContext[Any], arguments: str) -> Any:
+            if not native_step_available():
+                return await execute_observed(context, arguments)
             executed = False
             budget = getattr(self, "run_budget", None)
 
@@ -487,7 +498,9 @@ class SDKContextHarness(RunHooks):
                     "budget": local,
                 }
 
-            value = await checkpoint("por.agent_tool", invoke_step)
+            value = await DBOS.run_step_async(
+                {"name": "por.agent_tool", "preemptible": True}, invoke_step
+            )
             self.results[context.tool_call_id] = ObservedToolResult(**value["record"])
             if budget and not executed:
                 budget.add(value["budget"])
@@ -632,6 +645,10 @@ class SDKContextHarness(RunHooks):
     ) -> None:
         """Confirm the invocation boundary before any model or local tool runs."""
         self._check(context.context)
+        if self._agent is not None and self._agent is not agent:
+            raise ValueError("A Harness supports one Agent per invocation.")
+        # Runner supplies the bound Agent here before preparing the first input.
+        self._agent = agent
         self.events.append(("agent_start", agent.name))
         self._agent_started_at = time.monotonic()
         await self._observe("agent_started")
@@ -1080,24 +1097,16 @@ class SDKContextHarness(RunHooks):
         return settlement
 
     async def _settle_on_exit(self, reason: str) -> BatchSettlement:
-        if reason == "cancelled":
-            token = cleanup_only.set(True)
-            settlement_token = settling.set(True)
-            try:
-                return await self._settle_uncheckpointed(reason)
-            finally:
-                settling.reset(settlement_token)
-                cleanup_only.reset(token)
-        if cleanup_only.get():
-            return await self._settle_uncheckpointed(reason)
-        if not in_durable_workflow():
-            return await self._settle_uncheckpointed(reason)
+        if not native_step_available():
+            return await self._settle_owned(reason)
+        unit = current_unit.get()
 
         async def settle():
+            before = set(unit.delivery_ids) if unit else set()
             identity = await begin_call("context_settlement")
             try:
                 with budget_capture() as usage:
-                    result = await self._settle_uncheckpointed(reason)
+                    result = await self._settle_owned(reason)
             except BaseException as exc:
                 capture_budget_usage(usage)
                 if is_cancellation(exc):
@@ -1107,9 +1116,18 @@ class SDKContextHarness(RunHooks):
             await end_call(
                 identity, status="returned" if result.succeeded else "uncertain"
             )
-            return {"settlement": asdict(result), "state": state, "usage": usage}
+            return {
+                "settlement": asdict(result),
+                "state": state,
+                "usage": usage,
+                "delivery_ids": sorted(unit.delivery_ids - before) if unit else [],
+            }
 
-        saved = await checkpoint("por.agent_settlement", settle)
+        saved = await DBOS.run_step_async(
+            {"name": "por.agent_settlement", "preemptible": True}, settle
+        )
+        if unit:
+            unit.delivery_ids.update(saved["delivery_ids"])
         self._restore_durable_snapshot(saved["state"])
         capture_budget_usage(saved["usage"])
         value = saved["settlement"]
@@ -1118,7 +1136,7 @@ class SDKContextHarness(RunHooks):
         self.last_settlement = BatchSettlement(**value)
         return self.last_settlement
 
-    async def _settle_uncheckpointed(self, reason: str) -> BatchSettlement:
+    async def _settle_owned(self, reason: str) -> BatchSettlement:
         cleanup = asyncio.create_task(self.settle(reason))
         cancelled = False
         while True:
@@ -1148,50 +1166,34 @@ class SDKContextHarness(RunHooks):
         if self._started:
             raise ValueError("Create a fresh harness for each SDK invocation.")
         if agent.handoffs:
-            raise ValueError(
-                "Phase 0 supports one role per invocation, without handoffs."
-            )
+            raise ValueError("Each invocation requires a single role without handoffs.")
         if any(
             isinstance(tool, FunctionTool) and tool.tool_output_guardrails
             for tool in agent.tools
         ) or any(server.tool_output_guardrails for server in agent.mcp_servers):
             raise ValueError(
-                "Evidence status after output guardrails is outside the Phase 0 contract."
+                "Tool output guardrails are unsupported by the evidence collector."
             )
         config = run_config or RunConfig(
             tracing_disabled=not telemetry_enabled(), trace_include_sensitive_data=False
         )
         if config.call_model_input_filter is not None:
             raise ValueError(
-                "Phase 0 requires its own filter and full client-managed input."
+                "The Harness requires its own input filter and client-managed history."
             )
+        durable = native_step_available()
         config = replace(
             config,
             call_model_input_filter=self.durable_filter_model_input
-            if in_durable_workflow()
+            if durable
             else self.filter_model_input,
             tracing_disabled=config.tracing_disabled or not telemetry_enabled(),
             trace_include_sensitive_data=False,
         )
-        durable = in_durable_workflow()
-        if durable:
-            from dbos_openai_agents import DBOSRunner
-
-            from open_deep_research.runtime.durable_agent import (
-                BoundAgent,
-                MeteredModel,
-            )
-
-            agent = BoundAgent(
-                **{f.name: getattr(agent, f.name) for f in fields(Agent)}
-            )
-            agent.model = MeteredModel(agent.model)
-            agent.bind_harness(self)
-            runner = DBOSRunner
-            session = ReplayTranscript(session) if session is not None else None
-        else:
-            runner = Runner
-        self._agent, self._started = agent, True
+        runner = DBOSRunner if durable else Runner
+        if durable and session is not None:
+            session = InspectionTranscript(session)
+        self._started = True
         identity = correlation(
             harness=self,
             run_id=self.scope.run_id,
@@ -1202,7 +1204,6 @@ class SDKContextHarness(RunHooks):
         )
         identity.__enter__()
         cleanup_token = None
-        settling_token = None
         try:
             result = await runner.run(
                 agent,
@@ -1220,32 +1221,21 @@ class SDKContextHarness(RunHooks):
                     f"Unsettled Research Graph results: {settlement}"
                 )
             return result
+        except dbos_error.DBOSWorkflowConflictIDError:
+            # A replacement execution owns the journal and effects now.
+            self._closing = True
+            raise
         except BaseException as exc:
             self._closing = True
-            restored_control = None
-            if in_durable_workflow():
-                # A cached native control error does not execute its original
-                # observer callback. Restore the same in-memory fatal barrier
-                # before exit processing can admit any new external operation.
-                restored_control = await observe_execution(
-                    "execution_failed", error=exc
-                )
+            unit = current_unit.get()
+            control_error = unit.remember_control_error(exc) if unit else None
             cancelled = is_cancellation(exc)
-            try:
-                cancelled = (
-                    bool(await observe_execution("cancel_requested")) or cancelled
-                )
-            except BaseException:
-                pass
             reason = "cancelled" if cancelled else "exception"
-            if cancelled:
-                exc.business_cancelled = True
             if cancelled or (
-                isinstance(restored_control, ExecutionControlError)
-                and not getattr(restored_control, "unknown_outcome", False)
+                control_error is not None
+                and not getattr(control_error, "unknown_outcome", False)
             ):
-                cleanup_token = cleanup_only.set(True)
-                settling_token = settling.set(True)
+                cleanup_token = owned_cleanup.set(True)
             try:
                 await self._settle_on_exit(reason)
             except BaseException as cleanup_error:
@@ -1272,8 +1262,37 @@ class SDKContextHarness(RunHooks):
                 pass
             raise
         finally:
-            if settling_token is not None:
-                settling.reset(settling_token)
             if cleanup_token is not None:
-                cleanup_only.reset(cleanup_token)
+                owned_cleanup.reset(cleanup_token)
             identity.__exit__(None, None, None)
+
+
+class InspectionTranscript:
+    """Optional inspection transcript; DBOS, not a previous transcript, resumes.
+
+    Each private invocation starts with empty SDK history. Replacing a transcript
+    is repeatable even across an add_items ACK loss; it never drives execution.
+    """
+
+    def __init__(self, session):
+        self.session = session
+        self.session_id = session.session_id
+        self.items = []
+
+    async def get_items(self, limit=None):
+        return []
+
+    async def add_items(self, items):
+        self.items.extend(items)
+
+        async def save():
+            await self.session.clear_session()
+            await self.session.add_items(self.items)
+
+        await DBOS.run_step_async({"name": "por.sdk_transcript"}, save)
+
+    async def pop_item(self):
+        raise RuntimeError("Durable invocations do not resume from SDK sessions")
+
+    async def clear_session(self):
+        self.items.clear()

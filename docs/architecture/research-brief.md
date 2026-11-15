@@ -1,7 +1,7 @@
 # Markdown Research Brief workflow
 
 Native human interaction uses application version
-`dbosrunner-native-interaction-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
+`dbos-native-recovery-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
 See the [cutover steps](dbos-deployment.md#原生人机交互版本切换).
 DBOS owns execution and recovery, Runner owns the four business Agent loops, and
 Research Graph owns evidence. Markdown carries research intent, never execution control.

@@ -3,59 +3,43 @@
 from __future__ import annotations
 
 import asyncio
-import time
-from contextlib import ExitStack
+from contextlib import asynccontextmanager
 from copy import deepcopy
-from functools import partial
-from uuid import uuid4
 
-from agents import SQLiteSession
 from dbos import DBOS, SetEnqueueOptions, SetWorkflowID, SetWorkflowTimeout
+from dbos import error as dbos_error
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.budget import (
-    ModelBudgetExceeded,
-    can_spend_model_call,
-    is_over_budget,
+    budget_capture,
+    diff_budget_usage,
     merge_budget_usage,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.llm.errors import ModelInvocationError
 from open_deep_research.observability.telemetry import (
     annotate,
+    business_span,
     correlation,
     dbos_scope,
-    telemetry_enabled,
 )
 from open_deep_research.state import ResearchRoleResult
+from open_deep_research.time_utils import get_today_str
 from open_deep_research.web.run_data import (
     TERMINAL,
     ExecutionRevoked,
-    RunConflict,
     digest,
     dumps,
     public_payload,
-    sdk_observation,
     timestamp,
 )
 from open_deep_research.workflow import intake, reporting, research
-from open_deep_research.workflow.business_steps import SAFE_STEPS, _step, failure_kind
-from open_deep_research.workflow.dbos_config import (
-    BUSINESS,
-    FACT_WRITE_GRACE_SECONDS,
-    SETTLEMENT_GRACE_SECONDS,
-)
-from open_deep_research.workflow.durability import (
-    checkpoint,
-    durable_generation,
-    durable_unit,
-    event_delivery,
-    physical_calls,
-)
+from open_deep_research.workflow.dbos_config import BUSINESS, SETTLEMENT_GRACE_SECONDS
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
-    execution_observer,
+    error_chain,
+    failure_kind,
     owned_io,
+    stage_timeout,
 )
 from open_deep_research.workflow.python_state import (
     RESEARCH_ROLES,
@@ -65,20 +49,13 @@ from open_deep_research.workflow.python_state import (
     read_research_result,
     role_snapshot,
 )
-from open_deep_research.workflow.run_facts import facts
+from open_deep_research.workflow.run_facts import (
+    UnitReceipts,
+    confirm_cancel,
+    current_unit,
+    facts,
+)
 from open_deep_research.workflow.state_utils import agents_for_new_run
-
-OPERATIONS = {
-    "enrich_query_images": intake.enrich_query_images,
-    "plan_research": intake.plan_research,
-    "revise_brief": intake.revise_brief,
-    "generate_final_report": reporting.generate_final_report,
-    "plan_report_sections": intake.section_plan_step,
-    "research_review": research.research_review,
-    "section_writer": reporting.section_writer,
-    "write_final_sections": reporting.write_final_sections,
-    "compile_final_report": partial(reporting.compile_final_report, fail_on_error=True),
-}
 
 
 async def send_event(run_id, event_type, **data):
@@ -88,548 +65,332 @@ async def send_event(run_id, event_type, **data):
     )
 
 
-async def confirm_cancel(repo, run_id):
-    """Deliver an already authorized cancellation before a phase can fail fast."""
-    if (await asyncio.to_thread(repo.request, run_id))["cancel_requested"]:
-        await owned_io(repo.client.cancel_workflow, run_id, cancel_children=True)
-        return True
-    return False
+@DBOS.step(name="por.stage_started")
+async def publish_stage_started(unit, research_round):
+    def publish():
+        with unit.repo.engine.begin() as db:
+            unit.repo.check(unit.id, unit.permit, db=db, locked=True)
+            payload = {
+                "step": unit.name,
+                "unit_id": unit.id,
+                "execution_id": unit.execution_id,
+                "research_round": research_round,
+            }
+            event_key = digest([unit.id, unit.generation, "stage-start"])
+            unit.repo.publish(
+                db, unit.run_id, "step_started", idempotency_key=event_key, **payload
+            )
+            unit.repo.publish(
+                db,
+                unit.run_id,
+                "status",
+                idempotency_key=event_key + "-status",
+                message=f"Running {unit.name}",
+                granularity="stage",
+            )
+        return get_today_str()
+
+    date, cancelled = await owned_io(publish)
+    if cancelled is not None:
+        raise cancelled
+    return date
 
 
-@dbos_scope
-async def business_step(run_id, unit_id, name, state, *, revision_request=None):
-    """Rebuild a business stage in Workflow context; only its I/O uses Steps.
+async def watch_stage_fence(unit, owner, workflow_id):
+    """Interrupt non-preemptible I/O on a cancelled DBOS workflow or stale fence.
 
-    The historical name remains for callers. This is deliberately NOT a Step:
-    DBOSRunner and bounded LangChain calls need independent native checkpoints.
+    The public DBOS client observes status without consuming a journal slot.
     """
-    repo = facts()
-    try:
-        while (req := await asyncio.to_thread(repo.reserve, run_id)) is None:
-            await asyncio.sleep(0.5)
-        permit, _, past = await asyncio.to_thread(
-            repo.acquire,
-            run_id,
-            unit_id,
-            name,
-            safe=name in SAFE_STEPS,
-            native_replay=True,
-        )
-    except ExecutionRevoked:
-        if await confirm_cancel(repo, run_id):
-            raise asyncio.CancelledError()
-        raise
-    # Execution results are read exclusively from the DBOS journal.
-    cfg = deepcopy(req["data"]["config"])
-    cfg["configurable"]["allow_plan_feedback"] = False
-    sessions = []
-    delivery_ids = set()
-    control_failure = None
-
-    async def observe_business(kind, **payload):
-        if kind == "cancel_requested":
-            return (await asyncio.to_thread(repo.request, run_id))["cancel_requested"]
-        if kind == "execution_poll":
-            if await asyncio.to_thread(repo.check, unit_id, permit, allow_cancel=True):
-                await owned_io(
-                    repo.client.cancel_workflow, run_id, cancel_children=True
-                )
-                raise asyncio.CancelledError()
-            return None
-        if kind == "effect_guard":
-            return repo.effect_guard(unit_id, permit)
-        if kind in {
-            "tool_started",
-            "tool_finished",
-            "boundary_started",
-            "boundary_finished",
-        }:
-            if kind == "boundary_started" and payload["identity"]["name"] in {
-                "llm",
-                "llm_sync",
-                "sdk_model",
-            }:
-                actual, _ = await asyncio.to_thread(repo.physical_usage, unit_id)
-                total = merge_budget_usage(
-                    state.get("runtime", {}).get("budget", {}), actual
-                )
-                policy = Configuration.from_runnable_config(cfg)
-                reserve_report = name not in {
-                    "generate_final_report",
-                    "write_final_sections",
-                    "compile_final_report",
-                }
-                if is_over_budget(policy, total) or not can_spend_model_call(
-                    policy, total, reserve_final_report_call=reserve_report
-                ):
-                    raise ModelBudgetExceeded(
-                        "Physical call receipts exhausted the research budget"
-                    )
-                if (
-                    revision_request is not None
-                    and await asyncio.to_thread(_interaction_now)
-                    >= revision_request["expires_at"]
-                ):
-                    # This guard runs inside the native model Step, so cached
-                    # results replay without authorizing an expired provider call.
-                    raise ModelInvocationError("BriefApprovalExpired")
-
-            async def write_receipt():
-                deadline = time.monotonic() + FACT_WRITE_GRACE_SECONDS
-                while True:
-                    try:
-                        return await asyncio.to_thread(
-                            repo.operation,
-                            unit_id,
-                            permit,
-                            payload["identity"],
-                            status="started"
-                            if kind.endswith("_started")
-                            else payload["status"],
-                            usage=payload.get("usage"),
-                        )
-                    except SQLAlchemyError:
-                        if kind.endswith("_started") or time.monotonic() >= deadline:
-                            raise
-                        await asyncio.sleep(0.5)
-
-            # Own only the idempotent control write, never replay the external
-            # provider/tool. Cancellation cannot discard its known usage while
-            # a short storage outage or committed-but-lost ACK is being settled.
-            pending_receipt = asyncio.create_task(write_receipt())
-            cancelled = None
-            while not pending_receipt.done():
-                try:
-                    await asyncio.shield(pending_receipt)
-                except asyncio.CancelledError as exc:
-                    cancelled = cancelled or exc
-            result = pending_receipt.result()
-            annotate(
-                operation_id=result,
-                effect_status="started"
-                if kind.endswith("_started")
-                else payload["status"],
-            )
-            if kind.endswith("_started") and cancelled:
-                await owned_io(
-                    repo.operation,
-                    unit_id,
-                    permit,
-                    payload["identity"],
-                    status="not_executed",
-                )
-                raise cancelled
-            return result
-        await asyncio.to_thread(
-            repo.check,
-            unit_id,
-            permit,
-            allow_cancel=kind
-            in {
-                "model_completed",
-                "model_failed",
-                "agent_completed",
-                "agent_failed",
-                "harness",
-                "tool_result",
-            },
-        )
-        # Never persist raw prompt/tool arguments/output/exception text publicly.
-        allowed = sdk_observation(payload)
-
-        def publish():
-            event_id = uuid4().hex
-            with repo.engine.begin() as db:
-                repo.publish(
-                    db,
-                    run_id,
-                    "sdk_event",
-                    event_id=event_id,
-                    event="session_started" if kind == "sdk_session" else kind,
-                    step=name,
-                    unit_id=unit_id,
-                    execution_id=digest({"unit": unit_id, "permit": permit}),
-                    **allowed,
-                )
-            return event_id
-
-        async def publish_step():
-            result, cancel = await owned_io(publish)
-            if cancel:
-                raise cancel
-            return result
-
-        cleanup = kind in {
-            "model_completed",
-            "model_failed",
-            "agent_completed",
-            "agent_failed",
-            "harness",
-            "tool_result",
-        }
-        cancelled_request = (
-            cleanup
-            and (await asyncio.to_thread(repo.request, run_id))["cancel_requested"]
-        )
-        # Native cancelled workflows cannot append commands. Their still-owned
-        # cleanup writes business delivery facts directly, as the former Step did.
-        event_id = (
-            await publish_step()
-            if cancelled_request
-            else await checkpoint("por.sdk_observation", publish_step)
-        )
-        delivery_ids.add(event_id)
-        if kind == "sdk_session":
-            if repo.settings.session_path:
-                session, cancelled = await owned_io(
-                    SQLiteSession,
-                    unit_id + ":" + payload["invocation_id"],
-                    repo.settings.session_path,
-                )
-                sessions.append(session)
-                if cancelled:
-                    raise cancelled
-                return session
-            return None
-        return None
-
-    async def observer(kind, **payload):
-        nonlocal control_failure
-        if kind == "execution_failed":
-            pending = [payload.get("error")]
-            seen = set()
-            while pending:
-                error = pending.pop()
-                if error is None or id(error) in seen:
-                    continue
-                seen.add(id(error))
-                if isinstance(error, ExecutionControlError):
-                    if control_failure is None:
-                        control_failure = error
-                    elif getattr(error, "unknown_outcome", False):
-                        control_failure.unknown_outcome = True
-                pending.extend(getattr(error, "exceptions", ()))
-                pending.extend(
-                    [
-                        getattr(error, "__cause__", None),
-                        getattr(error, "__context__", None),
-                    ]
-                )
-            return control_failure
-        if (
-            control_failure is not None
-            and (
-                kind in {"model_started", "tool_started", "boundary_started"}
-                or (
-                    kind == "effect_guard"
-                    and getattr(control_failure, "unknown_outcome", False)
-                )
-            )
-            and (
-                getattr(control_failure, "unknown_outcome", False)
-                or not payload.get("identity", {}).get("settlement", False)
-            )
-        ):
-            raise control_failure
+    while True:
+        await asyncio.sleep(1)
         try:
-            return await observe_business(kind, **payload)
-        except (RunConflict, SQLAlchemyError) as exc:
-            if (
-                isinstance(exc, ExecutionRevoked)
-                and (await asyncio.to_thread(repo.request, run_id))["cancel_requested"]
+            if await asyncio.to_thread(
+                unit.repo.cancellation_requested,
+                unit.run_id,
+                unit.id,
+                unit.permit,
+                workflow_id,
             ):
-                await asyncio.to_thread(repo.check, unit_id, permit, allow_cancel=True)
-                await owned_io(
-                    repo.client.cancel_workflow, run_id, cancel_children=True
-                )
-                raise asyncio.CancelledError() from exc
+                owner.cancel()
+                return True
+        except (SQLAlchemyError, ExecutionRevoked) as exc:
             error = ExecutionControlError(
                 "Durable execution permission/storage unavailable"
             )
-            error.unknown_outcome = isinstance(exc, RunConflict) and not isinstance(
-                exc, ExecutionRevoked
-            )
-            if control_failure is not None and error.unknown_outcome:
-                control_failure.unknown_outcome = True
-            control_failure = control_failure or error
-            raise error from exc
+            error.__cause__ = exc
+            unit.remember_control_error(error)
+            owner.cancel()
+            return False
 
-    async def persist(**data):
-        # Retry idempotent fact writes only, never the SDK invocation or tool.
-        deadline = time.monotonic() + FACT_WRITE_GRACE_SECONDS
-        while True:
-            try:
-                _, cancelled = await owned_io(repo.finish_unit, unit_id, permit, **data)
-                return cancelled
-            except SQLAlchemyError:
-                if time.monotonic() >= deadline:
-                    raise
-                await asyncio.sleep(0.5)
 
-    artifact = None
-    observed_usage = past
-    operation_started = False
-    operation_returned = False
-    identity = ExitStack()
-    identity.enter_context(
-        correlation(
-            run_id=run_id,
-            unit_id=unit_id,
-            step=name,
-            execution_id=digest({"unit": unit_id, "permit": permit}),
-            research_round=state.get("workflow", {}).get("round", 1),
-        )
+async def record_stage_failure(unit, error, observed, *, retryable, original):
+    kind = failure_kind(error)
+    annotate(failure_kind=kind, status="cancelled" if kind == "cancelled" else "failed")
+    settlement = getattr(original, "context_settlement", None)
+    settled = getattr(original, "context_harness", None) is None or (
+        settlement is not None and settlement.succeeded
     )
-    token = execution_observer.set(observer)
-    durable_token = durable_unit.set(unit_id)
-    calls_token = physical_calls.set({})
-    delivery_token = event_delivery.set(delivery_ids)
-    owner_task = asyncio.current_task()
-
-    async def watch_cancellation():
-        while True:
-            await asyncio.sleep(1)
-            try:
-                await observer("execution_poll")
-            except asyncio.CancelledError:
-                if asyncio.current_task().cancelling():
-                    return
-                owner_task.cancel()
-                return
-            except Exception:
-                owner_task.cancel()
-                return
-
-    watcher = asyncio.create_task(watch_cancellation())
-
-    def read_generation():
-        from sqlalchemy import text
-
-        with repo.engine.connect() as db:
-            return db.execute(
-                text(
-                    "SELECT coalesce(max(generation),0) FROM por_domain.retries WHERE run_id=:id"
-                ),
-                {"id": run_id},
-            ).scalar_one()
-
-    generation_token = None
+    settled = settled and not getattr(error, "unknown_outcome", False)
+    for cause in error_chain(original):
+        usage = getattr(cause, "budget_usage", {})
+        observed = merge_budget_usage(observed, diff_budget_usage(usage, observed))
+        settled = settled and not getattr(cause, "unknown_outcome", False)
     try:
-        past = await asyncio.to_thread(repo.failed_usage, unit_id, past)
-        if past:
-            state = deepcopy(state)
-            runtime = state.setdefault("runtime", {})
-            runtime["budget"] = merge_budget_usage(runtime.get("budget", {}), past)
-        generation = await asyncio.to_thread(read_generation)
-        generation_token = durable_generation.set(generation)
-        if telemetry_enabled():
-            identity.enter_context(correlation(generation=generation))
-
-        def started():
-            with repo.engine.begin() as db:
-                repo.publish(
-                    db,
-                    run_id,
-                    "step_started",
-                    step=name,
-                    unit_id=unit_id,
-                    execution_id=digest({"unit": unit_id, "permit": permit}),
-                    research_round=state.get("workflow", {}).get("round", 1),
-                )
-                repo.publish(
-                    db, run_id, "status", message=f"Running {name}", granularity="stage"
-                )
-
-        async def start():
-            await asyncio.to_thread(started)
-
-        await checkpoint("por.stage_started", start)
-        operation = OPERATIONS.get(name) or getattr(research, name)
-        if revision_request is not None:
-            operation = partial(operation, feedback=revision_request["feedback"])
-        operation_started = True
-        result = await _step(
-            name,
-            operation,
-            state,
-            cfg,
-            Configuration.from_runnable_config(cfg).workflow_step_timeout_seconds,
+        settled = settled and not await asyncio.to_thread(
+            unit.repo.unconfirmed_operations, unit.id
         )
-        operation_returned = True
-        if control_failure is not None:
-            raise control_failure
-        if isinstance(result, ResearchRoleResult):
-            # Unit history belongs in this delta once; the State baseline does not.
-            usage = merge_budget_usage(past, result.budget_delta)
-            artifact = {"research_result": result.model_dump(mode="json")}
-            artifact["research_result"]["budget_delta"] = usage
-        elif name in {"plan_research", "revise_brief"}:
-            artifact = result
-        elif hasattr(result, "goto"):
-            artifact = {"patch": result.update or {}, "goto": result.goto}
-        else:
-            artifact = {"patch": result}
-        role = name.removesuffix("_agent")
-        if (
-            name.endswith("_agent")
-            and role
-            in {
-                "public_signal",
-                "internal_knowledge",
-                "risk_assessment",
-                "response_strategy",
-            }
-            and not result
-            and role
-            not in {
-                str(item).strip().lower()
-                for item in (
-                    Configuration.from_runnable_config(cfg).enabled_business_agents
-                    or []
-                )
-            }
-        ):
-            artifact["observation"] = {"skipped": True, "reason": "role_disabled"}
-        patch = artifact.get("patch", {})
-        if "research_result" not in artifact:
-            usage = merge_budget_usage(past, patch.get("runtime", {}).get("budget", {}))
-            if usage:
-                patch.setdefault("runtime", {})["budget"] = usage
-        if name == "research_review":
-            reviewed = deepcopy(state)
-            apply_patch(reviewed, patch)
-            artifact["followup"] = research.followup_assignments(
-                reviewed, Configuration.from_runnable_config(cfg)
-            )
-        observed_usage = usage
-        artifact["delivery_ids"] = sorted(delivery_ids)
+        billed = await asyncio.to_thread(
+            unit.repo.accounted_usage, unit.id, observed, unit.carry
+        )
+        await unit.write(
+            unit.repo.finish_unit,
+            usage=billed,
+            settled=settled,
+            error={
+                "kind": kind,
+                "error_type": type(error).__name__,
+                "step": unit.name,
+                "usage_complete": settled,
+                "retry_safe": settled and retryable and kind != "cancelled",
+                "delivery_ids": sorted(unit.delivery_ids),
+            },
+        )
+    except (ExecutionRevoked, SQLAlchemyError):
+        # The Finalizer still sees the pending settlement and its receipts.
+        pass
 
-        async def freeze_result():
-            billed = await asyncio.to_thread(repo.accounted_usage, unit_id, usage, past)
-            if "research_result" in artifact:
-                artifact["research_result"]["budget_delta"] = billed
-            elif billed:
-                patch.setdefault("runtime", {})["budget"] = billed
-            if "messages" in patch:
-                patch["messages"] = copy_state({"messages": patch["messages"]})[
-                    "messages"
-                ]
-            return artifact
 
-        # DBOS saves the result and its billed usage once. On replay, the
-        # permit holder only needs to restore the public settlement projection.
-        artifact = await checkpoint("por.stage_result", freeze_result)
-        observed_usage = (
-            artifact["research_result"]["budget_delta"]
-            if "research_result" in artifact
-            else artifact["patch"].get("runtime", {}).get("budget", {})
+@asynccontextmanager
+async def stage_receipts(
+    run_id,
+    unit_id,
+    name,
+    state,
+    config,
+    *,
+    retryable=False,
+    reserve_report=True,
+    expires_at=None,
+):
+    """Keep the domain's permit, billing and result projection scoped to one unit."""
+    repo = facts()
+    try:
+        # Retry can revisit a leaf after the previous Finalizer released capacity.
+        if not (await asyncio.to_thread(repo.request, run_id))["occupied"]:
+            while await asyncio.to_thread(repo.reserve, run_id) is None:
+                await asyncio.sleep(0.5)
+        permit, _, past = await asyncio.to_thread(
+            repo.acquire, run_id, unit_id, name, native_replay=True
         )
-        cancelled = await persist(artifact=artifact, usage=observed_usage)
-        if cancelled:
-            raise cancelled
-        return artifact
-    except BaseException as exc:
-        original_error = exc
-        if (
-            control_failure is not None
-            and not (await asyncio.to_thread(repo.request, run_id))["cancel_requested"]
-        ):
-            for field in ("budget_usage", "context_harness", "context_settlement"):
-                if hasattr(exc, field):
-                    setattr(control_failure, field, getattr(exc, field))
-            exc = control_failure
-        kind = failure_kind(exc)
-        annotate(
-            failure_kind=kind,
-            status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
-        )
-        harness = getattr(exc, "context_harness", None)
-        settlement = getattr(exc, "context_settlement", None)
-        settled = (
-            (settlement is not None and settlement.succeeded)
-            if harness
-            else name in SAFE_STEPS
-        )
-        settled = settled or not operation_started or operation_returned
-        cause = exc
-        while cause is not None:
-            if getattr(cause, "unknown_outcome", False):
-                settled = False
-            cause = getattr(cause, "__cause__", None)
-        usage = (
-            merge_budget_usage(past, exc.budget_usage)
-            if hasattr(exc, "budget_usage")
-            else observed_usage
-        )
-        usage = await asyncio.to_thread(repo.accounted_usage, unit_id, usage, past)
-        try:
-            await persist(
-                artifact=artifact,
-                usage=usage,
-                settled=settled,
-                error={
-                    "kind": kind,
-                    "error_type": type(exc).__name__,
-                    "step": name,
-                    "usage_complete": settled,
-                    "delivery_ids": sorted(delivery_ids),
-                },
-            )
-        except Exception:
-            # Database/ownership failure cannot turn an unconfirmed unit into success.
-            pass
-        if exc is not original_error:
-            raise exc from original_error
+    except ExecutionRevoked:
+        if await confirm_cancel(repo, run_id):
+            raise dbos_error.DBOSWorkflowCancelledError(
+                "Cancellation requested"
+            ) from None
         raise
+    unit = UnitReceipts(
+        repo=repo,
+        run_id=run_id,
+        id=unit_id,
+        name=name,
+        permit=permit,
+        config=Configuration.from_runnable_config(config),
+        baseline=state.get("runtime", {}).get("budget", {}),
+        generation=0,
+        carry={},
+        reserve_report=reserve_report,
+        expires_at=expires_at,
+    )
+    research_round = state.get("workflow", {}).get("round", 1)
+    token = current_unit.set(unit)
+    watcher = asyncio.create_task(
+        watch_stage_fence(unit, asyncio.current_task(), DBOS.workflow_id)
+    )
+    try:
+        with budget_capture() as observed:
+            try:
+                unit.generation = await asyncio.to_thread(repo.retry_generation, run_id)
+                unit.carry = await asyncio.to_thread(repo.failed_usage, unit_id, past)
+                with correlation(
+                    run_id=run_id,
+                    unit_id=unit_id,
+                    step=name,
+                    execution_id=unit.execution_id,
+                    research_round=research_round,
+                    generation=unit.generation,
+                ):
+                    date = await publish_stage_started(unit, research_round)
+                    yield unit, {**config, "research_date": date}
+            except dbos_error.DBOSWorkflowConflictIDError:
+                raise
+            except BaseException as exc:
+                cancelled = (
+                    watcher.done() and not watcher.cancelled() and watcher.result()
+                )
+                watcher.cancel()
+                failure = exc if cancelled else unit.remember_control_error(exc) or exc
+                await record_stage_failure(
+                    unit,
+                    failure,
+                    merge_budget_usage(unit.carry, observed),
+                    retryable=retryable,
+                    original=exc,
+                )
+                if cancelled and isinstance(exc, asyncio.CancelledError):
+                    raise dbos_error.DBOSWorkflowCancelledError(
+                        "Business Workflow cancelled"
+                    ) from exc
+                if failure is not exc:
+                    raise failure from exc
+                raise
     finally:
         watcher.cancel()
-        event_delivery.reset(delivery_token)
-        if generation_token is not None:
-            durable_generation.reset(generation_token)
-        physical_calls.reset(calls_token)
-        durable_unit.reset(durable_token)
-        execution_observer.reset(token)
-        identity.close()
-        for session in sessions:
-            await owned_io(session.close)
+        current_unit.reset(token)
+
+
+@DBOS.step(name="por.stage_result")
+async def stage_result(unit, artifact):
+    """Freeze a business result and its billed usage in the native journal."""
+    if unit.control_error is not None:
+        raise unit.control_error
+    artifact = deepcopy(artifact)
+    patch = artifact.get("patch", {})
+    role = artifact.get("research_result")
+    usage = role["budget_delta"] if role else patch.get("runtime", {}).get("budget", {})
+    usage = merge_budget_usage(unit.carry, usage)
+    billed = await asyncio.to_thread(
+        unit.repo.accounted_usage, unit.id, usage, unit.carry
+    )
+    if role:
+        role["budget_delta"] = billed
+    elif billed:
+        patch.setdefault("runtime", {})["budget"] = billed
+    if "messages" in patch:
+        patch["messages"] = copy_state({"messages": patch["messages"]})["messages"]
+    artifact["delivery_ids"] = sorted(unit.delivery_ids)
+    return artifact
+
+
+@DBOS.step(name="por.save_stage")
+async def save_stage(unit, artifact):
+    """Commit the idempotent public projection after DBOS has recorded the result."""
+    role = artifact.get("research_result")
+    usage = (
+        role["budget_delta"]
+        if role
+        else artifact["patch"].get("runtime", {}).get("budget", {})
+    )
+    _, cancelled = await unit.write(
+        unit.repo.finish_unit, usage=usage, artifact=artifact
+    )
+    if cancelled is not None:
+        raise cancelled
+
+
+def business_config(request):
+    config = deepcopy(request["data"]["config"])
+    config["configurable"]["allow_plan_feedback"] = False
+    return config
 
 
 @DBOS.workflow(name="por.role")
 @dbos_scope
-async def role_workflow(run_id, unit_id, role, state):
-    return await business_step(
-        run_id, unit_id, role + "_agent", role_snapshot(state, role)
-    )
+async def role_workflow(run_id, unit_id, role, initial):
+    name = role + "_agent"
+    state = role_snapshot(initial, role)
+    config = business_config(await load_request(run_id))
+    async with stage_receipts(run_id, unit_id, name, state, config) as (unit, cfg):
+        async with stage_timeout(unit.config.workflow_step_timeout_seconds):
+            result = await getattr(research, name)(state, cfg)
+        if isinstance(result, ResearchRoleResult):
+            artifact = {"research_result": result.model_dump(mode="json")}
+        else:
+            artifact = {"patch": result}
+            if not result and role not in {
+                str(enabled).strip().lower()
+                for enabled in unit.config.enabled_business_agents or ()
+            }:
+                artifact["observation"] = {"skipped": True, "reason": "role_disabled"}
+        saved = await stage_result(unit, artifact)
+        await save_stage(unit, saved)
+        return saved
 
 
 @DBOS.workflow(name="por.review")
 @dbos_scope
-async def review_workflow(run_id, state):
+async def review_workflow(run_id, initial):
+    state = copy_state(initial)
     round_ = state.get("workflow", {}).get("round", 1)
-    return await business_step(
-        run_id, f"{run_id}:review:{round_}", "research_review", state
-    )
+    config = business_config(await load_request(run_id))
+    async with stage_receipts(
+        run_id,
+        f"{run_id}:review:{round_}",
+        "research_review",
+        state,
+        config,
+        retryable=True,
+    ) as (unit, cfg):
+        with business_span("research_review", step=unit.name):
+            async with stage_timeout(unit.config.workflow_step_timeout_seconds):
+                patch = await research.research_review(state, cfg)
+        saved = await stage_result(unit, {"patch": patch})
+        apply_patch(state, saved["patch"])
+        await save_stage(unit, saved)
+        return {**saved, "followup": research.followup_assignments(state, unit.config)}
 
 
 @DBOS.workflow(name="por.report")
 @dbos_scope
 async def report_workflow(run_id, initial):
     state = copy_state(initial)
-    request = await load_request(run_id)
-    mode = request["data"]["config"]["configurable"].get("report_mode", "synthesis")
+    config = business_config(await load_request(run_id))
+    sections = config["configurable"].get("report_mode", "synthesis") == "sections"
     report_steps = (
-        (
-            "plan_report_sections",
-            "section_writer",
-            "write_final_sections",
-            "compile_final_report",
-        )
-        if mode == "sections"
-        else ("generate_final_report", "compile_final_report")
+        [
+            ("plan_report_sections", intake.section_plan_step),
+            ("section_writer", reporting.section_writer),
+            ("write_final_sections", reporting.write_final_sections),
+        ]
+        if sections
+        else [("generate_final_report", reporting.generate_final_report)]
     )
-    for name in report_steps:
-        outcome = await business_step(run_id, run_id + ":" + name, name, state)
-        apply_patch(state, outcome["patch"])
+    for name, generate in report_steps:
+        async with stage_receipts(
+            run_id,
+            run_id + ":" + name,
+            name,
+            state,
+            config,
+            retryable=True,
+            reserve_report=name
+            not in {"generate_final_report", "write_final_sections"},
+        ) as (unit, cfg):
+            with business_span("report_generation", step=name):
+                async with stage_timeout(unit.config.workflow_step_timeout_seconds):
+                    # Section writers update their input objects. Only a
+                    # saved patch may update the Workflow's shared State.
+                    result = await generate(deepcopy(state), cfg)
+            patch = result.update or {} if name == "plan_report_sections" else result
+            saved = await stage_result(unit, {"patch": patch})
+            await save_stage(unit, saved)
+            apply_patch(state, saved["patch"])
+    name = "compile_final_report"
+    async with stage_receipts(
+        run_id,
+        run_id + ":" + name,
+        name,
+        state,
+        config,
+        reserve_report=False,
+    ) as (unit, cfg):
+        with business_span("report_generation", step=name):
+            async with stage_timeout(unit.config.workflow_step_timeout_seconds):
+                patch = await reporting.compile_final_report(
+                    state, cfg, fail_on_error=True
+                )
+        saved = await stage_result(unit, {"patch": patch})
+        await save_stage(unit, saved)
+        apply_patch(state, saved["patch"])
     return state
 
 
@@ -639,7 +400,9 @@ async def reserve_step(run_id):
         return await asyncio.to_thread(facts().reserve, run_id) is not None
     except ExecutionRevoked:
         if await confirm_cancel(facts(), run_id):
-            raise asyncio.CancelledError()
+            raise dbos_error.DBOSWorkflowCancelledError(
+                "Cancellation requested"
+            ) from None
         raise
 
 
@@ -656,35 +419,58 @@ async def reserve(run_id):
 @DBOS.workflow(name="por.plan")
 @dbos_scope
 async def planning_workflow(run_id, initial, round_=1, *, revision_request=None):
-    # No durable human wait holds a BUSINESS queue slot or resource reservation.
+    # Approvals wait in por.run, after the business reservation is released.
     await reserve(run_id)
     state = copy_state(initial)
     try:
+        config = business_config(await load_request(run_id))
         if revision_request is not None:
-            outcome = await business_step(
+            async with stage_receipts(
                 run_id,
                 DBOS.workflow_id,
                 "revise_brief",
                 state,
-                revision_request=revision_request,
-            )
-            apply_patch(state, outcome["patch"])
-            return {"state": state, "revision_error": outcome["revision_error"]}
+                config,
+                retryable=True,
+                expires_at=revision_request["expires_at"],
+            ) as (unit, cfg):
+                async with stage_timeout(unit.config.workflow_step_timeout_seconds):
+                    revised = await intake.revise_brief(
+                        state, cfg, feedback=revision_request["feedback"]
+                    )
+                saved = await stage_result(unit, revised)
+                await save_stage(unit, saved)
+                apply_patch(state, saved["patch"])
+                return {"state": state, "revision_error": saved["revision_error"]}
         if round_ == 1:
-            outcome = await business_step(
-                run_id, run_id + ":enrich_query_images", "enrich_query_images", state
-            )
-            apply_patch(state, outcome["patch"])
-        outcome = await business_step(
-            run_id, f"{run_id}:plan:{round_}", "plan_research", state
-        )
-        apply_patch(state, outcome["patch"])
-        return {"state": state, "decision": outcome["decision"]}
+            name = "enrich_query_images"
+            async with stage_receipts(
+                run_id, run_id + ":" + name, name, state, config, retryable=True
+            ) as (unit, cfg):
+                async with stage_timeout(unit.config.workflow_step_timeout_seconds):
+                    patch = await intake.enrich_query_images(state, cfg)
+                saved = await stage_result(unit, {"patch": patch})
+                await save_stage(unit, saved)
+                apply_patch(state, saved["patch"])
+        async with stage_receipts(
+            run_id,
+            f"{run_id}:plan:{round_}",
+            "plan_research",
+            state,
+            config,
+            retryable=True,
+        ) as (unit, cfg):
+            async with stage_timeout(unit.config.workflow_step_timeout_seconds):
+                planned = await intake.plan_research(state, cfg)
+            saved = await stage_result(unit, planned)
+            await save_stage(unit, saved)
+            apply_patch(state, saved["patch"])
+            return {"state": state, "decision": saved["decision"]}
     finally:
-        # business_step can reacquire the reservation during recovery, even if
-        # the previous Executor released it just before committing the result.
+        # A resumed planner may have re-acquired capacity after a lost ACK.
+        # Repeat the idempotent release even if the plan was already saved.
         _, cancelled = await owned_io(facts().release, run_id)
-        if cancelled:
+        if cancelled is not None:
             raise cancelled
 
 
@@ -830,13 +616,9 @@ async def wait_for_revision(handle, expires_at):
         remaining = expires_at - await asyncio.to_thread(_interaction_now)
         if remaining <= 0:
             return False
-        timer = asyncio.timeout(remaining)
         try:
-            async with timer:
-                await facts().client.wait_first_async([handle])
-        except TimeoutError:
-            if not timer.expired():
-                raise
+            await asyncio.wait_for(facts().client.wait_first_async([handle]), remaining)
+        except asyncio.TimeoutError:
             return False
         return True
 

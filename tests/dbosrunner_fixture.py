@@ -89,7 +89,6 @@ async def producer():
         from open_deep_research.budget import ainvoke_model_with_budget
         from open_deep_research.configuration import Configuration
         from open_deep_research.runtime.sdk_context import SDKContextHarness
-        from open_deep_research.workflow.durability import durable_unit
 
         original = SDKContextHarness.filter_model_input
 
@@ -115,7 +114,6 @@ async def producer():
             return result
 
         SDKContextHarness.filter_model_input = context_calls
-        token = durable_unit.set("budget-role")
         try:
             runtime = _runtime(
                 config=Configuration(
@@ -133,7 +131,6 @@ async def producer():
                 "settled": runtime.harness.last_settlement.succeeded,
             }
         finally:
-            durable_unit.reset(token)
             SDKContextHarness.filter_model_input = original
     result = await DBOSRunner.run(
         Agent(name="producer", model=Producer(), tools=[read]),
