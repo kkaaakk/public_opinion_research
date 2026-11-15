@@ -11,8 +11,9 @@ Read `docs/audits/openai-agents-phase5.md`, the migration plan,
 `docs/audits/openai-agents-phase4-dbos.md` and
 `docs/architecture/dbos-deployment.md` before changing execution ownership,
 resource reservations, external operation receipts, archive compensation or auth.
-DBOS journal/status is the execution authority. Domain facts must not become a
-second scheduler, lease system or Run state machine. Never replay an interrupted
+DBOS journal/status is the execution authority. Business persistence is limited
+to request and retry authorization, actual model usage and protected external
+effects. See [domain persistence and cutover](docs/audits/dbos-domain-simplification.md). Never replay an interrupted
 Agent/tool unit with unknown external effects. Only the durable Finalizer applies
 retry grants; an old key cannot authorize another failure generation.
 
@@ -21,7 +22,8 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `dbos-native-recovery-v1`. Pending
+Application version is `dbos-domain-v1`. Pending
+`dbos-native-recovery-v1` journals require matching executors and explicit schema cutover. Pending
 `dbosrunner-native-interaction-v1` and earlier journals must drain on their
 matching release. The earlier PR #44 preview `dbosrunner-brief-idempotency-v1`, if deployed,
 also needs its matching release. See `docs/architecture/dbos-deployment.md`.

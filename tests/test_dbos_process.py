@@ -11,12 +11,18 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from dbos_support import NEO4J, NEO4J_PASSWORD  # noqa:F401
+from dbos_support import (  # noqa:F401
+    NEO4J,
+    NEO4J_PASSWORD,
+    has_unconfirmed_bills_or_effects,
+    holds_business_slot,
+    stage_observations,
+)
 from test_python_workflow import config, initial
 
 from open_deep_research.web.durable import RunClient
-from open_deep_research.web.run_data import digest
-from open_deep_research.workflow.run_facts import facts
+from open_deep_research.web.run_data import RunConflict, digest, read_request
+from open_deep_research.workflow.dbos_config import domain_engine, native_client
 
 pytestmark = pytest.mark.integration
 
@@ -239,7 +245,7 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             wait(
                 lambda: sum(
                     bool(u["artifact"])
-                    for u in facts().units(run["run_id"])
+                    for u in stage_observations(run["run_id"])
                     if u["name"] in {"public_signal_agent", "internal_knowledge_agent"}
                 )
                 == 2,
@@ -248,7 +254,7 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             )
             producers = [
                 u
-                for u in facts().units(run["run_id"])
+                for u in stage_observations(run["run_id"])
                 if u["name"] in {"public_signal_agent", "internal_knowledge_agent"}
             ]
             assert all(
@@ -277,7 +283,7 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             assert result["usage"]["model_calls"] == 26
             if scenario.startswith("legacy-"):
                 assert effect_count(directory, "models") == 6
-                after = {u["id"]: u["usage"] for u in facts().units(run["run_id"])}
+                after = {u["id"]: u["usage"] for u in stage_observations(run["run_id"])}
                 assert all(
                     after[key] == usage for key, usage in committed_usage.items()
                 )
@@ -287,8 +293,8 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             assert result["status"] == "interrupted"
             assert result["settlement"] == "unresolved"
             assert not result["retry_safe"]
-            assert facts().unresolved(run["run_id"])
-            assert facts().request(run["run_id"])["occupied"]
+            assert has_unconfirmed_bills_or_effects(run["run_id"])
+            assert has_unconfirmed_bills_or_effects(run["run_id"])
             from open_deep_research.web.run_data import RunConflict
 
             with pytest.raises(RunConflict):
@@ -309,7 +315,7 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
                 worker_stopped=True,
                 note="Both owned Executor process trees stopped; synthetic external receipt checked",
             )
-            assert not facts().request(run["run_id"])["occupied"]
+            assert read_request(run["run_id"])["reconciliation"]
             assert not client.get(run["run_id"], "alice")["retry_safe"]
             with pytest.raises(RunConflict):
                 client.retry(
@@ -342,7 +348,7 @@ def test_approval_process_restart_uses_committed_plan(pg_database, tmp_path):
             directory,
         )
         plan = client.get(run["run_id"], "alice")["plan"]
-        units_before = [u["id"] for u in facts().units(run["run_id"])]
+        units_before = [u["id"] for u in stage_observations(run["run_id"])]
         kill_owned(process)
         client.approve(run["run_id"], "alice", plan["version"], "approve")
         (directory / "executor-ready").unlink()
@@ -355,7 +361,7 @@ def test_approval_process_restart_uses_committed_plan(pg_database, tmp_path):
         result = client.get(run["run_id"], "alice")
         assert result["plan"] == dict(plan, locked=True)
         assert result["usage"]["model_calls"] == 26
-        assert set(units_before) <= {u["id"] for u in facts().units(run["run_id"])}
+        assert set(units_before) <= {u["id"] for u in stage_observations(run["run_id"])}
         assert effect_count(directory) == 2
     finally:
         for child in (process, restart):
@@ -405,7 +411,7 @@ def test_live_old_executor_is_fenced_after_public_recovery(pg_database, tmp_path
         assert old.poll() is None
         (directory / "ownership.release").write_text("continue")
         wait(lambda: (directory / "old-denied").exists(), old, directory)
-        assert facts().unresolved(run["run_id"])
+        assert has_unconfirmed_bills_or_effects(run["run_id"])
         assert effect_count(directory) == 0
     finally:
         for process in (old, new):
@@ -416,9 +422,9 @@ def test_live_old_executor_is_fenced_after_public_recovery(pg_database, tmp_path
 @pytest.mark.parametrize(
     "pg_database", [{"RUN_MAX_ACTIVE": 2, "RUN_OWNER_ACTIVE": 1}], indirect=True
 )
-def test_two_executors_enforce_global_owner_session_reservations(pg_database, tmp_path):
-    from sqlalchemy import text
-
+def test_two_executors_enforce_native_global_owner_limits_and_session_mutex(
+    pg_database, tmp_path
+):
     from open_deep_research.workflow.dbos_config import BUSINESS, VERSION
 
     client = RunClient()
@@ -430,20 +436,21 @@ def test_two_executors_enforce_global_owner_session_reservations(pg_database, tm
         cfg = configuration(directory)
         cfg["configurable"]["allow_plan_feedback"] = True
         a = client.create("alice", "a", {"topic": "a"}, cfg, initial())[0]
-        same = client.create(
-            "alice",
-            "same",
-            {"topic": "same"},
-            cfg,
-            initial(),
-            session_id=a["research_session_id"],
-        )[0]
+        with pytest.raises(RunConflict, match="active research"):
+            client.create(
+                "alice",
+                "same",
+                {"topic": "same"},
+                cfg,
+                initial(),
+                session_id=a["research_session_id"],
+            )
         independent = client.create(
             "alice", "independent", {"topic": "independent"}, cfg, initial()
         )[0]
         b = client.create("bob", "b", {"topic": "b"}, cfg, initial())[0]
         c = client.create("charlie", "c", {"topic": "c"}, cfg, initial())[0]
-        all_runs = [a, same, independent, b, c]
+        all_runs = [a, independent, b, c]
         wait(
             lambda: all(
                 client.get(r["run_id"], r["owner"])["status"] == "awaiting_approval"
@@ -466,17 +473,15 @@ def test_two_executors_enforce_global_owner_session_reservations(pg_database, tm
             )
         wait(lambda: len(list(directory.glob("*.entered"))) == 2, first, directory)
         time.sleep(1)
-        with facts().engine.connect() as db:
-            occupied = list(
-                db.execute(
-                    text(
-                        "SELECT owner,session FROM por_domain.requests WHERE occupied=true"
-                    )
-                ).mappings()
-            )
-        assert len(occupied) == 2
-        assert len({r["owner"] for r in occupied}) == 2
-        assert len({r["session"] for r in occupied}) == 2
+        active = native_client().list_workflows(
+            name="por.test.queue",
+            queue_name=BUSINESS,
+            status="PENDING",
+            load_input=False,
+            load_output=False,
+        )
+        assert len(active) == 2
+        assert len({w.queue_partition_key for w in active}) == 2
         assert len(list(directory.glob("*.entered"))) == 2
         # Release an admitted unit and verify another queued delivery progresses.
         entered = next(directory.glob("*.entered"))
@@ -528,7 +533,7 @@ def test_actual_postgresql_outage_fails_closed(pg_database, tmp_path, monkeypatc
         wait(
             lambda: any(
                 u["name"] == "internal_knowledge_agent" and u["artifact"]
-                for u in facts().units(run["run_id"])
+                for u in stage_observations(run["run_id"])
             ),
             process,
             directory,
@@ -596,7 +601,7 @@ def test_actual_postgresql_outage_fails_closed(pg_database, tmp_path, monkeypatc
             run_id + ":events",
             run_id + ":finalize",
         }
-        with facts().engine.connect() as db:
+        with domain_engine().connect() as db:
             assert (
                 db.execute(
                     text("SELECT count(*) FROM por_domain.requests")
@@ -630,13 +635,15 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
         wait(
             lambda: any(
                 u["id"].endswith(":internal_knowledge:2") and u["artifact"]
-                for u in facts().units(run["run_id"])
+                for u in stage_observations(run["run_id"])
             ),
             process,
             directory,
         )
         committed = {
-            u["id"]: u["usage"] for u in facts().units(run["run_id"]) if u["artifact"]
+            u["id"]: u["usage"]
+            for u in stage_observations(run["run_id"])
+            if u["artifact"]
         }
         assert effect_count(directory) == 3
         kill_owned(process)
@@ -660,7 +667,7 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
             "approval",
         }
         assert effect_count(directory) == effect_count(directory, "effects") == 4
-        after = {u["id"]: u["usage"] for u in facts().units(run["run_id"])}
+        after = {u["id"]: u["usage"] for u in stage_observations(run["run_id"])}
         assert all(after[key] == value for key, value in committed.items())
     finally:
         for child in (process, restart):
@@ -762,7 +769,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             submit(key)
             wait(lambda: (tmp_path / scenario).exists(), process, tmp_path)
             assert snapshot()["plan"]["ai_revision"]["pending"]
-            assert facts().request(run_id)["occupied"]
+            assert holds_business_slot(run_id)
             kill_owned(process)
             assert (
                 tmp_path / "revision-calls"
@@ -774,9 +781,9 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             saved_results = [
                 step
                 for step in client.client.list_workflow_steps(child_id)
-                if step["function_name"] == "por.stage_result"
+                if step["function_name"] == "por.publish_stage"
             ]
-            assert len(saved_results) == (1 if scenario == "revision-ack" else 0)
+            assert not saved_results
         else:
             assert not committed
 
@@ -806,7 +813,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
                 == "CANCELLED"
             )
             assert not (tmp_path / "revision-calls").exists()
-            assert not facts().request(run_id)["occupied"]
+            assert not holds_business_slot(run_id)
             return
 
         restart = start(tmp_path, executor, scenario)
@@ -818,7 +825,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             )
             assert done["plan"]["version"] == old["version"]
             assert done["plan"]["ai_revision"]["used"] == 0 and not done["retry_safe"]
-            assert facts().request(run_id)["occupied"]
+            assert has_unconfirmed_bills_or_effects(run_id)
             with pytest.raises(RunConflict):
                 client.approve(run_id, "alice", old["version"], "approve")
         else:
@@ -831,7 +838,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             plan = snapshot()["plan"]
             assert plan["revision"] == old["revision"] + 1 and feedback in plan["brief"]
             assert plan["expires_at"] == old["expires_at"]
-            assert not facts().request(run_id)["occupied"]
+            assert not holds_business_slot(run_id)
             if committed:
                 assert journal() == committed
                 accounting = (tmp_path / "revision-accounting").read_text().splitlines()
@@ -839,10 +846,10 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
                 # a native checkpoint may run its receipt aggregation again.
                 assert (
                     accounting
-                    == ["billed"]
+                    == ["published"]
                     * {
                         "revision-before-result": 2,
-                        "revision-ack": 1,
+                        "revision-ack": 2,
                         "revision-retry": 3,
                     }[scenario]
                 )
@@ -895,7 +902,7 @@ def test_planning_recovers_before_waiting_for_clarification(
             client.clarify(run_id, "alice", pending(1)["version"], {"brand": "Brand A"})
         wait(lambda: (tmp_path / scenario).exists(), process, tmp_path)
         kill_owned(process)
-        assert not facts().request(run_id)["occupied"]
+        assert not holds_business_slot(run_id)
         if scenario == "clarification-deadline":
             challenge = client.client.get_event(
                 run_id, "clarification", timeout_seconds=0
@@ -908,7 +915,7 @@ def test_planning_recovers_before_waiting_for_clarification(
         restart = start(tmp_path, executor, scenario)
         if scenario == "planning-release":
             wait(lambda: pending(2), restart, tmp_path)
-            assert not facts().request(run_id)["occupied"]
+            assert not holds_business_slot(run_id)
             assert len(plan_prompts(tmp_path)) == 2
             client.clarify(run_id, "alice", pending(2)["version"], {}, skip=True)
 
@@ -972,7 +979,7 @@ def test_clarification_wait_survives_executor_kill_and_same_run_answer(
             )
             pending = client.get(run_id, owner)
             assert pending["status"] == "awaiting_clarification"
-            assert not facts().request(run_id)["occupied"]
+            assert not holds_business_slot(run_id)
             return pending["clarification"]
 
         def steps(workflow_id, name):
@@ -993,7 +1000,7 @@ def test_clarification_wait_survives_executor_kill_and_same_run_answer(
             process,
             tmp_path,
         )
-        units = [u["id"] for u in facts().units(run_id)]
+        units = [u["id"] for u in stage_observations(run_id)]
         committed = {
             f"{run_id}:planning:{number}": steps(
                 f"{run_id}:planning:{number}", "por.llm"
@@ -1034,7 +1041,7 @@ def test_clarification_wait_survives_executor_kill_and_same_run_answer(
         if crash_round != 2:
             restored = pending_at(crash_round, restart)
             assert restored["version"] == versions[-1]
-            assert [u["id"] for u in facts().units(run_id)] == units
+            assert [u["id"] for u in stage_observations(run_id)] == units
             assert len(plan_prompts(tmp_path)) == crash_round
             client.clarify(
                 run_id, owner, versions[-1], CLARIFICATION_ANSWERS[crash_round - 1]

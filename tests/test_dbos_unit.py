@@ -18,8 +18,8 @@ from open_deep_research.workflow.dbos_config import ExecutionSettings
 from open_deep_research.workflow.execution import (
     execution_effect,
     owned_io,
+    stage_context,
 )
-from open_deep_research.workflow.run_facts import current_unit
 
 
 @pytest.mark.parametrize(
@@ -112,39 +112,46 @@ def test_owned_commit_drains_cancellation_before_return():
     asyncio.run(run())
 
 
-def test_effect_guard_remains_optional_for_legacy_and_is_owned():
+def test_effect_guard_checks_only_the_durable_commit(monkeypatch):
+    from contextlib import contextmanager
+
+    from dbos import DBOS
+
+    from open_deep_research.workflow import execution
+
     events = []
+    db = object()
 
-    class Guard:
-        def __enter__(self):
-            events.append("enter")
+    @contextmanager
+    def begin():
+        events.append("enter")
+        yield db
+        events.append("exit")
 
-        def __exit__(self, *_):
-            events.append("exit")
+    def require(connection, run_id, workflow_id, executor):
+        assert connection is db and run_id == "run" and workflow_id == "wf"
+        assert executor == "executor"
+        events.append("native_check")
 
-    def guard(unit_id, permit):
-        assert (unit_id, permit) == ("unit", "permit")
-        return Guard()
-
-    unit = SimpleNamespace(
-        id="unit",
-        permit="permit",
-        control_error=None,
-        repo=SimpleNamespace(effect_guard=guard),
+    monkeypatch.setattr(DBOS, "workflow_id", "wf")
+    monkeypatch.setattr(DBOS, "executor_id", "executor")
+    monkeypatch.setattr(
+        execution, "domain_engine", lambda: SimpleNamespace(begin=begin)
     )
+    monkeypatch.setattr(execution, "require_live_effect", require)
 
     async def run():
         async with execution_effect():
-            events.append("legacy")
-        token = current_unit.set(unit)
+            events.append("standalone")
+        token = stage_context.set(SimpleNamespace(run_id="run"))
         try:
             async with execution_effect():
                 events.append("write")
         finally:
-            current_unit.reset(token)
+            stage_context.reset(token)
 
     asyncio.run(run())
-    assert events == ["legacy", "enter", "write", "exit"]
+    assert events == ["standalone", "enter", "native_check", "write", "exit"]
 
 
 def test_native_production_chain_does_not_import_old_execution_or_experimental_runner():
@@ -154,7 +161,7 @@ def test_native_production_chain_does_not_import_old_execution_or_experimental_r
         "web/executor.py",
         "web/runs.py",
         "workflow/dbos_workflow.py",
-        "workflow/run_facts.py",
+        "workflow/domain_schema.py",
     ]
     for name in files:
         tree = ast.parse((root / name).read_text(encoding="utf-8-sig"))
@@ -171,6 +178,7 @@ def test_native_production_chain_does_not_import_old_execution_or_experimental_r
                         "experiments",
                     )
                 )
+    assert not (root / "workflow/run_facts.py").exists()
     assert not (root / "web/worker.py").exists()
     assert not (root / "web/run_store.py").exists()
     assert not (root / "workflow/python_workflow.py").exists()

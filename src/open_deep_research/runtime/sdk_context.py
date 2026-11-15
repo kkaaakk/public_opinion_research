@@ -55,8 +55,9 @@ from open_deep_research.workflow.execution import (
     is_cancellation,
     native_step_available,
     owned_cleanup,
+    stage_context,
+    unconfirmed,
 )
-from open_deep_research.workflow.run_facts import begin_call, current_unit, end_call
 
 tool_usage: ContextVar[dict | None] = ContextVar("tool_usage", default=None)
 
@@ -176,8 +177,8 @@ class SDKContextHarness(RunHooks):
     async def _observe(self, kind: str, **metadata: Any) -> None:
         """Send metadata at existing SDK/Harness seams; never send content."""
         annotate(**metadata)
-        if unit := current_unit.get():
-            await unit.observe(
+        if scope := stage_context.get():
+            await scope.observe(
                 kind,
                 dict(
                     role=self.scope.role,
@@ -195,7 +196,7 @@ class SDKContextHarness(RunHooks):
     def _durable_snapshot(self):
         """Freeze data only; never serialize stores, clients, locks or live tasks."""
         if self.workspace.pending_ingestions:
-            raise ResearchGraphSettlementError("Evidence batch remains unconfirmed")
+            raise unconfirmed("Evidence batch remains unconfirmed")
         names = (
             "model_calls",
             "budget_usage",
@@ -277,19 +278,15 @@ class SDKContextHarness(RunHooks):
 
         Model calls made by this bounded transaction share its Step. The Agent
         loop itself stays outside it; each Agent model call is DBOSRunner's Step.
-        An interrupted evidence transaction is fenced and requires receipts.
+        Evidence commits use stable Graph identities, and nested models retain their physical usage.
         """
         self._check(data.context)
         if hasattr(self, "run_budget"):
             self.items = list(data.model_data.input)
 
-        unit = current_unit.get()
-
         async def prepare():
             from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
 
-            before = set(unit.delivery_ids) if unit else set()
-            identity = await begin_call("context_batch")
             stop = None
             try:
                 with budget_capture() as usage:
@@ -301,27 +298,26 @@ class SDKContextHarness(RunHooks):
                         result = data.model_data
                     finally:
                         self._filter_usage = None
-            except BaseException as exc:
+            except ResearchGraphSettlementError as exc:
                 capture_budget_usage(usage)
-                if is_cancellation(exc):
-                    await end_call(identity, status="failed")
+                raise unconfirmed(
+                    "Research evidence checkpoint requires reconciliation"
+                ) from exc
+            except BaseException:
+                capture_budget_usage(usage)
                 raise
             snapshot = self._durable_snapshot()
-            await end_call(identity)
             return {
                 "input": result.input,
                 "instructions": result.instructions,
                 "state": snapshot,
                 "usage": usage,
                 "stop": stop,
-                "delivery_ids": sorted(unit.delivery_ids - before) if unit else [],
             }
 
         saved = await DBOS.run_step_async(
             {"name": "por.agent_context", "preemptible": True}, prepare
         )
-        if unit:
-            unit.delivery_ids.update(saved["delivery_ids"])
         self._restore_durable_snapshot(saved["state"])
         capture_budget_usage(saved["usage"])
         if saved["stop"] is not None:
@@ -1099,35 +1095,24 @@ class SDKContextHarness(RunHooks):
     async def _settle_on_exit(self, reason: str) -> BatchSettlement:
         if not native_step_available():
             return await self._settle_owned(reason)
-        unit = current_unit.get()
 
         async def settle():
-            before = set(unit.delivery_ids) if unit else set()
-            identity = await begin_call("context_settlement")
             try:
                 with budget_capture() as usage:
                     result = await self._settle_owned(reason)
-            except BaseException as exc:
+            except BaseException:
                 capture_budget_usage(usage)
-                if is_cancellation(exc):
-                    await end_call(identity, status="failed")
                 raise
             state = self._durable_snapshot()
-            await end_call(
-                identity, status="returned" if result.succeeded else "uncertain"
-            )
             return {
                 "settlement": asdict(result),
                 "state": state,
                 "usage": usage,
-                "delivery_ids": sorted(unit.delivery_ids - before) if unit else [],
             }
 
         saved = await DBOS.run_step_async(
             {"name": "por.agent_settlement", "preemptible": True}, settle
         )
-        if unit:
-            unit.delivery_ids.update(saved["delivery_ids"])
         self._restore_durable_snapshot(saved["state"])
         capture_budget_usage(saved["usage"])
         value = saved["settlement"]
@@ -1227,14 +1212,9 @@ class SDKContextHarness(RunHooks):
             raise
         except BaseException as exc:
             self._closing = True
-            unit = current_unit.get()
-            control_error = unit.remember_control_error(exc) if unit else None
             cancelled = is_cancellation(exc)
             reason = "cancelled" if cancelled else "exception"
-            if cancelled or (
-                control_error is not None
-                and not getattr(control_error, "unknown_outcome", False)
-            ):
+            if cancelled or isinstance(exc, ExecutionControlError):
                 cleanup_token = owned_cleanup.set(True)
             try:
                 await self._settle_on_exit(reason)

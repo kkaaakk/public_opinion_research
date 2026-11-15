@@ -14,6 +14,7 @@ from agents.items import ModelResponse
 from dbos import Serializer
 from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
 from pydantic import BaseModel, TypeAdapter
+from sqlalchemy import text
 
 from open_deep_research.llm.errors import ModelInvocationError
 from open_deep_research.research_graph.models import RelevantSubgraph
@@ -56,10 +57,6 @@ class RunConflict(ValueError):
 
 class RunNotFound(LookupError):
     """Hide both absent and foreign-owned resources."""
-
-
-class ExecutionRevoked(RunConflict):
-    """Reject a revoked business execution permission."""
 
 
 def _json_default(value: Any) -> Any:
@@ -196,6 +193,7 @@ def sdk_observation(payload: dict) -> dict:
         "invocation_id",
         "task_id",
         "tool_call_id",
+        "operation_id",
         "graph_call_id",
         "stage",
         "error_type",
@@ -205,6 +203,8 @@ def sdk_observation(payload: dict) -> dict:
     }
     numbers = {
         "model_calls",
+        "tool_calls",
+        "search_calls",
         "model_turn",
         "research_round",
         "duration_ms",
@@ -241,3 +241,110 @@ def sdk_observation(payload: dict) -> dict:
             and value >= 0
         }
     return result
+
+
+def db_time(db):
+    return float(db.scalar(text("SELECT extract(epoch from clock_timestamp())")))
+
+
+def read_request(run_id, owner=None, *, db=None, lock=False):
+    from open_deep_research.workflow.dbos_config import domain_engine
+
+    if db is None:
+        with domain_engine().connect() as connection:
+            return read_request(run_id, owner, db=connection, lock=lock)
+    query = "SELECT * FROM por_domain.requests WHERE id=:id" + (
+        " FOR UPDATE" if lock else ""
+    )
+    row = db.execute(text(query), {"id": run_id}).mappings().first()
+    if row is None or (owner is not None and row["owner"] != owner):
+        raise RunNotFound("Run or Session not found")
+    return dict(row) | {"data": loads(row["value"])}
+
+
+def publish_event(db, run_id, kind, *, idempotency_key=None, **payload):
+    from open_deep_research.workflow.dbos_config import native_client
+
+    payload.setdefault("observed_at", timestamp(db_time(db)))
+    native_client().send_in_transaction(
+        db,
+        run_id + ":events",
+        public_payload(dict(type=kind, **payload)),
+        topic="events",
+        idempotency_key=idempotency_key,
+    )
+
+
+def retry_generation(db, run_id):
+    return db.scalar(
+        text(
+            "SELECT coalesce(max(generation),0) FROM por_domain.retries WHERE run_id=:id"
+        ),
+        {"id": run_id},
+    )
+
+
+def role_deliverables(result):
+    """Extract public role text from a native result without its private context."""
+    raw = result.get("patch", {}).get("agents", {})
+    if producer := result.get("research_result"):
+        raw = {producer["role"]: {"report": producer["report"]}}
+    reports = {}
+    for role, data in raw.items():
+        report = data.get("report")
+        if isinstance(report, dict):
+            report = report.get("value")
+        if report:
+            reports[role] = report
+    return reports
+
+
+def legacy_projection(db, run_id):
+    from open_deep_research.budget import diff_budget_usage, merge_budget_usage
+    from open_deep_research.workflow.dbos_config import LEGACY_SCHEMA
+
+    if not db.scalar(
+        text("SELECT to_regclass(:name)"), {"name": f"{LEGACY_SCHEMA}.units"}
+    ):
+        return {}, {}, False
+    view = {}
+    usage = {}
+    unresolved = False
+    for stage in db.execute(
+        text(f"""
+        SELECT u.id,u.name,u.artifact,u.usage,u.error,u.settled,
+            ARRAY(SELECT o.usage FROM {LEGACY_SCHEMA}.operations o WHERE o.unit=u.id) AS costs,
+            EXISTS(SELECT 1 FROM {LEGACY_SCHEMA}.operations o
+                   WHERE o.unit=u.id AND o.status IN ('started','uncertain')) AS unknown_effect
+        FROM {LEGACY_SCHEMA}.units u WHERE u.run_id=:id ORDER BY u.id
+        """),
+        {"id": run_id},
+    ).mappings():
+        billed = loads(stage["usage"])
+        if not stage["settled"]:
+            lower_bound = {}
+            for cost in stage["costs"]:
+                lower_bound = merge_budget_usage(lower_bound, loads(cost))
+            billed = merge_budget_usage(billed, diff_budget_usage(lower_bound, billed))
+        usage = merge_budget_usage(usage, billed)
+        unresolved |= not stage["settled"] or stage["unknown_effect"]
+        patch = loads(stage["artifact"])["patch"] if stage["artifact"] else {}
+        if stage["artifact"]:
+            view.setdefault("completed_steps", []).append(stage["name"])
+        else:
+            view["current_step"] = stage["name"]
+        if error := loads(stage["error"]):
+            view["error"] = dict(error, retry_safe=False)
+        if report := patch.get("report", {}).get("final"):
+            view["legacy_report"] = report
+        for role, value in patch.get("agents", {}).items():
+            report = value.get("report")
+            if isinstance(report, dict):
+                report = report.get("value")
+            if report:
+                view.setdefault("legacy_roles", []).append(
+                    dict(
+                        role=role, content=report, stage_id=stage["id"], completed_at=""
+                    )
+                )
+    return view, usage, unresolved

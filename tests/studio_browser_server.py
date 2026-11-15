@@ -17,6 +17,8 @@ from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
+from open_deep_research.workflow.domain_schema import initialize_domain
+
 os.environ.update(
     PYTHON_DOTENV_DISABLED="1",
     OPENAI_AGENTS_DISABLE_TRACING="1",
@@ -58,7 +60,6 @@ from open_deep_research.web.durable import close_run_client
 from open_deep_research.web.executor import launch
 from open_deep_research.workflow import dbos_workflow
 from open_deep_research.workflow.dbos_config import settings
-from open_deep_research.workflow.run_facts import facts
 
 
 def main():
@@ -180,7 +181,7 @@ def main():
 
         patch.setattr(dbos_workflow.research, "research_review", review)
         DBOS.migrate(os.environ["DBOS_DATABASE_URL"], schema="por_dbos")
-        facts().initialize()
+        initialize_domain()
         launch("studio-browser-" + uuid4().hex)
         try:
             uvicorn.run(

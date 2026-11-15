@@ -5,13 +5,19 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
 import pytest
+from dbos_support import holds_business_slot, stage_observations
 from langchain_core.messages import HumanMessage
 from sqlalchemy import text
 from test_python_workflow_sdk import CLARIFICATION_ANSWERS, CLARIFICATION_QUESTIONS
 from test_research_brief import BRIEF
 
-from open_deep_research.web.run_data import RunConflict, RunNotFound, digest
-from open_deep_research.workflow.run_facts import facts
+from open_deep_research.web.run_data import (
+    RunConflict,
+    RunNotFound,
+    digest,
+    read_request,
+)
+from open_deep_research.workflow.dbos_config import domain_engine, native_client
 
 pytestmark = pytest.mark.integration
 
@@ -39,7 +45,7 @@ def test_accepted_report_topology_is_frozen_across_operator_default_changes(
     c.cfg["configurable"]["allow_clarification"] = False
     run = c.create(approval=True)
     pending = c.wait(run, lambda r: r["status"] == "awaiting_approval")
-    accepted = facts().request(run["run_id"])["data"]["config"]["configurable"]
+    accepted = read_request(run["run_id"])["data"]["config"]["configurable"]
     assert accepted["report_mode"] == "synthesis"
     monkeypatch.setenv("REPORT_MODE", "sections")
     c.client.approve(run["run_id"], "alice", pending["plan"]["version"], "approve")
@@ -82,14 +88,7 @@ def test_clarification_same_run_releases_quota_and_resumes(
     run = c.create(approval=True)
     pending = c.wait(run, lambda r: r["status"] == "awaiting_clarification")
     assert pending["native_status"] == "PENDING" and not pending["events_complete"]
-    with facts().engine.connect() as db:
-        assert (
-            db.execute(
-                text("SELECT occupied FROM por_domain.requests WHERE id=:id"),
-                {"id": run["run_id"]},
-            ).scalar_one()
-            is False
-        )
+    assert not holds_business_slot(run["run_id"])
     assert not c.runtimes and not c.calls
     version = pending["clarification"]["version"]
     c.client.clarify(
@@ -120,7 +119,7 @@ def waiting_for_round(case, run, number):
     )
     assert pending["status"] == "awaiting_clarification"
     assert pending["clarification"]["max_rounds"] == 3
-    assert not facts().request(run["run_id"])["occupied"]
+    assert not holds_business_slot(run["run_id"])
     return pending["clarification"]
 
 
@@ -393,7 +392,7 @@ def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_a
     with pytest.raises(RunConflict):
         revise(c, run, initial, "Stale brief.", key="stale")
     assert len(c.revision_requests) == 3 and len(c.plan_prompts) == 4
-    assert not c.models and not c.calls and not facts().request(run_id)["occupied"]
+    assert not c.models and not c.calls and not holds_business_slot(run_id)
 
     edited = plan["brief"] + "\n\nExplicit manual constraint."
     c.client.approve(run_id, "alice", plan["version"], "edit", edited)
@@ -487,7 +486,7 @@ def test_native_revision_admission_race(
             if duplicate:
                 # Native message identity takes precedence. It does not compare payloads.
                 assert submit("one", "Different feedback.").status_code == 200
-            with facts().engine.connect() as db:
+            with domain_engine().connect() as db:
                 messages = db.execute(
                     text(
                         "SELECT count(*) FROM por_dbos.notifications "
@@ -524,7 +523,7 @@ def test_native_revision_admission_race(
         done = c.wait(run, lambda r: r["archive_status"] == "saved")
         assert done["status"] == "completed" and done["plan"]["locked"]
         assert len(c.revision_requests) == (2 if first_fails else 1)
-        children = facts().client.list_workflows(
+        children = native_client().list_workflows(
             workflow_id_prefix=run_id + ":brief-revision:"
         )
         assert len(children) == len(c.revision_requests)
@@ -550,7 +549,7 @@ def test_repeated_failed_revisions_do_not_spend_success_quota(native_case):
         result = pending_brief(c, run, error="model_error")
         assert result["version"] == plan["version"] and result["brief"] == plan["brief"]
         assert len(c.revision_requests) == n
-    assert not facts().request(run["run_id"])["occupied"]
+    assert not holds_business_slot(run["run_id"])
     result = revise(c, run, plan, feedback, key="failure-1")
     assert not result["plan"]["ai_revision"]["pending"]
     assert len(c.revision_requests) == 4
@@ -560,7 +559,7 @@ def test_repeated_failed_revisions_do_not_spend_success_quota(native_case):
     assert done["plan"]["version"] == plan["version"]
     with pytest.raises(RunConflict):
         revise(c, run, plan, feedback, key="failure-2")
-    children = facts().client.list_workflows(
+    children = native_client().list_workflows(
         workflow_id_prefix=run["run_id"] + ":brief-revision:"
     )
     assert len(children) == 4 and all(w.status == "SUCCESS" for w in children)
@@ -601,11 +600,11 @@ def test_revision_failure_keeps_old_version_and_compaction_bills_once(
     assert result["ai_revision"]["error"] == expected
     assert result["expires_at"] == old["expires_at"]
     assert len(c.revision_requests) == calls
-    unit = next(u for u in facts().units(run["run_id"]) if u["name"] == "revise_brief")
-    assert unit["settled"] is True and unit["usage"].get("model_calls", 0) == calls
-    assert (
-        not c.models and not c.calls and not facts().request(run["run_id"])["occupied"]
+    unit = next(
+        u for u in stage_observations(run["run_id"]) if u["name"] == "revise_brief"
     )
+    assert unit["settled"] is True and unit["usage"].get("model_calls", 0) == calls
+    assert not c.models and not c.calls and not holds_business_slot(run["run_id"])
     if expected is None:
         assert (
             result["version"] != old["version"] and result["ai_revision"]["used"] == 1
@@ -667,7 +666,7 @@ def test_revision_cannot_publish_after_expiry_or_cancel(native_case, mode):
     )
     if mode == "running":
         assert c.client.client.get_event(run_id, "approval_end", 0) == "expired"
-    assert not c.models and not c.calls and not facts().request(run_id)["occupied"]
+    assert not c.models and not c.calls and not holds_business_slot(run_id)
     with pytest.raises(RunConflict):
         revise(c, run, old, "Late feedback.", key="late")
 
@@ -750,13 +749,13 @@ def test_waiting_snapshot_reads_phase_before_its_versioned_payload(
 
 def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeypatch):
     from open_deep_research.workflow import dbos_workflow as engine
-    from open_deep_research.workflow.run_facts import RunFacts
+    from open_deep_research.workflow import execution
 
-    original_publish, original_send = RunFacts.publish, engine.send_event
+    original_publish, original_send = execution.publish_event, engine.send_event
     held = []
     observed = []
 
-    def reordered(repo, db, run_id, kind, **payload):
+    def reordered(db, run_id, kind, *, idempotency_key=None, **payload):
         if (
             kind == "sdk_event"
             and payload.get("event") == "agent_completed"
@@ -764,7 +763,9 @@ def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeyp
         ):
             held.append((run_id, payload))
             return
-        return original_publish(repo, db, run_id, kind, **payload)
+        return original_publish(
+            db, run_id, kind, idempotency_key=idempotency_key, **payload
+        )
 
     async def send(run_id, event_type, **data):
         await original_send(run_id, event_type, **data)
@@ -783,7 +784,7 @@ def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeyp
             _, packet = held.pop()
             await original_send(run_id, "sdk_event", **packet)
 
-    monkeypatch.setattr(RunFacts, "publish", reordered)
+    monkeypatch.setattr(execution, "publish_event", reordered)
     monkeypatch.setattr(engine, "send_event", send)
     c = native_case
     run = c.create()

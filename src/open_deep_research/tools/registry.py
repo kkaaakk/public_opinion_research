@@ -1,16 +1,30 @@
 # 根据检索模式与实际可用服务装配研究工具，并生成一致的动态工具说明。
 """Assemble the tools visible to a research agent and describe them."""
 
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.messages import MessageLikeRepresentation, filter_messages
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
+from langchain_core.tools import BaseTool, tool
 
 from open_deep_research.config_values import get_config_value
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
 from open_deep_research.search.tavily import tavily_search, tavily_search_raw
 from open_deep_research.state import ResearchComplete
+
+ToolEffect = Literal["read", "idempotent", "protected"]
+
+
+def tool_effect(tool: BaseTool) -> ToolEffect:
+    """Adapter-declared behavior; ambiguous tools require effect protection."""
+    effect = (tool.metadata or {}).get("effect")
+    return effect if effect in {"read", "idempotent"} else "protected"
+
+
+def tag_tool_effect(tool: BaseTool, effect: ToolEffect):
+    tool.metadata = {**(tool.metadata or {}), "effect": effect}
+    return tool
+
 
 # Importing rag_tool eagerly makes the RAG package recurse
 # through rag.__init__.  Keep this tool lazy so the raw Research Graph search
@@ -95,7 +109,7 @@ async def get_search_tool(search_api: SearchAPI):
             "type": "search",
             "name": "web_search"
         }
-        return [search_tool]
+        return [tag_tool_effect(search_tool, "read")]
 
     elif search_api == SearchAPI.NONE:
         # No search functionality configured
@@ -122,7 +136,7 @@ async def get_raw_search_tool(search_api: SearchAPI):
             "name": "web_search",
             "research_graph_raw": True,
         }
-        return [raw_tool]
+        return [tag_tool_effect(raw_tool, "read")]
     return await get_search_tool(search_api)
 
 # 判断当前检索模式是否要求启用本地 RAG。
@@ -152,7 +166,7 @@ async def get_retrieval_tools(config: RunnableConfig):
             "type": "search",
             "name": "rag_search",
         }
-        retrieval_tools.append(rag_tool)
+        retrieval_tools.append(tag_tool_effect(rag_tool, "idempotent"))
 
     return retrieval_tools
 
@@ -169,7 +183,7 @@ async def get_all_tools(config: RunnableConfig):
     from open_deep_research.mcp import load_mcp_tools
 
     # Start with core research tools
-    tools = [tool(ResearchComplete), think_tool]
+    tools = [tag_tool_effect(tool(ResearchComplete), "read"), tag_tool_effect(think_tool, "read")]
 
     # Add configured retrieval tools
     retrieval_tools = await get_retrieval_tools(config)

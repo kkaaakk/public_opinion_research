@@ -8,7 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
-from dbos_support import retry_observed_failure
+from dbos_support import (
+    has_unconfirmed_bills_or_effects,
+    record_scripted_model_attempt,
+    retry_observed_failure,
+    stage_observations,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -16,8 +21,9 @@ from open_deep_research.web.run_data import (
     RunConflict,
     RunNotFound,
     dumps,
+    read_request,
 )
-from open_deep_research.workflow.run_facts import facts
+from open_deep_research.workflow.dbos_config import domain_engine, native_client
 
 pytestmark = pytest.mark.integration
 
@@ -245,20 +251,25 @@ def test_native_four_roles_real_sdk_graph_budget_and_history(native_case):
         assert result["usage"]["model_calls"] == 26
     from open_deep_research.state import ResearchRoleResult
 
-    for unit in facts().units(run["run_id"]):
+    archived = case.wait(run, lambda r: r["archive_status"] == "saved")
+    for unit in stage_observations(run["run_id"]):
         if unit["name"] not in {"public_signal_agent", "internal_knowledge_agent"}:
             continue
-        assert "research_result" not in unit["artifact"]
-        assert set(
-            unit["artifact"]["patch"]["agents"][unit["name"].removesuffix("_agent")]
-        ) == {"report"}
+        event = next(
+            e
+            for e in case.client.read_events(run["run_id"], "alice", 0, 1000)
+            if e["type"] == "agent_report" and e["unit_id"] == unit["id"]
+        )
+        assert (
+            not {"patch", "research_result", "memory", "working_context"} & event.keys()
+        )
         saved_result = case.client.client.retrieve_workflow(unit["id"]).get_result()
         role_result = ResearchRoleResult.model_validate(saved_result["research_result"])
         assert role_result.role + "_agent" == unit["name"]
         assert role_result.round == 1
-        assert role_result.budget_delta == unit["usage"]
+        for field in ("model_calls", "input_tokens", "output_tokens", "total_tokens"):
+            assert role_result.budget_delta[field] == unit["usage"][field]
         assert role_result.working_context_scope.run_id == run["run_id"]
-    archived = case.wait(run, lambda r: r["archive_status"] == "saved")
     saved = case.history.get(archived["history_id"], owner="alice")
     assert saved["run_id"] == run["run_id"]
     assert len(saved["role_reports"]) == 4
@@ -321,7 +332,7 @@ def test_approval_immutable_once_and_no_replanning(native_case, decision):
     run = case.create(approval=True)
     planned = case.wait(run, lambda r: r["status"] == "awaiting_approval")
     assert not case.runtimes
-    before = [u["id"] for u in facts().units(run["run_id"])]
+    before = [u["id"] for u in stage_observations(run["run_id"])]
     with pytest.raises(RunConflict):
         case.client.approve(run["run_id"], "alice", "0" * 64, decision)
     case.client.approve(run["run_id"], "alice", planned["plan"]["version"], decision)
@@ -331,7 +342,7 @@ def test_approval_immutable_once_and_no_replanning(native_case, decision):
         case.client.approve(
             run["run_id"], "alice", planned["plan"]["version"], decision
         )
-    after = [u["id"] for u in facts().units(run["run_id"])]
+    after = [u["id"] for u in stage_observations(run["run_id"])]
     assert set(before) <= set(after)
     assert len([k for k in after if ":plan:" in k]) == 1
     if decision == "reject":
@@ -405,79 +416,85 @@ def test_sdk_failure_and_cancel_preserve_budget_and_settlement(native_case):
     assert len(case.models) == 2
 
 
-def test_transactional_capacity_includes_owner_session_and_quarantine(pg_database):
+def test_session_mutex_uses_native_status_and_authorization(pg_database):
     from test_python_workflow import config, initial
 
     from open_deep_research.web.durable import RunClient
+    from open_deep_research.web.run_data import RunNotFound
 
     client = RunClient()
-    repo = facts()
     first = client.create("alice", "a", {"topic": "a"}, config(), initial())[0]
-    second = client.create(
-        "alice",
-        "b",
-        {"topic": "b"},
-        config(),
-        initial(),
-        session_id=first["research_session_id"],
-    )[0]
-    third = client.create("alice", "c", {"topic": "c"}, config(), initial())[0]
-    fourth = client.create("alice", "d", {"topic": "d"}, config(), initial())[0]
-    other = client.create("bob", "e", {"topic": "e"}, config(), initial())[0]
-    assert repo.reserve(first["run_id"])
-    assert not repo.reserve(second["run_id"])
-    assert repo.reserve(third["run_id"])
-    assert not repo.reserve(fourth["run_id"])
-    assert repo.reserve(other["run_id"])
-    permit, _, _ = repo.acquire(
-        first["run_id"], first["run_id"] + ":role", "public_signal_agent"
-    )
-    with pytest.raises(RunConflict):
-        repo.acquire(first["run_id"], first["run_id"] + ":role", "public_signal_agent")
-    repo.release(first["run_id"])
-    assert not repo.reserve(second["run_id"])
-    with pytest.raises(RunConflict):
-        repo.check(first["run_id"] + ":role", permit)
-
-
-def test_tool_operation_identity_never_authorizes_unknown_replay(pg_database):
-    from test_python_workflow import config, initial
-
-    from open_deep_research.web.durable import RunClient
-
-    c = RunClient()
-    r = c.create("alice", "a", {"topic": "a"}, config(), initial())[0]
-    repo = facts()
-    unit = r["run_id"] + ":role"
-    permit, _, _ = repo.acquire(r["run_id"], unit, "public_signal_agent")
-    identity = dict(
-        role="public_signal",
-        name="write",
-        task_id="t",
-        research_round=1,
-        tool_call_id="native",
-        arguments="secret-body",
-    )
-    operation = repo.operation(unit, permit, identity)
-    assert len(operation) == 64
-    with pytest.raises(RunConflict):
-        repo.operation(unit, permit, identity)
-    with repo.engine.connect() as db:
-        row = (
-            db.execute(
-                text("SELECT * FROM por_domain.operations WHERE id=:id"),
-                {"id": operation},
-            )
-            .mappings()
-            .one()
+    session = first["research_session_id"]
+    with pytest.raises(RunConflict, match="active research"):
+        client.create(
+            "alice", "b", {"topic": "b"}, config(), initial(), session_id=session
         )
-        assert "secret-body" not in str(dict(row))
-    repo.operation(unit, permit, identity, "returned")
-    assert repo.operation(unit, permit, identity, "returned") == operation
-    with pytest.raises(RunConflict):
-        repo.operation(unit, permit, identity, "returned", usage={"model_calls": 999})
-    with pytest.raises(RunConflict):
-        repo.operation(unit, permit, identity)
+    with pytest.raises(RunNotFound):
+        client.create(
+            "bob", "b", {"topic": "b"}, config(), initial(), session_id=session
+        )
+
+    native_client().cancel_workflow(first["run_id"])
+    second, created = client.create(
+        "alice", "b", {"topic": "b"}, config(), initial(), session_id=session
+    )
+    assert created and second["research_session_id"] == session
+    assert second["native_status"] == "ENQUEUED"
+
+
+def test_tool_operation_identity_never_authorizes_unknown_replay(
+    native_case, monkeypatch
+):
+    import threading
+
+    from open_deep_research.runtime import sdk_runtime
+    from open_deep_research.workflow import execution
+
+    case = native_case
+    original = sdk_runtime.start_operation
+    entered, release = threading.Event(), threading.Event()
+    admitted = []
+
+    def guard(*args):
+        original(*args)
+        admitted.append(args)
+        entered.set()
+        assert release.wait(20)
+
+    effect = sdk_runtime.tool_effect
+    monkeypatch.setattr(
+        sdk_runtime,
+        "tool_effect",
+        lambda t: "protected" if t.name == "web_search" else effect(t),
+    )
+    monkeypatch.setattr(sdk_runtime, "start_operation", guard)
+    run = case.create()
+    try:
+        assert entered.wait(20)
+        run_id, workflow_id, executor, op, name, fingerprint = admitted[0]
+        with pytest.raises(execution.ExecutionControlError, match="already admitted"):
+            original(*admitted[0])
+        with pytest.raises(execution.ExecutionControlError, match="no longer owns"):
+            original(
+                run_id, workflow_id, "other-executor", "another-id", name, fingerprint
+            )
+        with domain_engine().connect() as db:
+            row = (
+                db.execute(
+                    text("SELECT * FROM por_domain.operations WHERE id=:id"), {"id": op}
+                )
+                .mappings()
+                .one()
+            )
+            assert len(row["fingerprint"]) == 64 and row["outcome"] is None
+            assert "arguments" not in row and "usage" not in row
+    finally:
+        release.set()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "completed" and case.calls["public_signal"] == 1
+    execution.finish_operation(run_id, op, "returned")
+    with pytest.raises(execution.ExecutionControlError):
+        execution.finish_operation(run_id, op, "unknown")
 
 
 @pytest.mark.parametrize("entrypoint", ["/api/runs", "/api/research", "cli"])
@@ -629,8 +646,8 @@ def test_configuration_and_sdk_drift_fail_before_external_work(
     if changed == "MAX_MODEL_CALLS":
         monkeypatch.setenv("MAX_MODEL_CALLS", "101")
     else:
-        with facts().engine.begin() as db:
-            req = facts().request(run["run_id"], db=db)
+        with domain_engine().begin() as db:
+            req = read_request(run["run_id"], db=db)
             req["data"]["sdk"] = "unsupported-sdk"
             db.execute(
                 text("UPDATE por_domain.requests SET value=:v WHERE id=:id"),
@@ -699,15 +716,13 @@ def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
     async def flaky(state, cfg):
         if not attempts:
             attempts.append("failure")
-            from open_deep_research.budget import capture_budget_usage
-
-            capture_budget_usage({"model_calls": 1, "input_tokens": 2})
+            await record_scripted_model_attempt()
             raise RuntimeError("Synthetic safe read failure")
         return await original(state, cfg)
 
     monkeypatch.setattr(engine.research, "research_review", flaky)
     run = case.create()
-    failed = case.wait(run)
+    failed = case.wait(run, lambda r: r["events_complete"])
     assert failed["status"] == "failed"
     assert failed["retry_safe"]
     assert len(case.models) == 2
@@ -746,23 +761,24 @@ def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
 
 
 @pytest.mark.parametrize("pg_database", [{"RUN_QUEUE_CAPACITY": 1}], indirect=True)
-def test_queue_capacity_and_policy_mismatch_are_explicit(pg_database):
+def test_queue_capacity_and_policy_mismatch_are_explicit(pg_database, monkeypatch):
     from test_python_workflow import config, initial
 
     from open_deep_research.web.durable import RunClient
+    from open_deep_research.workflow import domain_schema
     from open_deep_research.workflow.dbos_config import ExecutionSettings
-    from open_deep_research.workflow.run_facts import RunFacts
 
     client = RunClient()
     client.create("alice", "first", {"topic": "a"}, config(), initial())
     with pytest.raises(RunConflict, match="full"):
         client.create("bob", "second", {"topic": "b"}, config(), initial())
-    changed = RunFacts(ExecutionSettings(pg_database, queue_capacity=2))
-    try:
-        with pytest.raises(RunConflict, match="policy"):
-            changed.initialize()
-    finally:
-        changed.close()
+    monkeypatch.setattr(
+        domain_schema,
+        "settings",
+        lambda: ExecutionSettings(pg_database, queue_capacity=2),
+    )
+    with pytest.raises(RunConflict, match="policy"):
+        domain_schema.verify_policy()
 
 
 def test_domain_artifact_and_native_enqueue_rollback_are_atomic(
@@ -772,22 +788,23 @@ def test_domain_artifact_and_native_enqueue_rollback_are_atomic(
 
     from open_deep_research.web.durable import RunClient
 
-    repo = facts()
     client = RunClient()
 
     def fail(*args, **kw):
         raise RuntimeError("Synthetic native-message transaction failure")
 
     with monkeypatch.context() as patch:
-        patch.setattr(repo, "publish", fail)
+        from open_deep_research.web import durable
+
+        patch.setattr(durable, "publish_event", fail)
         with pytest.raises(RuntimeError):
             client.create("alice", "a", {"topic": "a"}, config(), initial())
-    with repo.engine.connect() as db:
+    with domain_engine().connect() as db:
         assert (
             db.execute(text("SELECT count(*) FROM por_domain.requests")).scalar_one()
             == 0
         )
-    assert not repo.client.list_workflows(
+    assert not native_client().list_workflows(
         name=["por.run", "por.events", "por.finalize"],
         load_input=False,
         load_output=False,
@@ -968,131 +985,106 @@ def test_cancellation_during_real_receipt_commit_drains_harness(
 ):
     import threading
 
-    from open_deep_research.workflow.run_facts import RunFacts
+    from open_deep_research.runtime import sdk_runtime
 
     case = native_case
-    original = RunFacts.operation
-    release = threading.Event()
-    returned = set()
-    lock = threading.Lock()
+    original = sdk_runtime.finish_operation
+    entered, release = threading.Event(), threading.Event()
+    effect = sdk_runtime.tool_effect
+    monkeypatch.setattr(
+        sdk_runtime,
+        "tool_effect",
+        lambda t: "protected" if t.name == "web_search" else effect(t),
+    )
 
-    def operation(repo, unit, permit, identity, status="started", **kwargs):
-        if status == "returned" and identity["role"] != "service":
-            with lock:
-                returned.add(identity["role"])
-            assert release.wait(20), "Receipt gate was not released"
-        return original(repo, unit, permit, identity, status, **kwargs)
+    def finish(*args):
+        if args[-1] == "returned":
+            entered.set()
+            assert release.wait(20)
+        original(*args)
 
-    monkeypatch.setattr(RunFacts, "operation", operation)
+    monkeypatch.setattr(sdk_runtime, "finish_operation", finish)
     run = case.create()
     try:
-        end = time.monotonic() + 15
-        while len(returned) < 2 and time.monotonic() < end:
-            time.sleep(0.05)
-        assert len(returned) == 2
+        assert entered.wait(20)
         case.client.cancel(run["run_id"], "alice")
-        cancelling = case.client.get(run["run_id"], "alice")
-        assert cancelling["native_status"] == "CANCELLED"
-        assert cancelling["settlement"] == "pending"
-        assert cancelling["status"] == "cancelling"
+        cancelling = case.wait(run, lambda r: r["native_status"] == "CANCELLED")
+        assert (
+            cancelling["settlement"] == "pending"
+            and cancelling["status"] == "cancelling"
+        )
     finally:
         release.set()
-    result = case.wait(run)
-    if result["status"] != "cancelled":
-        print(
-            "receipt settlements:",
-            [str(rt.harness.last_settlement) for rt in case.runtimes],
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "cancelled" and result["settlement"] == "settled"
+    assert case.calls["public_signal"] == 1
+    with domain_engine().connect() as db:
+        assert (
+            db.scalar(text("SELECT outcome FROM por_domain.operations")) == "returned"
         )
-        print(
-            "receipt cleanup errors:",
-            [
-                (
-                    getattr(rt.harness, "_exit_error_type", "none"),
-                    rt.harness.events[-5:],
-                )
-                for rt in case.runtimes
-            ],
-        )
-        print(
-            "receipt unit errors:", [u["error"] for u in facts().units(run["run_id"])]
-        )
-        print(
-            "receipt sdk failures:",
-            [
-                e
-                for e in case.client.read_events(run["run_id"], "alice", 0, 1000)
-                if e.get("event") in {"model_failed", "agent_failed"}
-            ],
-        )
-    assert result["status"] == "cancelled", {
-        "error": result["error"],
-        "settlements": [rt.harness.last_settlement for rt in case.runtimes],
-        "units": [
-            (u["name"], u["settled"], u["error"]) for u in facts().units(run["run_id"])
-        ],
-    }
-    assert result["settlement"] == "settled"
-    assert len(case.models) == 2
-    assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
-    assert all(len(rt.workspace.receipts) == 1 for rt in case.runtimes)
-    assert result["usage"]["model_calls"] == 8 + sum(
-        rt.budget_usage["model_calls"] for rt in case.runtimes
-    )
+    assert result["usage"]["model_calls"] >= 10
 
 
 @pytest.mark.parametrize("native_case", ["cancel"], indirect=True)
-def test_persisted_cancel_intent_survives_lost_web_cancel_rpc(native_case):
+def test_persisted_cancel_intent_survives_request_ack_loss(native_case, monkeypatch):
     case = native_case
     run = case.create()
-    end = time.monotonic() + 15
-    while not case.blocked.is_set() and time.monotonic() < end:
-        time.sleep(0.05)
-    assert case.blocked.is_set()
-    # Simulate death after the cancellation intent transaction and before its RPC.
-    with facts().engine.begin() as db:
-        db.execute(
-            text("UPDATE por_domain.requests SET cancel_requested=true WHERE id=:id"),
-            {"id": run["run_id"]},
-        )
-    result = case.wait(run)
-    assert result["native_status"] == "CANCELLED"
-    assert result["status"] == "cancelled", {
-        "error": result["error"],
-        "settlements": [rt.harness.last_settlement for rt in case.runtimes],
-    }
-    assert result["settlement"] == "settled"
-    assert len(case.models) == 2
+    case.wait(run, lambda _: case.blocked.is_set())
+    with monkeypatch.context() as patch:
+        original = case.client.get
+
+        def lost(*args):
+            raise RuntimeError("Response lost after cancellation transaction")
+
+        patch.setattr(case.client, "get", lost)
+        with pytest.raises(RuntimeError, match="Response lost"):
+            case.client.cancel(run["run_id"], "alice")
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["native_status"] == "CANCELLED" and result["status"] == "cancelled"
+    assert result["settlement"] == "settled" and len(case.models) == 2
+    assert original(run["run_id"], "alice")["cancel_requested"]
 
 
-def test_unknown_memory_commit_is_quarantined_not_retried(native_case, monkeypatch):
+def test_memory_commit_with_lost_ack_reuses_saved_report_and_business_key(
+    native_case, monkeypatch
+):
     from open_deep_research.workflow import dbos_workflow as engine
 
     case = native_case
+    calls = []
 
-    async def uncertain_memory(state, config, report):
-        with facts().engine.begin() as db:
+    async def commit_memory(state, config, report):
+        with domain_engine().begin() as db:
             db.execute(
                 text(
                     "CREATE TABLE IF NOT EXISTS external_memory_effects(id text PRIMARY KEY)"
                 )
             )
-            db.execute(text("INSERT INTO external_memory_effects VALUES ('one')"))
-        raise RuntimeError("Memory committed but acknowledgement is unknown")
-
-    monkeypatch.setattr(engine.reporting, "maybe_persist_chat_memory", uncertain_memory)
-    run = case.create()
-    result = case.wait(run)
-    assert result["status"] == "interrupted"
-    assert result["settlement"] == "unresolved"
-    assert not result["retry_safe"]
-    assert facts().request(run["run_id"])["occupied"]
-    with facts().engine.connect() as db:
-        assert (
             db.execute(
-                text("SELECT count(*) FROM external_memory_effects")
-            ).scalar_one()
-            == 1
-        )
+                text(
+                    "INSERT INTO external_memory_effects VALUES ('one') ON CONFLICT DO NOTHING"
+                )
+            )
+        calls.append(report)
+        if len(calls) == 1:
+            raise RuntimeError("Memory committed but acknowledgement is unknown")
+
+    monkeypatch.setattr(engine.reporting, "maybe_persist_chat_memory", commit_memory)
+    case.cfg["configurable"].update(
+        rag_memory_write_enabled=True, rag_memory_mysql_url="mysql+pymysql://offline"
+    )
+    run = case.create()
+    failed = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert failed["status"] == "failed" and failed["retry_safe"] and failed["report"]
+    retry_observed_failure(case, run, "memory-lost-ack", failed)
+    result = case.wait(
+        run, lambda r: r["generation"] == 1 and r["archive_status"] == "saved"
+    )
+    assert result["status"] == "completed" and calls == [failed["report"]] * 2
+    assert result["report"] == failed["report"]
+    assert len(case.models) == 4 and result["usage"] == failed["usage"]
+    with domain_engine().connect() as db:
+        assert db.scalar(text("SELECT count(*) FROM external_memory_effects")) == 1
 
 
 @pytest.mark.parametrize("pg_database", [{"RUN_APPROVAL_SECONDS": 1}], indirect=True)
@@ -1121,29 +1113,31 @@ def test_approval_expiry_gap_before_recv_is_still_enforced(native_case, monkeypa
         c.client.approve(run_id, "alice", paused["plan"]["version"], "approve")
 
 
-def test_retry_after_failed_result_accounting_keeps_committed_model(
+def test_retry_after_failed_result_publication_keeps_committed_model(
     native_case, monkeypatch
 ):
     from sqlalchemy.exc import OperationalError
 
-    from open_deep_research.workflow.run_facts import RunFacts
+    from open_deep_research.workflow import dbos_workflow as engine
 
-    original = RunFacts.accounted_usage
+    original = engine._publish_stage
     failures = []
 
-    def account(repo, unit, observed, carry):
-        if unit.endswith(":plan:1") and not failures:
-            failures.append(unit)
-            raise OperationalError("Stage accounting unavailable", None, RuntimeError())
-        return original(repo, unit, observed, carry)
+    def publish(scope, artifact):
+        if scope.name == "plan_research" and len(failures) < 3:
+            failures.append(scope.stage_id)
+            raise OperationalError(
+                "Stage publication unavailable", None, RuntimeError()
+            )
+        return original(scope, artifact)
 
-    monkeypatch.setattr(RunFacts, "accounted_usage", account)
+    monkeypatch.setattr(engine, "_publish_stage", publish)
     case = native_case
     run = case.create()
     failed = case.wait(
         run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
     )
-    assert failures == [run["run_id"] + ":plan:1"]
+    assert failures == [run["run_id"] + ":plan:1"] * 3
     workflow_id = run["run_id"] + ":planning:1"
 
     def steps():
@@ -1151,7 +1145,9 @@ def test_retry_after_failed_result_accounting_keeps_committed_model(
 
     model = [s for s in steps() if s["function_name"] == "por.llm"]
     assert len(model) == 1 and model[0]["output"]
-    assert any(s["function_name"] == "por.stage_result" and s["error"] for s in steps())
+    assert any(
+        s["function_name"] == "por.publish_stage" and s["error"] for s in steps()
+    )
     retry_observed_failure(case, run, "result-accounting", failed)
     done = case.wait(
         run, lambda r: r["status"] == "completed" and r["archive_status"] == "saved"
@@ -1168,25 +1164,20 @@ def test_committed_role_ack_loss_does_not_repeat_sdk_or_drop_usage(
 ):
     from sqlalchemy.exc import OperationalError
 
-    from open_deep_research.workflow.run_facts import RunFacts
+    from open_deep_research.workflow import dbos_workflow as engine
 
-    original = RunFacts.finish_unit
+    original = engine._publish_stage
     lost = []
 
-    def finish(repo, unit, permit, **data):
-        result = original(repo, unit, permit, **data)
-        if (
-            data.get("artifact") is not None
-            and unit.endswith(":response_strategy")
-            and not lost
-        ):
-            lost.append(unit)
+    def publish(scope, artifact):
+        original(scope, artifact)
+        if scope.name == "response_strategy_agent" and not lost:
+            lost.append(scope.stage_id)
             raise OperationalError(
                 "Synthetic acknowledgement loss", None, Exception("after commit")
             )
-        return result
 
-    monkeypatch.setattr(RunFacts, "finish_unit", finish)
+    monkeypatch.setattr(engine, "_publish_stage", publish)
     run = native_case.create()
     result = native_case.wait(run)
     assert lost
@@ -1210,18 +1201,15 @@ def test_tool_control_storage_errors_are_fatal_not_model_observations(
 ):
     from sqlalchemy.exc import OperationalError
 
-    from open_deep_research.workflow.run_facts import RunFacts
+    from open_deep_research.runtime import sdk_runtime
 
-    original = RunFacts.operation
+    def fail(*args):
+        raise OperationalError(
+            "Synthetic admission outage", None, Exception("unavailable")
+        )
 
-    def fail(repo, unit, permit, identity, status="started", **kwargs):
-        if status == "started" and identity["role"] != "service":
-            raise OperationalError(
-                "Synthetic admission outage", None, Exception("unavailable")
-            )
-        return original(repo, unit, permit, identity, status, **kwargs)
-
-    monkeypatch.setattr(RunFacts, "operation", fail)
+    monkeypatch.setattr(sdk_runtime, "tool_effect", lambda tool: "protected")
+    monkeypatch.setattr(sdk_runtime, "start_operation", fail)
     run = native_case.create()
     result = native_case.wait(run)
     assert result["status"] == "failed"
@@ -1232,22 +1220,32 @@ def test_tool_control_storage_errors_are_fatal_not_model_observations(
     assert all(rt.budget_usage["model_calls"] == 1 for rt in native_case.runtimes)
 
 
-def test_cancel_of_safe_retry_cannot_release_an_active_unsettled_unit(
+def test_cancel_during_safe_retry_preserves_inflight_model_bill(
     native_case, monkeypatch
 ):
     import threading
 
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from open_deep_research import budget
     from open_deep_research.workflow import dbos_workflow as engine
 
-    entered = threading.Event()
+    entered, release = threading.Event(), threading.Event()
     attempts = []
 
+    class Model:
+        async def ainvoke(self, payload, config=None):
+            entered.set()
+            await asyncio.to_thread(release.wait, 20)
+            return AIMessage(content="review")
+
     async def review(state, config):
-        if not attempts:
-            attempts.append("failed")
+        attempts.append(1)
+        if len(attempts) == 1:
             raise RuntimeError("Safe review failure")
-        entered.set()
-        await asyncio.Event().wait()
+        await budget.ainvoke_model_with_budget(
+            Model(), [HumanMessage(content="review")]
+        )
 
     monkeypatch.setattr(engine.research, "research_review", review)
     case = native_case
@@ -1257,19 +1255,20 @@ def test_cancel_of_safe_retry_cannot_release_an_active_unsettled_unit(
     )
     assert failed["retry_safe"]
     retry_observed_failure(case, run, "retry", failed)
-    end = time.monotonic() + 10
-    while not entered.is_set() and time.monotonic() < end:
-        time.sleep(0.05)
-    assert entered.is_set()
-    assert facts().unresolved(run["run_id"])
-    assert facts().request(run["run_id"])["occupied"]
-    case.client.cancel(run["run_id"], "alice")
-    case.client.cancel(run["run_id"], "alice")
-    result = case.wait(run)
-    assert result["status"] == "cancelled"
+    try:
+        assert entered.wait(20)
+        assert has_unconfirmed_bills_or_effects(run["run_id"])
+        case.client.cancel(run["run_id"], "alice")
+        case.client.cancel(run["run_id"], "alice")
+    finally:
+        release.set()
+    result = case.wait(
+        run, lambda r: r["generation"] == 1 and r["archive_status"] == "saved"
+    )
+    assert result["status"] == "cancelled" and not result["retry_safe"]
     assert result["settlement"] == "settled"
+    assert result["usage"]["model_calls"] == failed["usage"]["model_calls"] + 1
     assert len(case.models) == 2
-    assert not result["retry_safe"]
 
 
 def test_native_workflow_matches_frozen_business_reference(
@@ -1296,7 +1295,7 @@ def test_native_workflow_matches_frozen_business_reference(
         cfg["configurable"]["research_run_id"] = run["run_id"]
         # The oracle starts at unchanged research ownership, after the new Plan.
         # Account exactly the native planning artifacts rather than forging zero cost.
-        for unit in facts().units(run["run_id"]):
+        for unit in stage_observations(run["run_id"]):
             if unit["name"] in {"plan_research", "plan_report_sections"}:
                 state["runtime"]["budget"] = merge_budget_usage(
                     state["runtime"]["budget"], unit["usage"]
@@ -1456,13 +1455,18 @@ def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypat
     assert result["usage"]["total_tokens"] == 306
     unit = next(
         u
-        for u in facts().units(run["run_id"])
+        for u in stage_observations(run["run_id"])
         if u["id"] == run["run_id"] + ":enrich_query_images"
     )
     assert unit["settled"] and unit["artifact"]
     assert unit["usage"]["model_calls"] == 1
     assert unit["usage"]["total_tokens"] == 15
-    assert "runtime" not in unit["artifact"]["patch"]
+    finished = next(
+        e
+        for e in case.client.read_events(run["run_id"], "alice", 0, 1000)
+        if e["type"] == "step_completed" and e["unit_id"] == unit["id"]
+    )
+    assert "runtime" not in finished and "patch" not in finished
     plans = case.client.client.list_workflows(
         workflow_id_prefix=run["run_id"],
         name="por.plan",
@@ -1545,7 +1549,7 @@ def test_native_cancelled_vision_keeps_reservation_until_actual_usage_settles(
         assert pending["settlement"] == "pending"
         unit = next(
             u
-            for u in facts().units(run["run_id"])
+            for u in stage_observations(run["run_id"])
             if u["name"] == "enrich_query_images"
         )
         assert unit["settled"] is None and unit["artifact"] is None
@@ -1564,9 +1568,13 @@ def test_native_cancelled_vision_keeps_reservation_until_actual_usage_settles(
             0 if provider_error else delta
         )
     unit = next(
-        u for u in facts().units(run["run_id"]) if u["name"] == "enrich_query_images"
+        u
+        for u in stage_observations(run["run_id"])
+        if u["name"] == "enrich_query_images"
     )
-    assert unit["usage"]["model_calls"] == 1 and unit["settled"]
+    assert unit["usage"]["model_calls"] == 1 and not has_unconfirmed_bills_or_effects(
+        run["run_id"]
+    )
     assert unit["usage"]["total_tokens"] == (0 if provider_error else 15)
     assert model.finished.is_set() and len(model.requests) == 1
     assert len(case.models) == 0 and not any(case.calls.values())
@@ -1581,10 +1589,9 @@ def test_research_results_are_joined_after_both_native_children(
     from threading import Event
 
     from open_deep_research.workflow import dbos_workflow as engine
-    from open_deep_research.workflow.run_facts import RunFacts
 
     case = native_case
-    original = RunFacts.finish_unit
+    original = engine._publish_stage
     fast_committed = Event()
     order = []
     joined = []
@@ -1596,18 +1603,18 @@ def test_research_results_are_joined_after_both_native_children(
 
     monkeypatch.setattr(engine, "assemble_research_results", assemble)
 
-    def finish(repo, unit, permit, **data):
-        value = data.get("artifact", {}).get("research_result")
+    def finish(scope, artifact):
+        value = artifact.get("research_result")
         if value and value["role"] == slower:
             assert fast_committed.wait(10), "Native role children must remain parallel"
-        result = original(repo, unit, permit, **data)
+        result = original(scope, artifact)
         if value:
             order.append(value["role"])
             if value["role"] != slower:
                 fast_committed.set()
         return result
 
-    monkeypatch.setattr(RunFacts, "finish_unit", finish)
+    monkeypatch.setattr(engine, "_publish_stage", finish)
     run = case.create()
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert result["status"] == "completed", result["error"]

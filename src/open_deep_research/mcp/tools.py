@@ -460,6 +460,13 @@ async def load_mcp_tools(
             wrapped = wrap_mcp_tools(server_name, tools, existing_tool_names)
             # Tag each tool with its domain category for scene-based filtering
             wrapped = _tag_tools_with_domain(wrapped, server_name)
+            # These adapter-owned transports enforce read-only behavior.
+            # An arbitrary MCP server annotation cannot authorize replay.
+            if server_name == "markitdown" or (
+                server_name == "dbhub" and server_conn["transport"] == "stdio"
+            ):
+                for item in wrapped:
+                    item.metadata = {**(item.metadata or {}), "effect": "read"}
             all_tools.extend(wrapped)
             existing_tool_names.update(t.name for t in wrapped)
 

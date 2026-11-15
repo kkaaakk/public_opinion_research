@@ -415,7 +415,16 @@ class ResearchGraphProducerStrategy(_ResearchGraphStrategyBase):
                 ),
                 metrics=workspace.metrics.as_dict(),
             )
-        except Exception:
+        except Exception as exc:
+            from open_deep_research.workflow.execution import (
+                ExecutionControlError,
+                error_chain,
+                is_cancellation,
+            )
+
+            for cause in error_chain(exc):
+                if isinstance(cause, ExecutionControlError) or is_cancellation(cause):
+                    raise cause
             return _producer_hook_failure(workspace, messages)
 
 

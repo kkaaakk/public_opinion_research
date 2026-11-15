@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
+from open_deep_research.workflow.dbos_config import domain_engine, native_client
+
 pytestmark = pytest.mark.integration
 
 
@@ -85,17 +87,15 @@ def test_native_runner_profile(native_case, monkeypatch):
             return await original(self, *args, **kwargs)
 
         monkeypatch.setattr(ScriptedModel, "get_response", delayed)
-    from open_deep_research.workflow.run_facts import facts
 
-    repo = facts()
-    with repo.engine.connect() as db:
+    with domain_engine().connect() as db:
         database = db.execute(text("SELECT current_database()")).scalar_one()
     if os.environ.get("PROFILE_SQL_STATS") == "1":
-        with repo.engine.begin() as db:
+        with domain_engine().begin() as db:
             db.execute(text("CREATE EXTENSION IF NOT EXISTS pg_stat_statements"))
 
     def statistics_row():
-        with repo.engine.connect() as db:
+        with domain_engine().connect() as db:
             db.execute(text("SELECT pg_stat_clear_snapshot()"))
             values = dict(
                 db.execute(
@@ -151,13 +151,17 @@ def test_native_runner_profile(native_case, monkeypatch):
         time.sleep(1.1)  # PostgreSQL publishes cumulative stats asynchronously.
         after = statistics_row()
         for sample in samples:
-            workflows = repo.client.list_workflows(
+            workflows = native_client().list_workflows(
                 workflow_id_prefix=sample.pop("run_id"),
                 load_input=False,
                 load_output=False,
             )
             sample["journal_rows"] = sum(
-                len(repo.client.list_workflow_steps(w.workflow_id, load_output=False))
+                len(
+                    native_client().list_workflow_steps(
+                        w.workflow_id, load_output=False
+                    )
+                )
                 for w in workflows
             )
         times = [s["seconds"] for s in samples]

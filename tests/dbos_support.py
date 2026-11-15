@@ -16,8 +16,12 @@ from sqlalchemy.engine import make_url
 from open_deep_research.web.durable import RunClient, close_run_client
 from open_deep_research.web.history import Neo4jHistoryStore
 from open_deep_research.web.run_data import RunConflict
-from open_deep_research.workflow.dbos_config import settings
-from open_deep_research.workflow.run_facts import facts
+from open_deep_research.workflow.dbos_config import (
+    domain_engine,
+    native_client,
+    settings,
+)
+from open_deep_research.workflow.domain_schema import initialize_domain
 
 BASE_URL = os.environ.get(
     "TEST_DBOS_DATABASE_URL",
@@ -61,7 +65,7 @@ def pg_database(monkeypatch, request, tmp_path):
         monkeypatch.setenv(policy_name, str(value))
     settings.cache_clear()
     DBOS.migrate(isolated, schema="por_dbos")
-    facts().initialize()
+    initialize_domain()
     try:
         yield isolated
     finally:
@@ -75,6 +79,110 @@ def pg_database(monkeypatch, request, tmp_path):
         with admin.connect() as db:
             db.execute(text("DROP DATABASE " + name + " WITH (FORCE)"))
         admin.dispose()
+
+
+def stage_observations(run_id):
+    """Read public stage events and their physical bills for the test assertions."""
+    from open_deep_research.budget import merge_budget_usage
+    from open_deep_research.web.run_data import loads
+
+    used = {}
+    with domain_engine().connect() as db:
+        for stage, usage in db.execute(
+            text(
+                "SELECT stage_id,usage FROM por_domain.model_attempts WHERE run_id=:r"
+            ),
+            {"r": run_id},
+        ):
+            used[stage] = merge_budget_usage(
+                used.get(stage),
+                loads(usage) if usage is not None else {"model_calls": 1},
+            )
+    store = RunClient()
+    cursor = (
+        store.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0
+    )
+    stages = {}
+    for event in store.read_events(run_id, None, 0, cursor):
+        if event["type"] not in {
+            "step_started",
+            "step_failed",
+            "step_skipped",
+            "step_completed",
+        }:
+            continue
+        stage = event["unit_id"]
+        view = stages.setdefault(
+            stage,
+            dict(
+                id=stage,
+                name=event["step"],
+                artifact=None,
+                error={},
+                settled=None,
+                usage=used.get(stage, {}),
+            ),
+        )
+        if event["type"] != "step_started":
+            view["settled"] = not event.get("error", {}).get("unknown_outcome")
+        if event["type"] in {"step_completed", "step_skipped"}:
+            view["artifact"] = True
+            view["usage"] = merge_budget_usage(
+                view["usage"],
+                {
+                    key: event[key]
+                    for key in ("budget_warnings", "degradation_reasons")
+                    if key in event
+                },
+            )
+        if event["type"] == "step_failed":
+            view["error"] = event.get("error", {})
+    return list(stages.values())
+
+
+def holds_business_slot(run_id):
+    return bool(
+        native_client().list_workflows(
+            workflow_id_prefix=run_id + ":",
+            status="PENDING",
+            queue_name="por-business",
+            load_input=False,
+            load_output=False,
+        )
+    )
+
+
+def has_unconfirmed_bills_or_effects(run_id):
+    from open_deep_research.budget import model_bill
+    from open_deep_research.web.durable import external_effects
+
+    with domain_engine().connect() as db:
+        return bool(any(external_effects(db, run_id)) or model_bill(db, run_id)[1])
+
+
+async def record_scripted_model_attempt():
+    from langchain_core.language_models.fake_chat_models import (
+        FakeMessagesListChatModel,
+    )
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from open_deep_research.budget import ainvoke_model_with_budget
+
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="controlled failed review",
+                usage_metadata={
+                    "input_tokens": 2,
+                    "output_tokens": 0,
+                    "total_tokens": 2,
+                },
+            )
+        ]
+    )
+    await ainvoke_model_with_budget(
+        model, [HumanMessage(content="test review")], model_name="fixture:review"
+    )
 
 
 def retry_observed_failure(case, run, key, observed):
@@ -184,20 +292,21 @@ def native_case(pg_database, monkeypatch, tmp_path, request):
         yield case
     finally:
         # This database was created by this exact fixture, never a shared catalog.
-        repo = facts()
-        with repo.engine.connect() as db:
+        with domain_engine().connect() as db:
             owned_ids = list(
                 db.execute(text("SELECT id FROM por_domain.requests")).scalars()
             )
         for root in owned_ids:
-            targets = repo.client.list_workflows(
+            targets = native_client().list_workflows(
                 workflow_id_prefix=root,
                 status=["PENDING", "ENQUEUED"],
                 load_input=False,
                 load_output=False,
             )
             for target in targets:
-                repo.client.cancel_workflow(target.workflow_id, cancel_children=True)
+                native_client().cancel_workflow(
+                    target.workflow_id, cancel_children=True
+                )
         time.sleep(0.3)
         DBOS.destroy(workflow_completion_timeout_sec=2)
         case.history.close()
