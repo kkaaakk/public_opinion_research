@@ -59,8 +59,8 @@ from open_deep_research.workflow.execution import (
     execution_effect,
     gather_owned,
     native_step_available,
+    stage_context,
 )
-from open_deep_research.workflow.run_facts import begin_call, end_call
 from open_deep_research.workflow.state_utils import (
     business_context,
     report_state,
@@ -353,16 +353,14 @@ def _section_plan_update(
     return [by_name.get(section.name, section) for section in sections]
 
 
-async def _persist_report(
+async def persist_report_memory(
     state: AgentState, config: RunnableConfig, report: str, usage: dict[str, Any]
 ) -> None:
-    """Preserve report costs if the existing memory write fails; never replay it."""
+    """Upsert Memory with stable business keys after committing the report."""
 
     async def persist():
-        identity = await begin_call("report_memory")
         async with execution_effect():
             await maybe_persist_chat_memory(state, config, report)
-        await end_call(identity)
 
     try:
         if native_step_available():
@@ -378,6 +376,11 @@ async def _persist_report(
             merge_budget_usage(usage, getattr(exc, "budget_usage", {})),
         )
         raise
+
+
+async def _persist_standalone_report(state, config, report, usage):
+    if stage_context.get() is None:
+        await persist_report_memory(state, config, report, usage)
 
 
 # 为需要研究的章节提取角色或图证据，并行生成正文。
@@ -579,7 +582,9 @@ async def compile_final_report(
     Falls back to notes-based synthesis when all sections are missing.
     """
     if report_state(state).get("final"):
-        await _persist_report(state, config, report_state(state)["final"], {})
+        await _persist_standalone_report(
+            state, config, report_state(state)["final"], {}
+        )
         return {}
     configurable = Configuration.from_runnable_config(config)
 
@@ -675,7 +680,9 @@ async def compile_final_report(
                         configurable,
                         final_usage,
                     )
-                    await _persist_report(state, config, report, budget_update)
+                    await _persist_standalone_report(
+                        state, config, report, budget_update
+                    )
                     return {
                         "report": {"final": report},
                         "messages": [AIMessage(content=report)],
@@ -684,7 +691,7 @@ async def compile_final_report(
             else:
                 report += f"\n\n> Note: 以下 section 因预算限制未完成: {', '.join(missing_names)}"
 
-        await _persist_report(state, config, report, fill_budget_update)
+        await _persist_standalone_report(state, config, report, fill_budget_update)
         return {
             "report": {"final": report},
             "messages": [AIMessage(content=report)],
@@ -862,7 +869,9 @@ async def _fallback_report_generation(
                 configurable,
                 final_usage,
             )
-            await _persist_report(state, config, final_report_content, budget_update)
+            await _persist_standalone_report(
+                state, config, final_report_content, budget_update
+            )
 
             # Return successful report generation
             return {

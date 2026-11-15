@@ -159,9 +159,9 @@ async def maybe_persist_chat_memory(
         if cancellation is not None:
             raise cancellation
     except Exception:  # pragma: no cover - depends on external MySQL/vector DB
-        from open_deep_research.workflow.run_facts import current_unit
+        from open_deep_research.workflow.execution import stage_context
 
-        if current_unit.get() is not None:
+        if stage_context.get() is not None:
             raise
         LOGGER.exception(
             "Failed to persist chat memory; continuing without persistence."

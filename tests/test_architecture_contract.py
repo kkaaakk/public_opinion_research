@@ -31,6 +31,7 @@ def test_main_graph_contract():
         "por.report",
         "por.events",
         "por.finalize",
+        "por.cancel",
     }
     assert not any(
         isinstance(node, ast.AsyncFunctionDef) and node.name == "business_step"
@@ -53,7 +54,9 @@ def test_research_subgraph_contract():
     assert "await intake.revise_brief(" in source
     assert "await research.research_review(" in source
     assert "await reporting.compile_final_report(" in source
-    assert "await save_stage(" in source
+    assert "await publish_stage(" in source
+    assert "stage_receipts" not in source
+    assert not (SOURCE_ROOT / "workflow/run_facts.py").exists()
     assert "DBOS.wait_first_async" in source
     assert "DBOS.cancel_workflow_async" in source
 

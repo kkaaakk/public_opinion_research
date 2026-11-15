@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from importlib.metadata import version as installed_version
 from uuid import uuid4
 
 from sqlalchemy import text
 
-from open_deep_research.budget import merge_budget_usage
+from open_deep_research.budget import merge_budget_usage, model_bill
 from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import (
     business_span,
@@ -19,10 +20,16 @@ from open_deep_research.web.run_data import (
     IDEMPOTENCY_KEY_PATTERN,
     RunConflict,
     RunNotFound,
+    db_time,
     digest,
     dumps,
+    legacy_projection,
     loads,
     public_payload,
+    publish_event,
+    read_request,
+    retry_generation,
+    role_deliverables,
     timestamp,
 )
 from open_deep_research.workflow.brief import (
@@ -30,32 +37,126 @@ from open_deep_research.workflow.brief import (
     MAX_BRIEF_REVISIONS,
 )
 from open_deep_research.workflow.dbos_config import (
+    ACTIVE,
     ARCHIVE,
-    BUSINESS,
     CONTROL,
-    RECOVERY,
     SDK_VERSION,
+    SETTLEMENT_GRACE_SECONDS,
     VERSION,
+    close_connections,
+    domain_engine,
+    native_client,
+    settings,
+)
+from open_deep_research.workflow.domain_schema import (
+    admission_lock,
+    require_matching_journals,
+    verify_policy,
 )
 from open_deep_research.workflow.python_state import copy_state
-from open_deep_research.workflow.run_facts import facts
+
+NATIVE_TERMINAL = {"SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED"}
+
+
+def validate_request(request):
+    data = request["data"]
+    effective = Configuration.from_runnable_config(data["config"]).model_dump(
+        mode="json"
+    )
+    if (
+        data["version"] != VERSION
+        or data["sdk"] != SDK_VERSION
+        or installed_version("openai-agents") != SDK_VERSION
+        or data["runtime"] != SDK_RUNTIME_VERSION
+        or digest(effective) != data["configuration"]
+    ):
+        raise RunConflict(
+            "Accepted configuration/version changed; drain using the original release"
+        )
+
+
+def external_effects(db, run_id):
+    return db.execute(
+        text("""
+        SELECT EXISTS (SELECT 1 FROM por_domain.operations WHERE run_id=:r AND outcome IS NULL),
+               EXISTS (SELECT 1 FROM por_domain.operations WHERE run_id=:r AND outcome='unknown')
+        """),
+        {"r": run_id},
+    ).one()
 
 
 class RunClient:
-    """Validate business controls and project execution facts; never schedule/claim work."""
+    """Own request admission and user commands over the native DBOS Run."""
 
-    def __init__(self, repository=None):
-        self.facts = repository or facts()
-        self.facts.verify_policy()
-        self.client = self.facts.client
+    def __init__(self):
+        self.engine = domain_engine()
+        self.client = native_client()
+
+    def _admit(self, db, owner, session_id, *, excluding=None):
+        if session_id:
+            requests = db.execute(
+                text("""
+                SELECT id, owner, reconciliation FROM por_domain.requests WHERE session=:s
+                """),
+                {"s": session_id},
+            ).all()
+            if not requests or any(row.owner != owner for row in requests):
+                raise RunNotFound("Session not found")
+            ids = [row.id for row in requests if row.id != excluding]
+            if ids and self.client.list_workflows(
+                workflow_ids=ids,
+                status=list(ACTIVE),
+                load_input=False,
+                load_output=False,
+                limit=1,
+            ):
+                raise RunConflict("Session already has an active research Run")
+            for run_id, _, reconciliation in requests:
+                if run_id == excluding or reconciliation:
+                    continue
+                if (
+                    retry_generation(db, run_id)
+                    > self._retry_receipt(run_id)["generation"]
+                    or any(external_effects(db, run_id))
+                    or model_bill(db, run_id)[1]
+                    or (
+                        self.client.get_event(
+                            run_id + ":events", "projection", timeout_seconds=0
+                        )
+                        or {}
+                    )
+                    .get("error", {})
+                    .get("unknown_outcome")
+                ):
+                    raise RunConflict(
+                        "Session has a retry or external effect awaiting settlement"
+                    )
+        if (
+            len(
+                self.client.list_workflows(
+                    name="por.run",
+                    status=list(ACTIVE),
+                    load_input=False,
+                    load_output=False,
+                    limit=settings().queue_capacity,
+                )
+            )
+            >= settings().queue_capacity
+        ):
+            raise RunConflict("Research queue is full")
+
+    def _retry_receipt(self, run_id):
+        receipt = self.client.get_event(
+            run_id + ":finalize", "retry_applied", timeout_seconds=0
+        )
+        return receipt if isinstance(receipt, dict) else {"generation": receipt or 0}
 
     def create(self, owner, key, request, config, state, *, session_id=None):
         if not owner or len(owner) > 128 or not key or len(key) > 128:
             raise RunConflict("Owner and idempotency key are required")
         fingerprint = digest({"request": request, "session_id": session_id})
-        repo = self.facts
-        with repo.engine.begin() as db:
-            repo.lock(db)
+        with self.engine.begin() as db:
+            admission_lock(db)
             old = db.execute(
                 text(
                     "SELECT id,value FROM por_domain.requests WHERE owner=:o AND request_key=:k"
@@ -68,29 +169,8 @@ class RunClient:
                 run_id = old[0]
                 created = False
             else:
-                repo.require_matching_journals()
-                if session_id:
-                    owners = (
-                        db.execute(
-                            text(
-                                "SELECT DISTINCT owner FROM por_domain.requests WHERE session=:s"
-                            ),
-                            {"s": session_id},
-                        )
-                        .scalars()
-                        .all()
-                    )
-                    if not owners or any(o != owner for o in owners):
-                        raise RunNotFound("Session not found")
-                pending = self.client.list_workflows(
-                    name="por.run",
-                    status=["ENQUEUED", "PENDING"],
-                    load_input=False,
-                    load_output=False,
-                    limit=repo.settings.queue_capacity + 1,
-                )
-                if len(pending) >= repo.settings.queue_capacity:
-                    raise RunConflict("Research queue is full")
+                require_matching_journals()
+                self._admit(db, owner, session_id)
                 cfg = loads(dumps(config))
                 operator_approval = Configuration.from_runnable_config(
                     cfg
@@ -121,9 +201,9 @@ class RunClient:
                     "version": VERSION,
                     "sdk": SDK_VERSION,
                     "runtime": SDK_RUNTIME_VERSION,
-                    "created": repo.now(db),
-                    "approval_seconds": repo.settings.approval_seconds,
-                    "run_seconds": repo.settings.run_seconds,
+                    "created": db_time(db),
+                    "approval_seconds": settings().approval_seconds,
+                    "run_seconds": settings().run_seconds,
                 }
                 db.execute(
                     text(
@@ -155,7 +235,7 @@ class RunClient:
                             },
                             run_id,
                         )
-                repo.publish(db, run_id, "run_status", status="queued")
+                publish_event(db, run_id, "run_status", status="queued")
                 created = True
         return self.get(run_id, owner), created
 
@@ -168,136 +248,173 @@ class RunClient:
         return values[0]
 
     def get(self, run_id, owner):
-        repo = self.facts
-        req = repo.request(run_id, owner)
+        req = read_request(run_id, owner)
         status = self.native(run_id)
-        units = repo.units(run_id)
-        # Read phase before the payloads it fences: workflows publish payload first.
-        phase = self.client.get_event(run_id, "phase", timeout_seconds=0)
+        relay = run_id + ":events"
+        event = self.client.get_event
+        # Read phase before the payloads the workflow publishes first.
+        phase = event(run_id, "phase", timeout_seconds=0)
+        plan = event(run_id, "plan", timeout_seconds=0)
         clarification = (
-            self.client.get_event(run_id, "clarification", timeout_seconds=0)
-            if status.status == "PENDING"
-            and phase == "awaiting_clarification"
+            event(run_id, "clarification", timeout_seconds=0)
+            if phase == "awaiting_clarification"
+            and status.status == "PENDING"
             and not req["cancel_requested"]
             else None
         )
-        plan = self.client.get_event(run_id, "plan", timeout_seconds=0)
-        revision = plan.get("ai_revision") if plan else None
-        revision_pending = (
-            revision is not None
-            and phase == "revising_brief"
-            and status.status == "PENDING"
-            and not req["cancel_requested"]
-        )
-        with repo.engine.connect() as db:
-            generation = int(
-                db.execute(
-                    text(
-                        "SELECT coalesce(max(generation),0) FROM por_domain.retries WHERE run_id=:id"
-                    ),
-                    {"id": run_id},
-                ).scalar_one()
-            )
-            if clarification and repo.now(db) >= clarification["expires_at"]:
+        before_receipts = event(relay, "cursor", timeout_seconds=0) or 0
+        history = event(relay, "history", timeout_seconds=0)
+        delivered = event(relay, "done", timeout_seconds=0)
+        view = event(relay, "projection", timeout_seconds=0) or {}
+        terminal = status.status in NATIVE_TERMINAL
+        legacy = req["data"]["version"] != VERSION
+        with self.engine.connect() as db:
+            generation = retry_generation(db, run_id)
+            if clarification and db_time(db) >= clarification["expires_at"]:
                 clarification = None
-        locked_brief = self.client.get_event(run_id, "brief_locked", timeout_seconds=0)
-        cursor = (
-            self.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0
+            if legacy:
+                historic, charges, unknown = legacy_projection(db, run_id)
+                view = view | historic
+                open_effect, complete = False, not unknown
+            else:
+                charges, pending_model, complete = model_bill(db, run_id)
+                open_effect, unknown = external_effects(db, run_id)
+                open_effect = bool(open_effect or pending_model)
+            expired = bool(
+                open_effect
+                and terminal
+                and status.completed_at is not None
+                and db_time(db) - status.completed_at / 1000 >= SETTLEMENT_GRACE_SECONDS
+            )
+        retry_receipt = self._retry_receipt(run_id)
+        applied = retry_receipt["generation"]
+        error = dict(view.get("error", {}))
+        missing_checkpoint = error.pop("unknown_outcome", False)
+        unknown = bool(unknown or missing_checkpoint)
+        if open_effect:
+            unknown = True
+        pending = (
+            open_effect
+            and not missing_checkpoint
+            and not req["reconciliation"]
+            and not expired
         )
-        history = self.client.get_event(
-            run_id + ":events", "history", timeout_seconds=0
-        )
-        if isinstance(history, dict):
-            history = history["id"] if history["generation"] == generation else None
-        error = {}
-        stages = []
-        budget = req["data"]["initial"].get("runtime", {}).get("budget", {})
-        report = ""
-        for unit in units:
-            budget = merge_budget_usage(budget, unit["usage"])
-            if unit["error"]:
-                error = unit["error"]
-            artifact = unit["artifact"] or {}
-            patch = artifact.get("patch", {})
-            report = patch.get("report", {}).get("final", report)
-            reports = patch.get("agents", {})
-            if result := artifact.get("research_result"):
-                reports = {result["role"]: {"report": result["report"]}}
-            for role, data in reports.items():
-                if isinstance(data, dict) and data.get("report"):
-                    stages.append(
-                        {
-                            "role": role,
-                            "content": data["report"].get("value", "")
-                            if isinstance(data["report"], dict)
-                            else data["report"],
-                            "stage_id": unit["id"],
-                            "completed_at": "",
-                        }
-                    )
-        unsettled = repo.unresolved(run_id)
-        pending_cleanup = any(u["settled"] is None for u in units)
-        terminal = status.status in {
-            "SUCCESS",
-            "ERROR",
-            "CANCELLED",
-            "MAX_RECOVERY_ATTEMPTS_EXCEEDED",
-        }
-        settlement = (
-            "pending"
-            if pending_cleanup and not terminal
-            else "unresolved"
-            if unsettled
-            else "settled"
-        )
+        settlement = "pending" if pending else "unresolved" if unknown else "settled"
         native_state = {
             "ENQUEUED": "queued",
+            "DELAYED": "queued",
             "PENDING": "running",
             "SUCCESS": "completed",
             "ERROR": "failed",
             "CANCELLED": "cancelled",
-            "MAX_RECOVERY_ATTEMPTS_EXCEEDED": "interrupted",
         }.get(status.status, "interrupted")
-        approval = self.client.get_event(run_id, "approval_end", timeout_seconds=0)
+        approval = event(run_id, "approval_end", timeout_seconds=0)
         if status.status == "SUCCESS" and approval in {"reject", "expired"}:
             native_state = "cancelled"
         if not terminal and phase in {"awaiting_approval", "awaiting_clarification"}:
             native_state = phase
-        if req["cancel_requested"] and not terminal:
-            native_state = "cancelling"
-        if terminal and unsettled:
+        if (
+            status.status == "ERROR"
+            and req["cancel_requested"]
+            and retry_receipt.get("outcome") == "cancelled"
+        ):
+            native_state = "cancelled"
+        if terminal and unknown and not pending:
             native_state = "interrupted"
-            error = error or {"kind": "unconfirmed_effect", "usage_complete": False}
-        if unsettled:
-            error["usage_complete"] = False
-        if status.status == "ERROR" and "kind" not in error:
-            error = {"kind": "execution_error", "usage_complete": not unsettled}
-        if terminal and pending_cleanup:
-            settlement = "pending"
-            if req["cancel_requested"]:
-                native_state = "cancelling"
-        delivered = self.client.get_event(run_id + ":events", "done", timeout_seconds=0)
-        delivered_phase = self.client.get_event(
-            run_id + ":events", "phase", timeout_seconds=0
+            error.setdefault("kind", "unconfirmed_effect")
+        elif status.status == "ERROR":
+            error.setdefault("kind", "execution_error")
+        if req["cancel_requested"] and (not terminal or pending):
+            native_state = "cancelling"
+        if error or unknown:
+            error["usage_complete"] = complete and not unknown
+        usage = merge_budget_usage(
+            req["data"]["initial"].get("runtime", {}).get("budget", {}), charges
         )
-        applied = (
-            self.client.get_event(
-                run_id + ":finalize", "retry_applied", timeout_seconds=0
+        if not legacy:
+            usage = merge_budget_usage(
+                usage,
+                {
+                    k: view[k]
+                    for k in (
+                        "tool_calls",
+                        "search_calls",
+                        "budget_warnings",
+                        "degradation_reasons",
+                    )
+                    if k in view
+                },
             )
-            or 0
+        if not complete:
+            usage["usage_complete"] = False
+        report = view.get("legacy_report", "")
+        if seq := view.get("report"):
+            report = self._stream_item(relay, seq)["content"]
+        if not report and native_state == "completed":
+            # The Workflow can commit before the separate SSE relay publishes
+            # its public index. Read the completed report from its native result.
+            outcome = self.client.retrieve_workflow(run_id).get_result()
+            report = (
+                outcome.get("report", {}).get("final", "")
+                if isinstance(outcome, dict)
+                else ""
+            )
+        roles = list(view.get("legacy_roles", []))
+        for stage, seq in view.get("roles", {}).items():
+            item = self._stream_item(relay, seq)
+            roles.append(
+                dict(
+                    role=item["role"],
+                    content=item["content"],
+                    stage_id=stage,
+                    completed_at="",
+                )
+            )
+        if (
+            terminal
+            and not legacy
+            and (not delivered or delivered.get("generation", 0) != generation)
+        ):
+            # The native child result already exists while the public relay
+            # catches up. Extract only the report from each missing child.
+            published = view.get("roles", {})
+            for child in self.client.list_workflows(
+                name="por.role",
+                workflow_id_prefix=run_id + ":",
+                status="SUCCESS",
+                load_input=False,
+                load_output=True,
+            ):
+                if child.workflow_id in published or not child.output:
+                    continue
+                roles.extend(
+                    dict(
+                        role=role,
+                        content=content,
+                        stage_id=child.workflow_id,
+                        completed_at="",
+                    )
+                    for role, content in role_deliverables(child.output).items()
+                )
+        current = (
+            error.get("step")
+            or view.get("current_step")
+            or next(iter(reversed(view.get("active", {}))), None)
         )
-        if isinstance(applied, dict):
-            applied = applied["generation"]
-        current = next(
-            (u["name"] for u in reversed(units) if u["artifact"] is None), ""
-        )
-        # Native receipts are published after their stream cursor. Reading done
-        # or history may cross a relay commit after our first cursor read. Fence
-        # the projection after those receipts so SSE cannot acknowledge an unseen
-        # terminal event using an older cursor. This remains a native read.
-        cursor = max(
-            cursor,
-            self.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0,
+        current = view.get("active", {}).get(current, current) or ""
+        if native_state == "completed":
+            current = ""
+        delivered_phase = event(relay, "phase", timeout_seconds=0)
+        # The relay commits cursor before its terminal receipts.
+        cursor = max(before_receipts, event(relay, "cursor", timeout_seconds=0) or 0)
+        if isinstance(history, dict):
+            history = history["id"] if history["generation"] == generation else None
+        locked_brief = event(run_id, "brief_locked", timeout_seconds=0)
+        revision = plan.get("ai_revision") if plan else None
+        revision_pending = (
+            phase == "revising_brief"
+            and status.status == "PENDING"
+            and not req["cancel_requested"]
         )
         return {
             "approval_required": bool(
@@ -331,18 +448,20 @@ class RunClient:
             "event_cursor": cursor,
             "seq": cursor,
             "current_step": current,
-            "completed_steps": [u["name"] for u in units if u["artifact"]],
+            "completed_steps": view.get(
+                "completed_steps", list(view.get("completed", {}).values())
+            ),
             "workflow_backend": "dbos",
             "business_agent_runtime": "openai_agents",
             "execution_engine": "dbos",
             "workflow_version": req["data"]["version"],
             "sdk_version": SDK_VERSION,
             "runtime_version": SDK_RUNTIME_VERSION,
-            "usage": budget,
+            "usage": usage,
             "settlement": settlement,
             "error": error,
             "report": report,
-            "role_reports": stages,
+            "role_reports": roles,
             "archive_status": "saved" if history else "pending" if terminal else "none",
             "history_id": history,
             "plan": dict(
@@ -371,37 +490,40 @@ class RunClient:
             and status.app_version == VERSION
             and not req["cancel_requested"]
             and generation == applied
-            and not unsettled
-            and any(u["error"].get("retry_safe", False) for u in units),
+            and not unknown
+            and error.get("retry_safe", False),
             "created_at": timestamp(req["data"]["created"]),
-            "updated_at": timestamp(status.updated_at / 1000),
-            "terminated_at": timestamp(status.updated_at / 1000) if terminal else None,
+            "updated_at": timestamp((status.updated_at or 0) / 1000),
+            "terminated_at": timestamp((status.updated_at or 0) / 1000)
+            if terminal
+            else None,
         }
 
+    def _stream_item(self, relay, seq):
+        item = self.client.read_stream_offset(
+            relay, "events", seq - 1, timeout_seconds=0
+        )
+        if item is None:
+            raise RunConflict(
+                "Durable event prefix is not available; retain the current cursor"
+            )
+        return item
+
     def read_events(self, run_id, owner, after, limit=100):
-        self.facts.request(run_id, owner)
+        read_request(run_id, owner)
         cursor = (
             self.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0
         )
         if not isinstance(after, int) or after < 0 or after > cursor:
             raise RunConflict("Invalid event cursor")
-        result = []
-        for offset in range(after, min(cursor, after + limit)):
-            item = self.client.read_stream_offset(
-                run_id + ":events", "events", offset, timeout_seconds=0
-            )
-            if item is not None:
-                result.append(public_payload(item))
-            else:
-                raise RunConflict(
-                    "Durable event prefix is not available; retain the current cursor"
-                )
-        return result
+        return [
+            public_payload(self._stream_item(run_id + ":events", seq))
+            for seq in range(after + 1, min(cursor, after + limit) + 1)
+        ]
 
     def _human_command(self, run_id, owner, version, topic, payload, *, key=None):
-        repo = self.facts
-        req = repo.request(run_id, owner)
-        repo.validate(req)
+        req = read_request(run_id, owner)
+        validate_request(req)
         native = self.native(run_id)
         phase, event = (
             ("awaiting_approval", "plan")
@@ -418,8 +540,8 @@ class RunClient:
         pending = self.client.get_event(run_id, event, timeout_seconds=0)
         if not pending or pending["version"] != version:
             raise RunConflict("Interaction version changed")
-        with repo.engine.connect() as db:
-            if repo.now(db) >= pending["expires_at"]:
+        with self.engine.connect() as db:
+            if db_time(db) >= pending["expires_at"]:
                 raise RunConflict("Interaction expired")
 
         command = dict(owner=owner, version=version, **payload)
@@ -498,260 +620,82 @@ class RunClient:
         return self.get(run_id, owner)
 
     def cancel(self, run_id, owner):
-        current = self.get(run_id, owner)
-        if not current["retry_requested"] and current["native_status"] in {
-            "SUCCESS",
-            "ERROR",
-            "CANCELLED",
-            "MAX_RECOVERY_ATTEMPTS_EXCEEDED",
-        }:
-            return current
-        with self.facts.engine.begin() as db:
-            self.facts.request(run_id, owner, db=db, lock=True)
-            db.execute(
-                text(
-                    "UPDATE por_domain.requests SET cancel_requested=true WHERE id=:id"
-                ),
-                {"id": run_id},
-            )
-        # Restart-safe retry of this public command; admission is already fenced.
-        self.client.cancel_workflow(run_id, cancel_children=True)
+        with self.engine.begin() as db:
+            req = read_request(run_id, owner, db=db, lock=True)
+            if not req["cancel_requested"] and (
+                self.native(run_id).status not in NATIVE_TERMINAL
+                or retry_generation(db, run_id)
+                > self._retry_receipt(run_id)["generation"]
+            ):
+                if req["data"]["version"] != VERSION:
+                    raise RunConflict("Cancel using the original application release")
+                db.execute(
+                    text(
+                        "UPDATE por_domain.requests SET cancel_requested=true WHERE id=:id"
+                    ),
+                    {"id": run_id},
+                )
+                self.client.enqueue_in_transaction(
+                    db,
+                    {
+                        "workflow_name": "por.cancel",
+                        "queue_name": CONTROL,
+                        "workflow_id": run_id + ":cancel",
+                        "app_version": VERSION,
+                        "authenticated_user": owner,
+                    },
+                    run_id,
+                )
         return self.get(run_id, owner)
 
-    def _failure_target(self, status, queue):
-        """Identify one native failed execution, never a reusable Run-level grant."""
-        steps = self.client.list_workflow_steps(status.workflow_id)
-        errors = [s["function_id"] for s in steps if s.get("error") is not None]
-        stage_start = max(
-            (
-                s["function_id"]
-                for s in steps
-                if s["function_name"] == "por.stage_started"
-            ),
-            default=0,
-        )
-        if stage_start:
-            errors = [
-                s["function_id"]
-                for s in steps
-                if s["function_id"] >= stage_start and s.get("error") is not None
-            ]
-        stage_result = next(
-            (
-                s
-                for s in reversed(steps)
-                if s["function_name"] == "por.stage_result"
-                and s["function_id"] > stage_start
-            ),
-            None,
-        )
-        models = [
-            s["function_id"]
-            for s in steps
-            if s["function_name"] in {"por.llm", "por.llm_sync"}
-            and s["function_id"] > stage_start
-        ]
-        # Bounded ordinary phases execute calls in order. Only their final call
-        # can be the unresolved model/response-validation failure. Earlier errors
-        # may already have been handled, and earlier chapters must be retained.
-        save_error = next(
-            (
-                s["function_id"]
-                for s in steps
-                if s["function_name"] == "por.save_stage"
-                and s["function_id"] > stage_start
-                and s.get("error") is not None
-            ),
-            None,
-        )
-        if save_error is not None:
-            start = save_error
-        elif stage_result:
-            # Reapply the public projection after a saved result, or rerun only
-            # result accounting if that Step failed. Keep the committed models.
-            start = (
-                max(s["function_id"] for s in steps) + 1
-                if stage_result.get("error") is None
-                else stage_result["function_id"]
-            )
-        else:
-            start = (
-                max(models)
-                if models
-                else min(errors)
-                if errors
-                else max((s["function_id"] for s in steps), default=0) + 1
-            )
-        return {
-            "workflow_id": status.workflow_id,
-            "queue": queue,
-            "start_step": start,
-            "failure": digest(
-                {
-                    "version": status.app_version,
-                    "updated": status.updated_at,
-                    "completed": status.completed_at,
-                    "steps": [
-                        {
-                            k: s.get(k)
-                            for k in (
-                                "function_id",
-                                "function_name",
-                                "child_workflow_id",
-                                "started_at_epoch_ms",
-                                "completed_at_epoch_ms",
-                            )
-                        }
-                        for s in steps
-                    ],
-                }
-            ),
-        }
-
-    def _rewind_safe(self, run_id, command):
-        # Only the durable Finalizer calls this. Replaying its Step after a lost
-        # ACK may confirm the original command, never authorize a later ERROR.
-        with self.facts.engine.begin() as db:
-            req = self.facts.request(run_id, db=db, lock=True)
-            row = db.execute(
-                text(
-                    "SELECT version,generation,outcome FROM por_domain.retries WHERE run_id=:id AND key=:k"
-                ),
-                {"id": run_id, "k": command.get("key")},
-            ).first()
-            if (
-                not row
-                or not row[2]
-                or command
-                != {
-                    "key": command.get("key"),
-                    "generation": row[1],
-                    "version": row[0],
-                    "outcome": digest(loads(row[2])),
-                }
-            ):
-                return None
-            outcome = loads(row[2])
-            if (
-                outcome["source_generation"] + 1 != row[1]
-                or outcome["version"] != VERSION
-            ):
-                return None
-            self.facts.validate(req)
-            if req["cancel_requested"]:
-                self.client.cancel_workflow(run_id, cancel_children=True)
-                return {"generation": row[1], "outcome": "cancelled"}
-            # The captured native status/journal timestamps are execution
-            # versions. Rewind clears/replaces them before another execution.
-            # A crash after native commit but before our Step ACK therefore
-            # skips an advanced target, even if it has already failed again.
-            root_target = outcome["targets"][-1]
-            root_status = self.native(run_id)
-            if (
-                root_status.status != "ERROR"
-                or self._failure_target(root_status, root_target["queue"])
-                != root_target
-            ):
-                return {"generation": row[1], "outcome": "superseded"}
-            for target in outcome["targets"]:
-                status = self.native(target["workflow_id"])
-                if (
-                    status.status != "ERROR"
-                    or self._failure_target(status, target["queue"]) != target
-                ):
-                    continue
-                if target["queue"] == BUSINESS and self.facts.unresolved(run_id, db):
-                    # A previously rewound leaf may have started while the
-                    # Finalizer was down. Wait for its owned settlement; this
-                    # original grant is not yet acknowledged or blocked.
-                    if self.facts.pending_settlement(run_id, db=db):
-                        return {"retryable": True}
-                    return {"generation": row[1], "outcome": "blocked"}
-                self.client.rewind_workflow(
-                    target["workflow_id"],
-                    start_step=target["start_step"],
-                    queue_name=target["queue"],
-                    queue_partition_key=req["owner"],
-                )
-            return {"generation": row[1], "outcome": "applied"}
-
     def retry(self, run_id, owner, key, expected_version):
-        repo = self.facts
-        with repo.engine.begin() as db:
-            req = repo.request(run_id, owner, db=db, lock=True)
-            existing = db.execute(
+        from open_deep_research.workflow.dbos_workflow import retry_targets
+
+        if not isinstance(key, str) or not IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
+            raise RunConflict("Retry requires a bounded Idempotency-Key")
+        with self.engine.begin() as db:
+            admission_lock(db)
+            req = read_request(run_id, owner, db=db, lock=True)
+            version = db.scalar(
                 text(
                     "SELECT version FROM por_domain.retries WHERE run_id=:id AND key=:k"
                 ),
                 {"id": run_id, "k": key},
-            ).first()
-            if existing:
-                if existing[0] != expected_version:
+            )
+            if version is not None:
+                if version != expected_version:
                     raise RunConflict("Retry key was used for another observed version")
-                # An idempotent acknowledgement is never an execution grant.
-                # The original native message survives a submitter crash.
             else:
-                repo.validate(req)
                 result = self.get(run_id, owner)
                 if (
                     result["state_version"] != expected_version
                     or not result["retry_safe"]
                     or not result["events_complete"]
-                    or result["retry_requested"]
-                    or req["cancel_requested"]
-                    or not key
                 ):
-                    raise RunConflict(
-                        "Run requires reconciliation; no safe automatic retry"
-                    )
-                children = self.client.list_workflows(
-                    workflow_id_prefix=run_id + ":",
-                    status="ERROR",
-                    load_input=False,
-                    load_output=False,
-                )
-                targets = [
-                    self._failure_target(
-                        c,
-                        RECOVERY
-                        if c.name in {"por.review", "por.report"}
-                        else BUSINESS,
-                    )
-                    for c in sorted(
-                        children,
-                        key=lambda c: {
-                            "por.review": 0,
-                            "por.report": 0,
-                            "por.plan": 1,
-                            "por.research": 2,
-                        }.get(c.name, 3),
-                    )
-                    if c.name
-                    in {"por.plan", "por.research", "por.review", "por.report"}
-                ]
-                root = self.native(run_id)
-                if root.status != "ERROR" or root.app_version != VERSION or not targets:
-                    raise RunConflict("The observed failed execution changed")
-                targets.append(self._failure_target(root, RECOVERY))
+                    raise RunConflict("Run requires reconciliation; no safe retry")
+                validate_request(req)
+                self._admit(db, owner, req["session"], excluding=run_id)
+                targets = retry_targets(run_id)
                 generation = result["generation"] + 1
-                outcome = {
-                    "source_generation": result["generation"],
+                grant = {
+                    "source_generation": generation - 1,
                     "version": VERSION,
                     "targets": targets,
                 }
                 db.execute(
-                    text(
-                        "INSERT INTO por_domain.retries(run_id,key,version,generation,outcome) VALUES (:id,:k,:v,:g,:o)"
+                    text("""
+                    INSERT INTO por_domain.retries(run_id,key,version,generation,outcome)
+                    VALUES (:id,:k,:v,:g,:o)
+                    """),
+                    dict(
+                        id=run_id,
+                        k=key,
+                        v=expected_version,
+                        g=generation,
+                        o=dumps(grant),
                     ),
-                    {
-                        "id": run_id,
-                        "k": key,
-                        "v": expected_version,
-                        "g": generation,
-                        "o": dumps(outcome),
-                    },
                 )
-                repo.publish(db, run_id, "retry_started", generation=generation)
+                publish_event(db, run_id, "retry_started", generation=generation)
                 self.client.send_in_transaction(
                     db,
                     run_id + ":finalize",
@@ -759,7 +703,7 @@ class RunClient:
                         "key": key,
                         "generation": generation,
                         "version": expected_version,
-                        "outcome": digest(outcome),
+                        "outcome": digest(grant),
                     },
                     topic="retry",
                     idempotency_key=key,
@@ -767,46 +711,45 @@ class RunClient:
         return self.get(run_id, owner)
 
     def reconcile(self, run_id, owner, expected_version, *, worker_stopped, note):
-        result = self.get(run_id, owner)
-        if (
-            not worker_stopped
-            or not note.strip()
-            or len(note) > 2000
-            or result["state_version"] != expected_version
-            or result["status"] != "interrupted"
-        ):
-            raise RunConflict(
-                "Verify executor death and authoritative effects for the observed interrupted Run"
-            )
-        with self.facts.engine.begin() as db:
-            self.facts.lock(db)
-            observed = self.facts.request(run_id, owner, db=db, lock=True)
-            if observed["released"]:
-                raise RunConflict("Quarantine was already reconciled")
-            db.execute(
-                text("UPDATE por_domain.units SET permit=:p WHERE run_id=:id"),
-                {"id": run_id, "p": uuid4().hex},
-            )
+        with self.engine.begin() as db:
+            admission_lock(db)
+            req = read_request(run_id, owner, db=db, lock=True)
+            result = self.get(run_id, owner)
+            if (
+                req["reconciliation"]
+                or not worker_stopped
+                or not note.strip()
+                or len(note) > 2000
+                or result["state_version"] != expected_version
+                or result["status"] != "interrupted"
+                or result["retry_requested"]
+            ):
+                raise RunConflict(
+                    "Verify executor death and authoritative effects for the observed interrupted Run"
+                )
             db.execute(
                 text(
-                    "UPDATE por_domain.requests SET occupied=false,released=:n WHERE id=:id"
+                    "UPDATE por_domain.requests SET reconciliation=:receipt WHERE id=:id"
                 ),
-                {
-                    "id": run_id,
-                    "n": dumps({"owner": owner, "note": note, "worker_stopped": True}),
-                },
+                dict(
+                    id=run_id,
+                    receipt=dumps(
+                        {"owner": owner, "note": note, "worker_stopped": True}
+                    ),
+                ),
             )
-            self.facts.publish(db, run_id, "reconciled", retry_safe=False)
+            # The note releases Session admission. Original external evidence remains available.
+            if not result["events_complete"] and result["workflow_version"] == VERSION:
+                publish_event(db, run_id, "reconciled", retry_safe=False)
         return self.get(run_id, owner)
 
 
 @lru_cache(maxsize=1)
 def get_run_client():
+    verify_policy()
     return RunClient()
 
 
 def close_run_client():
-    if facts.cache_info().currsize:
-        facts().close()
-    facts.cache_clear()
     get_run_client.cache_clear()
+    close_connections()

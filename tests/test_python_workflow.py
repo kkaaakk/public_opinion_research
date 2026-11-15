@@ -677,7 +677,7 @@ def test_memory_write_failure_preserves_successful_report_cost(monkeypatch):
 
         monkeypatch.setattr(reporting, "maybe_persist_chat_memory", fail)
         with pytest.raises(RuntimeError) as caught:
-            await reporting._persist_report(
+            await reporting.persist_report_memory(
                 copy_state(initial()),
                 config(),
                 "report",

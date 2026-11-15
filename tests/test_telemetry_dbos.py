@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from open_deep_research.observability.telemetry import dbos_scope
 from open_deep_research.workflow import dbos_workflow as engine
-from open_deep_research.workflow.run_facts import facts
+from open_deep_research.workflow.dbos_config import domain_engine, native_client
 
 pytestmark = pytest.mark.integration
 
@@ -54,19 +54,20 @@ def traced_case(trace_capture, pg_database, monkeypatch, tmp_path, request):
     try:
         yield case
     finally:
-        repo = facts()
-        with repo.engine.connect() as db:
+        with domain_engine().connect() as db:
             run_ids = list(
                 db.execute(text("SELECT id FROM por_domain.requests")).scalars()
             )
         for run_id in run_ids:
-            for workflow in repo.client.list_workflows(
+            for workflow in native_client().list_workflows(
                 workflow_id_prefix=run_id,
                 status=["PENDING", "ENQUEUED"],
                 load_input=False,
                 load_output=False,
             ):
-                repo.client.cancel_workflow(workflow.workflow_id, cancel_children=True)
+                native_client().cancel_workflow(
+                    workflow.workflow_id, cancel_children=True
+                )
         time.sleep(0.3)
         DBOS.destroy(workflow_completion_timeout_sec=2)
         case.history.close()
@@ -97,29 +98,33 @@ def test_dbos_native_step_retry_keeps_safe_native_events(traced_case, trace_capt
     assert "secret-native-retry-error" not in steps[0].to_json()
 
 
-def test_cancel_during_telemetry_read_still_settles_the_acquired_safe_unit(
+def test_cancel_before_model_admission_with_tracing_has_no_unsettled_bill(
     traced_case, monkeypatch
 ):
-    import asyncio
+    from open_deep_research import budget
 
-    entered = threading.Event()
-    original = asyncio.to_thread
+    entered, release = threading.Event(), threading.Event()
+    original = budget.start_model_attempt
 
-    async def delayed(operation, *args, **kwargs):
-        if getattr(operation, "__name__", "") == "retry_generation":
-            entered.set()
-            await asyncio.Event().wait()
-        return await original(operation, *args, **kwargs)
+    def delayed(*args):
+        entered.set()
+        assert release.wait(20)
+        original(*args)
 
-    monkeypatch.setattr(asyncio, "to_thread", delayed)
+    monkeypatch.setattr(budget, "start_model_attempt", delayed)
     case = traced_case
     run = case.create()
-    case.wait(run, lambda _: entered.is_set())
-    case.client.cancel(run["run_id"], "alice")
+    try:
+        assert entered.wait(20)
+        case.client.cancel(run["run_id"], "alice")
+        case.wait(run, lambda r: r["native_status"] == "CANCELLED")
+    finally:
+        release.set()
     result = saved(case, run, "cancelled")
-    units = facts().units(run["run_id"])
-    assert units and all(unit["settled"] is True for unit in units)
     assert result["settlement"] == "settled"
+    assert (
+        result["usage"]["model_calls"] == case.state["runtime"]["budget"]["model_calls"]
+    )
     assert not case.models and not case.calls
 
 
@@ -177,11 +182,13 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
         )
         assert tool.attributes["por.run_id"] == run["run_id"]
         assert tool.attributes["por.unit_id"].startswith(run["run_id"] + ":")
+        assert tool.attributes["por.execution_id"]
         assert (
-            tool.attributes["por.execution_id"] and tool.attributes["por.operation_id"]
+            tool.attributes["por.tool_call_id"] and tool.attributes["por.graph_call_id"]
         )
+        assert "por.operation_id" not in tool.attributes
+        assert "por.effect_status" not in tool.attributes
         assert tool.attributes["por.generation"] == 0
-        assert tool.attributes["por.effect_status"] == "returned"
         assert tool.attributes["por.status"] == "succeeded"
     assert {
         "research_review",

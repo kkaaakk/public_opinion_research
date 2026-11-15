@@ -39,7 +39,7 @@ socket.socket.connect = local_connect
 import pytest
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from dbos import DBOS, DBOSClient
-from dbos_support import NEO4J, NEO4J_PASSWORD
+from dbos_support import NEO4J, NEO4J_PASSWORD, record_scripted_model_attempt
 from langchain_core.runnables import RunnableConfig
 from neo4j import GraphDatabase
 from sqlalchemy.exc import SQLAlchemyError
@@ -47,12 +47,16 @@ from test_python_workflow_sdk import install_sdk
 from test_sdk_context import _payload
 from test_sdk_runtime import TOKENS, _tool
 
-from open_deep_research.runtime import business_agent
+from open_deep_research import budget
+from open_deep_research.runtime import business_agent, sdk_runtime
 from open_deep_research.web import history
 from open_deep_research.web.executor import launch
-from open_deep_research.web.run_data import RunConflict
-from open_deep_research.workflow.dbos_workflow import release_step, reserve
-from open_deep_research.workflow.run_facts import RunFacts, facts
+from open_deep_research.workflow import dbos_workflow as engine
+from open_deep_research.workflow.execution import (
+    ExecutionControlError,
+    stage_context,
+    start_operation,
+)
 
 
 def install(directory, scenario):
@@ -170,7 +174,6 @@ def install(directory, scenario):
 
         from reference_research import legacy_research_patch
 
-        from open_deep_research.workflow import dbos_workflow as engine
 
         async def legacy_producer(state, config, *, role):
             # Run the actual SDK/Harness, but persist the frozen 31e8ad8 wire
@@ -185,10 +188,10 @@ def install(directory, scenario):
                 engine.research, role + "_agent", partial(legacy_producer, role=role)
             )
 
-    old_finish = RunFacts.finish_unit
-    old_acquire = RunFacts.acquire
-    old_operation = RunFacts.operation
-    old_check = RunFacts.check
+    old_publish = engine._publish_stage
+    old_announce = engine._announce_stage
+    old_finish_operation = sdk_runtime.finish_operation
+    old_finish_model_attempt = budget.finish_model_attempt
     lost_receipt_producers = Barrier(2)
 
     def gate(name):
@@ -196,46 +199,18 @@ def install(directory, scenario):
         while not (directory / (name + ".release")).exists():
             time.sleep(0.05)
 
-    if scenario in {"revision-ack", "revision-before-result", "revision-retry"}:
-        original_account = RunFacts.accounted_usage
-
-        def account(self, unit, observed, carry):
-            billed = original_account(self, unit, observed, carry)
-            if ":brief-revision:" in unit:
-                with (directory / "revision-accounting").open(
-                    "a", encoding="utf-8"
-                ) as log:
-                    log.write("billed\n")
-                if scenario == "revision-before-result" or (
-                    scenario == "revision-retry"
-                    and (directory / "revision-calls").read_text().splitlines()
-                    == ["call", "call"]
-                ):
-                    gate(scenario)
-            return billed
-
-        patch.setattr(RunFacts, "accounted_usage", account)
-
     if scenario == "planning-release":
-        from open_deep_research.workflow import dbos_workflow as engine
+        original_publish_step = engine.publish_stage
 
-        original_release_step = engine.release_step
-        original_release = RunFacts.release
-
-        def release(self, run_id):
-            original_release(self, run_id)
-            if DBOS.workflow_id == run_id + ":planning:2" and DBOS.step_id is None:
-                gate(scenario)
-
-        async def release_step_then_gate(run_id):
-            # If planning uses a native release Step, pause after its journal
-            # has committed. On replay the cached Step cannot release again.
-            await original_release_step(run_id)
-            if DBOS.workflow_id == run_id + ":planning:2":
+        async def publish_then_gate(result):
+            await original_publish_step(result)
+            if (
+                DBOS.workflow_id.endswith(":planning:2")
+                and stage_context.get().name == "plan_research"
+            ):
                 await asyncio.to_thread(gate, scenario)
 
-        patch.setattr(RunFacts, "release", release)
-        patch.setattr(engine, "release_step", release_step_then_gate)
+        patch.setattr(engine, "publish_stage", publish_then_gate)
 
     if scenario == "clarification-deadline":
         original_recv = DBOS.recv_async
@@ -251,13 +226,8 @@ def install(directory, scenario):
         patch.setattr(DBOS, "recv_async", staticmethod(recv))
 
     if scenario.startswith("retry-"):
-        from open_deep_research.budget import capture_budget_usage
-        from open_deep_research.web.durable import RunClient
-        from open_deep_research.workflow import dbos_workflow as engine
-
         original_review = engine.research.research_review
         original_rewind = DBOSClient.rewind_workflow
-        original_apply = RunClient._rewind_safe
         original_sleep = DBOS.sleep_async
 
         async def retry_review(state, config):
@@ -267,7 +237,7 @@ def install(directory, scenario):
             if scenario == "retry-nested" and attempt == 2:
                 await asyncio.to_thread(gate, "nested-leaf")
             if attempt <= 2:
-                capture_budget_usage({"model_calls": 1, "input_tokens": 2})
+                await record_scripted_model_attempt()
                 raise RuntimeError("Synthetic safe read failure with durable witness")
             return await original_review(state, config)
 
@@ -293,14 +263,7 @@ def install(directory, scenario):
                     "real native commit before lost ACK"
                 )
                 raise SQLAlchemyError("Synthetic native control commit ACK loss")
-            return result
-
-        def apply(client, run_id, command):
-            # Fault injection only: execute the entire real grant/native rewind
-            # first, release its transaction, then stop before the Step ACK.
-            # Never substitute a recovery result or fake a journal write.
-            result = original_apply(client, run_id, command)
-            if scenario == "retry-after":
+            if scenario == "retry-after" and ":" not in workflow_id:
                 gate(scenario)
             return result
 
@@ -323,81 +286,79 @@ def install(directory, scenario):
         patch.setattr(DBOS, "sleep_async", staticmethod(sleep))
         patch.setattr(engine.research, "research_review", retry_review)
         patch.setattr(DBOSClient, "rewind_workflow", rewind)
-        patch.setattr(RunClient, "_rewind_safe", apply)
 
-    def finish(self, unit, permit, **data):
-        if (
-            scenario == "revision-ack"
-            and ":brief-revision:" in unit
-            and data.get("artifact")
+    def publish(scope, result):
+        if scope.name == "revise_brief":
+            with (directory / "revision-accounting").open("a", encoding="utf-8") as log:
+                log.write("published\n")
+            if scenario == "revision-before-result" or (
+                scenario == "revision-retry"
+                and (directory / "revision-calls").read_text().splitlines()
+                == ["call", "call"]
+            ):
+                gate(scenario)
+        old_publish(scope, result)
+        if scenario == "revision-ack" and scope.name == "revise_brief":
+            gate(scenario)
+        if scenario == "plan-error" and scope.name == "plan_research":
+            gate(scenario)
+        if scenario == "legacy-artifact" and scope.stage_id.endswith(
+            ":public_signal:1"
         ):
             gate(scenario)
-        if (
-            scenario == "plan-error"
-            and unit.endswith(":plan:1")
-            and data.get("artifact")
-        ):
-            gate("plan-error")
-        if (
-            scenario == "runner-error"
-            and unit.endswith(":public_signal:1")
-            and data.get("error")
-        ):
-            gate("runner-error")
-        value = old_finish(self, unit, permit, **data)
-        if (
-            scenario == "legacy-artifact"
-            and unit.endswith(":public_signal:1")
-            and data.get("artifact")
-        ):
-            # The real domain transaction has committed; native Step ACK has not.
-            gate("legacy-artifact")
-        return value
 
-    patch.setattr(RunFacts, "finish_unit", finish)
-
-    def acquire(self, run_id, unit, name, **kw):
+    def announce(scope, round_):
         if (
             scenario in {"checkpoint", "legacy-checkpoint"}
-            and name == "research_review"
+            and scope.name == "research_review"
         ):
             gate(scenario)
-        if scenario == "gap-checkpoint" and unit.endswith(":public_signal:2"):
-            gate("gap-checkpoint")
-        return old_acquire(self, run_id, unit, name, **kw)
+        if scenario == "gap-checkpoint" and scope.stage_id.endswith(":public_signal:2"):
+            gate(scenario)
+        return old_announce(scope, round_)
 
-    def operation(self, unit, permit, identity, status="started", **kwargs):
-        if (
-            scenario == "revision-unconfirmed"
-            and ":brief-revision:" in unit
-            and identity["name"] == "llm"
-            and status == "returned"
-        ):
+    old_failure = engine.publish_failure
+
+    def failure(scope, error):
+        if scenario == "runner-error" and scope.stage_id.endswith(":public_signal:1"):
             gate(scenario)
+        old_failure(scope, error)
+
+    def finish_tool(*args):
         if (
             scenario == "lost-receipt"
-            and status == "returned"
-            and identity["role"] in {"public_signal", "internal_knowledge"}
+            and args[-1] == "returned"
             and not (directory / (scenario + ".release")).exists()
         ):
-            # Both producers must be holding uncommitted receipts before the kill.
             lost_receipt_producers.wait()
             gate(scenario)
-        return old_operation(self, unit, permit, identity, status, **kwargs)
+        return old_finish_operation(*args)
 
-    def check(self, *args, **kwargs):
+    def finish_model(*args):
+        if (
+            scenario == "revision-unconfirmed"
+            and stage_context.get().name == "revise_brief"
+            and not (directory / (scenario + ".release")).exists()
+        ):
+            gate(scenario)
         try:
-            return old_check(self, *args, **kwargs)
+            return old_finish_model_attempt(*args)
         except SQLAlchemyError:
             if scenario == "model-wait":
                 (directory / "control-failed").write_text(
-                    "actual durable control connection error"
+                    "actual model receipt connection error"
                 )
+                # Let the native Step surface a real failed provider receipt.
+                raise ExecutionControlError(
+                    "Physical model receipt unavailable"
+                ) from None
             raise
 
-    patch.setattr(RunFacts, "check", check)
-    patch.setattr(RunFacts, "acquire", acquire)
-    patch.setattr(RunFacts, "operation", operation)
+    patch.setattr(engine, "_publish_stage", publish)
+    patch.setattr(engine, "_announce_stage", announce)
+    patch.setattr(engine, "publish_failure", failure)
+    patch.setattr(sdk_runtime, "finish_operation", finish_tool)
+    patch.setattr(budget, "finish_model_attempt", finish_model)
 
     from open_deep_research.runtime.sdk_context import SDKContextHarness
 
@@ -551,7 +512,9 @@ def install(directory, scenario):
                 )
             return _payload(role)
 
-        return [_tool(role, coroutine=effect)]
+        tool = _tool(role, coroutine=effect)
+        tool.metadata = {**(tool.metadata or {}), "effect": "protected"}
+        return [tool]
 
     patch.setattr(business_agent, "sdk_model", model)
     patch.setattr(business_agent, "_business_agent_tools", tools)
@@ -561,18 +524,19 @@ def install(directory, scenario):
 @DBOS.step(preemptible=False)
 async def ownership_step(request):
     directory = Path(request["directory"])
-    unit = request["run_id"] + ":ownership"
-    permit, artifact, _ = await asyncio.to_thread(
-        facts().acquire, request["run_id"], unit, "ownership"
+    run_id = request["run_id"]
+    wf, executor = DBOS.workflow_id, DBOS.executor_id
+    await asyncio.to_thread(
+        start_operation, run_id, wf, executor, "probe", "external_write", "test"
     )
-    if artifact is not None:
-        return artifact
-    (directory / "old-active").write_text(DBOS.executor_id)
+    (directory / "old-active").write_text(executor)
     while not (directory / "ownership.release").exists():
         await asyncio.sleep(0.05)
     try:
-        await asyncio.to_thread(facts().check, unit, permit)
-    except RunConflict:
+        await asyncio.to_thread(
+            start_operation, run_id, wf, executor, "stale", "external_write", "test"
+        )
+    except ExecutionControlError:
         (directory / "old-denied").write_text("stale executor denied")
         raise
     raise AssertionError("A stale executor was admitted")
@@ -593,11 +557,7 @@ async def queue_wait(request):
 
 @DBOS.workflow(name="por.test.queue")
 async def queue_workflow(request):
-    await reserve(request["run_id"])
-    try:
-        await queue_wait(request)
-    finally:
-        await release_step(request["run_id"])
+    await queue_wait(request)
 
 
 def main():

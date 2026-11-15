@@ -1,6 +1,6 @@
 # 业务执行与 Agent Loop
 
-> 当前执行版本为 `dbos-native-recovery-v1`。各 Workflow 直接调用业务服务。旧版本的演进见[统一改造](dbosrunner-unification.md)。
+> 当前执行版本为 `dbos-domain-v1`。当前存储及迁移见[业务持久化简化](../audits/dbos-domain-simplification.md)。
 
 > 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
 
@@ -19,15 +19,15 @@ por.role → 角色函数 → run_business_agent → SDKAgentRuntime → SDKCont
       ├─ 官方模型 Step → MeteredModel → 模型供应商和物理费用回执
       ├─ por.agent_tool Step → 工具权限、操作回执、结果和费用
       └─ Context Steps → Evidence、Working Context 和压缩
-  → por.stage_result → por.save_stage
+  → DBOS Workflow 结果 → por.publish_stage → 公开成果
 
 独立 por.events → DBOS Durable Stream → SSE
 独立 por.finalize → History archive / 补偿 / 经授权的安全重试
 ```
 
 DBOS 管理 Workflow、Step、Queue、持久化、消息和恢复；执行 journal 是权威。
-领域事实保留 owner、资源预留、可撤销许可、操作回执、费用和已清算 artifact，
-不自行维护任务领取、lease、Workflow Cursor 或另一套调度状态机。
+业务存储负责 owner、请求幂等、操作授权、实际模型用量和需要核对的外部操作。
+公开报告和阶段进度通过 DBOS Stream 提供给界面，History 使用稳定 Run ID 归档。
 
 SDK Runner 是四角色唯一的模型/工具循环。`SDKAgentRuntime` 直接拥有角色装配、
 报告和私有记忆助手；没有旧 Runtime 父类或失败后 fallback。四个 AgentSpec 的职责、

@@ -6,11 +6,12 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 
+from dbos import DBOSClient
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
 APP = "public-opinion-research"
-VERSION = "dbos-native-recovery-v1"
+VERSION = "dbos-domain-v1"
 SDK_VERSION = "0.24.0"
 CONTROL = "por-control"
 BUSINESS = "por-business"
@@ -18,6 +19,9 @@ ARCHIVE = "por-archive"
 RECOVERY = "por-recovery"
 FACT_WRITE_GRACE_SECONDS = 15
 SETTLEMENT_GRACE_SECONDS = 60
+SYSTEM_SCHEMA = "por_dbos"
+ACTIVE = ("ENQUEUED", "PENDING", "DELAYED")
+LEGACY_SCHEMA = "por_archive_native_recovery"
 
 
 @dataclass(frozen=True)
@@ -72,3 +76,31 @@ class ExecutionSettings:
 @lru_cache(maxsize=1)
 def settings():
     return ExecutionSettings.environment()
+
+
+@lru_cache(maxsize=1)
+def domain_engine():
+    return settings().engine()
+
+
+@lru_cache(maxsize=1)
+def native_client():
+    from open_deep_research.web.run_data import RunJSON
+
+    return DBOSClient(
+        system_database_engine=domain_engine(),
+        application_name=APP,
+        dbos_system_schema=SYSTEM_SCHEMA,
+        serializer=RunJSON(),
+        retry_connection_errors=False,
+        observability_query_timeout_sec=3,
+    )
+
+
+def close_connections():
+    if native_client.cache_info().currsize:
+        native_client().destroy()
+    if domain_engine.cache_info().currsize:
+        domain_engine().dispose()
+    native_client.cache_clear()
+    domain_engine.cache_clear()

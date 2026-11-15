@@ -12,11 +12,18 @@ from open_deep_research.web.run_data import RunNotFound, sdk_observation
 RUN = "a" * 32
 
 
-class Facts:
-    def request(self, run_id, owner):
+@pytest.fixture
+def request_lookup(monkeypatch):
+    calls = []
+
+    def read_request(run_id, owner):
+        calls.append((run_id, owner))
         if run_id != RUN or owner != "operator":
             raise RunNotFound()
         return {"data": {"config": {}}}
+
+    monkeypatch.setattr(observations, "read_request", read_request)
+    return calls
 
 
 def test_sdk_observation_is_bounded_and_excludes_arbitrary_content():
@@ -44,7 +51,7 @@ def test_sdk_observation_is_bounded_and_excludes_arbitrary_content():
     }
 
 
-def test_native_view_uses_public_read_apis_and_omits_payloads():
+def test_native_view_uses_public_read_apis_and_omits_payloads(request_lookup):
     calls = []
 
     class Client:
@@ -67,22 +74,31 @@ def test_native_view_uses_public_read_apis_and_omits_payloads():
             return [
                 {
                     "function_id": 1,
-                    "function_name": "business_step",
+                    "function_name": "load_request",
                     "error": "private",
                     "output": "private",
                 }
             ]
 
-    store = SimpleNamespace(facts=Facts(), client=Client())
+    store = SimpleNamespace(client=Client())
     view = observations.execution_view(store, RUN, "operator", "", 0, 20)
     assert view["workflows"][0]["status"] == "ERROR"
     assert "private" not in json.dumps(view)
     assert view["steps"][0]["function_id"] == 1
+    assert view["steps"][0]["function_name"] == "load_request"
     with pytest.raises(RunNotFound):
         observations.execution_view(store, RUN, "other", "", 0, 20)
     with pytest.raises(RunNotFound):
         observations.execution_view(store, RUN, "operator", "b" * 32, 0, 20)
+    with pytest.raises(RunNotFound):
+        observations.execution_view(store, "b" * 32, "operator", "", 0, 20)
     assert len(calls) == 2
+    assert request_lookup == [
+        (RUN, "operator"),
+        (RUN, "other"),
+        (RUN, "operator"),
+        ("b" * 32, "operator"),
+    ]
 
 
 def test_evidence_allows_provenance_but_not_raw_tool_or_credential_fields(monkeypatch):
@@ -114,7 +130,9 @@ def test_evidence_allows_provenance_but_not_raw_tool_or_credential_fields(monkey
     assert observations._source_url("javascript:alert(1)") is None
 
 
-def test_evidence_queries_run_scope_and_keyset_cursors_before_reading(monkeypatch):
+def test_evidence_queries_run_scope_and_keyset_cursors_before_reading(
+    monkeypatch, request_lookup
+):
     calls = []
 
     class Driver:
@@ -128,6 +146,8 @@ def test_evidence_queries_run_scope_and_keyset_cursors_before_reading(monkeypatc
             calls.append((cypher, params))
             assert params["run_id"] == RUN and params["routing_"] == "r"
             if "ResearchEdge" in cypher:
+                assert cypher.count("{run_id: $run_id}") == 3
+                assert "e.edge_id > $after" in cypher
                 return (
                     [
                         {
@@ -140,6 +160,7 @@ def test_evidence_queries_run_scope_and_keyset_cursors_before_reading(monkeypatc
                     None,
                     None,
                 )
+            assert "{run_id: $run_id}" in cypher and "n.node_id > $after" in cypher
             return (
                 [
                     {
@@ -166,16 +187,21 @@ def test_evidence_queries_run_scope_and_keyset_cursors_before_reading(monkeypatc
     monkeypatch.setattr(
         observations.GraphDatabase, "driver", lambda *_a, **_k: Driver()
     )
-    store = SimpleNamespace(facts=Facts())
+    store = SimpleNamespace()
     view = observations.evidence_view(
-        store, RUN, "operator", node_id="EV1", edge_after="REL0"
+        store, RUN, "operator", after="EV0", node_id="EV1", edge_after="REL0"
     )
     assert view["nodes"][0]["node_id"] == "EV1"
     assert view["edges"][0]["target_id"] == "SRC1"
-    assert calls[1][1]["after"] == "REL0"
+    assert [params["after"] for _, params in calls] == ["EV0", "REL0"]
+    assert all(params["node_id"] == "EV1" for _, params in calls)
+    assert (view["next_cursor"], view["next_edge_cursor"]) == ("EV1", "REL1")
     with pytest.raises(RunNotFound):
         observations.evidence_view(store, RUN, "other")
+    with pytest.raises(RunNotFound):
+        observations.evidence_view(store, "b" * 32, "operator")
     assert len(calls) == 2
+    assert request_lookup == [(RUN, "operator"), (RUN, "other"), ("b" * 32, "operator")]
 
 
 @pytest.mark.parametrize("path", ["event-page", "execution", "evidence"])

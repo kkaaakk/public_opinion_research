@@ -5,11 +5,10 @@ from agents.items import ModelResponse
 from agents.testing import assistant_message
 from agents.usage import Usage
 
-from open_deep_research.budget import ModelBudgetExceeded
+from open_deep_research.budget import ModelBudgetExceeded, model_bill
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
-from open_deep_research.web.run_data import RunJSON
+from open_deep_research.web.run_data import RunJSON, dumps
 from open_deep_research.workflow.execution import failure_kind
-from open_deep_research.workflow.run_facts import RunFacts
 
 
 def test_native_response_round_trip_preserves_replay_items_and_usage_details():
@@ -57,8 +56,19 @@ def test_failed_call_replay_retains_context_fallback_and_safe_usage():
     )
 
 
-def test_replayed_failed_hook_cannot_double_physical_cost_or_token_details(monkeypatch):
-    repo = object.__new__(RunFacts)
+class Bills:
+    def __init__(self, usage):
+        self.usage = usage
+
+    def execute(self, query, params):
+        assert "model_attempts" in str(query) and params == {"r": "run"}
+        return self
+
+    def scalars(self):
+        return self.usage
+
+
+def test_known_costs_are_counted_once_with_provider_details():
     actual = {
         "model_calls": 1,
         "input_tokens": 7,
@@ -67,35 +77,26 @@ def test_replayed_failed_hook_cannot_double_physical_cost_or_token_details(monke
         "input_token_details": {"cache_read": 2},
         "output_token_details": {"reasoning": 1},
     }
-    monkeypatch.setattr(repo, "physical_usage", lambda _unit: (actual, True))
-    restored = repo.accounted_usage(
-        "role",
-        {
-            "model_calls": 2,
-            "input_tokens": 14,
-            "input_token_details": {"cache_read": 4},
-        },
-        {},
-    )
-    assert restored["model_calls"] == 1 and restored["input_tokens"] == 7
-    assert restored["input_token_details"] == {"cache_read": 2}
-    assert restored["output_token_details"] == {"reasoning": 1}
-    assert repo.failed_usage("role", actual)["model_calls"] == 0
+    result, pending, complete = model_bill(Bills([dumps(actual)]), "run")
+    assert result["model_calls"] == 1 and result["input_tokens"] == 7
+    assert result["input_token_details"] == {"cache_read": 2}
+    assert result["output_token_details"] == {"reasoning": 1}
+    assert pending == 0 and complete
 
 
-def test_unreceipted_prior_business_cost_is_retained_without_recounting(monkeypatch):
-    repo = object.__new__(RunFacts)
-    monkeypatch.setattr(
-        repo,
-        "physical_usage",
-        lambda _unit: ({"model_calls": 2, "input_tokens": 7}, True),
+def test_lost_and_partial_provider_bills_remain_counted_and_incomplete():
+    result, pending, complete = model_bill(
+        Bills(
+            [
+                dumps({"model_calls": 2, "input_tokens": 7}),
+                None,
+                dumps({"model_calls": 1, "usage_complete": False}),
+            ]
+        ),
+        "run",
     )
-    carry = repo.failed_usage("review", {"model_calls": 3, "input_tokens": 9})
-    assert carry["model_calls"] == 1 and carry["input_tokens"] == 2
-    restored = repo.accounted_usage(
-        "review", {"model_calls": 4, "input_tokens": 16}, carry
-    )
-    assert restored["model_calls"] == 3 and restored["input_tokens"] == 9
+    assert pending == 1 and not complete
+    assert result["model_calls"] == 4 and result["input_tokens"] == 7
 
 
 @pytest.mark.parametrize(
@@ -132,8 +133,8 @@ def test_unreceipted_prior_business_cost_is_retained_without_recounting(monkeypa
                 ("por.stage_started", False),
                 ("por.llm", False),
                 ("por.stage_result", False),
-                ("por.save_stage", True),
-                ("release_step", False),
+                ("por.publish_stage", True),
+                ("por.stage_failed", False),
             ],
             4,
         ),
@@ -150,13 +151,12 @@ def test_unreceipted_prior_business_cost_is_retained_without_recounting(monkeypa
         ([("child-role", False), ("child-review", True)], 2),
     ],
 )
-def test_retry_preserves_completed_phases_and_prior_calls(steps, expected):
+def test_retry_preserves_completed_phases_and_prior_calls(steps, expected, monkeypatch):
     from types import SimpleNamespace
 
-    from open_deep_research.web.durable import RunClient
+    from open_deep_research.workflow import dbos_workflow
 
-    client = object.__new__(RunClient)
-    client.client = SimpleNamespace(
+    client = SimpleNamespace(
         list_workflow_steps=lambda _id: [
             dict(
                 function_id=i + 1,
@@ -167,6 +167,11 @@ def test_retry_preserves_completed_phases_and_prior_calls(steps, expected):
         ]
     )
     status = SimpleNamespace(
-        workflow_id="report", app_version="current", updated_at=2, completed_at=3
+        workflow_id="report",
+        name="por.report",
+        app_version="current",
+        updated_at=2,
+        completed_at=3,
     )
-    assert client._failure_target(status, "business")["start_step"] == expected
+    monkeypatch.setattr(dbos_workflow, "native_client", lambda: client)
+    assert dbos_workflow.failure_target(status)[0]["start_step"] == expected

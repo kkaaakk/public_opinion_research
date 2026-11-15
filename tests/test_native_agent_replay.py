@@ -9,26 +9,33 @@ from agents.testing import ModelStep, ScriptedModel, assistant_message, function
 from dbos import DBOS, DBOSClient, SetWorkflowID
 from test_sdk_runtime import TOKENS, _runtime, _tool
 
+from open_deep_research.runtime import sdk_runtime
 from open_deep_research.web.run_data import RunJSON
-from open_deep_research.workflow.run_facts import UnitReceipts, current_unit
+from open_deep_research.workflow.execution import StageContext, stage_context
 
 
-def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path):
+def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monkeypatch):
     url = f"sqlite:///{(tmp_path / 'agent.sqlite').as_posix()}"
     workflow_id = "replay-agent"
     calls = []
     attempts = 0
 
-    class Receipts(UnitReceipts):
-        async def operation(self, identity, *, status, usage=None):
-            if status == "started":
-                assert DBOS.step_id is not None
-                calls.append(identity["name"])
-            return identity["tool_call_id"]
+    async def begin():
+        assert DBOS.step_id is not None
+        calls.append("sdk_model")
 
-        async def observe(self, kind, payload, *, call_id=None):
-            if kind == "tool_result":
-                assert call_id == payload["tool_call_id"]
+    async def observe(self, kind, payload, *, call_id=None):
+        if kind == "tool" and payload["status"] == "started":
+            assert DBOS.step_id is not None
+            calls.append(payload["name"])
+        if kind == "tool_result":
+            assert call_id == payload["tool_call_id"]
+
+    monkeypatch.setattr(sdk_runtime, "begin_model_call", begin)
+    monkeypatch.setattr(StageContext, "observe", observe)
+    monkeypatch.setattr(
+        sdk_runtime, "settings", lambda: SimpleNamespace(session_path=None)
+    )
 
     async def search(query: str, limit: int = 3):
         # Two calls in one response exercise the SDK's parallel Tool Steps.
@@ -51,6 +58,7 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path):
         nonlocal attempts
         attempts += 1
         tool = _tool(coroutine=search)
+        tool.metadata = {**(tool.metadata or {}), "effect": "read"}
         model = ScriptedModel(
             [
                 [
@@ -62,18 +70,15 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path):
             default_usage=TOKENS,
         )
         runtime = _runtime(tools=[tool], model=model)
-        unit = Receipts(
-            repo=SimpleNamespace(settings=SimpleNamespace(session_path=None)),
-            run_id=workflow_id,
-            id=workflow_id + ":role",
-            name="public_signal_agent",
-            permit="attempt",
-            config=runtime.config,
-            baseline={},
-            generation=0,
-            carry={},
+        scope = StageContext(
+            workflow_id,
+            workflow_id + ":role",
+            "public_signal_agent",
+            0,
+            runtime.config,
+            {},
         )
-        token = current_unit.set(unit)
+        token = stage_context.set(scope)
         try:
             outcome = await runtime.run("collect evidence")
             if attempts == 1:
@@ -83,7 +88,7 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path):
             assert not model.calls
             return outcome.budget, outcome.report
         finally:
-            current_unit.reset(token)
+            stage_context.reset(token)
 
     def launch():
         DBOS(

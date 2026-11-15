@@ -8,12 +8,12 @@ from urllib.parse import urlsplit, urlunsplit
 from neo4j import GraphDatabase
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.web.run_data import RunNotFound, public_payload
+from open_deep_research.web.run_data import RunNotFound, public_payload, read_request
 
 
 def execution_view(store, run_id, owner, workflow_id, offset, limit, workflow_offset=0):
     """Read public DBOS catalog APIs, explicitly excluding inputs/outputs/errors."""
-    store.facts.request(run_id, owner)
+    read_request(run_id, owner)
     workflow_id = workflow_id or run_id
     if workflow_id != run_id and not workflow_id.startswith(run_id + ":"):
         raise RunNotFound("Workflow not found")
@@ -167,7 +167,7 @@ def evidence_view(
     edge_after="",
 ):
     """Read the existing ResearchNode/ResearchEdge schema without model calls."""
-    req = store.facts.request(run_id, owner)
+    req = read_request(run_id, owner)
     cfg = Configuration.from_runnable_config(req["data"]["config"])
     if not cfg.research_graph_enabled or cfg.research_graph_backend != "neo4j":
         return {

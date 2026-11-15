@@ -58,7 +58,7 @@ def main():
         "workflow",
         "workflow.dbos_workflow",
         "workflow.dbos_config",
-        "workflow.run_facts",
+        "workflow.domain_schema",
         "workflow.python_state",
         "workflow.intake",
         "workflow.reporting",

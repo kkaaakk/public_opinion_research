@@ -1,8 +1,8 @@
 # DBOS production execution — Phase 5
 
-> 当前应用版本为 `dbos-native-recovery-v1`。运行中的
-> `dbosrunner-native-interaction-v1` 任务由该版本的 API 与 Executor 排空。
-> 见[执行链切换](#原生执行链版本切换)。
+> 当前应用版本为 `dbos-domain-v1`。新装使用 `--initialize-only`。已有
+> `dbos-native-recovery-v1` 安装需要先停旧准入、按原版排空并核验，
+> 然后运行 `--migrate-domain`。见[业务持久化与切换](../audits/dbos-domain-simplification.md)。
 >
 > `dbosrunner-native-interaction-v1` 的澄清与 Brief 审批使用
 > DBOS 原生消息和等待。见[切换步骤](#原生人机交互版本切换)及
@@ -199,8 +199,8 @@ remaining limitations and the old-to-new acceptance mapping.
 
 Control/event/finalization workflows can wait durably and therefore do not use
 finite worker concurrency as a business quota. Actual research execution is
-bounded by the business queue and domain reservations; queue capacity bounds
-accepted backlog. Large-backlog metadata throughput/storage need deployment
+bounded by the native business queue. Queue capacity bounds new request backlog,
+and Session admission checks for an active Run or unsettled effect. Large-backlog metadata throughput/storage need deployment
 sizing. API state_version is the delivered event cursor; the Neo4j archive
 run_state_version is retry generation + 1, preventing late older projections.
 

@@ -19,6 +19,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from open_deep_research.workflow.domain_schema import initialize_domain
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -91,7 +93,6 @@ def main():
     from open_deep_research.web.executor import launch
     from open_deep_research.workflow import shared
     from open_deep_research.workflow.dbos_config import settings
-    from open_deep_research.workflow.run_facts import facts
 
     url = make_url(os.environ["TEST_DBOS_DATABASE_URL"])
     if url.host not in {"127.0.0.1", "localhost"}:
@@ -115,7 +116,7 @@ def main():
     started = time.monotonic()
     try:
         DBOS.migrate(os.environ["DBOS_DATABASE_URL"], schema="por_dbos")
-        facts().initialize()
+        initialize_domain()
         args.summary.parent.mkdir(parents=True, exist_ok=True)
         case = NativeCase(patch, args.summary.parent / (name + "-data"), "normal")
         case.cfg["configurable"].update(

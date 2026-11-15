@@ -9,8 +9,10 @@ from pathlib import Path
 
 import pytest
 from dbos import DBOSClient
+from dbos_support import stage_observations
 
-from open_deep_research.web.run_data import RunJSON
+from open_deep_research.web.run_data import RunJSON, read_request
+from open_deep_research.workflow.dbos_config import native_client
 
 
 @pytest.mark.integration
@@ -106,7 +108,6 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
     from test_python_workflow import initial
 
     from open_deep_research.web.durable import RunClient
-    from open_deep_research.workflow.run_facts import facts
 
     client = RunClient()
     proc = start(tmp_path, "runner-recovery", window)
@@ -148,11 +149,11 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
         committed = before[internal_id].output
         assert committed["research_result"]["role"] == "internal_knowledge"
         assert any(
-            u["id"] == internal_id and u["artifact"] and u["settled"] is True
-            for u in facts().units(run_id)
+            step["function_name"] == "por.publish_stage" and step["error"] is None
+            for step in native_client().list_workflow_steps(internal_id)
         )
 
-        steps = facts().client.list_workflow_steps(public_id)
+        steps = native_client().list_workflow_steps(public_id)
         assert any("_model_call_step" in s["function_name"] for s in steps)
         if window == "runner-tool":
             assert any(
@@ -176,8 +177,7 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
             recovery_started = time.perf_counter()
             proc = start(tmp_path, "runner-recovery", window)
         wait(
-            lambda: client.get(run["run_id"], "alice")["status"]
-            in {"completed", "failed", "interrupted"},
+            lambda: client.get(run["run_id"], "alice")["events_complete"],
             proc,
             tmp_path,
             timeout=90,
@@ -202,7 +202,7 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
         if window in {"runner-batch", "batch-error-cache"}:
             assert result["status"] == "interrupted"
             assert not result["retry_safe"]
-            assert facts().request(run["run_id"])["occupied"]
+            assert not read_request(run["run_id"])["reconciliation"]
             assert effect_count(tmp_path, "lc_models") == lc_before
         else:
             assert result["status"] == "completed", result["error"]
@@ -234,7 +234,6 @@ def test_committed_failed_model_attempt_is_replayed_without_rebilling(
     from test_python_workflow import initial
 
     from open_deep_research.web.durable import RunClient
-    from open_deep_research.workflow.run_facts import facts
 
     client = RunClient()
     proc = start(tmp_path, "failed-response", scenario)
@@ -255,7 +254,7 @@ def test_committed_failed_model_attempt_is_replayed_without_rebilling(
             wait(
                 lambda: any(
                     u["name"] == "internal_knowledge_agent" and u["settled"] is True
-                    for u in facts().units(run["run_id"])
+                    for u in stage_observations(run["run_id"])
                 ),
                 proc,
                 tmp_path,
@@ -265,8 +264,7 @@ def test_committed_failed_model_attempt_is_replayed_without_rebilling(
         (tmp_path / "executor-ready").unlink()
         proc = start(tmp_path, "failed-response", scenario)
         wait(
-            lambda: client.get(run["run_id"], "alice")["status"]
-            in {"completed", "failed", "interrupted"},
+            lambda: client.get(run["run_id"], "alice")["events_complete"],
             proc,
             tmp_path,
             timeout=90,
@@ -281,7 +279,7 @@ def test_committed_failed_model_attempt_is_replayed_without_rebilling(
             assert result["status"] == "failed", result["error"]
             unit = next(
                 u
-                for u in facts().units(run["run_id"])
+                for u in stage_observations(run["run_id"])
                 if u["name"] == "public_signal_agent"
             )
             assert unit["usage"]["model_calls"] == 1
@@ -302,7 +300,6 @@ def test_finalizer_crash_after_leaf_rewind_keeps_original_grant_live(
     from test_python_workflow import initial
 
     from open_deep_research.web.durable import RunClient
-    from open_deep_research.workflow.run_facts import facts
 
     client = RunClient()
     proc = start(tmp_path, "nested-finalizer", "retry-nested")
@@ -332,10 +329,18 @@ def test_finalizer_crash_after_leaf_rewind_keeps_original_grant_live(
             proc,
             tmp_path,
         )
-        assert any(
-            u["name"] == "research_review" and u["settled"] is None
-            for u in facts().units(run["run_id"])
+        run_id = run["run_id"]
+        pending = client.get(run_id, "alice")
+        assert pending["generation"] == 1 and pending["retry_requested"]
+        assert client.native(run_id).status == "ERROR"
+        assert client.native(run_id + ":review:1").status == "PENDING"
+        assert (
+            client.client.get_event(
+                run_id + ":finalize", "retry_applied", timeout_seconds=0
+            )
+            is None
         )
+        assert effect_count(tmp_path, "reviews") == 2
         kill_owned(proc)
         (tmp_path / "retry-nested.release").touch()
         (tmp_path / "nested-leaf.release").touch()
@@ -352,6 +357,7 @@ def test_finalizer_crash_after_leaf_rewind_keeps_original_grant_live(
         result = client.get(run["run_id"], "alice")
         assert result["generation"] == 1 and not result["retry_requested"]
         assert result["usage"]["model_calls"] == 27
+        assert effect_count(tmp_path, "reviews") == 3
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == 2
         receipt = client.client.get_event(
             run["run_id"] + ":finalize", "retry_applied", timeout_seconds=0

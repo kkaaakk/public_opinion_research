@@ -7,13 +7,21 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from dbos_support import retry_observed_failure
+from dbos_support import (
+    has_unconfirmed_bills_or_effects,
+    record_scripted_model_attempt,
+    retry_observed_failure,
+)
 from sqlalchemy import text
 
-from open_deep_research.budget import capture_budget_usage
-from open_deep_research.web.run_data import RunConflict, digest, loads
+from open_deep_research.web.run_data import (
+    RunConflict,
+    digest,
+    loads,
+    publish_event,
+)
 from open_deep_research.workflow import dbos_workflow as engine
-from open_deep_research.workflow.run_facts import facts
+from open_deep_research.workflow.dbos_config import domain_engine
 
 pytestmark = pytest.mark.integration
 
@@ -79,7 +87,7 @@ def saved(case, run, status, generation):
 
 
 def command_for(run_id, key):
-    with facts().engine.connect() as db:
+    with domain_engine().connect() as db:
         row = db.execute(
             text(
                 "SELECT version,generation,outcome FROM por_domain.retries WHERE run_id=:id AND key=:k"
@@ -101,7 +109,14 @@ def assert_consistent(case, run, result):
     assert record["run_state_version"] == result["generation"] + 1
     assert record["usage"] == {
         k: result["usage"].get(k, 0)
-        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+        for k in (
+            "model_calls",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "usage_complete",
+        )
+        if k in result["usage"]
     }
     assert record["report"] == result["report"]
     assert result["events_complete"]
@@ -134,7 +149,7 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
             while not release[attempt].is_set():
                 await asyncio.sleep(0.02)
         if attempt <= 2:
-            capture_budget_usage({"model_calls": 1, "input_tokens": 2})
+            await record_scripted_model_attempt()
             raise RuntimeError("Synthetic settled safe read failure")
         return await original(state, cfg)
 
@@ -146,7 +161,7 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
     try:
         case.client.retry(run["run_id"], "alice", key, first["state_version"])
         assert entered[2].wait(15)
-        assert facts().unresolved(run["run_id"])
+        assert case.client.get(run["run_id"], "alice")["retry_requested"]
         for _ in range(3):
             current = case.client.retry(
                 run["run_id"], "alice", key, first["state_version"]
@@ -212,9 +227,9 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
                 for e in case.client.read_events(run["run_id"], "alice", 0, 10000)
             ),
         )
-        with facts().engine.begin() as db:
+        with domain_engine().begin() as db:
             for event in ("run_status", "done", "history_saved"):
-                facts().publish(
+                publish_event(
                     db,
                     run["run_id"],
                     event,
@@ -294,7 +309,7 @@ def test_concurrent_distinct_keys_authorize_one_native_failure(
     assert_consistent(case, run, completed)
     assert len(attempts) == 2
     assert len(case.models) == 4
-    with facts().engine.connect() as db:
+    with domain_engine().connect() as db:
         assert (
             db.execute(
                 text("SELECT count(*) FROM por_domain.retries WHERE run_id=:id"),
@@ -322,23 +337,49 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
             await asyncio.Event().wait()
         return await original(state, cfg)
 
-    async def uncertain_memory(state, cfg, report):
-        with facts().engine.begin() as db:
+    async def uncertain_external_write(state, cfg, report, usage):
+        from dbos import DBOS
+
+        from open_deep_research.workflow.execution import (
+            finish_operation,
+            stage_context,
+            start_operation,
+            unconfirmed,
+        )
+
+        run_id = stage_context.get().run_id
+        await asyncio.to_thread(
+            start_operation,
+            run_id,
+            DBOS.workflow_id,
+            DBOS.executor_id,
+            "opaque-before-ack",
+            "external_tool",
+            "fingerprint",
+        )
+        with domain_engine().begin() as db:
             db.execute(text("CREATE TABLE external_retry_effects(id text PRIMARY KEY)"))
             db.execute(text("INSERT INTO external_retry_effects VALUES ('one')"))
-        raise RuntimeError("Actual committed memory effect, acknowledgement unknown")
+        await asyncio.to_thread(
+            finish_operation, run_id, "opaque-before-ack", "unknown"
+        )
+        raise unconfirmed("Actual committed external effect, acknowledgement unknown")
 
     monkeypatch.setattr(engine.research, "research_review", review)
     if outcome == "unknown":
+        case.cfg["configurable"].update(
+            rag_memory_write_enabled=True,
+            rag_memory_mysql_url="mysql+pymysql://offline",
+        )
         monkeypatch.setattr(
-            engine.reporting, "maybe_persist_chat_memory", uncertain_memory
+            engine.reporting, "persist_report_memory", uncertain_external_write
         )
     run = case.create()
     failed = saved(case, run, "failed", 0)
     failed = retry_observed_failure(case, run, "only-grant", failed)
     if outcome == "cancelled":
         assert entered.wait(15)
-        assert facts().unresolved(run["run_id"])
+        assert case.client.get(run["run_id"], "alice")["retry_requested"]
         case.client.retry(run["run_id"], "alice", "only-grant", failed["state_version"])
         case.client.cancel(run["run_id"], "alice")
     expected = "cancelled" if outcome == "cancelled" else "interrupted"
@@ -357,8 +398,8 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
         case.client.retry(run["run_id"], "alice", "unsafe-new", result["state_version"])
     if outcome == "unknown":
         assert result["settlement"] == "unresolved"
-        assert facts().request(run["run_id"])["occupied"]
-        with facts().engine.connect() as db:
+        assert has_unconfirmed_bills_or_effects(run["run_id"])
+        with domain_engine().connect() as db:
             assert (
                 db.execute(
                     text("SELECT count(*) FROM external_retry_effects")
@@ -409,6 +450,9 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
         first = client.get(run["run_id"], "alice")
         assert first["status"] == "failed" and first["retry_safe"]
         assert effect_count(tmp_path, "reviews") == 1
+        root_failure = client.native(run["run_id"]).completed_at
+        research_id = run["run_id"] + ":research"
+        research_failure = client.native(research_id).completed_at
         client.retry(run["run_id"], "alice", "original", first["state_version"])
         wait(lambda: (tmp_path / scenario).exists(), process, tmp_path)
         # The command is durable and consumed, but its native application has
@@ -423,7 +467,9 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
             )
         else:
             assert not any(
-                s["function_name"].endswith("retry_execution") for s in steps
+                s["function_name"].endswith("retry_execution")
+                and (s["output"] or {}).get("last")
+                for s in steps
             )
         if scenario in {"retry-after", "retry-error"}:
             wait(
@@ -432,11 +478,15 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
                 process,
                 tmp_path,
             )
+        if scenario in {"retry-before", "retry-between"}:
+            # The Finalizer waits for the rewound leaf before rewinding its parent.
+            assert client.native(run["run_id"]).completed_at == root_failure
+            changed = client.native(research_id).completed_at != research_failure
+            assert changed == (scenario == "retry-between")
+        assert effect_count(tmp_path, "reviews") == 2
         kill_owned(process)
         client.retry(run["run_id"], "alice", "original", first["state_version"])
-        assert effect_count(tmp_path, "reviews") == (
-            2 if scenario in {"retry-after", "retry-error"} else 1
-        )
+        assert effect_count(tmp_path, "reviews") == 2
         (tmp_path / (scenario + ".release")).write_text("continue")
         (tmp_path / "executor-ready").unlink()
         restart = start(tmp_path, executor, scenario)
@@ -544,7 +594,7 @@ def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeyp
     async def review(state, cfg):
         attempts.append(1)
         if len(attempts) <= 2:
-            capture_budget_usage({"model_calls": 1, "input_tokens": 2})
+            await record_scripted_model_attempt()
             raise RuntimeError("Safe read failure")
         return await original_review(state, cfg)
 

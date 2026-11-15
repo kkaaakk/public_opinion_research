@@ -292,9 +292,13 @@ def install_sdk(
 
         if role == "internal_knowledge" and local_tool is not None:
             return [local_tool]
-        result = [_tool(role, coroutine=search)]
+        entry = _tool(role, coroutine=search)
+        entry.metadata = {**(entry.metadata or {}), "effect": "read"}
+        result = [entry]
         if mode == "complete":
-            result.append(_tool(role, name="ResearchComplete", domain="core"))
+            finish = _tool(role, name="ResearchComplete", domain="core")
+            finish.metadata = {**(finish.metadata or {}), "effect": "read"}
+            result.append(finish)
         return result
 
     monkeypatch.setattr(business_agent, "SDKAgentRuntime", RecordingRuntime)

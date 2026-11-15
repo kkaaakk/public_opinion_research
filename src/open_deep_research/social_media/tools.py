@@ -129,7 +129,7 @@ SOCIAL_MEDIA_TOOL_NAMES: frozenset[str] = frozenset({
 # 返回可供角色权限过滤的全部社交媒体工具。
 def get_social_media_tools() -> list:
     """Return all social media LangChain tools."""
-    return [
+    tools = [
         search_posts,
         fetch_thread,
         fetch_comments,
@@ -138,3 +138,8 @@ def get_social_media_tools() -> list:
         get_trending_keywords,
         get_public_opinion_snapshot,
     ]
+
+    # The HTTP backend may start a paid Apify Actor even though its route
+    # uses GET. Local records require no external effect protection.
+    effect = "protected" if social_media_mcp._api_base_url(social_media_mcp._social_config(None)) else "read"
+    return [item.model_copy(update={"metadata": {"effect": effect}}) for item in tools]

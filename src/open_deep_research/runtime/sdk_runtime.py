@@ -18,12 +18,16 @@ from agents.exceptions import MaxTurnsExceeded, MCPToolCancellationError
 from agents.retry import ModelRetrySettings
 from agents.run import ModelInputData
 from agents.tool_context import ToolContext
+from dbos import DBOS
+from dbos import error as dbos_error
 from jsonschema.validators import validator_for
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.budget import (
     ModelBudgetExceeded,
+    begin_model_call,
     budget_capture,
     budget_from_sdk_usage,
     budget_from_tool_calls,
@@ -33,10 +37,12 @@ from open_deep_research.budget import (
     capture_budget_usage,
     context_pressure_ratio,
     diff_budget_usage,
+    end_model_call,
     estimate_text_tokens,
     is_over_budget,
     merge_budget_usage,
     model_budget_admission,
+    physical_model_usage,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
@@ -50,8 +56,18 @@ from open_deep_research.observability.telemetry import (
 from open_deep_research.research_graph.compaction import summarize_compactable_history
 from open_deep_research.research_graph.workspace import ResearchWorkspace
 from open_deep_research.runtime.sdk_context import SDKContextHarness, tool_usage
-from open_deep_research.workflow.execution import ExecutionControlError, owned_io
-from open_deep_research.workflow.run_facts import begin_call, current_unit, end_call
+from open_deep_research.tools.registry import tool_effect
+from open_deep_research.web.run_data import digest
+from open_deep_research.workflow.dbos_config import native_client, settings
+from open_deep_research.workflow.execution import (
+    ExecutionControlError,
+    commit_receipt,
+    finish_operation,
+    owned_io,
+    stage_context,
+    start_operation,
+    unconfirmed,
+)
 
 SDK_RUNTIME_VERSION = "sdk-phase5-v1"
 
@@ -104,16 +120,23 @@ class MeteredModel(Model):
 
     async def get_response(self, *args, **kwargs):
         try:
-            identity = await begin_call("sdk_model")
+            identity = await begin_model_call()
         except ModelBudgetExceeded as exc:
             raise _ReasoningStopped(str(exc)) from exc
+        except SQLAlchemyError as exc:
+            raise ExecutionControlError("Model admission storage unavailable") from exc
         try:
-            response = await self.model.get_response(*args, **kwargs)
+            response = await self._response(identity, *args, **kwargs)
         except BaseException as exc:
             usage = {"model_calls": 1}
-            await end_call(identity, usage=usage, status="failed")
+            await end_model_call(identity, physical_model_usage(usage, failed=True))
             if isinstance(exc, Exception) and not isinstance(
-                exc, (ExecutionControlError, ModelBudgetExceeded)
+                exc,
+                (
+                    dbos_error.DBOSWorkflowCancelledError,
+                    ExecutionControlError,
+                    ModelBudgetExceeded,
+                ),
             ):
                 raise ModelInvocationError(
                     type(exc).__name__,
@@ -123,8 +146,35 @@ class MeteredModel(Model):
             raise
         usage = budget_from_sdk_usage(response.usage)
         usage["model_calls"] = 1
-        await end_call(identity, usage=usage)
+        await end_model_call(identity, physical_model_usage(usage))
         return response
+
+    async def _response(self, identity, *args, **kwargs):
+        if identity is None:
+            return await self.model.get_response(*args, **kwargs)
+
+        async def wait_for_native_stop():
+            client = native_client()
+            handle = await client.retrieve_workflow_async(DBOS.workflow_id)
+            await client.wait_first_async([handle])
+
+        # The official runner's model Step is not preemptible in 0.3.0.
+        # Keep its checkpoint and use DBOS's terminal wait for provider cancellation.
+        response = asyncio.create_task(self.model.get_response(*args, **kwargs))
+        stop = asyncio.create_task(wait_for_native_stop())
+        try:
+            done, _ = await asyncio.wait(
+                (response, stop), return_when=asyncio.FIRST_COMPLETED
+            )
+            if response in done:
+                return response.result()
+            stop.result()
+            raise dbos_error.DBOSWorkflowCancelledError("Native execution stopped")
+        finally:
+            for task in (response, stop):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(response, stop, return_exceptions=True)
 
     def stream_response(self, *args, **kwargs):
         raise NotImplementedError("Durable business Agents use DBOSRunner.run")
@@ -546,6 +596,7 @@ class SDKAgentRuntime:
         # execution dependencies, never the Runtime or one of its bound methods.
         allowed_domains = self.spec.allowed_domains
         role = self.role
+        effect = tool_effect(tool)
         config = self.config
         runtime_config = self.runtime_config
         budget = self.run_budget
@@ -581,25 +632,34 @@ class SDKAgentRuntime:
                 budget.add(increment)
                 args = json.loads(arguments)
                 validator.validate(args)
-                identity = dict(
-                    role=role,
-                    name=name,
-                    task_id=context.context.scope.task_id,
-                    research_round=context.context.scope.research_round,
-                    invocation_id=context.context.sdk_run_id,
-                    tool_call_id=context.tool_call_id,
-                    arguments=arguments,
-                )
-                unit = current_unit.get()
-                operation_id = (
-                    await unit.operation(identity, status="started") if unit else None
-                )
-                context.context.results[
-                    context.tool_call_id
-                ].operation_id = operation_id
-                context.context.results[context.tool_call_id].effect_status = "started"
+                scope = stage_context.get()
+                record = context.context.results[context.tool_call_id]
+                operation_id = None
                 call_config = runtime_config
-                if operation_id is not None:
+                if scope is not None and effect == "protected":
+                    operation_id = digest(
+                        (DBOS.workflow_id, name, context.tool_call_id)
+                    )
+                    try:
+                        _, cancelled = await owned_io(
+                            start_operation,
+                            scope.run_id,
+                            DBOS.workflow_id,
+                            DBOS.executor_id,
+                            operation_id,
+                            name,
+                            digest(args),
+                        )
+                    except SQLAlchemyError as exc:
+                        raise ExecutionControlError(
+                            "External tool admission storage unavailable"
+                        ) from exc
+                    if cancelled is not None:
+                        await commit_receipt(
+                            finish_operation, scope.run_id, operation_id, "not_executed"
+                        )
+                        raise cancelled
+                    record.operation_id = operation_id
                     call_config = {
                         **runtime_config,
                         "metadata": {
@@ -608,33 +668,82 @@ class SDKAgentRuntime:
                             "idempotency_key": operation_id,
                         },
                     }
-                with budget_capture() as captured:
+                if scope is not None:
                     try:
-                        output = await tool.ainvoke(
+                        await scope.observe(
+                            "tool",
                             {
-                                "type": "tool_call",
-                                "id": context.tool_call_id,
+                                "role": role,
                                 "name": name,
-                                "args": args,
+                                "tool_call_id": context.tool_call_id,
+                                "invocation_id": context.context.sdk_run_id,
+                                "operation_id": operation_id,
+                                "status": "started",
+                                **increment,
                             },
-                            call_config,
+                            call_id=context.tool_call_id + ":started",
                         )
-                    except BaseException:
-                        await end_call(
-                            identity if unit else None,
-                            status="uncertain",
-                            usage=increment,
-                        )
-                        context.context.results[
-                            context.tool_call_id
-                        ].effect_status = "uncertain"
+                    except BaseException as exc:
+                        if operation_id is not None:
+                            await commit_receipt(
+                                finish_operation,
+                                scope.run_id,
+                                operation_id,
+                                "not_executed",
+                            )
+                        if isinstance(exc, SQLAlchemyError):
+                            raise ExecutionControlError(
+                                "Tool observation storage unavailable"
+                            ) from exc
                         raise
-                    finally:
-                        budget.add(captured)
-                # The receipt states that the external invoker returned. The
-                # Harness separately validates business success/evidence status.
-                await end_call(identity if unit else None, usage=increment)
-                context.context.results[context.tool_call_id].effect_status = "returned"
+                record.effect_status = "started"
+                try:
+                    with budget_capture() as captured:
+                        try:
+                            output = await tool.ainvoke(
+                                {
+                                    "type": "tool_call",
+                                    "id": context.tool_call_id,
+                                    "name": name,
+                                    "args": args,
+                                },
+                                call_config,
+                            )
+                        finally:
+                            budget.add(captured)
+                    result = decode_output(output)
+                except BaseException as exc:
+                    if operation_id is not None:
+                        await commit_receipt(
+                            finish_operation, scope.run_id, operation_id, "unknown"
+                        )
+                        record.effect_status = "uncertain"
+                        if isinstance(exc, Exception):
+                            raise unconfirmed(
+                                "External tool result requires reconciliation"
+                            ) from exc
+                    raise
+                if operation_id is not None:
+                    await commit_receipt(
+                        finish_operation, scope.run_id, operation_id, "returned"
+                    )
+                record.effect_status = "returned"
+                if scope is not None:
+                    await scope.observe(
+                        "tool",
+                        {
+                            "role": role,
+                            "name": name,
+                            "tool_call_id": context.tool_call_id,
+                            "invocation_id": context.context.sdk_run_id,
+                            "operation_id": operation_id,
+                            "status": "returned",
+                        },
+                        call_id=context.tool_call_id + ":returned",
+                    )
+                return result
+
+            def decode_output(output):
                 if isinstance(output, ToolMessage):
                     if output.status == "error":
                         raise _ToolRejected(_text(output.content))
@@ -674,6 +783,7 @@ class SDKAgentRuntime:
                     raise MCPToolCancellationError(_text(output))
                 if isinstance(envelope, dict) and (
                     ("isError" in envelope and envelope["isError"] is not False)
+                    or ("ok" in envelope and envelope["ok"] is False)
                     or ("success" in envelope and envelope["success"] is not True)
                     or (
                         "status" in envelope
@@ -809,11 +919,11 @@ class SDKAgentRuntime:
                 raise ValueError(f"Duplicate business tool name: {tool.name}")
             names.add(tool.name)
             registered.append(self._register_tool(tool))
-        unit = current_unit.get()
+        scope = stage_context.get()
         self.agent = Agent(
             name=self.spec.display_name,
             instructions=self.system_prompt,
-            model=MeteredModel(self.model) if unit else self.model,
+            model=MeteredModel(self.model) if scope else self.model,
             tools=registered,
             output_type=None,
             model_settings=ModelSettings(
@@ -838,18 +948,18 @@ class SDKAgentRuntime:
         self.sdk_result = None
         session = None
         try:
-            if unit is not None:
-                await unit.observe(
+            if scope is not None:
+                await scope.observe(
                     "session_started",
                     {"role": self.role, "invocation_id": self.harness.sdk_run_id},
                 )
-                if unit.repo.settings.session_path:
+                if settings().session_path:
                     from agents import SQLiteSession
 
                     session, cancelled = await owned_io(
                         SQLiteSession,
-                        unit.id + ":" + self.harness.sdk_run_id,
-                        unit.repo.settings.session_path,
+                        scope.stage_id + ":" + self.harness.sdk_run_id,
+                        settings().session_path,
                     )
                     if cancelled is not None:
                         raise cancelled

@@ -92,7 +92,13 @@ def history_record(
         "org_context",
         "rag_enabled",
     )
-    usage_keys = ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+    usage_keys = (
+        "model_calls",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "usage_complete",
+    )
     return HistoryRecord(
         id=stable_id("HISTORY", run_id, length=32),
         run_id=run_id,

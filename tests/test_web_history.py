@@ -380,16 +380,19 @@ def test_renamed_workflow_with_final_report_is_not_filtered_out():
 # 验证 SSE 运行失败后保留嵌套角色输出。
 @pytest.mark.integration
 def test_failed_sse_run_preserves_nested_role_outputs(native_case, monkeypatch):
-    from open_deep_research.budget import capture_budget_usage
-    from open_deep_research.workflow import research
+    from open_deep_research import budget
+    from open_deep_research.workflow.execution import stage_context, unconfirmed
 
     case = native_case
+    finish = budget.finish_model_attempt
 
-    async def fail(*args, **kwargs):
-        capture_budget_usage({"model_calls": 1})
-        raise RuntimeError("SECRET_DSN")
+    def lose_receipt(run_id, call_id, usage):
+        stage = stage_context.get()
+        if stage is not None and stage.name == "risk_assessment_agent":
+            raise unconfirmed("SECRET_DSN")
+        return finish(run_id, call_id, usage)
 
-    monkeypatch.setattr(research, "risk_assessment_agent", fail)
+    monkeypatch.setattr(budget, "finish_model_attempt", lose_receipt)
     run = case.create()
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     record = case.history.get(result["history_id"], owner="alice")
@@ -404,9 +407,16 @@ def test_failed_sse_run_preserves_nested_role_outputs(native_case, monkeypatch):
     }
     assert record["usage"] == {
         k: result["usage"][k]
-        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+        for k in (
+            "model_calls",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "usage_complete",
+        )
     }
     assert result["usage"]["model_calls"] == 20
+    assert result["usage"]["usage_complete"] is False
     events = case.client.read_events(run["run_id"], "alice", 0, 1000)
     assert any(e["type"] == "error" for e in events)
     assert any(e["type"] == "history_saved" for e in events)
@@ -444,22 +454,28 @@ def test_no_final_report_still_creates_an_incomplete_history_record(
 
 
 @pytest.mark.integration
-def test_memory_boundary_failure_preserves_committed_report_and_stays_unsafe(
+def test_memory_boundary_failure_preserves_committed_report_for_retry(
     native_case, monkeypatch
 ):
     from open_deep_research.workflow import reporting
 
-    async def fail(*args, **kwargs):
-        raise RuntimeError("Unconfirmed report memory boundary")
+    attempted = []
+
+    async def fail(state, config, report):
+        attempted.append(report)
+        raise RuntimeError("Synthetic idempotent Memory outage")
 
     case = native_case
+    case.cfg["configurable"].update(
+        rag_memory_write_enabled=True, rag_memory_mysql_url="mysql+pymysql://offline"
+    )
     monkeypatch.setattr(reporting, "maybe_persist_chat_memory", fail)
     result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
     record = case.history.get(result["history_id"], owner="alice")
-    assert record["status"] == "incomplete"
-    assert result["status"] == "interrupted"
-    assert result["settlement"] == "unresolved"
-    assert result["retry_safe"] is False
+    assert record["status"] == result["status"] == "failed"
+    assert result["settlement"] == "settled"
+    assert result["retry_safe"] is True
+    assert attempted == [result["report"]]
     assert record["report"] == result["report"]
     assert record["report"].startswith(
         "FINAL brand recall report, sourced and reviewed"
@@ -491,8 +507,15 @@ def test_cancelled_run_still_creates_a_history_record(native_case):
     assert record["status"] == result["status"] == "cancelled"
     assert record["usage"] == {
         k: result["usage"][k]
-        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+        for k in (
+            "model_calls",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "usage_complete",
+        )
     }
+    assert result["usage"]["usage_complete"] is False
     assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
     assert any(
         e["type"] == "history_saved"
@@ -500,7 +523,7 @@ def test_cancelled_run_still_creates_a_history_record(native_case):
     )
 
 
-# 验证真实 LangGraph 嵌套失败时已完成阶段仍可恢复。
+# 验证 DBOS 子 Workflow 失败时已完成阶段的报告仍可查询。
 @pytest.mark.integration
 def test_real_dbos_nested_failure_retains_finished_stage(native_case, monkeypatch):
     from open_deep_research.workflow import research
@@ -513,9 +536,8 @@ def test_real_dbos_nested_failure_retains_finished_stage(native_case, monkeypatc
     monkeypatch.setattr(research, "response_strategy_agent", fail)
     result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
     record = case.history.get(result["history_id"], owner="alice")
-    assert record["status"] == "incomplete"
-    assert result["status"] == "interrupted"
-    assert result["settlement"] == "unresolved"
+    assert record["status"] == result["status"] == "failed"
+    assert result["settlement"] == "settled"
     assert result["retry_safe"] is False
     assert {s["role"] for s in record["role_reports"]} == {
         "public_signal",

@@ -22,16 +22,24 @@ from open_deep_research.workflow.dbos_config import (
     CONTROL,
     RECOVERY,
     VERSION,
+    close_connections,
+    domain_engine,
+    native_client,
     settings,
 )
-from open_deep_research.workflow.run_facts import facts
+from open_deep_research.workflow.domain_schema import (
+    initialize_domain,
+    migration_inventory,
+    require_matching_journals,
+    verify_policy,
+)
 
 
 def launch(executor_id, *, queues=None):
     assert callable(dbos_workflow.run_workflow)
     cfg = settings()
-    facts().verify_policy()
-    facts().require_matching_journals()
+    verify_policy()
+    require_matching_journals()
     tracing = initialize_telemetry()
     DBOS(
         config={
@@ -68,6 +76,7 @@ def launch(executor_id, *, queues=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--initialize-only", action="store_true")
+    parser.add_argument("--migrate-domain", action="store_true")
     parser.add_argument("--executor-id", default=os.environ.get("DBOS_EXECUTOR_ID"))
     parser.add_argument("--health", action="store_true")
     parser.add_argument("--migration-check", action="store_true")
@@ -80,20 +89,20 @@ def main():
     if args.migration_check:
         import json
 
-        print(json.dumps(facts().migration_inventory(), ensure_ascii=False, indent=2))
+        print(json.dumps(migration_inventory(), ensure_ascii=False, indent=2))
         return
-    if args.initialize_only:
+    if args.initialize_only or args.migrate_domain:
         DBOS.migrate(settings().url, schema="por_dbos")
-        facts().initialize()
-        facts().close()
+        initialize_domain(migrate_legacy=args.migrate_domain)
+        close_connections()
         return
     if args.health:
         from sqlalchemy import text
 
-        with facts().engine.connect() as db:
+        with domain_engine().connect() as db:
             db.execute(text("SELECT 1"))
-        facts().client.list_workflows(limit=1, load_input=False, load_output=False)
-        facts().close()
+        native_client().list_workflows(limit=1, load_input=False, load_output=False)
+        close_connections()
         return
     if args.reconcile_run:
         from open_deep_research.web.durable import get_run_client
@@ -105,7 +114,7 @@ def main():
             worker_stopped=args.worker_stopped,
             note=args.note,
         )
-        facts().close()
+        close_connections()
         return
     if not args.executor_id:
         parser.error(
@@ -128,7 +137,7 @@ def main():
             DBOS.destroy()
         finally:
             try:
-                facts().close()
+                close_connections()
             finally:
                 shutdown_telemetry()
 

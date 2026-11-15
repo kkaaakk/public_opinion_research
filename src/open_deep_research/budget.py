@@ -26,6 +26,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.config import ensure_config, merge_configs
+from sqlalchemy import text
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
@@ -67,6 +68,139 @@ def require_physical_model_budget(config, baseline, actual, *, reserve_report):
         raise ModelBudgetExceeded(
             "Physical call receipts exhausted the research budget"
         )
+
+
+def model_bill(db, run_id):
+    """Known physical charges, a count of open invocations, and usage completeness."""
+    from open_deep_research.web.run_data import loads
+
+    total: dict[str, Any] = {}
+    pending = 0
+    complete = True
+    for usage in db.execute(
+        text("SELECT usage FROM por_domain.model_attempts WHERE run_id=:r"),
+        {"r": run_id},
+    ).scalars():
+        if usage is None:
+            pending += 1
+            continue
+        value = loads(usage)
+        complete &= value.get("usage_complete", True)
+        total = merge_budget_usage(total, value)
+    return (
+        merge_budget_usage(total, {"model_calls": pending}),
+        pending,
+        complete and not pending,
+    )
+
+
+def start_model_attempt(scope, workflow_id, executor_id, call_id):
+    from open_deep_research.web.run_data import db_time
+    from open_deep_research.workflow.dbos_config import domain_engine
+    from open_deep_research.workflow.execution import require_live_effect, unconfirmed
+
+    with domain_engine().begin() as db:
+        require_live_effect(db, scope.run_id, workflow_id, executor_id)
+        keys = {"r": scope.run_id, "id": call_id}
+        if db.scalar(
+            text("SELECT 1 FROM por_domain.model_attempts WHERE run_id=:r AND id=:id"),
+            keys,
+        ):
+            raise unconfirmed("Model attempt already exists without its native result")
+        if scope.expires_at is not None and db_time(db) >= scope.expires_at:
+            raise ModelInvocationError("BriefApprovalExpired")
+        if scope.config.budget_enabled:
+            actual, pending, complete = model_bill(db, scope.run_id)
+            # With token ceilings, an in-flight bill has no provider token
+            # count yet. Do not spend that capacity on another parallel call.
+            token_limit = (
+                scope.config.max_input_tokens is not None
+                or scope.config.max_output_tokens is not None
+            )
+            if token_limit and (pending or not complete):
+                raise ModelBudgetExceeded(
+                    "Token budget is held by an unconfirmed model bill"
+                )
+            require_physical_model_budget(
+                scope.config,
+                scope.initial_usage,
+                actual,
+                reserve_report=scope.reserve_report,
+            )
+        db.execute(
+            text(
+                "INSERT INTO por_domain.model_attempts(run_id,id,stage_id) VALUES (:r,:id,:stage)"
+            ),
+            dict(keys, stage=scope.stage_id),
+        )
+
+
+def finish_model_attempt(run_id, call_id, usage):
+    from open_deep_research.web.run_data import dumps
+    from open_deep_research.workflow.dbos_config import domain_engine
+    from open_deep_research.workflow.execution import unconfirmed
+
+    with domain_engine().begin() as db:
+        if (
+            db.execute(
+                text("""
+            UPDATE por_domain.model_attempts SET usage=:usage
+            WHERE run_id=:r AND id=:id AND (usage IS NULL OR usage=:usage)
+            """),
+                {"r": run_id, "id": call_id, "usage": dumps(usage)},
+            ).rowcount
+            != 1
+        ):
+            raise unconfirmed("Conflicting model usage receipt")
+
+
+async def begin_model_call():
+    from open_deep_research.workflow.execution import (
+        ExecutionControlError,
+        owned_cleanup,
+        owned_io,
+        stage_context,
+    )
+
+    scope = stage_context.get()
+    if scope is None:
+        return None
+    if owned_cleanup.get():
+        raise ExecutionControlError("No new inference during cancellation cleanup")
+    call_id = scope.call_id("model")
+    _, cancellation = await owned_io(
+        start_model_attempt, scope, DBOS.workflow_id, DBOS.executor_id, call_id
+    )
+    if cancellation is not None:
+        await end_model_call(call_id, {})
+        raise cancellation
+    return call_id
+
+
+async def end_model_call(call_id, usage):
+    from open_deep_research.workflow.execution import commit_receipt, stage_context
+
+    scope = stage_context.get()
+    if call_id is not None and scope is not None:
+        await commit_receipt(finish_model_attempt, scope.run_id, call_id, usage)
+
+
+def physical_model_usage(usage, *, failed=False):
+    """A response without a provider count leaves the token bill incomplete."""
+    value = dict(usage)
+    value["model_calls"] = max(value.get("model_calls", 0), 1)
+    if not value.get("total_tokens") and (
+        failed or not value.get("input_tokens") and not value.get("output_tokens")
+    ):
+        value["usage_complete"] = False
+    return value
+
+
+def _failed_physical_usage(error):
+    usage = getattr(error, "budget_usage", {})
+    if isinstance(error, ModelBudgetExceeded) and not usage.get("model_calls"):
+        return {}
+    return physical_model_usage(usage, failed=True)
 
 
 @contextmanager
@@ -481,7 +615,6 @@ async def ainvoke_model_with_budget(
         ExecutionControlError,
         native_step_available,
     )
-    from open_deep_research.workflow.run_facts import begin_call, end_call
 
     if isinstance(runnable, _DurableStructured):
         usage = {}
@@ -511,7 +644,7 @@ async def ainvoke_model_with_budget(
     async def execute():
         nonlocal executed
         executed = True
-        identity = await begin_call("llm")
+        identity = await begin_model_call()
         try:
             result, delta = await _ainvoke_model_accounted(
                 runnable,
@@ -522,14 +655,13 @@ async def ainvoke_model_with_budget(
                 structured_output=structured_output,
             )
         except BaseException as exc:
-            await end_call(
-                identity, usage=getattr(exc, "budget_usage", {}), status="failed"
-            )
+            if isinstance(exc, (Exception, asyncio.CancelledError)):
+                await end_model_call(identity, _failed_physical_usage(exc))
             invocation_error = _durable_model_error(exc, identity, model_name)
             if invocation_error is not None:
                 raise invocation_error from exc
             raise
-        await end_call(identity, usage=delta)
+        await end_model_call(identity, physical_model_usage(delta))
         return result, delta
 
     try:
@@ -589,15 +721,17 @@ def invoke_model_with_budget(
     Mirrors :func:`ainvoke_model_with_budget`, including attempt and usage
     accounting when the call raises.
     """
-    from open_deep_research.workflow.execution import native_step_available
-    from open_deep_research.workflow.run_facts import begin_call, current_unit, end_call
+    from open_deep_research.workflow.execution import (
+        native_step_available,
+        stage_context,
+    )
 
     executed = False
 
     def execute():
         nonlocal executed
         executed = True
-        identity = asyncio.run(begin_call("llm_sync")) if current_unit.get() else None
+        identity = asyncio.run(begin_model_call()) if stage_context.get() else None
         try:
             response, delta = _invoke_model_accounted(
                 runnable,
@@ -608,20 +742,16 @@ def invoke_model_with_budget(
                 structured_output=structured_output,
             )
         except BaseException as exc:
-            if identity is not None:
-                asyncio.run(
-                    end_call(
-                        identity,
-                        usage=getattr(exc, "budget_usage", {}),
-                        status="failed",
-                    )
-                )
+            if identity is not None and isinstance(
+                exc, (Exception, asyncio.CancelledError)
+            ):
+                asyncio.run(end_model_call(identity, _failed_physical_usage(exc)))
             invocation_error = _durable_model_error(exc, identity, model_name)
             if invocation_error is not None:
                 raise invocation_error from exc
             raise
         if identity is not None:
-            asyncio.run(end_call(identity, usage=delta))
+            asyncio.run(end_model_call(identity, physical_model_usage(delta)))
         return response, delta
 
     try:
