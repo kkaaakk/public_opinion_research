@@ -25,7 +25,9 @@ function stream(events) {
     } }) } };
 }
 function state(status, extra = {}) {
-    return { status, usage: {}, role_reports: [], report: '', archive_status: 'pending', ...extra };
+    return { status, usage: {}, role_reports: [], report: '', archive_status: 'pending',
+        events_complete: ['completed', 'failed', 'cancelled', 'interrupted'].includes(status),
+        event_cursor: 0, ...extra };
 }
 function storage(value) {
     const values = new Map(value ? [[storageKey, JSON.stringify(value)]] : []);
@@ -110,17 +112,25 @@ test('known Run reload only subscribes and deduplicates durable event sequences'
     const saved = storage({ key: 'key', request: body, runId, cursor: 7 });
     let reads = 0;
     const view = page(saved, (path) => {
-        if (path.endsWith('/events')) return stream([
-            { seq: 8, type: 'status', message: 'stage' }, { seq: 8, type: 'status', message: 'duplicate' },
-            { seq: 9, type: 'report', content: 'report' }, { seq: 10, type: 'done' },
-        ]);
-        return response(state(++reads === 1 ? 'running' : 'completed', { report: reads > 1 ? 'report' : '' }));
+        if (path.endsWith('/events')) {
+            assert.equal(view.element('status-text').textContent, '正在接收结果…');
+            assert.notEqual(JSON.parse(saved.getItem(storageKey)).finished, true);
+            return stream([
+                { seq: 8, type: 'history_saved', id: 'old-archive', generation: 0 },
+                { seq: 8, type: 'status', message: 'duplicate', generation: 1 },
+                { seq: 9, type: 'report', content: 'report', generation: 1 }, { seq: 10, type: 'done', generation: 1 },
+            ]);
+        }
+        return response(state('completed', { generation: 1, event_cursor: 10, report: ++reads > 1 ? 'report' : '' }));
     });
     await view.call('startResearch(true)');
     assert.ok(view.calls.every(call => call.options.method !== 'POST'));
     assert.equal(view.calls.find(call => call.path.endsWith('/events')).options.headers['Last-Event-ID'], '7');
     assert.equal(JSON.parse(saved.getItem(storageKey)).cursor, 10);
+    assert.equal(JSON.parse(saved.getItem(storageKey)).finished, true);
     assert.equal(view.element('report-content').textContent, 'report');
+    assert.equal(view.call('archiveSaved'), false, 'older generations must not replace the current archive state');
+    assert.equal(view.element('status-text').textContent, '已完成');
 });
 
 test('approval stays on the same Run and disables a simultaneous click', async () => {

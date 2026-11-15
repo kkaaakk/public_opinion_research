@@ -266,6 +266,8 @@ def publish_event(db, run_id, kind, *, idempotency_key=None, **payload):
     from open_deep_research.workflow.dbos_config import native_client
 
     payload.setdefault("observed_at", timestamp(db_time(db)))
+    if "generation" not in payload:
+        payload["generation"] = retry_generation(db, run_id)
     native_client().send_in_transaction(
         db,
         run_id + ":events",
@@ -282,6 +284,21 @@ def retry_generation(db, run_id):
         ),
         {"id": run_id},
     )
+
+
+def result_budget(result):
+    if role := result.get("research_result"):
+        return role["budget_delta"]
+    return result.get("patch", {}).get("runtime", {}).get("budget", {})
+
+
+def stage_budget(result):
+    budget = result_budget(result)
+    return {
+        key: budget[key]
+        for key in ("budget_warnings", "degradation_reasons")
+        if budget.get(key)
+    }
 
 
 def role_deliverables(result):

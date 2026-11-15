@@ -748,50 +748,52 @@ def test_waiting_snapshot_reads_phase_before_its_versioned_payload(
 
 
 def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeypatch):
+    import asyncio
+    import threading
+
     from open_deep_research.workflow import dbos_workflow as engine
-    from open_deep_research.workflow import execution
 
-    original_publish, original_send = execution.publish_event, engine.send_event
-    held = []
-    observed = []
-
-    def reordered(db, run_id, kind, *, idempotency_key=None, **payload):
-        if (
-            kind == "sdk_event"
-            and payload.get("event") == "agent_completed"
-            and payload.get("role") == "response_strategy"
-        ):
-            held.append((run_id, payload))
-            return
-        return original_publish(
-            db, run_id, kind, idempotency_key=idempotency_key, **payload
-        )
-
-    async def send(run_id, event_type, **data):
-        await original_send(run_id, event_type, **data)
-        if event_type == "history_saved" and held:
-            import asyncio
-
-            from dbos import DBOS
-
-            await asyncio.sleep(0.2)
-            # Archive can arrive first, but is not a receipt for an unseen SDK tail.
-            observed.append(
-                await DBOS.get_event_async(
-                    run_id + ":events", "done", timeout_seconds=0
-                )
-            )
-            _, packet = held.pop()
-            await original_send(run_id, "sdk_event", **packet)
-
-    monkeypatch.setattr(execution, "publish_event", reordered)
-    monkeypatch.setattr(engine, "send_event", send)
     c = native_case
+    original_save, original_event = c.history.save, engine.public_event
+    entered, release, archived = (threading.Event() for _ in range(3))
+
+    def save(records):
+        result = original_save(records)
+        archived.set()
+        return result
+
+    async def deliver(event):
+        if (
+            event["type"] == "sdk_event"
+            and event.get("event") == "agent_completed"
+            and event.get("role") == "response_strategy"
+        ):
+            # The native message has committed. Hold its Stream append while
+            # the independent research result and History write both finish.
+            entered.set()
+            while not release.is_set():
+                await asyncio.sleep(0.02)
+        return await original_event(event)
+
+    monkeypatch.setattr(c.history, "save", save)
+    monkeypatch.setattr(engine, "public_event", deliver)
     run = c.create()
+    try:
+        assert entered.wait(15) and archived.wait(15)
+        current = c.client.get(run["run_id"], "alice")
+        assert current["native_status"] == "SUCCESS" and current["report"]
+        assert not current["events_complete"]
+        assert not any(
+            e["type"] in {"done", "history_saved"}
+            for e in c.client.read_events(run["run_id"], "alice", 0, 1000)
+        )
+    finally:
+        release.set()
+
     done = c.wait(
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
     )
-    assert observed == [None] and not held and done["status"] == "completed"
+    assert done["status"] == "completed"
     events = c.client.read_events(run["run_id"], "alice", 0, 1000)
     ends = [
         e

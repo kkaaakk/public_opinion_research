@@ -21,7 +21,6 @@ from open_deep_research.observability.telemetry import (
 from open_deep_research.state import ResearchReview, ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.web.run_data import (
-    TERMINAL,
     RunConflict,
     db_time,
     digest,
@@ -32,12 +31,14 @@ from open_deep_research.web.run_data import (
     read_request,
     retry_generation,
     role_deliverables,
+    stage_budget,
     timestamp,
 )
 from open_deep_research.workflow import intake, reporting, research
 from open_deep_research.workflow.dbos_config import (
     BUSINESS,
     CONTROL,
+    SETTLEMENT_GRACE_SECONDS,
     VERSION,
     domain_engine,
     native_client,
@@ -64,10 +65,17 @@ from open_deep_research.workflow.state_utils import agents_for_new_run
 
 
 async def send_event(run_id, event_type, **data):
-    # Called from workflows: the message is a native durable command.
+    # A replayed send retains its original message and generation.
+    if "generation" not in data:
+        data["generation"] = await asyncio.to_thread(run_generation, run_id)
     await DBOS.send_async(
         run_id + ":events", dict(type=event_type, **data), topic="events"
     )
+
+
+def run_generation(run_id):
+    with domain_engine().connect() as db:
+        return retry_generation(db, run_id)
 
 
 def stage_event(db, scope, kind, **payload):
@@ -105,8 +113,9 @@ def publish_failure(scope, error):
 
 @DBOS.step(name="por.stage_failed")
 async def record_failure(scope, error):
+    # Use the Step's function ID so rewind removes the failure with this Step.
+    await DBOS.set_event_async("failure", error)
     await asyncio.to_thread(publish_failure, scope, error)
-    return error
 
 
 @asynccontextmanager
@@ -124,15 +133,11 @@ async def observe_stage(
     """Publish phase observations and apply the existing business deadline."""
     round_ = state.get("workflow", {}).get("round", 1)
 
-    def generation():
-        with domain_engine().connect() as db:
-            return retry_generation(db, run_id)
-
     scope = StageContext(
         run_id,
         stage_id or f"{DBOS.workflow_id}:{name}",
         name,
-        await asyncio.to_thread(generation),
+        await asyncio.to_thread(run_generation, run_id),
         Configuration.from_runnable_config(config),
         config["initial_budget"],
         reserve_report,
@@ -193,31 +198,38 @@ async def stable_result(result):
     return await freeze_messages(result) if result["patch"].get("messages") else result
 
 
+async def publish_stage(result):
+    scope = stage_context.get()
+    if scope.name.endswith("_agent") or scope.name == "research_review":
+        # Role and Review completion already have their own native result.
+        await publish_stage_step(result)
+        return
+    # A report can be ready even if a later publication or Memory step fails.
+    if report := result.get("patch", {}).get("report", {}).get("final"):
+        await DBOS.set_event_async("report", report)
+    await publish_stage_step(result)
+    steps = await DBOS.get_event_async(DBOS.workflow_id, "completed_stages", 0) or {}
+    await DBOS.set_event_async(
+        "completed_stages", steps | {scope.name: stage_budget(result)}
+    )
+
+
 @DBOS.step(
     name="por.publish_stage", retries_allowed=True, max_attempts=3, interval_seconds=0.5
 )
-async def publish_stage(result):
+async def publish_stage_step(result):
     """Send only public business output and stage progress, in one transaction."""
     await asyncio.to_thread(_publish_stage, stage_context.get(), result)
 
 
 def _publish_stage(scope, result):
     patch = result.get("patch", {})
-    role = result.get("research_result")
-    budget = (
-        role["budget_delta"] if role else patch.get("runtime", {}).get("budget", {})
-    )
-    notes = {
-        key: budget[key]
-        for key in ("budget_warnings", "degradation_reasons")
-        if budget.get(key)
-    }
     with domain_engine().begin() as db:
         skipped = result.get("observation", {}).get("skipped")
         if skipped:
             stage_event(db, scope, "step_skipped", reason="role_disabled")
         else:
-            stage_event(db, scope, "step_completed", **notes)
+            stage_event(db, scope, "step_completed", **stage_budget(result))
         for role, report in role_deliverables(result).items():
             stage_event(db, scope, "agent_report", role=role, content=report)
             stage_event(
@@ -579,7 +591,12 @@ async def run_workflow(run_id):
         challenge["version"] = digest(dict(run_id=run_id, **challenge))
         await DBOS.set_event_async("clarification", challenge)
         await DBOS.set_event_async("phase", "awaiting_clarification")
-        await send_event(run_id, "run_status", status="awaiting_clarification")
+        await send_event(
+            run_id,
+            "run_status",
+            status="awaiting_clarification",
+            clarification_version=challenge["version"],
+        )
         reply = await receive_interaction("clarification", req["owner"], challenge)
         if reply is None:
             await DBOS.set_event_async("approval_end", "expired")
@@ -707,125 +724,102 @@ async def run_workflow(run_id):
     return await handle.get_result()
 
 
-def project_event(view, event):
-    """Index public stream offsets for the Run API and History."""
-    kind = event["type"]
-    stage = event.get("unit_id")
-    if kind == "step_started" and stage not in view["completed"]:
-        view["active"][stage] = event["step"]
-    elif kind in {"step_completed", "step_skipped", "step_failed"}:
-        view["active"].pop(stage, None)
-        if kind == "step_completed":
-            view["completed"][stage] = event["step"]
-            for key in ("budget_warnings", "degradation_reasons"):
-                if event.get(key):
-                    view[key] = list(dict.fromkeys(view.get(key, []) + event[key]))
-        if kind == "step_failed" and event["error_kind"] != "cancelled":
-            view["error"] = event["error"]
-    elif kind == "agent_report":
-        view["roles"][stage] = event["seq"]
-    elif kind == "report":
-        view["report"] = event["seq"]
-    elif (
-        kind == "sdk_event"
-        and event.get("event") == "tool"
-        and event["status"] == "started"
-    ):
-        for field in ("tool_calls", "search_calls"):
-            view[field] = view.get(field, 0) + event.get(field, 0)
-    else:
-        return False
-    return True
-
-
 @DBOS.workflow(name="por.events")
 @dbos_scope
 async def events_workflow(run_id):
-    cursor = generation = 0
-    seen = set()
-    delivered_ids = set()
-    terminal = history = snapshot = None
-    acknowledged = False
-    view = {"active": {}, "completed": {}, "roles": {}, "error": {}}
+    """Merge native mailboxes into one append-only Stream for all readers."""
+    delivery = {"offset": 0, "generation": 0}
+    terminal = archive = None
+    roles_finished = {}
+
+    async def append(event):
+        # DBOS assigns the native offset. This single writer counts its
+        # checkpointed appends so GET can expose a delivered-prefix watermark.
+        await DBOS.write_stream_async("events", await public_event(event))
+        delivery["offset"] += 1
+
     while True:
-        ready = terminal and (
-            set(terminal["expected_events"]).issubset(seen)
-            and set(terminal["expected_event_ids"]).issubset(delivered_ids)
-        )
-        draining = (
-            snapshot is not None or ready and (history is not None or not acknowledged)
+        draining = terminal is not None or archive is not None
+        waiting_for_cleanup = (
+            terminal is not None
+            and terminal["drain_roles"]
+            and not all(roles_finished.values())
         )
         event = await DBOS.recv_async(
-            "events", timeout_seconds=0 if draining else 86400
+            "events",
+            timeout_seconds=(
+                SETTLEMENT_GRACE_SECONDS
+                if waiting_for_cleanup
+                else 0
+                if draining
+                else 86400
+            ),
         )
         if event is None:
-            # Native messages with the same timestamp may arrive out of order.
-            # Drain the committed prefix before confirming a snapshot or done.
-            if snapshot is not None:
-                await DBOS.set_event_async(f"projection_ready:{snapshot}", True)
-                snapshot = None
-            if ready and (history is not None or not acknowledged):
-                if history:
-                    cursor += 1
-                    done = await public_event(
-                        dict(history, type="done", seq=cursor, archive_status="saved")
+            # recv orders by millisecond, with no tie breaker. A terminal
+            # notification is a fence: consume the committed mailbox prefix
+            # before writing any terminal frames, including when archive won
+            # the timestamp tie. Cancelled roles may still be emitting cleanup.
+            if not draining:
+                continue
+            for batch in (terminal, archive):
+                if batch is None:
+                    continue
+                observed_at = batch.get("observed_at") or await event_timestamp()
+                for frame in batch["frames"]:
+                    await append(
+                        dict(
+                            frame,
+                            observed_at=observed_at,
+                            generation=delivery["generation"],
+                        )
                     )
-                    await DBOS.write_stream_async("events", done)
-                    await DBOS.set_event_async("cursor", cursor)
-                await DBOS.set_event_async("done", {"generation": generation})
-                if history:
-                    await DBOS.set_event_async(
-                        "history", {"id": history["id"], "generation": generation}
-                    )
-                    if history["status"] in {"completed", "cancelled"}:
-                        await DBOS.close_stream_async("events")
-                        return
-                history = None
-                acknowledged = True
+                delivery.update(batch["receipt"])
+            await DBOS.set_event_async("delivery", delivery)
+            if archive and archive["close"]:
+                await DBOS.close_stream_async("events")
+                return
+            terminal = archive = None
             continue
-        if event["type"] == "_snapshot":
-            snapshot = event["generation"]
+
+        generation = event["generation"]
+        if generation < delivery["generation"]:
             continue
-        event_generation = event.get("generation", generation)
-        if event_generation < generation:
-            continue
-        changed = event_generation > generation
-        if changed:
-            generation = event_generation
-            seen, terminal, history, acknowledged = set(), None, None, False
-            view["error"], view["active"] = {}, {}
-        cursor += 1
-        event = await public_event(
-            dict(
-                event,
-                protocol_version=1,
-                run_id=run_id,
-                attempt_id=run_id,
-                seq=cursor,
-                generation=generation,
-            )
-        )
-        await DBOS.write_stream_async("events", event)
-        if project_event(view, event) or changed:
-            await DBOS.set_event_async("projection", view)
-        await DBOS.set_event_async("cursor", cursor)
-        if event.get("event_id"):
-            delivered_ids.add(event["event_id"])
+        if generation > delivery["generation"]:
+            delivery = {"offset": delivery["offset"], "generation": generation}
+            terminal = archive = None
+            roles_finished.clear()
         kind = event["type"]
-        if kind != "run_status" or event.get("status") in TERMINAL:
-            seen.add(kind)
-        if kind == "done":
+        if kind == "_terminal":
             terminal = event
-        if kind == "run_status":
-            await DBOS.set_event_async("phase", event["status"])
-        if kind == "history_saved":
-            history = event
+            continue
+        if kind == "_archive_saved":
+            archive = event
+            continue
+        if event.get("step", "").endswith("_agent") and kind.startswith("step_"):
+            # Match cleanup to the stage, including a same-millisecond start
+            # received after its finish. No tracking of individual SDK events.
+            stage = event["execution_id"]
+            if kind == "step_started":
+                roles_finished.setdefault(stage, False)
+            else:
+                roles_finished[stage] = True
+        if kind == "run_status" and (
+            version := event.get("plan_version") or event.get("clarification_version")
+        ):
+            delivery["pause"] = {"phase": event["status"], "version": version}
+        await append(event)
+        await DBOS.set_event_async("delivery", delivery)
 
 
 @DBOS.step(retries_allowed=True, max_attempts=10, interval_seconds=0.5, backoff_rate=1)
+async def event_timestamp():
+    return timestamp(await asyncio.to_thread(_interaction_now))
+
+
 async def public_event(event):
     return public_payload(
-        dict(event, timestamp=timestamp(await asyncio.to_thread(_interaction_now)))
+        dict(event, timestamp=event.get("observed_at") or await event_timestamp())
     )
 
 
@@ -837,31 +831,13 @@ async def cancel_workflow(run_id):
 
 
 @DBOS.step(retries_allowed=True, max_attempts=5, interval_seconds=1)
-async def completion_facts(run_id, *, terminal_snapshot=False):
+async def completion_facts(run_id):
     from open_deep_research.web.durable import get_run_client
 
-    def snapshot():
-        client = get_run_client()
-        result = client.get(run_id, None)
-        if terminal_snapshot:
-            roles = client.client.list_workflows(
-                workflow_id_prefix=run_id + ":",
-                name="por.role",
-                load_input=False,
-                load_output=False,
-            )
-            result["expected_event_ids"] = sorted(
-                tail
-                for role in roles
-                if (
-                    tail := client.client.get_event(
-                        role.workflow_id, "sdk_tail", timeout_seconds=0
-                    )
-                )
-            )
-        return result
+    def read():
+        return get_run_client().outcome(run_id)
 
-    return await asyncio.to_thread(snapshot)
+    return await asyncio.to_thread(read)
 
 
 async def wait_for_terminal(run_id):
@@ -879,8 +855,8 @@ async def archive_step(run_id, result):
 
     record = history_record(
         run_id=run_id,
-        request=(await asyncio.to_thread(read_request, run_id))["data"]["request"],
-        report=result["report"],
+        request=result["archive_request"],
+        report=public_payload(result["report"]),
         usage=result["usage"],
         started_at=result["created_at"],
         completed_at=result["terminated_at"],
@@ -888,7 +864,10 @@ async def archive_step(run_id, result):
         if result["status"] in {"completed", "failed", "cancelled"}
         else "incomplete",
         source="dbos",
-        role_reports=[HistoryStage.model_validate(s) for s in result["role_reports"]],
+        role_reports=[
+            HistoryStage.model_validate(public_payload(stage))
+            for stage in result["role_reports"]
+        ],
         error_message="Research requires review." if result["error"] else "",
         failed_stage=result["current_step"],
     )
@@ -902,66 +881,56 @@ async def archive_step(run_id, result):
 
 def failure_target(workflow):
     """Bind a retry to a specific native execution and failed suffix."""
-    steps = sorted(
-        native_client().list_workflow_steps(workflow.workflow_id),
-        key=lambda step: step["function_id"],
-    )
-    stage = max(
+    steps = native_client().list_workflow_steps(workflow.workflow_id)
+    stage = next(
         (
-            step["function_id"]
-            for step in steps
+            step
+            for step in reversed(steps)
             if step["function_name"] == "por.stage_started"
-        ),
-        default=0,
-    )
-    suffix = [step for step in steps if step["function_id"] > stage]
-    last = steps[-1]["function_id"] if steps else 0
-    failure = next(
-        (
-            step.get("output")
-            for step in reversed(suffix)
-            if step["function_name"] == "por.stage_failed"
         ),
         None,
     )
-    errors = [step["function_id"] for step in suffix if step.get("error") is not None]
+    suffix = [
+        step
+        for step in steps
+        if stage is None or step["function_id"] > stage["function_id"]
+    ]
+    result_steps = {"por.stage_result", "por.publish_stage"}
+    publication = next(
+        (
+            step["function_id"]
+            for step in suffix
+            if step["function_name"] in result_steps | {"por.report_memory"}
+            and step.get("error")
+        ),
+        None,
+    )
+    frozen = next(
+        (
+            step["function_id"]
+            for step in reversed(suffix)
+            if step["function_name"] in result_steps and step.get("error") is None
+        ),
+        None,
+    )
+    last = steps[-1]["function_id"] if steps else 0
+    # Pure business validation can fail after a successful model call. Cut
+    # at that call while retaining valid earlier phases and their receipts.
     calls = [
         step["function_id"]
         for step in suffix
         if step["function_name"] in {"por.llm", "por.llm_sync"}
     ]
-    publication = next(
-        (
-            step["function_id"]
-            for step in suffix
-            if step["function_name"]
-            in {"por.stage_result", "por.publish_stage", "por.report_memory"}
-            and step.get("error") is not None
-        ),
-        None,
-    )
-    frozen = max(
-        (
-            step["function_id"]
-            for step in suffix
-            if step["function_name"] in {"por.publish_stage", "por.stage_result"}
-            and step.get("error") is None
-        ),
-        default=0,
-    )
-    # Invalid model output is a successful DBOS call with a failing business
-    # validator. Preserve preceding valid calls and all completed phases.
-    failed_start = next(
-        (
-            step["function_id"]
-            for step in steps
-            if step["function_id"] == stage and step.get("error") is not None
-        ),
-        None,
-    )
-    start = failed_start or publication or (frozen + 1 if frozen else None)
+    errors = [step["function_id"] for step in suffix if step.get("error") is not None]
+    failed = bool(steps and steps[-1]["function_name"] == "por.stage_failed")
+    failed_start = stage["function_id"] if stage and stage.get("error") else None
+    start = failed_start or publication
     if start is None:
-        start = max(calls or errors, default=(last if failure else last + 1))
+        start = (
+            frozen + 1
+            if frozen
+            else max(calls or errors, default=last if failed else last + 1)
+        )
     return dict(
         workflow_id=workflow.workflow_id,
         queue=CONTROL if workflow.name == "por.run" else BUSINESS,
@@ -983,7 +952,7 @@ def failure_target(workflow):
                 ],
             ]
         ),
-    ), bool(isinstance(failure, dict) and failure.get("retry_safe"))
+    )
 
 
 def retry_targets(run_id):
@@ -1010,11 +979,12 @@ def retry_targets(run_id):
     )
     if not leaves:
         raise RunConflict("No safe failed native Step to rewind")
-    target, safe = failure_target(leaves[0])
-    if not safe:
+    leaf = leaves[0]
+    failure = client.get_event(leaf.workflow_id, "failure", 0) or {}
+    if not failure.get("retry_safe"):
         raise RunConflict("The failed Step requires reconciliation")
-    parents = [failure_target(wf)[0] for wf in candidates if wf.name == "por.research"]
-    return [target, *parents, failure_target(root)[0]]
+    parents = [failure_target(wf) for wf in candidates if wf.name == "por.research"]
+    return [failure_target(leaf), *parents, failure_target(root)]
 
 
 @DBOS.step()
@@ -1065,17 +1035,18 @@ async def retry_execution(run_id, command, index):
 
             def same_failure(target):
                 wf = statuses.get(target["workflow_id"])
-                return wf and wf.status == "ERROR" and failure_target(wf)[0] == target
+                return wf and wf.status == "ERROR" and failure_target(wf) == target
 
             if not same_failure(root):
                 return {"outcome": "superseded"}
             target = targets[index]
-            if index == 0 and same_failure(target):
+            unchanged = same_failure(target)
+            if index == 0 and unchanged:
                 from open_deep_research.budget import model_bill
 
                 if any(external_effects(db, run_id)) or model_bill(db, run_id)[1]:
                     return {"outcome": "blocked"}
-            if same_failure(target):
+            if unchanged:
                 options = {
                     "start_step": target["start_step"],
                     "queue_name": target["queue"],
@@ -1119,10 +1090,36 @@ async def apply_retry(run_id, command, applied_generation):
     return generation
 
 
+def terminal_frames(result):
+    status, usage = result["status"], result["usage"]
+    yield dict(
+        type="settlement",
+        status=result["settlement"],
+        usage=usage,
+        error=result["error"],
+    )
+    yield dict(
+        type="usage",
+        **{
+            key: usage.get(key, 0)
+            for key in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+        },
+    )
+    if error := result["error"]:
+        yield dict(
+            type="error",
+            message="Research requires review.",
+            kind=error["kind"],
+            failed_stage=result["current_step"],
+        )
+    yield dict(type="run_status", status=status)
+    yield dict(type="done", status=status, archive_status="pending")
+
+
 @DBOS.workflow(name="por.finalize")
 @dbos_scope
 async def finalize_workflow(run_id):
-    applied_generation = 0
+    generation = 0
     while True:
         await wait_for_terminal(run_id)
         while True:
@@ -1131,107 +1128,57 @@ async def finalize_workflow(run_id):
             except Exception:
                 await DBOS.sleep_async(5)
                 continue
-            if result["generation"] > applied_generation:
-                command = await DBOS.recv_async("retry", timeout_seconds=30)
-                applied_generation = await apply_retry(
-                    run_id, command, applied_generation
-                )
-                await wait_for_terminal(run_id)
-                continue
-            if result["settlement"] == "pending":
-                # Only actual in-flight external bills/writes can delay this
-                # terminal snapshot. The Run's execution status is native.
-                await DBOS.sleep_async(1)
-                continue
-            break
-        await send_event(run_id, "_snapshot", generation=applied_generation)
-        await DBOS.get_event_async(
-            run_id + ":events",
-            f"projection_ready:{applied_generation}",
-            timeout_seconds=86400,
-        )
-        result = await completion_facts(run_id, terminal_snapshot=True)
-        await send_event(
-            run_id,
-            "settlement",
-            generation=result["generation"],
-            status=result["settlement"],
-            usage=result["usage"],
-            error=result["error"],
-        )
-        await send_event(
-            run_id,
-            "usage",
-            generation=result["generation"],
-            **{
-                k: result["usage"].get(k, 0)
-                for k in (
-                    "model_calls",
-                    "input_tokens",
-                    "output_tokens",
-                    "total_tokens",
-                )
-            },
-        )
-        if result["error"]:
-            await send_event(
-                run_id,
-                "error",
-                generation=result["generation"],
-                message="Research requires review.",
-                kind=result["error"].get("kind", "execution_error"),
-                failed_stage=result["current_step"],
-            )
-        await send_event(
-            run_id,
-            "run_status",
-            status=result["status"],
-            generation=result["generation"],
-        )
-        await send_event(
-            run_id,
-            "done",
-            status=result["status"],
-            archive_status="pending",
-            generation=result["generation"],
-            expected_event_ids=result["expected_event_ids"],
-            expected_events=["settlement", "usage", "run_status"]
-            + (["error"] if result["error"] else []),
-        )
-        advanced = False
-        while True:
-            try:
-                history_id = await archive_step(run_id, result)
-                await send_event(
-                    run_id,
-                    "history_saved",
-                    id=history_id,
-                    status=result["status"],
-                    generation=result["generation"],
-                )
+            if result["settlement"] != "pending":
                 break
-            except Exception:
-                await send_event(
-                    run_id,
-                    "archive_pending",
-                    generation=result["generation"],
-                    message="Report archive is pending; the Run retains its result.",
-                )
-                command = await DBOS.recv_async("retry", timeout_seconds=30)
-                if command and result["retry_safe"]:
-                    updated = await apply_retry(run_id, command, applied_generation)
-                    if updated > applied_generation:
-                        applied_generation = updated
-                        advanced = True
-                        break
-        if advanced:
-            continue
-        if not result["retry_safe"]:
-            return
+            await DBOS.sleep_async(1)
+
+        await send_event(
+            run_id,
+            "_terminal",
+            generation=generation,
+            frames=list(terminal_frames(result)),
+            receipt={"terminal": True, "pause": None},
+            drain_roles=result["native_status"] != "SUCCESS",
+        )
+        archived = notified = False
+        safe = result["retry_safe"]
         while True:
-            command = await DBOS.recv_async("retry", timeout_seconds=86400)
-            if command:
-                updated = await apply_retry(run_id, command, applied_generation)
-                if updated > applied_generation:
-                    applied_generation = updated
+            if not archived:
+                try:
+                    history_id = await archive_step(
+                        run_id, dict(result, generation=generation)
+                    )
+                except Exception:
+                    if not notified:
+                        await send_event(
+                            run_id,
+                            "archive_pending",
+                            generation=generation,
+                            message="Report archive is pending; the Run retains its result.",
+                        )
+                        notified = True
+                else:
+                    status = result["status"]
+                    await send_event(
+                        run_id,
+                        "_archive_saved",
+                        generation=generation,
+                        close=not safe,
+                        receipt={"history_id": history_id},
+                        frames=[
+                            dict(type="history_saved", id=history_id, status=status),
+                            dict(type="done", status=status, archive_status="saved"),
+                        ],
+                    )
+                    archived = True
+                    if not safe:
+                        return
+
+            command = await DBOS.recv_async(
+                "retry", timeout_seconds=86400 if archived else 30
+            )
+            if safe:
+                advanced = await apply_retry(run_id, command, generation)
+                if advanced > generation:
+                    generation = advanced
                     break

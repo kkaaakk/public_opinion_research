@@ -183,24 +183,23 @@ def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     end = result["seq"]
     before = len(case.models)
-    original = case.client.client.get_event
+    original = case.client.client.read_stream
     reads = []
 
-    def raced(workflow_id, key, **kwargs):
-        value = original(workflow_id, key, **kwargs)
-        if workflow_id == run["run_id"] + ":events" and key == "cursor":
-            reads.append(value)
-            # read_events and the initial Run projection both precede the
-            # last cursor commit; the subsequent done/history reads observe it.
-            if len(reads) <= 2:
-                return end - 1
-        return value
+    def raced(workflow_id, key, *, offset, **kwargs):
+        if workflow_id == run["run_id"] + ":events" and offset == end - 1:
+            reads.append(offset)
+            if len(reads) == 1:
+                # The empty page was read just before the last Stream commit.
+                # The delivery Event already exposes the newer watermark.
+                return (item for item in ())
+        return original(workflow_id, key, offset=offset, **kwargs)
 
     class Subscription:
         async def is_disconnected(self):
             return False
 
-    monkeypatch.setattr(case.client.client, "get_event", raced)
+    monkeypatch.setattr(case.client.client, "read_stream", raced)
 
     async def receive():
         return [
@@ -211,10 +210,10 @@ def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
         ]
 
     frames = asyncio.run(receive())
-    assert len(reads) >= 3
-    assert any(
-        f"id: {end}\n" in frame and '"type": "done"' in frame for frame in frames
-    )
+    assert reads == [end - 1, end - 1]
+    data = [frame for frame in frames if frame.startswith("id:")]
+    assert len(data) == 1
+    assert f"id: {end}\n" in data[0] and '"type": "done"' in data[0]
     assert len(case.models) == before == 4
 
 
@@ -617,6 +616,16 @@ def test_api_contract_create_auth_cancel_and_sse(
         replay = http.get("/api/runs/" + run["run_id"] + "/events", headers=headers)
         assert "id: 1" in replay.text
         assert "history_saved" in replay.text
+        end = int(replay.text.rsplit("id: ", 1)[-1].splitlines()[0])
+        resumed = http.get(
+            "/api/runs/" + run["run_id"] + "/events?after=0",
+            headers=dict(headers, **{"Last-Event-ID": str(end - 1)}),
+        )
+        assert resumed.status_code == 200
+        assert resumed.text.count("\ndata: ") == 1 and resumed.text.startswith(
+            f"id: {end}\n"
+        )
+        assert '"type": "done"' in resumed.text
         assert (
             http.get("/api/runs/" + run["run_id"], headers=headers).json()[
                 "execution_engine"
