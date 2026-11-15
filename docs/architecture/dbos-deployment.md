@@ -42,7 +42,7 @@ identity/usage checks, recovery regressions and the precise-head merge gate.
 3. 本次沿用 `dbos-domain-v1` 的业务表。历史 Run 继续从旧 Event、Stream 和原账单及操作记录读取，按原有 owner 规则打开 History。更早的 RunFacts 安装仍按原步骤运行显式迁移。
 4. 回滚前关闭新版准入，使用新版清算已接收的任务，保留各版本的 journal 和外部回执。检查备份，以及切换后产生的 Run、账单和 History，再由匹配的发行版恢复已授权的执行。
 
-`por.events` 单写者按 Native Stream offset 输出进度。API 的 `seq` 为 offset 加一。`delivery` Event 发布已写入的前缀长度及其交互、终态和归档回执。SSE 与分页从 Native Stream 直接读取。原生终态、事件完整交付和 History 写入有各自的查询字段。研究终态交付后，归档可以继续补偿。DBOS 3.3.0 的取消可能先写入原生终态，角色随后完成 SDK 清算与尾部观察。事件集成会在有限时间内等待角色的收尾消息。 [DBOS 3.3.0](https://github.com/dbos-inc/dbos-transact-py/releases/tag/3.3.0)
+`por.events` 单写者按 Native Stream offset 输出进度。API 的 `seq` 为 offset 加一。`delivery` Event 发布已写入的前缀长度及其交互、终态和归档回执。SSE 与分页从 Native Stream 直接读取。原生终态、事件完整交付和 History 写入有各自的查询字段。研究终态交付后，归档可以继续补偿。DBOS 3.3.0 的取消可以先终止根 Workflow，再逐级处理子 Workflow。Finalizer 确认业务子 Workflow 均已退出活跃状态，并按实际模型和操作回执清算。单写者排空已提交的消息后发布终态，继而记录交付回执。 [DBOS 3.3.0](https://github.com/dbos-inc/dbos-transact-py/releases/tag/3.3.0)
 
 ## 原生执行链版本切换
 

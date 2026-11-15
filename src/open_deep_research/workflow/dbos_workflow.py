@@ -36,9 +36,9 @@ from open_deep_research.web.run_data import (
 )
 from open_deep_research.workflow import intake, reporting, research
 from open_deep_research.workflow.dbos_config import (
+    ACTIVE,
     BUSINESS,
     CONTROL,
-    SETTLEMENT_GRACE_SECONDS,
     VERSION,
     domain_engine,
     native_client,
@@ -730,7 +730,6 @@ async def events_workflow(run_id):
     """Merge native mailboxes into one append-only Stream for all readers."""
     delivery = {"offset": 0, "generation": 0}
     terminal = archive = None
-    roles_finished = {}
 
     async def append(event):
         # DBOS assigns the native offset. This single writer counts its
@@ -740,26 +739,14 @@ async def events_workflow(run_id):
 
     while True:
         draining = terminal is not None or archive is not None
-        waiting_for_cleanup = (
-            terminal is not None
-            and terminal["drain_roles"]
-            and not all(roles_finished.values())
-        )
         event = await DBOS.recv_async(
-            "events",
-            timeout_seconds=(
-                SETTLEMENT_GRACE_SECONDS
-                if waiting_for_cleanup
-                else 0
-                if draining
-                else 86400
-            ),
+            "events", timeout_seconds=0 if draining else 86400
         )
         if event is None:
             # recv orders by millisecond, with no tie breaker. A terminal
             # notification is a fence: consume the committed mailbox prefix
             # before writing any terminal frames, including when archive won
-            # the timestamp tie. Cancelled roles may still be emitting cleanup.
+            # the timestamp tie.
             if not draining:
                 continue
             for batch in (terminal, archive):
@@ -788,7 +775,6 @@ async def events_workflow(run_id):
         if generation > delivery["generation"]:
             delivery = {"offset": delivery["offset"], "generation": generation}
             terminal = archive = None
-            roles_finished.clear()
         kind = event["type"]
         if kind == "_terminal":
             terminal = event
@@ -796,14 +782,6 @@ async def events_workflow(run_id):
         if kind == "_archive_saved":
             archive = event
             continue
-        if event.get("step", "").endswith("_agent") and kind.startswith("step_"):
-            # Match cleanup to the stage, including a same-millisecond start
-            # received after its finish. No tracking of individual SDK events.
-            stage = event["execution_id"]
-            if kind == "step_started":
-                roles_finished.setdefault(stage, False)
-            else:
-                roles_finished[stage] = True
         if kind == "run_status" and (
             version := event.get("plan_version") or event.get("clarification_version")
         ):
@@ -835,6 +813,17 @@ async def completion_facts(run_id):
     from open_deep_research.web.durable import get_run_client
 
     def read():
+        # The root can be cancelled before the cascade reaches its children.
+        # A cancelled child can lose ownership without publishing a stage end.
+        if native_client().list_workflows(
+            workflow_id_prefix=run_id + ":",
+            name=["por.plan", "por.research", "por.role", "por.review", "por.report"],
+            status=list(ACTIVE),
+            load_input=False,
+            load_output=False,
+            limit=1,
+        ):
+            return None
         return get_run_client().outcome(run_id)
 
     return await asyncio.to_thread(read)
@@ -1128,7 +1117,7 @@ async def finalize_workflow(run_id):
             except Exception:
                 await DBOS.sleep_async(5)
                 continue
-            if result["settlement"] != "pending":
+            if result is not None and result["settlement"] != "pending":
                 break
             await DBOS.sleep_async(1)
 
@@ -1138,7 +1127,6 @@ async def finalize_workflow(run_id):
             generation=generation,
             frames=list(terminal_frames(result)),
             receipt={"terminal": True, "pause": None},
-            drain_roles=result["native_status"] != "SUCCESS",
         )
         archived = notified = False
         safe = result["retry_safe"]
