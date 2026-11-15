@@ -18,7 +18,7 @@ from open_deep_research.observability.telemetry import (
     correlation,
     dbos_scope,
 )
-from open_deep_research.state import ResearchRoleResult
+from open_deep_research.state import ResearchReview, ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.web.run_data import (
     TERMINAL,
@@ -229,9 +229,13 @@ def _publish_stage(scope, result):
                 content=report,
                 granularity="stage",
             )
-        if review := patch.get("workflow", {}).get("review"):
+        review = patch.get("workflow", {}).get("review")
+        if review is not None:
             stage_event(
-                db, scope, "research_review", review=review.model_dump(mode="json")
+                db,
+                scope,
+                "research_review",
+                review=ResearchReview.model_validate(review).model_dump(mode="json"),
             )
         if report := patch.get("report", {}).get("final"):
             stage_event(db, scope, "report", content=report)

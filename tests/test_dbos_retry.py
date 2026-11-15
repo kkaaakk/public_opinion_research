@@ -450,6 +450,9 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
         first = client.get(run["run_id"], "alice")
         assert first["status"] == "failed" and first["retry_safe"]
         assert effect_count(tmp_path, "reviews") == 1
+        root_failure = client.native(run["run_id"]).completed_at
+        research_id = run["run_id"] + ":research"
+        research_failure = client.native(research_id).completed_at
         client.retry(run["run_id"], "alice", "original", first["state_version"])
         wait(lambda: (tmp_path / scenario).exists(), process, tmp_path)
         # The command is durable and consumed, but its native application has
@@ -475,11 +478,15 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
                 process,
                 tmp_path,
             )
+        if scenario in {"retry-before", "retry-between"}:
+            # The Finalizer waits for the rewound leaf before rewinding its parent.
+            assert client.native(run["run_id"]).completed_at == root_failure
+            changed = client.native(research_id).completed_at != research_failure
+            assert changed == (scenario == "retry-between")
+        assert effect_count(tmp_path, "reviews") == 2
         kill_owned(process)
         client.retry(run["run_id"], "alice", "original", first["state_version"])
-        assert effect_count(tmp_path, "reviews") == (
-            2 if scenario in {"retry-after", "retry-error"} else 1
-        )
+        assert effect_count(tmp_path, "reviews") == 2
         (tmp_path / (scenario + ".release")).write_text("continue")
         (tmp_path / "executor-ready").unlink()
         restart = start(tmp_path, executor, scenario)

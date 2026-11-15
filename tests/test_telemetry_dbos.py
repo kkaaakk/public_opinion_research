@@ -182,11 +182,13 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
         )
         assert tool.attributes["por.run_id"] == run["run_id"]
         assert tool.attributes["por.unit_id"].startswith(run["run_id"] + ":")
+        assert tool.attributes["por.execution_id"]
         assert (
-            tool.attributes["por.execution_id"] and tool.attributes["por.operation_id"]
+            tool.attributes["por.tool_call_id"] and tool.attributes["por.graph_call_id"]
         )
+        assert "por.operation_id" not in tool.attributes
+        assert "por.effect_status" not in tool.attributes
         assert tool.attributes["por.generation"] == 0
-        assert tool.attributes["por.effect_status"] == "returned"
         assert tool.attributes["por.status"] == "succeeded"
     assert {
         "research_review",

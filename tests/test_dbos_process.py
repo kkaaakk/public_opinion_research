@@ -257,11 +257,35 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
                 for u in stage_observations(run["run_id"])
                 if u["name"] in {"public_signal_agent", "internal_knowledge_agent"}
             ]
-            assert all(
-                "patch" in u["artifact"] and "research_result" not in u["artifact"]
-                for u in producers
-            )
             committed_usage = {u["id"]: u["usage"] for u in producers}
+
+            def producer_reports():
+                return {
+                    event["unit_id"]: event
+                    for event in client.read_events(run["run_id"], "alice", 0, 1000)
+                    if event["type"] == "agent_report"
+                    and event["unit_id"] in committed_usage
+                }
+
+            wait(
+                lambda: set(producer_reports()) == set(committed_usage),
+                process,
+                directory,
+            )
+            reports = producer_reports()
+            assert all(
+                report["content"] and not {"patch", "research_result"} & report.keys()
+                for report in reports.values()
+            )
+            if scenario == "legacy-artifact":
+                # The public event committed before the native Step could acknowledge it.
+                public_id = run["run_id"] + ":public_signal:1"
+                assert client.native(public_id).status == "PENDING"
+                assert not any(
+                    step["function_name"] == "por.publish_stage"
+                    and step["completed_at_epoch_ms"] is not None
+                    for step in client.client.list_workflow_steps(public_id)
+                )
             assert effect_count(directory, "models") == 4
         kill_owned(process)
         before = effect_count(directory)
@@ -283,6 +307,22 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             assert result["usage"]["model_calls"] == 26
             if scenario.startswith("legacy-"):
                 assert effect_count(directory, "models") == 6
+                roles = client.client.list_workflows(
+                    workflow_ids=list(committed_usage),
+                    load_input=False,
+                    load_output=True,
+                )
+                assert {role.workflow_id for role in roles} == set(committed_usage)
+                for role in roles:
+                    assert role.status == "SUCCESS"
+                    # Only the public Producer lost its native completion in
+                    # this window. It returns the current envelope on recovery.
+                    resumed = (
+                        scenario == "legacy-artifact" and role.workflow_id == public_id
+                    )
+                    assert set(role.output) == (
+                        {"research_result"} if resumed else {"patch"}
+                    )
                 after = {u["id"]: u["usage"] for u in stage_observations(run["run_id"])}
                 assert all(
                     after[key] == usage for key, usage in committed_usage.items()
@@ -902,7 +942,18 @@ def test_planning_recovers_before_waiting_for_clarification(
             client.clarify(run_id, "alice", pending(1)["version"], {"brand": "Brand A"})
         wait(lambda: (tmp_path / scenario).exists(), process, tmp_path)
         kill_owned(process)
-        assert not holds_business_slot(run_id)
+        if scenario == "planning-release":
+            planning_id = run_id + ":planning:2"
+            # Publication committed. DBOS still owns the slot until the planner returns.
+            assert client.native(planning_id).status == "PENDING"
+            assert holds_business_slot(run_id)
+            assert any(
+                step["function_name"] == "por.publish_stage"
+                and step["completed_at_epoch_ms"] is not None
+                for step in client.client.list_workflow_steps(planning_id)
+            )
+        else:
+            assert not holds_business_slot(run_id)
         if scenario == "clarification-deadline":
             challenge = client.client.get_event(
                 run_id, "clarification", timeout_seconds=0
@@ -915,6 +966,7 @@ def test_planning_recovers_before_waiting_for_clarification(
         restart = start(tmp_path, executor, scenario)
         if scenario == "planning-release":
             wait(lambda: pending(2), restart, tmp_path)
+            assert client.native(planning_id).status == "SUCCESS"
             assert not holds_business_slot(run_id)
             assert len(plan_prompts(tmp_path)) == 2
             client.clarify(run_id, "alice", pending(2)["version"], {}, skip=True)
