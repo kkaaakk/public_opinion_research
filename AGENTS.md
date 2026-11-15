@@ -32,8 +32,7 @@ terminal frames and compensates History independently. Pending
 matching release. The earlier PR #44 preview `dbosrunner-brief-idempotency-v1`, if deployed,
 also needs its matching release. See `docs/architecture/dbos-deployment.md`.
 SDK runtime version remains `sdk-phase5-v1`.
-The Studio relay waits for its terminal-event manifest before acknowledging
-delivery. Pending `dbos-phase5-v1` journals must drain on their matching release;
+Pending `dbos-phase5-v1` journals must drain on their matching release;
 the new Executor must not replay those older relay command sequences.
 Pending Phase 4 DBOS journals must drain on their matching release/Executor.
 Old SQL Runs also drain on their original release; no migration/replay is implied.
