@@ -25,6 +25,15 @@ def test_percentiles_do_not_invent_values_for_missing_samples():
     assert values["min"] == 10 and values["max"] == 40 and values["n"] == 4
 
 
+def test_worker_rejects_a_checkout_without_the_historical_workload(
+    monkeypatch, tmp_path
+):
+    worker = DRIVER["worker"]
+    monkeypatch.setitem(worker.__globals__, "ROOT", tmp_path)
+    with pytest.raises(SystemExit, match="historical RunFacts workload"):
+        worker(SimpleNamespace())
+
+
 def test_benchmark_rejects_external_and_obfuscated_service_addresses():
     for url in (
         "https://cloud.langfuse.com",

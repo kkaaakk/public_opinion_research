@@ -1,4 +1,4 @@
-"""Native, opt-in SQL/Event diagnostics with synthetic inference only.
+"""Opt-in SQL/Event diagnostics for the historical RunFacts benchmark.
 
 This is separate from formal performance measurement. No SQL bind parameters,
 exception messages, payloads or credentials are persisted by the diagnostic.
@@ -248,6 +248,7 @@ def worker(args):
     )
     bench = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bench)
+    bench.require_run_facts_workload(ROOT)
     clean = bench.isolated_environment(os.environ)
     os.environ.clear()
     os.environ.update(clean)
@@ -581,6 +582,7 @@ def worker(args):
                 output=benchmark_output,
                 runs=args.runs,
                 warmup=args.warmup,
+                source_root=ROOT,
             )
         )
     finally:

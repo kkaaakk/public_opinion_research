@@ -1,12 +1,14 @@
 # Markdown Research Brief workflow
 
-Native human interaction uses application version
-`dbos-native-recovery-v1` with DBOS 3.3.0 and DBOSRunner 0.3.0.
-See the [cutover steps](dbos-deployment.md#原生人机交互版本切换).
+The Run API in `dbos-events-v1` uses native interaction messages with
+DBOS 3.3.0 and DBOSRunner 0.3.0. [Deployment and cutover](dbos-deployment.md#事件与归档版本切换)
 DBOS owns execution and recovery, Runner owns the four business Agent loops, and
 Research Graph owns evidence. Markdown carries research intent, never execution control.
 
-## Before and after
+## From intake to reporting
+
+The first diagram shows the previous three-call planning path. The second
+shows the current flow.
 
 ```mermaid
 flowchart TD
@@ -38,19 +40,21 @@ flowchart TD
   I --> J[Risk then Strategy]
   J --> K[One bounded report synthesis Step]
   K --> L[Persisted report artifact]
-  L --> M[Existing memory write / Finalizer / History / SSE]
+  L --> P[Optional por.report_memory Step]
+  P --> M[por.finalize publishes terminal result and archives History]
+  L -. "report event" .-> S[por.events / SSE]
+  M -. "terminal and archive frames" .-> S
 ```
 
 `por.plan` remains a BUSINESS child workflow, with no human wait inside its queue
 slot. `por.run` owns native `recv` for clarification and approval on CONTROL.
-Reservations are released after each planning segment and reacquired for research.
+The planning slot is released when the child reaches its terminal state. DBOS
+applies the Business Queue limits again when the next child is dequeued.
 Up to four planning segments use stable child IDs `:planning:1` through
-`:planning:4` and corresponding `:plan:N` unit IDs. The parent replays the
+`:planning:4` and corresponding `:plan:N` stage IDs. The parent replays the
 versioned replies already recorded by native `recv` and appends one message per
 reply with a stable ID. The planner derives the completed count and skip decision
 from this conversation. DBOS reuses completed child results and model Steps.
-Planning releases its reservation on recovery as well as on the first execution
-because the existing business stage can reacquire it while rebuilding state.
 
 ## Plan and Markdown contract
 
@@ -175,9 +179,9 @@ explicit feedback. Provider context limits can reject large inputs. The
 planner retains the original context and surfaces that failure to the user.
 
 The native DBOS message and child journal preserve request and execution
-identity. `por_domain` still owns reservations, physical usage, external operation
-receipts and settlement. The native plan event publishes the current Brief,
-success count and error for preview.
+identity. `por_domain.model_attempts` records actual model attempts and usage.
+The native plan event publishes the current Brief, success count and error for
+preview.
 
 Committed model Steps are reused after Executor restart. If a provider returned
 before its native result committed, the external-effect guard blocks automatic
@@ -232,30 +236,24 @@ budget, model errors, empty or token-limited results fail explicitly. There is n
 hidden report request retry. Finalizer can authorize a retry of this pure model
 Step without replaying already committed roles/tools.
 
-The generated report artifact is committed **before** `compile_final_report`
-performs the existing external memory effect. That boundary retains the original
-unknown-effect guard; it is not declared a safe replay unit. Finalizer, archive
-compensation and terminal delivery manifest remain authoritative. The manifest also
-waits for committed SDK event IDs from each unit artifact/error before acknowledging
-terminal delivery. IDs are receipt metadata, with no new table or execution authority.
-They remain known across retry generations; no role/tool invocation is replayed
-merely to complete trace delivery. Snapshots read native phase before the payloads
-it fences, preventing a waiting status with a missing Brief/challenge.
+`por.report` publishes the final report Event before invoking the optional
+`por.report_memory` Step. Finalizer reads native results and external receipts.
+The relay drains committed messages before publishing the terminal prefix and
+its `delivery` receipt. Snapshots read native phase before the plan or
+clarification payload it fences. [Result delivery](agent-loop.md#交付与执行状态)
 
 Advanced `report_mode="sections"` reuses the existing planner, parallel writers,
 completed section artifacts, budget and context fallback code. It plans after the
 approved Brief is frozen. No secondary runtime or mode router was introduced.
 This preserves long-report capability with one configuration field and one branch.
 Legacy intake helper exports still have assessed reference-runner/external-script
-consumers; they are excluded from production OPERATIONS, not fallback paths.
+consumers. Production intake calls `plan_research` and `revise_brief`.
 
 ## Deployment and rollback
 
-`por.run` and `por.plan` have new command sequences. Finish or explicitly cancel
-and settle unfinished `dbosrunner-clarification-v1` and earlier Runs with their original
-API and Executor before admitting new Runs. The new release refuses incompatible
-unfinished journals at Executor startup and at admission. See the
-[deployment and rollback procedure](dbos-deployment.md).
+Settle unfinished Runs using the original API and Executor for their application
+version. Startup and new admission check for incompatible unfinished journals.
+[Deployment and rollback](dbos-deployment.md#事件与归档版本切换)
 
 For verification, measurements and remaining limitations see
 [the implementation audit](../audits/research-brief-spec.md).

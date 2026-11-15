@@ -130,7 +130,7 @@ def tool_name(available_tool: Any) -> str:
 
 # 将模型或序列化值转成单个合法研究任务。
 def coerce_research_task(value: Any) -> ResearchTask | None:
-    """Normalize a task from a Pydantic or serialized LangGraph state value."""
+    """Normalize a task from a Pydantic model or serialized State value."""
     if isinstance(value, ResearchTask):
         return value
     if isinstance(value, dict):
@@ -156,7 +156,7 @@ def coerce_research_tasks(value: Any) -> list[ResearchTask]:
 
 # 将模型或序列化字典转换为合法复核结果。
 def coerce_research_review(value: Any) -> ResearchReview | None:
-    """Normalize a review from a Pydantic or serialized LangGraph state value."""
+    """Normalize a review from a Pydantic model or serialized State value."""
     if isinstance(value, ResearchReview):
         return value
     if isinstance(value, dict):
@@ -200,8 +200,7 @@ def resolve_research_run_id(
         value = str(metadata.get(key) or "").strip() if isinstance(metadata, Mapping) else ""
         if value:
             return value
-    # A new root invocation without a LangGraph thread id still gets a unique
-    # scope.  research_phase writes it into state before parallel Sends begin.
+    # Standalone business services still need a scope for evidence.
     return f"run_{uuid.uuid4().hex}"
 
 

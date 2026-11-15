@@ -33,9 +33,9 @@ def stream_events(response):
     ]
 
 
-# 验证报告交付前完成归档，并可重新打开。
+# 验证归档完成后的报告可通过 History 重新打开。
 @pytest.mark.integration
-def test_report_is_archived_before_delivery_and_reopens(native_case, monkeypatch):
+def test_saved_report_reopens_in_history(native_case, monkeypatch):
     case = native_case
     run = case.create(owner="operator")
     result = case.wait(run, lambda r: r["archive_status"] == "saved")

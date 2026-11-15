@@ -4,6 +4,7 @@ import ast
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -12,6 +13,7 @@ from open_deep_research.state import ResearchReview, ResearchTask, Section
 from open_deep_research.web.run_data import (
     RunJSON,
     dumps,
+    legacy_projection,
     public_payload,
 )
 from open_deep_research.workflow.dbos_config import ExecutionSettings
@@ -47,6 +49,57 @@ def test_json_serializer_only_restores_known_domain_types(value):
 def test_serializer_refuses_arbitrary_objects(value):
     with pytest.raises(TypeError):
         dumps(value)
+
+
+def test_archived_stage_keeps_report_and_effect_metadata():
+    db = Mock()
+    db.scalar.return_value = "por_archive_native_recovery.units"
+    db.execute.return_value.mappings.return_value = [
+        {
+            "id": "run:role",
+            "name": "public_signal_agent",
+            "artifact": dumps(
+                {
+                    "patch": {
+                        "agents": {
+                            "public_signal": {"report": {"value": "wrapped report"}},
+                            "internal_knowledge": {"report": "plain report"},
+                            "risk_assessment": {"report": None},
+                        },
+                        "report": {"final": "original final report"},
+                    }
+                }
+            ),
+            "usage": dumps({"total_tokens": 23}),
+            "error": dumps(None),
+            "settled": True,
+            "costs": [],
+            "unknown_effect": True,
+        },
+    ]
+
+    view, usage, unresolved = legacy_projection(db, "run")
+
+    assert view == {
+        "completed_steps": ["public_signal_agent"],
+        "legacy_report": "original final report",
+        "legacy_roles": [
+            {
+                "role": "internal_knowledge",
+                "content": "plain report",
+                "stage_id": "run:role",
+                "completed_at": "",
+            },
+            {
+                "role": "public_signal",
+                "content": "wrapped report",
+                "stage_id": "run:role",
+                "completed_at": "",
+            },
+        ],
+    }
+    assert usage["total_tokens"] == 23
+    assert unresolved is True
 
 
 @pytest.mark.parametrize(

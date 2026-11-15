@@ -1,4 +1,4 @@
-"""Repeated local DBOS research against real Langfuse; synthetic inference only."""
+"""Reproduce the historical RunFacts benchmark against isolated local Langfuse."""
 
 from __future__ import annotations
 
@@ -128,6 +128,14 @@ def apply_source_root(source_root):
             raise ValueError("Source root is not an application checkout")
         sys.path.insert(0, str(source))
         os.environ["PYTHONPATH"] = str(source)
+
+
+def require_run_facts_workload(source_root):
+    if not (source_root / "src/open_deep_research/workflow/run_facts.py").is_file():
+        raise SystemExit(
+            "This measurement requires the historical RunFacts workload. "
+            "Use the frozen checkout in evaluation/observability/README.md."
+        )
 
 
 def source_fingerprint(source_root):
@@ -479,6 +487,9 @@ def rss():
 
 
 def worker(args):
+    require_run_facts_workload(ROOT)
+    if args.source_root is not None:
+        require_run_facts_workload(args.source_root)
     traced = args.case not in {"off", "concurrent_off"}
     clean = isolated_environment(os.environ)
     os.environ.clear()

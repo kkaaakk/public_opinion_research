@@ -1,5 +1,7 @@
 # DBOS 业务持久化简化
 
+> 本页记录第二批的迁移和实测。当时的事件交付描述对应 `dbos-domain-v1`。 [当前交付协议](../architecture/agent-loop.md#交付与执行状态)
+
 基线为 PR #45 合并提交 `26bd6b57`。新 application version 为 `dbos-domain-v1`。依赖锁保留 DBOS 3.3.0、官方 DBOSRunner 0.3.0 和 OpenAI Agents SDK 0.24.0。
 
 ## 模块与职责

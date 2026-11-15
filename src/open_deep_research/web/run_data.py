@@ -354,14 +354,8 @@ def legacy_projection(db, run_id):
             view["error"] = dict(error, retry_safe=False)
         if report := patch.get("report", {}).get("final"):
             view["legacy_report"] = report
-        for role, value in patch.get("agents", {}).items():
-            report = value.get("report")
-            if isinstance(report, dict):
-                report = report.get("value")
-            if report:
-                view.setdefault("legacy_roles", []).append(
-                    dict(
-                        role=role, content=report, stage_id=stage["id"], completed_at=""
-                    )
-                )
+        for role, content in role_deliverables({"patch": patch}).items():
+            view.setdefault("legacy_roles", []).append(
+                dict(role=role, content=content, stage_id=stage["id"], completed_at="")
+            )
     return view, usage, unresolved

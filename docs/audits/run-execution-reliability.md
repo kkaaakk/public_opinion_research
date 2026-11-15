@@ -1,5 +1,7 @@
 # 请求与执行可靠性审查
 
+> 历史记录，对应 `dbosrunner-stage-settlement-v1`。 [当前可靠性设计](../architecture/agent-loop.md#可靠性设计) · [当前数据库与部署](../architecture/dbos-deployment.md)
+
 基线为 GitHub `main` 的 `11b23847b391ab62a30343d9b9e756cae331d62a`。依赖锁定 DBOS 3.3.0、DBOSRunner 0.3.0 和 OpenAI Agents SDK 0.24.0。
 
 ## 调用链
@@ -48,7 +50,7 @@
 | `retries.run_id,key,version,generation,outcome` | 幂等授权和失败代次绑定。只有 Finalizer 可以对 grant 中的原生目标执行 rewind |
 | `approvals.run_id,version,decision` | 澄清、审批和 AI 修改的版本及决定回执，事务内绑定人机交互与原生消息 |
 
-六张表和已有数据兼容。新版只省略新投影中的 `completed` 键，历史 JSON 原样可读。由于费用查询的失败现在可能成为原生结果 Step 的失败记录，切换采用应用版本 `dbosrunner-stage-settlement-v1`。已提交模型可保留，安全重试从失败的结果 Step 开始。旧版未完成 journal 由匹配发行版清算。[部署与回滚](../architecture/dbos-deployment.md#阶段清算版本切换)
+六张表和已有数据兼容。该版本只省略新投影中的 `completed` 键，历史 JSON 原样可读。由于费用查询的失败可能成为原生结果 Step 的失败记录，切换采用应用版本 `dbosrunner-stage-settlement-v1`。已提交模型可保留，安全重试从失败的结果 Step 开始。旧版未完成 journal 由匹配发行版清算。 [部署与回滚](../architecture/dbos-deployment.md#事件与归档版本切换)
 
 许可轮换、取消探测、外部操作账本和投影提交仍各有开销。保留原生产者并行拓扑与两个释放边界。真实供应商账单、生产数据排空和跨主机自动接管仍需要各自的运行环境验证。
 

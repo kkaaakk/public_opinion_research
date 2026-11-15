@@ -4,7 +4,7 @@ layout: doc
 
 # Public Opinion Research 文档站
 
-当前生产链路为 DBOS + OpenAI Agents SDK + Research Graph Context Harness。见 [Phase 5 审计](./audits/openai-agents-phase5.md) 和 [部署说明](./architecture/dbos-deployment.md)。这里汇总模块文档、评估记录和历史样例。
+当前生产链路由 FastAPI、DBOS、OpenAI Agents SDK 和 Research Graph Context Harness 组成。 [执行架构](./architecture/agent-loop.md) · [部署与数据库](./architecture/dbos-deployment.md)
 
 ::: tip 阅读建议
 第一次接手项目时，建议按“快速开始 -> 当前技术栈 -> Agent Loop -> Tools -> RAG -> Memory”的顺序阅读；排查检索质量时直接进入评估记录。
@@ -17,8 +17,8 @@ layout: doc
 ## 推荐阅读路径
 
 1. 阅读 [项目 README](https://github.com/kkaaakk/public_opinion_research/blob/main/README.md)，完成环境准备和基础运行。
-2. 阅读 [模块与迁移边界](./architecture/openai-agents-sdk-migration-plan.md)，区分当前 DBOS、SDK、业务服务和 Harness 职责。
-3. 阅读 [Agent Loop](./architecture/agent-loop.md)，掌握主流程如何进入 research phase、运行四个业务 Agent、使用 tools 并生成 final report。
+2. 阅读 [执行架构](./architecture/agent-loop.md)，了解五层职责、业务流程与故障恢复边界。
+3. 阅读 [部署与数据库](./architecture/dbos-deployment.md)，查看配置、表结构、版本切换及回滚步骤。
 4. 阅读 [Tools 模块](./architecture/tools.md)，确认 web search、RAG、MCP 和控制工具如何装配。
 5. 阅读 [RAG 模块](./architecture/rag.md)，深入本地知识库、memory、hybrid retrieval、reranker 和 citation 链路。
 6. 阅读 [Memory 模块](./architecture/memory.md)，理解 MySQL memory 的写入、索引和回查边界。
@@ -46,7 +46,9 @@ flowchart TD
 | 主题         | 入口                                                           | 说明                                   |
 | ------------ | -------------------------------------------------------------- | -------------------------------------- |
 | 快速开始     | [项目 README](https://github.com/kkaaakk/public_opinion_research/blob/main/README.md)                       | 项目介绍、安装、运行和配置说明         |
-| 架构与模块   | [模块与迁移边界](./architecture/openai-agents-sdk-migration-plan.md)                | 当前实现的技术分层、默认栈和模块边界   |
+| 架构与模块   | [执行架构](./architecture/agent-loop.md) | 五层职责、业务流程和可靠性设计 |
+| 部署与验收   | [部署](./architecture/dbos-deployment.md) · [故障验收](./audits/dbos-architecture-closeout.md) | 数据库、上线流程及已验证范围 |
+| 面试讲解     | [项目口述与问答](./interview/index.md) | 两分钟介绍、业务链路和追问 |
 | RAG / Memory | [RAG 模块](./architecture/rag.md)                              | 本地知识库、长期记忆、检索、重排和引用 |
 | 评估         | [RAG 检索测试记录](./evaluation/rag-retrieval-test-records.md) | 历次检索指标、配置、未命中样本和说明   |
 | 示例         | [ArXiv 示例](./examples/arxiv.md)                              | 示例研究报告和输出样本                 |

@@ -22,11 +22,11 @@ share one OTel Provider and Langfuse BatchSpanProcessor. The default OpenAI SDK
 uploader is replaced; only OpenInference creates SDK spans. No trace store, query
 API, execution table, scheduler or new frontend waterfall is added.
 
-`budget.py` remains the budget/usage authority. SDK Runtime captures SDK usage and
-nested Graph/tool/report model attempts, and business Steps retain failed and
-cancelled charges. Unknown provider token usage is not estimated as billed usage.
-Estimates for context admission are explicitly separate from actual usage.
-Parallel deltas merge once; request redelivery and SSE replay do not add charges.
+`budget.py` applies budget policy and aggregates physical use from
+`por_domain.model_attempts`. SDK Runtime captures SDK usage, and the bounded
+Graph/tool/report services record their model attempts and usage. Provider
+usage gaps are marked as incomplete. Context admission uses estimates of prompt
+size. Request redelivery and SSE replay do not create new model attempts.
 
 History intentionally stores the four numeric public counters: model calls,
 input tokens, output tokens and total tokens. Run status retains the full budget
@@ -75,10 +75,8 @@ Other business spans are `context_build`, `context_retrieval`,
 receipts. Context/compaction tokens are estimates, not provider usage.
 
 Planning, intake, extraction, compaction, memory and report models remain bounded
-LangChain business services. Existing actual stage usage is copied to the
-enclosing business Step/span as `por.model_calls` and
-`por.{input,output,total}_tokens`. Each actual Core model lifecycle also creates
-one `langchain_generation` through OpenInference LangChain **0.1.80**. The
+LangChain business services. Each actual Core model lifecycle creates one
+`langchain_generation` through OpenInference LangChain **0.1.80**. The
 model-only adapter forwards public model callbacks to OI's official handler;
 Core's public configure hook inherits it into nested services and threads. OI's
 global all-event hook is removed before enabling the pipeline. Chains,
@@ -180,15 +178,15 @@ Attributes reuse `por.run_id`, `por.workflow_id`, `por.unit_id`, `por.execution_
 `por.invocation_id`, `por.role`, `por.task_id`, `por.research_round`,
 `por.generation`, `por.model_turn`, `por.tool_call_id`, `por.graph_call_id` and
 `por.operation_id`. Only available facts are attached. `por.dbos_step_id` is native
-`DBOS.step_id`; `execution_id` is Studio's existing unit/permit digest. Token keys
+`DBOS.step_id`. `execution_id` is a digest of stage ID and retry generation. Token keys
 follow OpenInference. `por.status`, `por.failure_kind`, `por.error_type` and
 `por.effect_status` describe known observations without exception strings.
 
 `run_id` is **not** an OTel `trace_id`. Langfuse session ID and trace metadata
 `run_id` group segments even if tracing was toggled or an old workflow lacked a
-parent. A telemetry-only generation lookup reads RunClient's existing accepted
-retry-generation fact; it grants no permission and is omitted if its read fails.
-The native workflow/unit/permit and Finalizer still determine actual execution.
+parent. A telemetry-only lookup reads the accepted retry generation and omits
+the value when the read fails. The Finalizer verifies the original native
+failure before using a retry grant.
 
 API enqueue uses DBOSClient `otel_context`; workflows use `PropagateOtelContext`
 for children. DBOS persists W3C traceparent/tracestate in its existing
@@ -197,11 +195,10 @@ auth or baggage is propagated. Retries/recovery emit fresh span identities under
 the persisted caller. A killed process cannot finish/export its in-flight spans.
 Unknown effects remain quarantined; completed tools are never replayed for traces.
 
-There are no new DBOS commands, function IDs, workflow inputs, schema migrations
-or retry branches. Application stays `dbos-phase5-studio-v1`, runtime stays
-`sdk-phase5-v1`. Matching-version journals without the optional carrier recover
-with business-ID correlation; continuity is not fabricated. Older Phase 4 and
-pre-Studio journals still require their matching drain Executors.
+Current application and SDK Runtime versions are `dbos-events-v1` and
+`sdk-phase5-v1`. When a matching-version journal lacks the optional OTel carrier,
+the Run ID still groups its observations. Earlier journals use their matching
+Executor for drain. [Deployment](dbos-deployment.md)
 
 ## Failure, shutdown, rollback and limits
 
