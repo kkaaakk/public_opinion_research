@@ -174,4 +174,4 @@ def test_retry_preserves_completed_phases_and_prior_calls(steps, expected, monke
         completed_at=3,
     )
     monkeypatch.setattr(dbos_workflow, "native_client", lambda: client)
-    assert dbos_workflow.failure_target(status)[0]["start_step"] == expected
+    assert dbos_workflow.failure_target(status)["start_step"] == expected

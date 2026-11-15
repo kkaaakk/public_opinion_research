@@ -20,7 +20,6 @@ from open_deep_research.configuration import (
 from open_deep_research.web.durable import get_run_client
 from open_deep_research.web.run_data import (
     IDEMPOTENCY_KEY_PATTERN,
-    TERMINAL,
     RunConflict,
     RunNotFound,
     public_run,
@@ -240,19 +239,9 @@ async def event_stream(store, run_id: str, owner: str, after: int, raw: Request)
             for item in events:
                 after = item["seq"]
                 yield f"id: {after}\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
-            run = await asyncio.to_thread(store.get, run_id, owner)
-            terminal_delivered = (
-                run["status"] in TERMINAL
-                and run["settlement"] != "pending"
-                and run["events_complete"]
-            )
-            approval_delivered = (
-                run["status"] in {"awaiting_approval", "awaiting_clarification"}
-                and run["events_paused"]
-            )
-            if (terminal_delivered or approval_delivered) and after >= run["seq"]:
-                return
             if not events:
+                if await asyncio.to_thread(store.stream_finished, run_id, owner, after):
+                    return
                 yield ": keep-alive\n\n"
                 await asyncio.sleep(0.5)
         except (SQLAlchemyError, RunConflict, RunNotFound):

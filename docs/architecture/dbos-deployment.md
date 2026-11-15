@@ -1,8 +1,8 @@
 # DBOS production execution — Phase 5
 
-> 当前应用版本为 `dbos-domain-v1`。新装使用 `--initialize-only`。已有
-> `dbos-native-recovery-v1` 安装需要先停旧准入、按原版排空并核验，
-> 然后运行 `--migrate-domain`。见[业务持久化与切换](../audits/dbos-domain-simplification.md)。
+> 当前应用版本为 `dbos-events-v1`。新装使用 `--initialize-only`。
+> 从 `dbos-domain-v1` 升级见[事件与归档版本切换](#事件与归档版本切换)。
+> 更早版本仍按各自要求排空和迁移。见[业务持久化与切换](../audits/dbos-domain-simplification.md)。
 >
 > `dbosrunner-native-interaction-v1` 的澄清与 Brief 审批使用
 > DBOS 原生消息和等待。见[切换步骤](#原生人机交互版本切换)及
@@ -34,6 +34,15 @@ the guarded `tests/langfuse_acceptance_fixture.py` runner with synthetic inferen
 It does not connect test fixtures to an operator's services. See the
 [final review and UI evidence](../audits/langfuse-otel-final-review.md) for ports,
 identity/usage checks, recovery regressions and the precise-head merge gate.
+
+## 事件与归档版本切换
+
+1. 停止 `dbos-domain-v1` 的新 Run 准入。用匹配旧版完成或取消待澄清、审批及执行中的任务，处理已授权的重试、未知外部效果和待归档记录。保存 PostgreSQL 和 History 的一致备份。
+2. 确认研究及归档已清算后，可用 DBOS 原生取消停止仅在等待后续重试或消息的旧 `por.finalize` 和 `por.events`。运行 `python -m open_deep_research.web.executor --migration-check`，确认没有旧版未终止 journal，再同步切换 API 与 Executor。
+3. 本次沿用 `dbos-domain-v1` 的业务表。历史 Run 继续从旧 Event、Stream 和原账单及操作记录读取，按原有 owner 规则打开 History。更早的 RunFacts 安装仍按原步骤运行显式迁移。
+4. 回滚前关闭新版准入，使用新版清算已接收的任务，保留各版本的 journal 和外部回执。检查备份，以及切换后产生的 Run、账单和 History，再由匹配的发行版恢复已授权的执行。
+
+`por.events` 单写者按 Native Stream offset 输出进度。API 的 `seq` 为 offset 加一。`delivery` Event 发布已写入的前缀长度及其交互、终态和归档回执。SSE 与分页从 Native Stream 直接读取。原生终态、事件完整交付和 History 写入有各自的查询字段。研究终态交付后，归档可以继续补偿。DBOS 3.3.0 的取消可以先终止根 Workflow，再逐级处理子 Workflow。Finalizer 确认业务子 Workflow 均已退出活跃状态，并按实际模型和操作回执清算。单写者排空已提交的消息后发布终态，继而记录交付回执。 [DBOS 3.3.0](https://github.com/dbos-inc/dbos-transact-py/releases/tag/3.3.0)
 
 ## 原生执行链版本切换
 

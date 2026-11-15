@@ -54,6 +54,52 @@ def test_studio_cancel_records_failed_model_and_agent_after_cancel_intent(native
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
 
 
+def test_cancel_delivers_when_native_role_loses_ownership_before_stage_end(
+    native_case, monkeypatch
+):
+    import threading
+
+    from open_deep_research.workflow import dbos_workflow
+
+    case = native_case
+    original = dbos_workflow._announce_stage
+    announced, release = threading.Event(), threading.Event()
+
+    def announce(scope, research_round):
+        date = original(scope, research_round)
+        if scope.name == "public_signal_agent":
+            announced.set()
+            assert release.wait(20)
+        return date
+
+    # The stage message commits before DBOS records the Step. Cancelling
+    # here clears native ownership and no step_failed message is produced.
+    monkeypatch.setattr(dbos_workflow, "_announce_stage", announce)
+    run = case.create()
+    run_id = run["run_id"]
+    role_id = run_id + ":public_signal:1"
+    try:
+        assert announced.wait(15)
+        case.client.cancel(run_id, "alice")
+        case.wait(run, lambda _: case.client.native(role_id).status == "CANCELLED")
+    finally:
+        release.set()
+
+    result = case.wait(
+        run,
+        lambda r: r["events_complete"] and r["archive_status"] == "saved",
+        timeout=20,
+    )
+    assert result["status"] == "cancelled" and result["settlement"] == "settled"
+    events = case.client.read_events(run_id, "alice", 0, 1000)
+    role_events = [event["type"] for event in events if event.get("unit_id") == role_id]
+    assert role_events.count("step_started") == 1 and "step_failed" not in role_events
+    assert events[-1]["type"] == "done" and events[-1]["status"] == "cancelled"
+    assert events[-1]["seq"] == result["event_cursor"]
+    assert not case.client.stream_finished(run_id, "alice", result["event_cursor"] - 1)
+    assert case.client.stream_finished(run_id, "alice", result["event_cursor"])
+
+
 def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(native_case):
     """Verify observer facts over actual Runner/DBOS, not synthetic UI events."""
     from open_deep_research.web.observations import execution_view
@@ -183,24 +229,23 @@ def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     end = result["seq"]
     before = len(case.models)
-    original = case.client.client.get_event
+    original = case.client.client.read_stream
     reads = []
 
-    def raced(workflow_id, key, **kwargs):
-        value = original(workflow_id, key, **kwargs)
-        if workflow_id == run["run_id"] + ":events" and key == "cursor":
-            reads.append(value)
-            # read_events and the initial Run projection both precede the
-            # last cursor commit; the subsequent done/history reads observe it.
-            if len(reads) <= 2:
-                return end - 1
-        return value
+    def raced(workflow_id, key, *, offset, **kwargs):
+        if workflow_id == run["run_id"] + ":events" and offset == end - 1:
+            reads.append(offset)
+            if len(reads) == 1:
+                # The empty page was read just before the last Stream commit.
+                # The delivery Event already exposes the newer watermark.
+                return (item for item in ())
+        return original(workflow_id, key, offset=offset, **kwargs)
 
     class Subscription:
         async def is_disconnected(self):
             return False
 
-    monkeypatch.setattr(case.client.client, "get_event", raced)
+    monkeypatch.setattr(case.client.client, "read_stream", raced)
 
     async def receive():
         return [
@@ -211,10 +256,10 @@ def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
         ]
 
     frames = asyncio.run(receive())
-    assert len(reads) >= 3
-    assert any(
-        f"id: {end}\n" in frame and '"type": "done"' in frame for frame in frames
-    )
+    assert reads == [end - 1, end - 1]
+    data = [frame for frame in frames if frame.startswith("id:")]
+    assert len(data) == 1
+    assert f"id: {end}\n" in data[0] and '"type": "done"' in data[0]
     assert len(case.models) == before == 4
 
 
@@ -617,6 +662,16 @@ def test_api_contract_create_auth_cancel_and_sse(
         replay = http.get("/api/runs/" + run["run_id"] + "/events", headers=headers)
         assert "id: 1" in replay.text
         assert "history_saved" in replay.text
+        end = int(replay.text.rsplit("id: ", 1)[-1].splitlines()[0])
+        resumed = http.get(
+            "/api/runs/" + run["run_id"] + "/events?after=0",
+            headers=dict(headers, **{"Last-Event-ID": str(end - 1)}),
+        )
+        assert resumed.status_code == 200
+        assert resumed.text.count("\ndata: ") == 1 and resumed.text.startswith(
+            f"id: {end}\n"
+        )
+        assert '"type": "done"' in resumed.text
         assert (
             http.get("/api/runs/" + run["run_id"], headers=headers).json()[
                 "execution_engine"

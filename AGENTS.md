@@ -22,14 +22,17 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `dbos-domain-v1`. Pending
+Application version is `dbos-events-v1`. Pending `dbos-domain-v1` journals
+must drain with the matching release before cutover. Native Stream offsets
+drive SSE resume. The single writer records one delivery Event per published
+prefix. Finalizer reads native results and the effect ledger before publishing
+terminal frames and compensates History independently. Pending
 `dbos-native-recovery-v1` journals require matching executors and explicit schema cutover. Pending
 `dbosrunner-native-interaction-v1` and earlier journals must drain on their
 matching release. The earlier PR #44 preview `dbosrunner-brief-idempotency-v1`, if deployed,
 also needs its matching release. See `docs/architecture/dbos-deployment.md`.
 SDK runtime version remains `sdk-phase5-v1`.
-The Studio relay waits for its terminal-event manifest before acknowledging
-delivery. Pending `dbos-phase5-v1` journals must drain on their matching release;
+Pending `dbos-phase5-v1` journals must drain on their matching release;
 the new Executor must not replay those older relay command sequences.
 Pending Phase 4 DBOS journals must drain on their matching release/Executor.
 Old SQL Runs also drain on their original release; no migration/replay is implied.

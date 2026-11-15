@@ -19,6 +19,7 @@ pytestmark = pytest.mark.integration
         ("dbos-brief-spec-v1", "por.role", ("old", "old:role", "public_signal", {})),
         ("dbosrunner-unified-v1", "por.run", ("old",)),
         ("dbos-native-recovery-v1", "por.run", ("old",)),
+        ("dbos-domain-v1", "por.events", ("old",)),
         ("dbosrunner-clarification-v1", "por.run", ("old",)),
         ("dbosrunner-brief-revision-v1", "por.plan", ("old", {}, 1)),
         ("dbosrunner-stage-settlement-v1", "por.run", ("old",)),
@@ -226,6 +227,44 @@ def test_legacy_cutover_preserves_reports_bills_and_unreconciled_operations(
         "alice", "historical", {"topic": "a"}, config(), initial()
     )
     assert not created and replay["run_id"] == run_id
+
+
+def test_drained_domain_run_keeps_its_model_and_operation_receipts(pg_database):
+    from sqlalchemy import text
+    from test_python_workflow import config, initial
+
+    from open_deep_research.web.durable import RunClient
+    from open_deep_research.web.run_data import dumps
+
+    client = RunClient()
+    run, _ = client.create("alice", "old-domain", {"topic": "a"}, config(), initial())
+    run_id = run["run_id"]
+    for suffix in ("", ":events", ":finalize"):
+        client.client.cancel_workflow(run_id + suffix)
+    with domain_engine().begin() as db:
+        data = read_request(run_id, db=db)["data"] | {"version": "dbos-domain-v1"}
+        db.execute(
+            text("UPDATE por_domain.requests SET value=:value WHERE id=:run"),
+            {"run": run_id, "value": dumps(data)},
+        )
+        db.execute(
+            text("INSERT INTO por_domain.model_attempts VALUES (:run,'m','s',:usage)"),
+            {"run": run_id, "usage": dumps({"model_calls": 1, "input_tokens": 19})},
+        )
+        db.execute(
+            text(
+                "INSERT INTO por_domain.operations VALUES (:run,'o','external','fingerprint','old','unknown')"
+            ),
+            {"run": run_id},
+        )
+    result = client.get(run_id, "alice")
+    assert result["workflow_version"] == "dbos-domain-v1"
+    assert (
+        result["usage"]["input_tokens"]
+        == initial()["runtime"]["budget"]["input_tokens"] + 19
+    )
+    assert result["status"] == "interrupted" and result["settlement"] == "unresolved"
+    assert not result["retry_safe"]
 
 
 def test_fresh_schema_contains_only_request_control_and_effect_billing_tables(

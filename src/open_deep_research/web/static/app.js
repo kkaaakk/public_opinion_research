@@ -3,7 +3,6 @@ let reportMarkdown = '';
 let startTime = 0;
 let timerInterval = null;
 let isResearchRunning = false;
-let researchFailed = false;
 let archiveSaved = false;
 let activeResearchRequest = null;
 let selectedHistoryRecord = null;
@@ -92,7 +91,6 @@ async function startResearch(resumeDurable = false) {
     reportMarkdown = '';
     startTime = Date.now();
     isResearchRunning = true;
-    researchFailed = false;
     archiveSaved = false;
     selectedHistoryRecord = null;
     reportRequestVersion += 1;
@@ -203,13 +201,7 @@ function handleEvent(data) {
             break;
 
         case 'error':
-            researchFailed = true;
             addLog('error', '⚠ ' + data.message);
-            statusText.textContent = 'Failed';
-            break;
-
-        case 'done':
-            statusText.textContent = researchFailed ? 'Failed' : 'Complete';
             break;
     }
 }
@@ -300,13 +292,17 @@ function showDurableState(state) {
     const labels = { queued: '等待执行', running: '研究中', awaiting_approval: '等待计划审批', awaiting_clarification: '等待补充需求',
         cancelling: '正在停止并清算', completed: '已完成', failed: '运行失败',
         cancelled: '已停止', interrupted: '运行中断，需要核对' };
-    statusText.textContent = labels[state.status] || state.status;
+    const terminal = ['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status);
+    const delivered = terminal && state.settlement !== 'pending' && state.events_complete
+        && !state.retry_requested && durableRun.cursor >= state.event_cursor;
+    statusText.textContent = terminal && !delivered ? '正在接收结果…' : (labels[state.status] || state.status);
     if (state.report && state.report !== reportMarkdown) handleEvent({ type: 'report', content: state.report });
     renderUsage(state.usage || {});
     if (state.history_id) handleEvent({ type: 'history_saved', id: state.history_id,
         status: state.status, completed_at: state.terminated_at });
     showBriefApproval(state);
     showClarification(state);
+    return delivered;
 }
 
 function showBriefApproval(state) {
@@ -382,13 +378,12 @@ async function followDurableRun(request) {
     let hydrate = true;
     while (durableRun) {
         const state = await (await durableRequest('/api/runs/' + durableRun.runId)).json();
-        showDurableState(state);
+        const delivered = showDurableState(state);
         if (hydrate) {
             for (const stage of state.role_reports || []) addLog(stage.role + '_agent', stage.content);
             hydrate = false;
         }
-        if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state.status) && state.settlement !== 'pending') {
-            researchFailed = state.status !== 'completed';
+        if (delivered) {
             if (state.archive_status === 'pending') {
                 reportNotice.textContent = '结果已保存到运行记录，历史归档等待后台补偿。';
                 reportNotice.classList.remove('hidden');
@@ -425,7 +420,7 @@ async function followDurableRun(request) {
                     const event = JSON.parse(payload);
                     if (!Number.isSafeInteger(event.seq) || event.seq <= durableRun.cursor) continue;
                     if (event.seq !== durableRun.cursor + 1) throw new Error('进度序号不连续，请恢复订阅。');
-                    handleEvent(event);
+                    if ((event.generation ?? 0) >= (state.generation ?? 0)) handleEvent(event);
                     durableRun.cursor = event.seq;
                     saveDurableRun();
                 }

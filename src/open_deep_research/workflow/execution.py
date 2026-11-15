@@ -248,7 +248,6 @@ class StageContext:
                     self.run_id,
                     "sdk_event",
                     event=kind,
-                    event_id=event_id,
                     idempotency_key=event_id,
                     step=self.name,
                     unit_id=self.stage_id,
@@ -257,14 +256,8 @@ class StageContext:
                     **sdk_observation(payload),
                 )
 
-            return event_id
-
         if native_step_available() and call_id is None:
-            committed = await DBOS.run_step_async(
-                {"name": "por.sdk_observation"}, publish
-            )
-            if kind in {"agent_completed", "agent_failed"}:
-                await DBOS.set_event_async("sdk_tail", committed)
+            await DBOS.run_step_async({"name": "por.sdk_observation"}, publish)
         else:
             await asyncio.to_thread(publish)
 

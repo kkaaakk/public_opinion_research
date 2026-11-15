@@ -61,6 +61,10 @@ def test_research_stream_respects_rag_selection(monkeypatch, rag_enabled):
         def read_events(self, run_id, owner, after, limit=100):
             return [e for e in events if e["seq"] > after][:limit]
 
+        def stream_finished(self, run_id, owner, after):
+            assert run_id == "run" and owner == "operator"
+            return after == events[-1]["seq"]
+
     monkeypatch.setattr(runs, "_store", Store)
     with TestClient(server.app) as client:
         response = client.post(

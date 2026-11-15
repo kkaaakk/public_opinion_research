@@ -99,11 +99,8 @@ def stage_observations(run_id):
                 loads(usage) if usage is not None else {"model_calls": 1},
             )
     store = RunClient()
-    cursor = (
-        store.client.get_event(run_id + ":events", "cursor", timeout_seconds=0) or 0
-    )
     stages = {}
-    for event in store.read_events(run_id, None, 0, cursor):
+    for event in store.read_events(run_id, None, 0, 10000):
         if event["type"] not in {
             "step_started",
             "step_failed",

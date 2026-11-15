@@ -7,8 +7,16 @@ from urllib.parse import urlsplit, urlunsplit
 
 from neo4j import GraphDatabase
 
+from open_deep_research.budget import merge_budget_usage
 from open_deep_research.configuration import Configuration
-from open_deep_research.web.run_data import RunNotFound, public_payload, read_request
+from open_deep_research.web.run_data import (
+    RunNotFound,
+    public_payload,
+    read_request,
+    result_budget,
+    role_deliverables,
+    stage_budget,
+)
 
 
 def execution_view(store, run_id, owner, workflow_id, offset, limit, workflow_offset=0):
@@ -73,6 +81,87 @@ def execution_view(store, run_id, owner, workflow_id, offset, limit, workflow_of
             "note": "Native journal commands; absent completion time is not proof of failure. Payloads are withheld.",
         }
     )
+
+
+def stage_errors(client, run_id):
+    """Read safe error summaries from failed native business workflows."""
+    failed = client.list_workflows(
+        workflow_id_prefix=run_id + ":",
+        status="ERROR",
+        name=["por.plan", "por.review", "por.role", "por.report"],
+        load_input=False,
+        load_output=False,
+    )
+    return [
+        error
+        for workflow in sorted(
+            failed, key=lambda wf: wf.completed_at or 0, reverse=True
+        )
+        if (error := client.get_event(workflow.workflow_id, "failure", 0))
+    ]
+
+
+def stage_results(client, run_id):
+    """Extract public deliverables and progress from the workflows that own them."""
+    completed, roles, active = [], [], []
+    usage = {}
+    for workflow in client.list_workflows(
+        workflow_id_prefix=run_id + ":",
+        name=["por.role", "por.review"],
+        load_input=False,
+        load_output=True,
+    ):
+        is_role = workflow.name == "por.role"
+        role = workflow.workflow_id[len(run_id) + 1 :].split(":")[0]
+        step = role + "_agent" if is_role else "research_review"
+        if workflow.status == "PENDING":
+            active.append((workflow.updated_at or 0, step))
+        if workflow.status != "SUCCESS" or not workflow.output:
+            continue
+        result = workflow.output
+        if not result.get("observation", {}).get("skipped"):
+            completed.append(step)
+        roles.extend(
+            dict(
+                role=role,
+                content=content,
+                stage_id=workflow.workflow_id,
+                completed_at="",
+            )
+            for role, content in role_deliverables(result).items()
+        )
+        budget = result_budget(result)
+        usage = merge_budget_usage(
+            usage,
+            stage_budget(result)
+            | {
+                key: budget[key]
+                for key in ("tool_calls", "search_calls")
+                if key in budget
+            },
+        )
+
+    for workflow in client.list_workflows(
+        workflow_id_prefix=run_id + ":",
+        name=["por.plan", "por.report"],
+        load_input=False,
+        load_output=False,
+    ):
+        if workflow.status == "PENDING":
+            active.append(
+                (workflow.updated_at or 0, workflow.name.removeprefix("por."))
+            )
+        stages = client.get_event(workflow.workflow_id, "completed_stages", 0) or {}
+        for step, notes in stages.items():
+            completed.append(step)
+            usage = merge_budget_usage(usage, notes)
+    return {
+        "completed_steps": completed,
+        "current_step": max(active, default=(0, ""))[1],
+        "role_reports": roles,
+        "report": client.get_event(run_id + ":report", "report", 0) or "",
+        "stage_usage": usage,
+    }
 
 
 NODE_PROPERTIES = frozenset(

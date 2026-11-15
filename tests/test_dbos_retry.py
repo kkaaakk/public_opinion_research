@@ -26,17 +26,15 @@ from open_deep_research.workflow.dbos_config import domain_engine
 pytestmark = pytest.mark.integration
 
 
-def test_terminal_delivery_waits_for_reordered_current_generation_usage(
+def test_terminal_delivery_drains_reordered_committed_messages(
     native_case, monkeypatch
 ):
-    """Native messages with tied timestamps need not arrive in send order."""
+    """A terminal envelope can arrive first when independent sends race."""
+    from dbos import DBOS
+
     case = native_case
-    original_review = engine.research.research_review
-    original_send = engine.send_event
-    original_public = engine.public_event
-    received_history = threading.Event()
+    original_review, original_send = engine.research.research_review, engine.send_event
     attempts = []
-    held = {}
 
     async def review(state, cfg):
         attempts.append(1)
@@ -44,35 +42,46 @@ def test_terminal_delivery_waits_for_reordered_current_generation_usage(
             raise RuntimeError("Safe read failure")
         return await original_review(state, cfg)
 
-    async def public(event):
-        result = await original_public(event)
-        if event["type"] == "history_saved" and event.get("generation") == 1:
-            received_history.set()
-        return result
+    def enqueue_terminal_first(run_id, data):
+        with domain_engine().begin() as db:
+            publish_event(
+                db, run_id, "_terminal", idempotency_key="terminal-first", **data
+            )
+            publish_event(
+                db,
+                run_id,
+                "status",
+                idempotency_key="committed-tail",
+                generation=1,
+                message="Producer tail",
+            )
 
     async def send(run_id, event_type, **data):
-        if event_type == "usage" and data.get("generation") == 1:
-            held[run_id] = data
-            return
-        await original_send(run_id, event_type, **data)
-        if event_type == "history_saved" and data.get("generation") == 1:
-            for _ in range(1000):
-                if received_history.is_set():
-                    break
-                await asyncio.sleep(0.01)
-            assert received_history.is_set()
-            await original_send(run_id, "usage", **held.pop(run_id))
+        if event_type == "_terminal" and data["generation"] == 1:
+            assert (
+                next(frame for frame in data["frames"] if frame["type"] == "usage")[
+                    "model_calls"
+                ]
+                > 0
+            )
+            await DBOS.run_step_async(None, enqueue_terminal_first, run_id, data)
+        else:
+            await original_send(run_id, event_type, **data)
 
     monkeypatch.setattr(engine.research, "research_review", review)
     monkeypatch.setattr(engine, "send_event", send)
-    monkeypatch.setattr(engine, "public_event", public)
     run = case.create()
     failed = saved(case, run, "failed", 0)
     case.client.retry(
         run["run_id"], "alice", "reordered-terminal", failed["state_version"]
     )
     completed = saved(case, run, "completed", 1)
-    assert_consistent(case, run, completed)
+    _, events = assert_consistent(case, run, completed)
+    terminal = [e for e in events if e["generation"] == 1]
+    tail = next(e for e in terminal if e.get("message") == "Producer tail")
+    usage = next(e for e in terminal if e["type"] == "usage")
+    history = next(e for e in terminal if e["type"] == "history_saved")
+    assert tail["seq"] < usage["seq"] < history["seq"] < events[-1]["seq"]
     assert len(attempts) == 2 and len(case.models) == 4
 
 
