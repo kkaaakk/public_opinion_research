@@ -329,10 +329,18 @@ def test_finalizer_crash_after_leaf_rewind_keeps_original_grant_live(
             proc,
             tmp_path,
         )
-        assert any(
-            u["name"] == "research_review" and u["settled"] is None
-            for u in stage_observations(run["run_id"])
+        run_id = run["run_id"]
+        pending = client.get(run_id, "alice")
+        assert pending["generation"] == 1 and pending["retry_requested"]
+        assert client.native(run_id).status == "ERROR"
+        assert client.native(run_id + ":review:1").status == "PENDING"
+        assert (
+            client.client.get_event(
+                run_id + ":finalize", "retry_applied", timeout_seconds=0
+            )
+            is None
         )
+        assert effect_count(tmp_path, "reviews") == 2
         kill_owned(proc)
         (tmp_path / "retry-nested.release").touch()
         (tmp_path / "nested-leaf.release").touch()
@@ -349,6 +357,7 @@ def test_finalizer_crash_after_leaf_rewind_keeps_original_grant_live(
         result = client.get(run["run_id"], "alice")
         assert result["generation"] == 1 and not result["retry_requested"]
         assert result["usage"]["model_calls"] == 27
+        assert effect_count(tmp_path, "reviews") == 3
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == 2
         receipt = client.client.get_event(
             run["run_id"] + ":finalize", "retry_applied", timeout_seconds=0
