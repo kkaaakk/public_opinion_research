@@ -13,9 +13,8 @@ This module only:
 * exposes a fail-open ``trace_span`` for the few high-value RAG stages that
   LangChain cannot auto-capture.
 
-It intentionally does not define a trace data model, storage, UI, waterfall,
-or search.  Anything LangChain/LangGraph already auto-traces must not be wrapped
-again, so no LLM/Tool/Node span is created here.
+LangChain captures its built-in model and tool spans. This module adds only the
+selected RAG spans above.
 """
 
 from __future__ import annotations
@@ -201,9 +200,9 @@ def invocation_metadata(config: Mapping[str, Any] | None = None) -> dict[str, An
     return metadata
 
 
-# 生成 LangGraph 节点级追踪标记。
+# 生成旧版 trace 读取和调用方使用的节点关联字段。
 def node_metadata(node_name: str, *, kind: str = "graph_node") -> dict[str, Any]:
-    """Return bounded metadata for one LangGraph node run."""
+    """Return bounded node metadata in the retained LangSmith format."""
     metadata: dict[str, Any] = {
         "workflow": WORKFLOW_NAME,
         "node_name": node_name,

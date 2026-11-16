@@ -1,5 +1,7 @@
 # Phase 5：旧运行时退役与最终架构收敛
 
+> 本页记录 2026-10-24 的迁移与验收。 [当前执行架构](../architecture/agent-loop.md) · [当前部署说明](../architecture/dbos-deployment.md)
+
 日期：2026-10-24（Asia/Shanghai）。基线为最新 `origin/main` / Phase 4 PR #27 Merge Commit **`a8574f61d0adba4b07ec860d5c6d7de0a0041e76`**，独立分支 `codex/openai-agents-phase5`。远端 SHA 通过 GitHub 连接器及 `git ls-remote` 双重核对。未修改 `.env`、凭据、四角色 AgentSpec/提示词、无关 worktree、stash、备份分支或学习资产。
 
 本次将新研究统一到 **DBOS 3.3.0 + OpenAI Agents SDK 0.24.0 + Research Graph Context Harness**，移除旧 Graph/手写循环。DBOS 的 Workflow、Step、Queue、消息、持久化与恢复继续使用 Phase 4 实现；本次仅补充一个读取终态/游标的 P1 竞态修复，不重做 DBOS。

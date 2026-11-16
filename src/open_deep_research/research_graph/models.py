@@ -1,9 +1,8 @@
 # 定义来源、证据、主张及工作上下文模型，保证图增量可验证和可溯源。
 """Typed models for the per-run public-opinion research graph.
 
-The graph is deliberately separate from LangGraph's message state.  These
-models describe durable research memory and the bounded state that is allowed
-back into an agent prompt.
+These models describe durable evidence and the bounded graph context available
+to an agent prompt.
 """
 
 from __future__ import annotations

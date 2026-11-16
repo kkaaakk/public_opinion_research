@@ -1,9 +1,7 @@
 # 为内存与 Neo4j 研究图提供一致的有限子图查询及提示格式化入口。
 """Research-memory retrieval adapters.
 
-This retriever returns a bounded subgraph.  It intentionally does not generate
-an answer; the existing LangGraph business agent remains the answer/analysis
-generator.
+This retriever supplies a bounded subgraph to the SDK business agents.
 """
 
 from __future__ import annotations

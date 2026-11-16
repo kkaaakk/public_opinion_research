@@ -330,15 +330,11 @@ async def research_brief_step(
     )
 
 
-# 根据简报生成章节计划；启用人工反馈时通过图中断接收调整意见。
+# 根据已确认的简报生成章节计划。
 async def section_plan_step(
     state: AgentState, config: RunnableConfig
 ) -> IntakeDecision:
-    """Plan report sections using Plan-and-Execute pattern.
-
-    Generates structured Sections from the research brief,
-    with optional human feedback via LangGraph interrupt().
-    """
+    """Generate structured report sections from the research brief."""
     configurable = Configuration.from_runnable_config(config)
     budget_usage = runtime_state(state).get("budget", {})
 

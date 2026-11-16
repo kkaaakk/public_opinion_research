@@ -1,5 +1,7 @@
 # Phase 4 DBOS implementation decisions
 
+This record describes the Phase 4 implementation. Current execution and cutover rules are documented in the [execution architecture](agent-loop.md) and [deployment guide](dbos-deployment.md).
+
 Status: implemented; local functional and fault acceptance passed; PR checks required. Base: 5ca71c12. User explicitly selects DBOS.
 
 - DBOS journal/status is the only execution authority. Control waits for approval;

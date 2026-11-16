@@ -1,12 +1,12 @@
 # 🔬 Public Opinion Research
 
-> 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](docs/architecture/research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
+> 当前应用版本为 `dbos-events-v1`。研究经过 Plan、可恢复澄清和 Brief 审批，再进入四角色研究及 Review/Gap，默认生成一份综合报告。 [Brief 合同](docs/architecture/research-brief.md)
 
 基于 DBOS、OpenAI Agents SDK、RAG、MCP 和四角色协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒体监控、长期记忆等能力。
 
-## 当前架构（2026-10-31）
+## 当前架构
 
-正式执行链为 **FastAPI / CLI → DBOS 3.3.0 Workflow/Step/Queue → OpenAI Agents SDK 0.24.0 → Research Graph Context Harness → 业务工具**。
+FastAPI（含 CLI 请求）经 RunClient 和 DBOSClient 将研究入 PostgreSQL 队列。独立 Executor 运行 DBOS 3.3.0 Workflow，四个角色通过 SDKAgentRuntime、Context Harness 和官方 DBOSRunner 0.3.0 调用 OpenAI Agents SDK 0.24.0 及业务工具。
 新研究默认使用持久 Run，浏览器刷新只重新订阅，停止操作会请求取消并等待清算。
 两个 Producer 并行汇合，经 Review/Gap 定向补查，再顺序执行 Risk → Strategy 和报告生成。
 原 LangGraph Server、业务 Graph 和手写 Agent Loop 已退役。
@@ -16,7 +16,7 @@ PostgreSQL 保存 DBOS journal 和领域事实；Neo4j 保存研究证据及 His
 旧 SQL 任务及旧版本 DBOS 任务须在匹配的发行版受控排空，不能跨引擎重投。
 历史记录继续读取和导入。单操作员令牌不等于多租户身份；跨主机自动接管需要额外协调。
 
-迁移结果、完整调用链和验证范围见 [Phase 5 审计](docs/audits/openai-agents-phase5.md)。
+查看 [执行架构与可靠性设计](docs/architecture/agent-loop.md)、[测试与故障验收](docs/audits/dbos-architecture-closeout.md) 或 [面试讲解](docs/interview/index.md)。
 DeerFlow 已退役；独立 RAG 配置及 DSH 分支资产保持原状。
 
 ## 🆕 扩展功能
@@ -303,8 +303,8 @@ python -m open_deep_research.web.server
 `RESEARCH_GRAPH_PASSWORD` 和 `RESEARCH_GRAPH_DATABASE`，无需配置另一套数据库。
 完整报告保存在独立的 `ResearchHistory` 节点中，以研究 `run_id` 对应同次研究的证据图。
 每次网页研究结束或中断后自动归档，历史列表展示运行状态和时间，详情保留参数、
-已有 token 用量及原始阶段报告。阶段输出从 DBOS 业务单元清算结果保存，后续 Agent 失败不会让
-已完成的采集或评估报告从历史记录中消失。
+已知 token 用量及原始阶段报告。Finalizer 从 DBOS 原生结果与报告 Event 读取已完成产物，
+报告交付后可以继续独立补偿归档。
 即使关闭研究图构建，已配置的 Neo4j 仍可用于报告归档。
 
 已有的研究可以点击 **导入 LangSmith**，从 `LANGSMITH_PROJECT` 指定的项目中读取

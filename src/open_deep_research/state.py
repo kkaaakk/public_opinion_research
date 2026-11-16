@@ -1,5 +1,5 @@
-# 按数据归属定义 LangGraph 状态，并用 reducer 安全合并并发节点的增量。
-"""Serializable LangGraph state grouped by data ownership."""
+# 按数据归属定义研究状态，由显式 reducer 合并并行角色增量。
+"""Serializable research state grouped by data ownership."""
 
 from __future__ import annotations
 
@@ -434,7 +434,6 @@ def runtime_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
     return merged
 
 
-# 保留 LangGraph 原生消息输入通道。
 class AgentInputState(TypedDict):
     """Serializable message input; normalization is owned by python_state."""
 

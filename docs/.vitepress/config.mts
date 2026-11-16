@@ -26,8 +26,10 @@ export default defineConfig({
         {
           text: "架构与模块",
           items: [
-            { text: "迁移边界", link: "/architecture/openai-agents-sdk-migration-plan" },
-            { text: "Agent Loop", link: "/architecture/agent-loop" },
+            { text: "执行架构与可靠性", link: "/architecture/agent-loop" },
+            { text: "部署与数据库", link: "/architecture/dbos-deployment" },
+            { text: "故障验收", link: "/audits/dbos-architecture-closeout" },
+            { text: "迁移历史", link: "/architecture/openai-agents-sdk-migration-plan" },
             { text: "Tools 模块", link: "/architecture/tools" },
             { text: "RAG 模块", link: "/architecture/rag" },
             { text: "Memory 模块", link: "/architecture/memory" },
@@ -37,6 +39,7 @@ export default defineConfig({
         {
           text: "评估与样例",
           items: [
+            { text: "面试讲解", link: "/interview/" },
             { text: "RAG 检索测试记录", link: "/evaluation/rag-retrieval-test-records" },
             { text: "ArXiv 示例", link: "/examples/arxiv" },
             { text: "PubMed 示例", link: "/examples/pubmed" },

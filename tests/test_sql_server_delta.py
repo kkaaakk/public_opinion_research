@@ -15,6 +15,11 @@ driver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(driver)
 
 
+def test_diagnostic_worker_requires_the_historical_workload():
+    with pytest.raises(SystemExit, match="historical RunFacts workload"):
+        driver.worker(None)
+
+
 def row(calls, user=1, top=True):
     value = {
         key: 0

@@ -5,7 +5,7 @@ LangChain services use ``AIMessage.usage_metadata`` and ``on_chat_model_start``;
 SDK business roles use official response Usage and RunHooks model starts. Token
 aggregation goes through LangChain's ``add_usage``; this module only adds the
 project-owned policy layer: model/tool/search limits, token budgets, warnings,
-degradation reasons, and per-node budget deltas for the LangGraph reducers.
+degradation reasons, and per-stage budget deltas for the State reducers.
 """
 
 from __future__ import annotations

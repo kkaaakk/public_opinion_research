@@ -1,8 +1,10 @@
 # DBOSRunner 与统一阶段持久化
 
+> 本页记录 `dbosrunner-unified-v1` 当时的设计、兼容和验证边界。后续版本已精简阶段持久化、操作回执和事件交付。 [当前执行架构](agent-loop.md) · [当前部署及历史版本切换](dbos-deployment.md)
+
 2026-11-05 开始，2026-11-06 继续验收（Asia/Shanghai）。源码基线 `origin/main` **b22428ac**，不是最初工作目录的旧检出；原目录的 59 个未提交文件未参与本改造。锁定 DBOS **3.3.0**、Agents SDK **0.24.0**、官方 `dbos-openai-agents` **0.3.0**。本次应用版本 **dbosrunner-unified-v1**；不增加 `por.role.v2`，不修改 SDK 源码。
 
-本页同时作为源码学习入口和迁移说明。验证结果、审查与尚未完成的事项见[验收记录](../audits/dbosrunner-unification.md)。
+源码路径与版本结论对应当时的提交。 [当时的验收记录](../audits/dbosrunner-unification.md)
 
 ## 1. 前后架构
 
@@ -164,6 +166,6 @@ Neo4j evidence 与 History、MySQL Memory 的逻辑 ID/owner 策略保留。回�
 
 ## 8. 官方依据与阅读路线
 
-先读 `workflow/dbos_workflow.py`，再读 `runtime/sdk_runtime.py` / `sdk_context.py`、`runtime/durable_agent.py`、`workflow/durability.py`、`workflow/run_facts.py` 与 `web/durable.py`。在真实进程测试中对照“调用返回、native ACK、业务成果投影”三个时刻理解可靠性边界。
+复现历史实现时，从该版提交读取以下路径。`workflow/dbos_workflow.py`、`runtime/sdk_runtime.py`、`runtime/sdk_context.py`、`runtime/durable_agent.py`、`workflow/durability.py`、`workflow/run_facts.py` 与 `web/durable.py`。当前源码阅读路线见 [执行架构](agent-loop.md)。
 
 官方资料：[DBOS Agents 集成](https://docs.dbos.dev/integrations/openai-agents)、[DBOSRunner 源码](https://github.com/dbos-inc/dbos-openai-agents/blob/main/dbos_openai_agents/runner.py)、[OpenAI SDK 总览](https://developers.openai.com/api/docs/guides/agents/sdk)。本次实际运行使用根锁的 0.3.0 wheel；线上 main 文档是滚动资料，不能替代锁版本合同测试。

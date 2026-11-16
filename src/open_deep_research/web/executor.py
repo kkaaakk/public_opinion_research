@@ -21,6 +21,7 @@ from open_deep_research.workflow.dbos_config import (
     BUSINESS,
     CONTROL,
     RECOVERY,
+    SYSTEM_SCHEMA,
     VERSION,
     close_connections,
     domain_engine,
@@ -45,7 +46,7 @@ def launch(executor_id, *, queues=None):
         config={
             "name": APP,
             "system_database_url": cfg.url,
-            "dbos_system_schema": "por_dbos",
+            "dbos_system_schema": SYSTEM_SCHEMA,
             "application_version": VERSION,
             "executor_id": executor_id,
             "serializer": RunJSON(),
@@ -92,7 +93,7 @@ def main():
         print(json.dumps(migration_inventory(), ensure_ascii=False, indent=2))
         return
     if args.initialize_only or args.migrate_domain:
-        DBOS.migrate(settings().url, schema="por_dbos")
+        DBOS.migrate(settings().url, schema=SYSTEM_SCHEMA)
         initialize_domain(migrate_legacy=args.migrate_domain)
         close_connections()
         return

@@ -1,339 +1,95 @@
-# DBOS production execution — Phase 5
+# DBOS 部署、数据库和恢复
 
-> 当前应用版本为 `dbos-events-v1`。新装使用 `--initialize-only`。
-> 从 `dbos-domain-v1` 升级见[事件与归档版本切换](#事件与归档版本切换)。
-> 更早版本仍按各自要求排空和迁移。见[业务持久化与切换](../audits/dbos-domain-simplification.md)。
->
-> `dbosrunner-native-interaction-v1` 的澄清与 Brief 审批使用
-> DBOS 原生消息和等待。见[切换步骤](#原生人机交互版本切换)及
-> [Brief API 合同](research-brief.md#persistent-human-interaction)。
->
-> `dbosrunner-stage-settlement-v1` 将阶段费用随 `por.stage_result` Step 持久化。
-> 见[阶段清算版本切换](#阶段清算版本切换)和[职责审查](../audits/run-execution-reliability.md)。
->
-> 2026-11-10 的 `dbosrunner-brief-revision-v1`。Brief AI 修改使用
-> 既有 `por.run` 审批循环和 `por.plan` 业务子 Workflow，命令序列已变更。
-> 交互合同见 [Markdown Research Brief](research-brief.md)，上线和回滚见[版本切换](#brief-ai-修改版本切换)。
-
-> 2026-11-05 的 `dbosrunner-unified-v1` 引入官方 DBOSRunner、八个阶段 Workflow 和动态模型 Steps。见[统一改造](dbosrunner-unification.md)及[验收记录](../audits/dbosrunner-unification.md)。
-
-> 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
-
-All new research uses PostgreSQL + DBOS. Web, `/api/runs`, `/api/research` and
-`deep-research` CLI share the durable Run API. No LangGraph Server is started.
-The former `python`/`openai_agents` request values are validated input aliases
-only; Configuration no longer contains runtime/backend selection fields.
-`DBOSRunner.run()` checkpoints the SDK model calls. The Context Harness preserves tool results and research context.
-
-Optional Langfuse/OTel tracing defaults off and is configured in API and Executor
-environments. It adds no execution database or journal commands. See
-[setup, privacy, recovery and rollback](observability.md).
-
-Final acceptance of PR #32 uses an official isolated Langfuse 4.70.1 server and
-the guarded `tests/langfuse_acceptance_fixture.py` runner with synthetic inference.
-It does not connect test fixtures to an operator's services. See the
-[final review and UI evidence](../audits/langfuse-otel-final-review.md) for ports,
-identity/usage checks, recovery regressions and the precise-head merge gate.
-
-## 事件与归档版本切换
-
-1. 停止 `dbos-domain-v1` 的新 Run 准入。用匹配旧版完成或取消待澄清、审批及执行中的任务，处理已授权的重试、未知外部效果和待归档记录。保存 PostgreSQL 和 History 的一致备份。
-2. 确认研究及归档已清算后，可用 DBOS 原生取消停止仅在等待后续重试或消息的旧 `por.finalize` 和 `por.events`。运行 `python -m open_deep_research.web.executor --migration-check`，确认没有旧版未终止 journal，再同步切换 API 与 Executor。
-3. 本次沿用 `dbos-domain-v1` 的业务表。历史 Run 继续从旧 Event、Stream 和原账单及操作记录读取，按原有 owner 规则打开 History。更早的 RunFacts 安装仍按原步骤运行显式迁移。
-4. 回滚前关闭新版准入，使用新版清算已接收的任务，保留各版本的 journal 和外部回执。检查备份，以及切换后产生的 Run、账单和 History，再由匹配的发行版恢复已授权的执行。
-
-`por.events` 单写者按 Native Stream offset 输出进度。API 的 `seq` 为 offset 加一。`delivery` Event 发布已写入的前缀长度及其交互、终态和归档回执。SSE 与分页从 Native Stream 直接读取。原生终态、事件完整交付和 History 写入有各自的查询字段。研究终态交付后，归档可以继续补偿。DBOS 3.3.0 的取消可以先终止根 Workflow，再逐级处理子 Workflow。Finalizer 确认业务子 Workflow 均已退出活跃状态，并按实际模型和操作回执清算。单写者排空已提交的消息后发布终态，继而记录交付回执。 [DBOS 3.3.0](https://github.com/dbos-inc/dbos-transact-py/releases/tag/3.3.0)
-
-## 原生执行链版本切换
-
-`dbos-native-recovery-v1` 改变了 Plan、Role、Review 和 Report 的 Step
-顺序。阶段结果和费用由 `por.stage_result` 保存，`por.save_stage` 提交业务投影。
-外部效果回执、审批消息、History 和既有 PostgreSQL schema 继续使用原存储。
-
-1. 停止旧 API 准入。使用匹配旧版本的 API 和 Executor，盘点并处理旧版本队列、进行中的研究、待澄清或审批的 Brief、待归档记录及未知效果。
-2. 在新 Executor 上运行 `--migration-check`。完成排空和必要的对账后，启动新版 API 和 Executor。
-3. 回滚时先停止新准入，由本版 Executor 清算已接收的运行。保留旧版本 journal、报告和外部操作回执。
+当前应用版本为 `dbos-events-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-phase5-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
 
 ## Local setup
 
-Use a new database and do not point these commands at existing MySQL/Neo4j data.
-The Compose PostgreSQL port is loopback-only; its default password is for local
-isolated development. Set `DBOS_POSTGRES_PASSWORD` for other deployments.
+下面使用隔离开发库。PostgreSQL 17.6 的 Compose 端口只绑定 loopback，示例密码供本机隔离环境使用。部署时在 API、Executor 和运维命令的各自进程环境提供同一逻辑数据库的 `DBOS_DATABASE_URL`（`postgresql+psycopg://…`）及相同业务配置。需要入队事务的两个 schema 必须位于同一 PostgreSQL 数据库。
 
 ```powershell
 docker compose -p por-dbos-phase4 -f compose.dbos.yaml up -d postgres --wait
 uv sync --extra dev --locked --python 3.11
 $env:DBOS_DATABASE_URL = 'postgresql+psycopg://por_execution:local-dbos-development-only@127.0.0.1:15434/por_execution'
 .venv/Scripts/python.exe -m open_deep_research.web.executor --initialize-only
-# Independent terminal, same trusted business settings and resource policy:
+```
+
+初始化账号需有 schema 安装权限。命令先使用 DBOS 公共 `DBOS.migrate(..., schema="por_dbos")`，再安装 `por_domain` 表和共享策略。常规数据库角色需访问两个 schema 及其表、序列和原生队列所需对象。迁移前在隔离副本验证角色授权。Compose 项目名和 `por-integration=dbos-phase4` 标签也供隔离停启夹具定位。
+
+在独立终端运行以下两个入口。每个终端配置数据库 URL，Web 另需 `PUBLIC_OPINION_API_TOKEN`（兼容 `WEB_API_TOKEN`），Executor 需所用模型、工具及 Graph/History 的可信配置。FastAPI 同时服务 Studio 和 Classic，默认端口为 8000。Langfuse/OTel 可分别在两进程启用。 [业务配置](../../README.md) · [可观测性配置](observability.md)
+
+```powershell
+# Executor
 .venv/Scripts/python.exe -m open_deep_research.web.executor --executor-id workstation-1
-# Web terminal: existing PUBLIC_OPINION_API_TOKEN and business provider/Graph settings.
+# API
 .venv/Scripts/python.exe -m open_deep_research.web.server
+# PostgreSQL 连接和原生目录读检查
 .venv/Scripts/python.exe -m open_deep_research.web.executor --health
 ```
 
-No commands edit `.env`. Run `--initialize-only` once with a migration-capable
-role before starting processes. It uses public `DBOS.migrate(schema='por_dbos')`
-and creates `por_domain` application tables. The runtime role needs USAGE on both
-schemas, DML on their tables and USAGE/SELECT on sequences. Database ownership,
-CREATE/ALTER and schema migration privileges can stay with a separate migration
-role; configure the runtime URL through the service environment/secret store.
-The dev Compose user is the database owner and is not a least-privilege template.
+`/api/health` 可检查 Web 入口，Executor `--health` 只检查数据库及原生目录可读。进程存活由运行环境监督。Web 的 SDK 准入支持 OpenAI/DeepSeek 模型和 Tavily 搜索。旧输入别名 `workflow_backend=python/dbos` 和 `business_agent_runtime=openai_agents` 校验后丢弃，退役值（包括环境配置）会被拒绝。启用令牌后 History 遵循现有 owner 过滤；无归属的旧归档保留原策略。
 
-DBOS owns `por_dbos`; business identity, configuration, permissions, operations
-and settled artifacts are in `por_domain`. Neo4j evidence/History and MySQL
-long-term memory remain in their existing stores. DBOS journal is not Memory.
-Back up both PostgreSQL schemas consistently, plus the existing business stores.
-Retain journal/streams for the public cursor lifetime; no automatic truncation
-or silent expired-cursor remapping is performed in this release.
+## Executor、队列和并发
 
-## Process ownership and deployment
+| 队列 | 职责 |
+| --- | --- |
+| `por-control` | 根 `por.run`、relay `por.events`、`por.cancel`。持久澄清和审批在根等待，期间不占 `por-business` 槽位。当前 Run 仍有 Session 互斥。 |
+| `por-business` | 规划、AI Brief 修改、研究段及安全 rewind 的业务目标。DBOS 使用 `global_concurrency` 和按 owner 的 `partition_concurrency`；同一个研究段内可并行执行它的角色子 Workflow。 |
+| `por-archive` | `por.finalize` 独立等待根终态，清算、发布终态、补偿归档，接收重试授权。 |
+| `por-recovery` | 原生运维恢复保留队列，`worker_concurrency` 与 `RUN_MAX_ACTIVE` 一致。常规用户重试继续使用其原生 Control / Business 目标队列。 |
 
-The FastAPI process submits/reads using DBOSClient and never claims work.
-The Executor initializes/registers native workflows and queues; it does not
-contain a task pool, application claim, lease or heartbeat scheduler.
-`RUN_MAX_ACTIVE` (default4), `RUN_OWNER_ACTIVE` (2), `RUN_QUEUE_CAPACITY` (1000),
-`RUN_APPROVAL_SECONDS` (86400), `RUN_TIMEOUT_SECONDS` (3600 per executing planning/research segment), and optional `RUN_SDK_SESSION_PATH` are centralized
-in `workflow/dbos_config.py`. All processes must use the same persisted policy.
-Create the parent directory of RUN_SDK_SESSION_PATH explicitly and grant the
-Executor file permissions before enabling that optional SQLite transcript store.
-Session means the existing trusted research session ID; SDK sessions are private
-per durable role invocation, useful for inspection, not workflow checkpoints.
+| 配置 | 默认值与作用 |
+| --- | --- |
+| `RUN_MAX_ACTIVE` / `RUN_OWNER_ACTIVE` | `4` / `2`，Business Queue 跨 Executor 的全局及 owner 分区并发 |
+| `RUN_QUEUE_CAPACITY` | `1000`，准入时按活跃 `por.run` 计数限制积压 |
+| `RUN_APPROVAL_SECONDS` | `86400`，每次澄清及 Brief 审批的期限；Brief 编辑和 AI 修改沿用同一审批期限 |
+| `RUN_TIMEOUT_SECONDS` | `3600`，规划或研究子 Workflow 自出队起的时限；有审批截止的修改同时受截止约束 |
+| `DBOS_EXECUTOR_ID` 或 `--executor-id` | 每个同时存活的实例使用独立 ID |
+| `RUN_SDK_SESSION_PATH` | 可选的私有 SQLite SDK transcript。启用前准备父目录和 Executor 文件权限；恢复读取 DBOS journal |
 
-Assign a unique `--executor-id` to every simultaneously live Executor. Restart a
-dead process with its original identity and matching application version to
-recover its pending workflows. Never share one ID between live processes.
-Automatic detection/recovery of a dead executor on another host requires DBOS
-Conductor or trusted external orchestration; this release does not claim that
-unconfigured multihost automatic failover exists. Route an explicitly authorized
-manual recovery to `por-recovery` and revoke/check domain permissions before
-allowing new external work. Do not resume an unconfirmed Agent/tool unit.
+共享策略持久化到 `por_domain.policy`，API 与 Executor 核对同一份值。业务段时限、Stage 自身时限和人工等待有独立边界。API 通过 DBOSClient 写入队列并读取状态，队列消费和 Workflow 恢复由 DBOS 完成。
 
-For planned shutdown stop new admission, cancel/drain executing Runs through the
-Run API and wait for their settlement, then use SIGTERM/Ctrl-C to stop native DBOS.
-Stopping the process is not itself a business cancel acknowledgement. Give SDK/tool cleanup at least its
-existing bounded drain window before forcibly killing a process. A database
-outage fails admission/control writes closed. API storage failures return503;
-EOF from SSE means reconnect/read status, not success. `--health` checks the
-PostgreSQL native catalog. Process liveness is separately supervised by the
-operator; there is no claimed application heartbeat endpoint for Executors.
+## 数据库设计
 
-## 原生人机交互版本切换
+以下五张表由 `workflow/domain_schema.py:initialize_domain` 建立。`value`、`usage`、`outcome` 中承载 JSON 的字段使用应用的 `RunJSON` 序列化约定，具体 SQL 类型为 `text`。
 
-1. 停止旧 API 的新研究准入。保留匹配的 API、前端和 Executor，让
-   `dbosrunner-stage-settlement-v1` 及更早版本完成或取消并清算所有任务。
-   如果部署过 PR #44 的预览版 `dbosrunner-brief-idempotency-v1`，也由预览版清算。
-   清点待澄清、待审批、已投递消息、排队或执行中的 AI 修改、待归档及未知外部效果。
-   备份 PostgreSQL 两个 schema 和相关业务存储。
-2. 用新版本运行 `python -m open_deep_research.web.executor --migration-check`。
-   确认输出为 `[]` 后再切换。新的接收循环与审批截止处理改变了持久化命令序列。
-   旧版本的未完成 Workflow 或未清算占位会阻止新版 Executor 启动和新 Run 准入。
-3. 新数据库沿用 `--initialize-only`。已有数据库无需数据改写或新增业务表。
-   新版不创建或读写 `por_domain.approvals`、`por_domain.brief_revision_receipts`。
-   如果库中已有这些表，原样保留以便回滚。只有在旧任务全部清算且确定无需回滚后，
-   才可把清理作为独立的数据库维护操作。现有原生消息、journal 和历史 Brief 原样保留。
-4. 同步切换 API、Studio、Classic 与 Executor。回滚前先由新版完成或清算其已接纳的任务。
-   若回滚目标需要旧审批表，而数据库最初由新版初始化，先用目标版本的
-   `--initialize-only` 建齐所需表。每个版本恢复自己的 journal。
-   [DBOS 版本匹配规则](https://docs.dbos.dev/python/tutorials/upgrading-workflows#versioning)
+| PostgreSQL 业务表 | 关键字段 | 职责 |
+| --- | --- | --- |
+| `por_domain.requests` | `id` 主键，`owner`、`request_key` 唯一组合，`session` 索引，`value`、`cancel_requested`、`reconciliation` | 接纳身份与审计。`value` 保存请求、指纹、冻结配置与初始 State、版本、创建时间与时限。取消是请求意图，核对记录用于 Session 准入。 |
+| `por_domain.policy` | `id=1`、`value` | 共享并发、容量和期限设置，启动及首次取得 RunClient 时校验。 |
+| `por_domain.retries` | `(run_id, key)` 主键，`version`、`generation`、`outcome`，`(run_id, generation)` 唯一 | `version` 绑定用户看到的状态游标，`outcome` 保存含源代次、应用版本和具体原生目标的授权数据。应用结果由 DBOS `retry_applied` Event 记录。 |
+| `por_domain.model_attempts` | `(run_id, id)` 主键，`stage_id`、可空 `usage` | 执行前登记物理尝试。`NULL` 表示尝试尚无结算回执，已返回用量含实际调用与已知 Token。 |
+| `por_domain.operations` | `(run_id, id)` 主键，`name`、`fingerprint`、`executor_id`、可空 `outcome` | 保护需核对的外部工具。准入时 outcome 为 `NULL`，后续写 `returned`、`unknown` 或 `not_executed`。 |
 
-## 阶段清算版本切换
+| 其他存储 | 所有权与可读内容 |
+| --- | --- |
+| PostgreSQL `por_dbos` | DBOS 维护原生 Workflow 状态、队列、输入输出、Step 结果、消息、Events 与 Streams。`workflow_status`、`operation_outputs` 等表由库管理。应用执行写入使用原生 API，运维按 API 查询和恢复。 |
+| PostgreSQL `por_archive_native_recovery` | 仅迁移安装存在。原 `units`、`operations` 连同数据、索引和约束归档到此；`web/run_data.py:legacy_projection` 读取旧产物、用量与未确认效果。 |
+| Neo4j History | `web/history.py:Neo4jHistoryStore` 写 `ResearchHistory`。稳定 ID 由 Run ID 派生，`run_state_version = generation + 1` 阻止旧重试代次覆盖新归档。存报告、阶段产物、用量、状态和 owner，支持历史 LangSmith 导入。 |
+| Research Graph | `research_graph/store.py` 管理每 Run 的 Source/Evidence/Claim/Finding 等，Neo4j 中按 `(run_id, node_id)`、关系 `(run_id, edge_id)` 写入。进程内后端只在所在进程可见。 |
+| 长期 Memory / RAG | 配置 MySQL 时，原始记忆在 `rag_chat_memories`（可配置表名），`memory_id` 唯一，包含用户、会话、记录类型、内容与索引状态。RAG 维护知识及可索引记忆的向量副本和独立知识图。 [Memory](memory.md) · [RAG](rag.md) |
 
-1. 停止旧 API 的新研究准入。用匹配的旧发行版和 Executor 完成或取消并清算
-   `dbosrunner-brief-revision-v1` 及更早版本的工作，包括等待审批、重试、待归档和未决外部效果。
-   备份 PostgreSQL 两个 schema 及相关业务存储。
-2. 运行新发行版的 `python -m open_deep_research.web.executor --migration-check`。
-   费用查询进入 `por.stage_result` 后，查询异常也可能出现在该 Step 的 journal 中。
-   新版准入和 Executor 要求旧版本未完成的 journal 与占位先完成清算。
-3. 现有六张业务表及其索引、外键、历史投影和回执可直接读取。新写入的
-   `units.artifact` 省略 JSON 的 `completed` 键，API 继续按投影是否存在展示阶段完成。
-   新数据库沿用 `--initialize-only`。在新版本中验证报告、清算、费用和 SSE 回放。
-4. 回滚时先停新版准入，由新版完成或清算其已接受工作，然后恢复旧版服务。
-   两版各自恢复匹配的 journal，原有历史记录随库保留。
-   [DBOS 版本匹配规则](https://docs.dbos.dev/python/tutorials/upgrading-workflows#versioning)
+## 事件与归档版本切换
 
-## Brief AI 修改版本切换
+1. 停止旧版新建 Run，保留原版的控制入口与匹配的 Executor。处理排队、执行、澄清、审批、AI 修改、已授权重试、未知效果及待归档的旧 Run。先确认业务和 History 已结算，再停止仅剩等待旧消息的 `por.events` / `por.finalize`。
+2. 保存同一切换点的 `por_dbos`、`por_domain` 与业务数据备份，包括已有归档 schema、Neo4j、Memory 以及需要保留的原生 Stream。运行新版 `python -m open_deep_research.web.executor --migration-check`。其输出为 JSON；上线前确认盘点为空，包含超出恢复尝试次数的旧 journal 也需核查。
+3. `dbos-domain-v1` 已有五张业务表，从该版切到 `dbos-events-v1` 沿用业务 schema。若仍有旧 `por_domain.units`，在排空、备份并演练后显式运行 `--migrate-domain`。事务将旧 `units` 和 `operations` 移到 `por_archive_native_recovery`，将 `requests.released` 更名为 `reconciliation` 并移除 `occupied`，再创建当前表。需要历史读取的运行角色保留归档 schema 的 `USAGE` 和表 `SELECT`。
+4. 同步切换 API、Studio/Classic 与 Executor，核对版本、请求创建、澄清/审批、SSE/状态与 History。对已终止旧 Run，`RunClient` 读取保留的旧投影/事件/Stream、旧账单及操作记录。旧 journal 和旧回执继续保留。
 
-1. 停止旧 API 接收新研究，保留旧 API 的澄清、审批和取消入口。使用原发行版、
-   匹配的应用版本和 Executor 身份，完成或明确取消并清算
-   `dbosrunner-clarification-v1` 及更早版本的排队、执行、等待、待重试、未决效果
-   和待归档任务。保留 PostgreSQL 两个 schema 和外部回执。
-2. 部署根锁后运行 `python -m open_deep_research.web.executor --migration-check`
-   检查旧 journal 和未决资源。
-   未完成旧版本 journal 会阻止新 Executor 启动和新 Run 准入。使用现有
-   `--initialize-only` 初始化新环境即可，本次无需数据改写或新增业务表。
-3. 用 `dbosrunner-brief-revision-v1` 启动 API 和 Executor，核对澄清、Brief
-   版本审批、AI 修改与审批截止时间，以及等待期间的资源释放。回滚时先停新准入，再由本版完成
-   或取消并清算本版任务，之后恢复旧版。每个版本只恢复自己的 journal。
-   [DBOS 版本匹配规则](https://docs.dbos.dev/python/tutorials/upgrading-workflows#versioning)
+历史 Phase 4 DBOS、`dbos-phase5-v1`、`dbos-phase5-studio-v1`、`dbos-brief-spec-v1`、`dbosrunner-unified-v1`、后续规划/审批版本（含 `dbosrunner-brief-idempotency-v1` 预览）、`dbosrunner-native-interaction-v1` 与 `dbos-native-recovery-v1` 均由各自的发行版处理原生执行。旧 SQL 队列也由原 SQL 发行版排空，保留原 History。数据库中可能存在的旧 `approvals` 与 `brief_revision_receipts` 供历史或回滚保留。 [版本与恢复](https://docs.dbos.dev/python/tutorials/upgrading-workflows) · [原生交互变更](research-brief.md) · [旧阶段清算记录](../audits/run-execution-reliability.md) · [业务 schema 迁移审计](../audits/dbos-domain-simplification.md)
 
-## Old Runs and cutover
+### 回滚
 
-Stop admission on the old release first. Keep the original Phase4 release in an
-isolated drain deployment until its paused, quarantined and archive-pending
-Runs have been settled/exported. This new release never reads/claims the old SQL
-queue. Do not copy an old Run into a new DBOS workflow or replay its tools.
-Legacy archives keep their stable IDs and owner policy. Rollback stops new DBOS
-admission and retains the matching Executor version for its existing Runs;
-never send a DBOS Run to the old Worker. The old Worker and Graph Server are absent from Phase 5.
+停止新版准入，保留匹配的新版 Executor 直到已接纳工作、已入队命令和归档清算完毕。保留该版本所有 journal、外部凭证和归档。完成 schema 变更的安装用迁移前一致备份在隔离数据库恢复旧版 schema，再让旧版读取其数据。切换后新增 Run 及其效果从新版存储对账。版本回滚需演练并核对这一时间窗内的两版数据去向。
 
-Unknown business outcomes retain global/owner/session reservations. Releasing a
-reservation requires confirming the old process is stopped, checking external
-records and recording evidence; it never makes an opaque unit replayable:
+## 故障恢复和用户重试
 
-```powershell
-.venv/Scripts/python.exe -m open_deep_research.web.executor --reconcile-run RUN_ID --state-version VERSION --worker-stopped --note 'verified external receipt ...'
-```
+- 同机恢复使用相同的 `application_version` 和已停止 Executor 的原 ID。多机部署需要 Conductor 或外部编排器协调故障检测与接管；本仓库的 Executor 启动命令只配置 ID、队列和匹配版本。关闭进程与提交业务取消属于两个入口。 [DBOS Executor 恢复](https://docs.dbos.dev/production/workflow-recovery)
+- PostgreSQL 短时故障会让准入和控制失败，API 存储错误返回 `503`。恢复后用原请求和键确认是否提交。SSE EOF 后从最后完整游标重连并读取当前状态。连续归档失败时，已有报告仍可从 Run 读取；Finalizer 独立重试 History。
+- 用户重试只适用于当前终态交付完毕且标记安全的失败。根据 GET 返回的 `state_version` 提交新键；相同键只确认同一代次授权。Finalizer 校验原生失败身份和回执，再按叶子到根 rewind。相关结果与代次以 `retry_applied` 为准。 [执行和外部调用边界](agent-loop.md#可靠性设计)
+- 未确认外部效果先核对供应商或存储系统回执、确认旧 Executor 已停止，并记录证据。操作命令 `--reconcile-run RUN_ID --state-version VERSION --worker-stopped --note '…'` 只记录人工核验并解除 Session 准入隔离。
 
 ## Verification
 
-Offline regression and lint use the root lock. Native tests require PostgreSQL
-and isolated Neo4j and only use controlled inference:
+通用 PR 继续运行 `CI` 的 Python 离线测试、Ruff、编译、入口导入和 Classic 控制器合同，Studio 仍按自己的路径规则运行。完整数据库合同由 GitHub Actions 的 `PostgreSQL Contracts` 工作流手动触发（工作流文件需先进入默认分支）。发布前选择要验证的分支或 ref。 [手动触发工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
 
-```powershell
-docker compose -p por-dbos-phase4 -f compose.dbos.yaml up -d postgres neo4j-test --wait
-.venv/Scripts/python.exe -m pytest
-.venv/Scripts/python.exe -m pytest -m integration tests/test_dbos_contracts.py tests/test_dbos_process.py tests/test_dbos_retry.py
-```
-
-`TEST_DBOS_DATABASE_URL`, `TEST_DBOS_NEO4J_URI`, `TEST_DBOS_NEO4J_PASSWORD` select
-isolated test services. `TEST_DBOS_POSTGRES_CONTAINER` and
-`TEST_DBOS_NEO4J_CONTAINER` identify the labeled test containers for physical
-outage contracts; only those exact containers are stopped/restarted.
-Contract tests create uniquely named `por_test_<uuid>`
-databases and drop only those exact databases. They must not target production.
-Process tests exercise real kill/restart and journal recovery, plus actual isolated PostgreSQL and Neo4j container outages. CI runs the same
-native contract suite with service containers. See the audit for actual results,
-remaining limitations and the old-to-new acceptance mapping.
-
-Control/event/finalization workflows can wait durably and therefore do not use
-finite worker concurrency as a business quota. Actual research execution is
-bounded by the native business queue. Queue capacity bounds new request backlog,
-and Session admission checks for an active Run or unsettled effect. Large-backlog metadata throughput/storage need deployment
-sizing. API state_version is the delivered event cursor; the Neo4j archive
-run_state_version is retry generation + 1, preventing late older projections.
-
-
-## Retry authorization and execution versions
-
-The final-review fix uses application version `dbos-phase4-v2`. Run initialization
-adds the nullable `por_domain.retries.outcome` authorization payload and a unique
-index on `(run_id, generation)` through the existing `--initialize-only` command.
-This is additive domain control data, not another execution queue or checkpoint.
-Do not run v2 code against a pending v1 Finalizer journal: drain/reconcile v1 with
-its matching release and Executor identity first, as for other version changes.
-
-The HTTP retry endpoint only atomically records a grant and its native message.
-Repeating a key/version acknowledges that original request and never rewinds.
-A new grant requires a settled safe failure and delivery of that generation's
-terminal event, binding the observed cursor to a new failure. Each grant records
-the source generation, application version, and exact failed native target/journal
-versions. Only the durable Finalizer applies it, with native rewind APIs.
-
-The Finalizer ignores stale, duplicate and unauthorized messages. A lost Step ACK
-is recovered by checking the original native execution versions; an already
-advanced target is never rewound again merely because it has failed again.
-`retry_applied` is a native command receipt containing `generation` and an outcome
-(`applied`, `superseded`, `cancelled`, or `blocked`); it does not declare research
-success. Run status remains native, and unsettled external effects remain held.
-Old History/SSE receipts never establish archive success for a new generation.
-Archive compensation continues after an invalid/old retry message and never
-restarts research. No HTTP-side recovery path is retained.
-
-Transient recovery storage failures are journaled as retryable Step result data,
-so replay does not depend on retaining a Python SQLAlchemy exception type. No
-application receipt acknowledges the grant until its native targets are checked.
-
-## Phase 5 cutover and compatibility
-
-The original Phase 5 application version was `dbos-phase5-v1`; SDK runtime
-version remains `sdk-phase5-v1`. Studio uses application version
-`dbos-phase5-studio-v1` because its event relay gates terminal receipts on the
-delivery manifest. DBOS native messages with tied millisecond timestamps can
-arrive out of send order; archive confirmation must not close a Stream before
-that generation's usage/report/error/status facts are delivered. This only
-changes event delivery, not research scheduling or retry authorization.
-Drain pending `dbos-phase5-v1` journals with the original release and Executor
-before switching; never replay an old relay journal on the new release. The
-same matching-release rule applies to a rollback. Existing history remains
-readable; do not copy or resubmit old opaque work as a new Studio Run.
-The role runtime no longer inherits or contains a handwritten Agent loop.
-The removed files include `runtime/agent_runtime.py`, `workflow/graph.py`,
-`langgraph.json` and the Supabase Auth hooks that only served Graph Server.
-The FastAPI operator Token, owner checks and immutable approval rules remain.
-
-Before switching an installation:
-
-1. Stop admission on the old API. Inventory queued, executing, paused, unknown and
-   archive-pending Runs with its original APIs/native DBOS catalog. Keep the
-   matching old API and Executor identity/version available to finish approvals,
-   cancel, settle and compensate archives. Do this for old SQL and Phase 4 DBOS
-   deployments separately; none of these are new Phase 5 tasks.
-2. Resolve unknown external operations using authoritative receipts. Do not copy
-   a SQL row, approval, old retry grant or opaque SDK unit into a new workflow.
-   Preserve all old databases/journals and historical archives.
-3. Deploy the root lock, run `--initialize-only`, configure PostgreSQL and the
-   existing trusted business services, then start uniquely identified Phase 5
-   Executors and FastAPI. No LangGraph/Studio service, Redis or old SQL Worker is
-   needed. Pending old-version DBOS journals require their matching old release;
-   the new release does not silently adopt them.
-4. Verify `/api/health`, Executor `--health`, a bounded admitted request, its
-   `X-Run-ID`/Run status, SSE cursor and eventual History. A report may be delivered
-   before independent History compensation completes; only `archive_status=saved`
-   acknowledges successful archive of the current generation.
-
-`PUBLIC_OPINION_API_TOKEN` (or existing `WEB_API_TOKEN`) is mandatory for admission
-and all Run controls. It identifies one trusted operator, not multiple tenants.
-History-only local reads keep the original optional-token policy; when a Token is
-configured, owner filtering remains enforced. Legacy unowned records are not
-silently assigned to the operator.
-
-Remove old runtime-selector settings from deployment configuration yourself;
-this migration does not edit `.env`. Supported input aliases are
-`workflow_backend=python/dbos` and `business_agent_runtime=openai_agents`; they
-are discarded before creating new requests. `langgraph`, `legacy` and unknown
-values fail closed, including old environment values. Old request fingerprints
-may conflict with normalized Phase 5 payloads: reconcile through the old release,
-never mint a replacement key to disguise an existing request.
-
-The SDK model adapter still supports OpenAI/DeepSeek and local Tavily tools.
-Other Web model/search selections explicitly fail validation; they cannot enter
-an old runtime. LangChain provider adapters remain available for single-call
-RAG/report/intake services. MCP OAuth token exchange remains supported through
-trusted configuration, with no global cache or retired Graph Server token store.
-
-CLI examples (the API and Executor must already be running):
-
-```powershell
-.venv/Scripts/python.exe -m open_deep_research.web.cli create 'brand recall' --key research-001 --approval
-.venv/Scripts/python.exe -m open_deep_research.web.cli get RUN_ID
-.venv/Scripts/python.exe -m open_deep_research.web.cli approve RUN_ID --plan-version SHA256 --decision approve
-.venv/Scripts/python.exe -m open_deep_research.web.cli events RUN_ID --after 20
-.venv/Scripts/python.exe -m open_deep_research.web.cli cancel RUN_ID
-.venv/Scripts/python.exe -m open_deep_research.web.cli retry RUN_ID --key retry-002 --state-version 42
-```
-
-A lost create response is retried with exactly the same body/key. An old retry key
-only acknowledges its original authorization; another safe failure needs a new
-observed state version/key. An SSE disconnect does not cancel execution. The CLI
-prints no credentials, and its events command subscribes without claiming work.
-Rollback stops new admission and preserves Executors for already accepted Phase 5
-Runs; it does not redeliver those Runs into the previous engine or version.
-
-
-## Research role result envelope
-
-Research producers return a Python `ResearchRoleResult`; the existing parallel
-role workflows and native command sequence remain unchanged. Steps now store a
-plain JSON `research_result` instead of a producer State Patch. The research join
-also reads the exact prior `dbos-brief-spec-v1` Patch contract, including already
-committed role outputs and the domain-Artifact/native-ACK window, without running
-models or tools again. Unsupported saved fields fail closed and retain their data.
-See the [contract, recovery evidence and cost audit](../audits/research-role-results-assembly.md).
-
-Stop old admission and old Executors before switching this release. Do not mix
-an old Executor that only understands Patch results with this release. Forward
-reading of the preceding contract does not make backward reading safe: on rollback,
-stop new admission and keep this release to finish its accepted Runs first. Do not
-rewrite journals, copy opaque units or mint new Runs to migrate external effects.
-Earlier application versions still drain on their matching releases.
+历史和后续故障验证仅使用隔离测试服务。`TEST_DBOS_DATABASE_URL`、`TEST_DBOS_NEO4J_URI`、`TEST_DBOS_NEO4J_PASSWORD` 指定测试端点，停启夹具使用 `TEST_DBOS_POSTGRES_CONTAINER` 和 `TEST_DBOS_NEO4J_CONTAINER` 定位带标签的测试容器。测试使用临时 `por_test_<uuid>` 数据库和受控推理。精确测试入口以 [按需工作流](../../.github/workflows/postgresql-contracts.yml) 为准。 [已验证范围与后续清单](../audits/dbos-architecture-closeout.md)

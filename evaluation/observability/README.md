@@ -1,9 +1,13 @@
 # Local observability benchmark
 
-This is a test driver, not a production entry point. It runs the existing native
-Run API, DBOS workflows, SDK Runner, Harness, Neo4j Graph and History with the
-repository's controlled business fixtures. No paid provider is called; dotenv,
-LangSmith and non-loopback Python sockets are disabled. Use the root lock/venv.
+These runners reproduce the historical RunFacts workload, including the old
+relay's archive receipt and the frozen trace/count gates. For the SQL/Event
+study, use a separate checkout at `022fb1aa7e4c92e3b4727bc20a90b271a4c5d08b`
+and install its root lock there. Run its scripts with its fixtures. The current
+checkout still supports the pure probe and aggregation tests.
+Use the audit's versioned input trees for comparisons. The controlled fixtures
+disable paid inference, dotenv, LangSmith and non-loopback Python sockets.
+[Historical baseline and evidence](../../docs/audits/dbos-sql-event-performance.md#9-原始证据与复现)
 
 Start dedicated `compose.dbos.yaml` services and an official local Langfuse project.
 Pass **test-only** keys through the environment, never CLI arguments or Git:

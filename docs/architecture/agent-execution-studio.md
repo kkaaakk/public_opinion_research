@@ -1,21 +1,14 @@
 # Agent Execution Studio：事实协议与展示边界
 
-> 2026-10-31 当前研究流程：统一 Plan → 可恢复需求澄清 → Markdown Brief 预览/编辑/版本审批 → 四角色与 Review/Gap → 默认单次综合报告。应用版本为 `dbos-brief-spec-v1`；旧 `dbos-phase5-studio-v1` journals 必须按原发行版排空。章节写作仅由显式 `report_mode="sections"` 启用。合同、前后流程及升级规则见 [Markdown Research Brief](research-brief.md)。本页其他 Phase 5/Studio 版本记录保留为历史说明。
+当前应用版本为 `dbos-events-v1`，Studio 和 Classic 共用 Run API 与 SSE 协议。 [执行架构](agent-loop.md) · [部署与切换](dbos-deployment.md) · [Markdown Research Brief](research-brief.md)
 
-基线：`origin/main dc070a4715f3bb1c29c5bce1cac6dfa5f3676b53`；继续 Draft PR #31，原 head `379209db4630ba3f3f56d2ca3f64dfbc5b252435`。执行架构以 [Phase 5](../audits/openai-agents-phase5.md)、[Phase 4 DBOS](../audits/openai-agents-phase4-dbos.md)和[部署文档](dbos-deployment.md)为准。没有恢复旧 LangGraph、手写 Agent Loop，或新增执行器。
-
-## 1. 所有权与实施顺序
-
-1. 独立审查 PR，再固定实际 API、Stream、SDK Hook、Graph 和 History 能力。
-2. 在现有 observer / 领域回执接缝补充安全元数据；所有业务仍走原 Workflow / Step / Runner。
-3. 实现严格 DTO、只读订阅器、Live / Replay 共用投影，再接入界面。
-4. 验证刷新、故障、授权与清算，执行受控原生链路、浏览器、原有回归及 CI。
+## 1. 数据所有权
 
 | 数据 | 权威 / 来源 | Studio 的职责 |
 | --- | --- | --- |
 | Run 和执行权 | DBOS `por.run`、原生子 Workflow / Journal | GET 读取；不写第二套 Run 状态机 |
 | SDK Loop | `SDKContextHarness` 的原生 RunHooks / Runner 边界 | 展示开始/结束、实际模型轮次、工具身份与结果 |
-| 效果与清算 | 既有 `RunFacts`、工具 operation 回执、Finalizer | 区分 returned / uncertain / succeeded；未知效果不重放 |
+| 效果与清算 | `model_attempts`、`operations` 和 Finalizer | 显示模型用量、操作回执和实际工具结果，保留未知效果的核对状态 |
 | 顺序事件 | 单写者 `por.events` → DBOS Durable Stream | 以 seq 重建连续前缀；去重和只读回放 |
 | Evidence / Finding / Source | 每 Run 的 Research Graph | 只读 provenance，不与 RAG Knowledge Graph 混用 |
 | 报告归档 | Neo4j History | 查询/阅读/导出；不冒充完整 Trace |
@@ -23,9 +16,9 @@
 
 Planning、Intake、Review、报告、抽取和压缩依旧是有界业务服务。Studio 不把它们画成额外 SDK Agent，也不以 SDK spans 推算全部业务模型用量。
 
-## 2. 新增只读接口
+## 2. 只读接口
 
-所有 `/api/runs/*` 接口沿用 `trusted_owner`、单操作员 Token 和既有 Run owner 检查，响应 `Cache-Control: no-store`。客户端不能传 owner、服务 URL、凭据或不受保护的 Run 身份。
+以下只读接口沿用 `trusted_owner`、单操作员 Token 和 Run owner 检查，响应 `Cache-Control: no-store`。owner、服务 URL 和凭据由服务端控制。
 
 | 接口 | 分页 / 内容 |
 | --- | --- |
@@ -41,7 +34,7 @@ Planning、Intake、Review、报告、抽取和压缩依旧是有界业务服务
 
 ## 3. v1 事件与身份
 
-继续使用 `protocol_version=1`，增加字段/事件，没有 SQL outbox 或游标解释器。终态 `done.expected_events` 声明本代必须交付的 settlement/usage/status 及存在的 report/error；relay 只在真实尾事件齐全后发布 done/history 回执并封闭 Stream，防止原生消息乱序造成缺尾。原 Studio 交付分支使用 `dbos-phase5-studio-v1`。本次 `dbos-brief-spec-v1` 还会等待已提交角色 artifact/error 中列明的 SDK 事件 ID，防止同毫秒乱序丢失模型/工具轨迹；这只是交付回执，不授权业务执行或重放。SDK runtime 仍为 `sdk-phase5-v1`。旧版本的 pending journals 继续由匹配发行版处理，不在新 Executor 重放；旧 Stream 仍可阅读，缺失的新字段明确为未提供。
+`protocol_version=1` 沿用原生 Stream 的游标。Finalizer 在根及业务子 Workflow 结束并清算后发 `_terminal`，归档成功时另发 `_archive_saved`。relay 收到任一尾部消息后排空已提交的消息，再依次写终态、归档帧并更新 `delivery` Event。这个前缀回执记录 offset、generation、人工等待版本、终态和 History ID，供读端处理同毫秒的乱序消息。已终止的旧版本可读取保留的 Stream 与回执，缺失的字段按可用信息展示。 [交付与执行状态](agent-loop.md#交付与执行状态)
 
 | 字段 | 含义 |
 | --- | --- |
@@ -49,8 +42,8 @@ Planning、Intake、Review、报告、抽取和压缩依旧是有界业务服务
 | seq / timestamp | 原生单 Stream offset+1 / relay 记录时间（UTC） |
 | observed_at | 产生公开领域事实时的数据库时间；早于 relay，不能和 relay 延迟混为耗时 |
 | generation | relay 的重试代次；不是一次 HTTP 重连 |
-| unit_id / step | 原业务单元与步骤名；补查和不同角色各有自己的单元 |
-| execution_id | unit + 已有许可的不可逆摘要，只用于区分该单元的执行实例；不开放许可本身，不具备授权能力 |
+| unit_id / step | `StageContext.stage_id` 和业务步骤名。字段名保留 v1 协议，补查有自己的角色及轮次 ID |
+| execution_id | 阶段 ID 与重试代次的摘要，用于关联同一阶段实例的观察 |
 | invocation_id / task_id / research_round | Harness 的 SDK invocation、研究任务和轮次 |
 | model_turn | 已进入 SDK 输入过滤器的原生模型轮次；对应 actual model_started/completed/failed |
 | tool_call_id / graph_call_id / operation_id | SDK 本地调用 / Research Graph provenance / 已有外部效果回执身份，彼此不混同 |
@@ -66,7 +59,7 @@ seq 是 relay 接收顺序，支持确定性回放；并行任务之间不能据
 | sdk_event/session_started | SDK Session 装配；不等同于 Runner 已执行 |
 | sdk_event/agent_started / agent_completed / agent_failed | 原生 SDK Agent 生命周期；Runner 结束不等于业务报告或 Run 结束 |
 | sdk_event/model_started / model_completed / model_failed | 按 invocation + model_turn 配对；只记录实际响应 usage，不累加 RunResult usage |
-| sdk_event/tool | 原有效果回执：started、returned、not_executed、uncertain；returned 只证明 invoker 返回 |
+| sdk_event/tool | 观测到的工具调用及效果结算。`returned` 表示 invoker 返回，`uncertain` 对应未确认效果 |
 | sdk_event/tool_result | Harness 明确的 succeeded / failed / cancelled / unobserved；不从工具文本猜成功 |
 | sdk_event/harness | input_filter、context_retrieval、working_context、context_ready、persist_batch、rolling_compact、settlement 的实际阶段及计数 |
 | research_review / research_followup | 结构化 Review、Gap 决策及补查轮次/目标角色；不新增自主 Supervisor |
@@ -96,4 +89,4 @@ SDK 公共字段在生产 observer 中再次 allowlist：字符串长度、非�
 
 独立前端的操作方式、测试入口和 wheel/Classic 集成见 [frontend README](../../frontend/README.md)。固定安装包接口优先于文档猜测；参考 [React Flow 自定义节点](https://reactflow.dev/learn/customization/custom-nodes)、[Agents SDK RunHooks](https://openai.github.io/openai-agents-python/ref/lifecycle/)、[DBOS Client](https://docs.dbos.dev/python/reference/client)。
 
-明确未实现：原始 Prompt / tool transcript、跨 provider 账单、Planning/Graph/报告等有界业务模型的逐请求 span、SDK 任意 turn 的恢复、跨服务 exactly-once、多租户 ACL、跨主机自动接管、按历史游标还原 Graph、持久 Stream 过期后的重建、大规模事件的磁盘索引。长 Trace 目前在内存保存完整前缀，时间线仅分页/限高渲染；更大规模需单独做索引和性能验收，不能以截断前缀换取错误状态。
+Studio 观察公开事件、原生执行元数据和当前 Graph 证据。逐请求的模型 trace 可在独立的 OTel/Langfuse 管道查看。长 Trace 在客户端内存保存完整前缀，时间线用分页和限高渲染。更大规模的长 Trace 与存储保留策略需要单独测量。 [观测与用量](observability.md) · [验证清单](../audits/dbos-architecture-closeout.md)
