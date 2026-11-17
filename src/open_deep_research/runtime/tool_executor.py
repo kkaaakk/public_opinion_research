@@ -106,11 +106,17 @@ class ToolExecutor:
     async def invoke(
         self,
         name: str,
-        validate_and_execute: Callable[[ToolContext[Any], str], Awaitable[str]],
+        declared_invoke: Callable[[ToolContext[Any], str], Awaitable[str]],
         context: ToolContext[Any],
         arguments: str,
     ) -> str:
-        """Reserve before validation and before the first await, including failed attempts."""
+        """Admit a call before the SDK validates and runs its declaration.
+
+        Permission and budget are reserved before the first await, so invalid
+        input and failed attempts are still accounted for. ``declared_invoke``
+        is the SDK's own callback (or the MCP schema adapter): it validates the
+        arguments before the tool body enters the external-effect boundary.
+        """
         tool = self.tools[name]
         if (
             context.tool_name != name
@@ -129,10 +135,15 @@ class ToolExecutor:
             self.budget.add(budget_usage_with_reason(reason))
             raise _ToolRejected(reason)
         self.budget.add(increment)
-        return await validate_and_execute(context, arguments)
+        return await declared_invoke(context, arguments)
 
     def tool_config(self, context: ToolContext[Any]) -> RunnableConfig:
-        """Give each invoker its own operation metadata."""
+        """Give each invoker its own operation metadata.
+
+        Read this inside the business callable: ``execute`` admits the protected
+        operation before running it, so a config built at the tool body's call
+        site would miss the operation identity.
+        """
         operation_id = context.context.results[context.tool_call_id].operation_id
         if operation_id is None:
             return self.runtime_config

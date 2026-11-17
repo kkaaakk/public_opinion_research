@@ -235,6 +235,8 @@ def test_native_catalog_fences_effect_changes_and_restores_legacy_tools(monkeypa
     monkeypatch.delenv("PUBLIC_OPINION_API_BASE_URL", raising=False)
     social = get_social_media_tools()[0]
     assert social.effect == "read"
+    # The social adapter is synchronous, so cancellation must drain its thread.
+    assert social.drain_on_cancel
     available = [social]
     catalog = business_agent_module._tool_catalog(available)
     assert catalog[0]["effect"] == "read"

@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 from typing import Annotated, Any, List, Literal
 
+from agents import function_tool
 from agents.tool_context import ToolContext
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -21,7 +22,7 @@ from open_deep_research.models import create_chat_model
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import Summary
 from open_deep_research.time_utils import get_today_str
-from open_deep_research.tools import python_tool
+from open_deep_research.tools import register_tool
 
 TAVILY_SEARCH_DESCRIPTION = (
     "A search engine optimized for comprehensive, accurate, and trusted results. "
@@ -179,28 +180,45 @@ TAVILY_RAW_DESCRIPTION = (
 )
 
 
-@python_tool(
-    name="web_search",
-    domain="web_search",
-    effect="read",
-    description=TAVILY_SEARCH_DESCRIPTION,
+# 运行配置须在受保护操作登记后读取，故由 Executor 在校验通过后调用。
+async def _run_web_search(context: ToolContext, queries: list[str]) -> str:
+    executor = context.context.tool_executor
+    return await _tavily_search(queries, config=executor.tool_config(context))
+
+
+@function_tool(
+    description_override=TAVILY_SEARCH_DESCRIPTION,
+    use_docstring_info=False,
+    strict_mode=False,
+    failure_error_function=None,
 )
 async def web_search(context: ToolContext, queries: list[str]) -> str:
-    return await _tavily_search(
-        queries, config=context.context.tool_executor.tool_config(context)
+    return await context.context.tool_executor.execute(
+        context, _run_web_search, context, queries
     )
 
 
-@python_tool(
-    name="web_search",
-    domain="web_search",
-    effect="read",
-    description=TAVILY_RAW_DESCRIPTION,
+async def _run_web_search_raw(context: ToolContext, queries: list[str]) -> str:
+    executor = context.context.tool_executor
+    return await _tavily_search_raw(queries, config=executor.tool_config(context))
+
+
+@function_tool(
+    name_override="web_search",
+    description_override=TAVILY_RAW_DESCRIPTION,
+    use_docstring_info=False,
+    strict_mode=False,
+    failure_error_function=None,
 )
 async def web_search_raw(context: ToolContext, queries: list[str]) -> str:
-    return await _tavily_search_raw(
-        queries, config=context.context.tool_executor.tool_config(context)
+    return await context.context.tool_executor.execute(
+        context, _run_web_search_raw, context, queries
     )
+
+
+# Business declarations keep the existing catalog names, domains and effects.
+web_search = register_tool(web_search, domain="web_search", effect="read")
+web_search_raw = register_tool(web_search_raw, domain="web_search", effect="read")
 
 
 # Direct LangChain callers use the same functions and their existing signatures.

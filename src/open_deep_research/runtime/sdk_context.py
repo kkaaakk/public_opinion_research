@@ -111,10 +111,11 @@ class ResearchGraphSettlementError(RuntimeError):
 class SDKContextHarness(RunHooks):
     """Bind exactly one SDK invocation to one research run, role, and task.
 
-    Use ``function_tool`` for raw local invokers. Plain decorated FunctionTools
-    remain observable but are never presumed successful: their error formatter
-    can hide failures. For local MCP, supply ``mcp_result`` and ``tool_error`` as
-    the server's public custom-data extractor and failure formatter respectively.
+    ``function_tool`` rebinds an existing SDK FunctionTool's invocation callback
+    without rebuilding its declaration. Plain decorated FunctionTools remain
+    observable but are never presumed successful: their error formatter can hide
+    failures. For local MCP, supply ``mcp_result`` and ``tool_error`` as the
+    server's public custom-data extractor and failure formatter respectively.
     Hosted tools have no local execution result and are excluded from ingestion.
     """
 
@@ -422,30 +423,31 @@ class SDKContextHarness(RunHooks):
 
     def function_tool(
         self,
+        tool: FunctionTool,
         *,
-        name: str,
-        description: str,
-        params_json_schema: dict[str, Any],
-        invoke: Callable[[ToolContext[Any], str], Awaitable[Any]],
+        invoke: Callable[[ToolContext[Any], str], Awaitable[Any]] | None = None,
         is_success: Callable[[Any], bool] | None = None,
         errors_as_results: bool = True,
-        strict_json_schema: bool = True,
         error_formatter: Callable[[ToolContext[Any], Exception], str] | None = None,
         drain_on_cancel: bool = False,
     ) -> FunctionTool:
-        """Observe a raw invoker before error formatting can obscure its status.
+        """Bind an existing SDK declaration to this collector.
 
-        The invoker owns argument validation and execution.
+        Only the invocation callback is replaced: the SDK keeps the tool's name,
+        description, JSON Schema, strictness and failure policy. ``invoke``
+        overrides that callback when the runtime adds admission or a protocol
+        adapter; the invoker owns argument validation and execution.
         Tools returning business error envelopes must supply ``is_success``.
         Cancellation always propagates. No SDK private fields are modified.
         """
+        declared = tool.on_invoke_tool if invoke is None else invoke
 
         async def execute_observed(context: ToolContext[Any], arguments: str) -> Any:
             if self._closing:
                 self._record(context, "cancelled", None, error_type="CancelledError")
                 raise asyncio.CancelledError()
             try:
-                call = invoke(context, arguments)
+                call = declared(context, arguments)
                 if drain_on_cancel:
                     output, _ = await finish_owned(asyncio.ensure_future(call))
                 else:
@@ -501,13 +503,7 @@ class SDKContextHarness(RunHooks):
             completion.set_result(output)
             return output
 
-        return FunctionTool(
-            name=name,
-            description=description,
-            params_json_schema=copy.deepcopy(params_json_schema),
-            on_invoke_tool=observed,
-            strict_json_schema=strict_json_schema,
-        )
+        return replace(tool, on_invoke_tool=observed)
 
     async def _tool_step(
         self, record: ObservedToolResult, execute: Callable[[], Awaitable[Any]]

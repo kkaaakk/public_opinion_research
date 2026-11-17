@@ -38,6 +38,7 @@ def local_connect(self, address):
 socket.socket.connect = local_connect
 
 import pytest
+from agents import function_tool
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from agents.tool_context import ToolContext
 from dbos import DBOS, DBOSClient
@@ -52,7 +53,7 @@ from test_sdk_runtime import TOKENS, _tool
 
 from open_deep_research import budget
 from open_deep_research.runtime import business_agent, tool_executor
-from open_deep_research.tools import python_tool
+from open_deep_research.tools import register_tool
 from open_deep_research.web import history
 from open_deep_research.web.executor import launch
 from open_deep_research.workflow import dbos_workflow as engine
@@ -549,19 +550,27 @@ def install(directory, scenario):
 
         public = role == "public_signal"
 
-        @python_tool(
-            name="web_search" if public else "rag_search",
-            domain="web_search" if public else "rag",
-            description="Search cited evidence",
+        async def run_effect(context: ToolContext):
+            executor = context.context.tool_executor
+            return await effect(executor.tool_config(context))
+
+        @function_tool(
+            name_override="web_search" if public else "rag_search",
+            description_override="Search cited evidence",
+            use_docstring_info=False,
+            strict_mode=False,
+            failure_error_function=None,
         )
         async def search(
             context: ToolContext,
             query: str,
             limit: Annotated[int, Field(ge=1, le=10)] = 3,
         ):
-            return await effect(context.context.tool_executor.tool_config(context))
+            return await context.context.tool_executor.execute(
+                context, run_effect, context
+            )
 
-        return [search]
+        return [register_tool(search, domain="web_search" if public else "rag")]
 
     patch.setattr(business_agent, "sdk_model", model)
     patch.setattr(business_agent, "_business_agent_tools", tools)

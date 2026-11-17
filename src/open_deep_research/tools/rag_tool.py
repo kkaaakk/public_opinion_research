@@ -3,6 +3,7 @@
 
 import asyncio
 
+from agents import function_tool
 from agents.tool_context import ToolContext
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -16,7 +17,7 @@ from open_deep_research.rag.service import (
     build_rag_pipeline_config,
     get_or_create_rag_pipeline,
 )
-from open_deep_research.tools import python_tool
+from open_deep_research.tools import register_tool
 
 RAG_SEARCH_DESCRIPTION = (
     "Search the configured local RAG sources, including local txt/md/json/pdf/image files "
@@ -65,16 +66,26 @@ async def _rag_search(query: str, config: RunnableConfig = None) -> str:
         return f"Local RAG search failed: {exc}"
 
 
-@python_tool(
-    name="rag_search",
-    domain="rag",
-    effect="idempotent",
-    description=RAG_SEARCH_DESCRIPTION,
+# 运行配置须在受保护操作登记后读取，故由 Executor 在校验通过后调用。
+async def _run_rag_search(context: ToolContext, query: str) -> str:
+    executor = context.context.tool_executor
+    return await _rag_search(query, config=executor.tool_config(context))
+
+
+@function_tool(
+    name_override="rag_search",
+    description_override=RAG_SEARCH_DESCRIPTION,
+    use_docstring_info=False,
+    strict_mode=False,
+    failure_error_function=None,
 )
 async def rag_search_tool(context: ToolContext, query: str) -> str:
-    return await _rag_search(
-        query, config=context.context.tool_executor.tool_config(context)
+    return await context.context.tool_executor.execute(
+        context, _run_rag_search, context, query
     )
+
+
+rag_search_tool = register_tool(rag_search_tool, domain="rag", effect="idempotent")
 
 
 # Public RAG imports still support direct LangChain callers.

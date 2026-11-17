@@ -1,20 +1,24 @@
-"""SDK tool declarations and the policy needed by business roles."""
+"""Business policy attached to official SDK FunctionTool declarations.
+
+The SDK owns tool declarations: ``@function_tool`` produces the model-visible
+name, description, JSON Schema, argument validation and defaults. This module
+only records the domain and external-effect policy the business Registry and
+ToolExecutor need.
+"""
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
-from functools import wraps
-from inspect import iscoroutinefunction
 from typing import Any, Literal
 
-from agents import FunctionTool, function_tool
-from agents.tool_context import ToolContext
+from agents import FunctionTool
 
 ToolEffect = Literal["read", "idempotent", "protected"]
 
 
 @dataclass(frozen=True)
 class BusinessTool:
+    """An official SDK tool plus the business metadata kept outside it."""
+
     sdk_tool: FunctionTool
     domain: str
     effect: ToolEffect = "protected"
@@ -29,37 +33,21 @@ class BusinessTool:
         return self.sdk_tool.description
 
 
-def python_tool(
+def register_tool(
+    tool: FunctionTool,
     *,
     domain: str,
-    description: str,
     effect: ToolEffect = "protected",
-    name: str | None = None,
-):
-    """Declare a function whose first argument is the SDK ToolContext."""
+    drain_on_cancel: bool = False,
+) -> BusinessTool:
+    """Pair an SDK declaration with its domain, effect and cancel policy.
 
-    def declare(function: Callable[..., Any]) -> BusinessTool:
-        # The SDK reads the original signature. The typed callback starts
-        # external effects only after SDK validation has succeeded.
-        @wraps(function)
-        async def invoke(context: ToolContext[Any], *args: Any, **kwargs: Any) -> Any:
-            return await context.context.tool_executor.execute(
-                context, function, context, *args, **kwargs
-            )
-
-        sdk_tool = function_tool(
-            invoke,
-            name_override=name,
-            description_override=description,
-            use_docstring_info=False,
-            strict_mode=False,
-            failure_error_function=None,
-        )
-        # Match the catalog stored by existing por.role_tools steps.
-        sdk_tool.params_json_schema.update(title=sdk_tool.name, description=description)
-        return BusinessTool(sdk_tool, domain, effect, not iscoroutinefunction(function))
-
-    return declare
+    ``drain_on_cancel`` marks tools whose business callable is synchronous: a
+    cancelled SDK call must still wait for that thread and its receipt.
+    """
+    # Match the catalog stored by existing por.role_tools steps.
+    tool.params_json_schema.update(title=tool.name, description=tool.description)
+    return BusinessTool(tool, domain, effect, drain_on_cancel)
 
 
 def tool_result_text(value: Any) -> str:

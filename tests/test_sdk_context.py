@@ -5,7 +5,7 @@ import json
 import re
 
 import pytest
-from agents import Agent, FileSearchTool, function_tool
+from agents import Agent, FileSearchTool, FunctionTool, function_tool
 from agents.exceptions import MaxTurnsExceeded, UserError
 from agents.mcp import MCPServer
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
@@ -163,11 +163,15 @@ def _tool(
     async def search(context, arguments):
         return _payload(json.loads(arguments)["label"])
 
-    return harness.function_tool(
+    declared = FunctionTool(
         name=name,
         description="Fixture research tool",
         params_json_schema=SEARCH_SCHEMA,
-        invoke=invoke or search,
+        on_invoke_tool=invoke or search,
+        strict_json_schema=False,
+    )
+    return harness.function_tool(
+        declared,
         errors_as_results=errors_as_results,
         is_success=is_success,
     )

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agents import FunctionTool
 from agents.tool_context import ToolContext
 from jsonschema.validators import validator_for
 from langchain_core.messages import ToolMessage
@@ -112,6 +113,22 @@ def mcp_tool_invoker(tool: BaseTool, schema: dict[str, Any]):
         )
 
     return invoke
+
+
+def mcp_function_tool(tool: BaseTool) -> FunctionTool:
+    """Declare one MCP adapter tool with its server-owned Schema.
+
+    MCP keeps its own protocol, authentication and structured results; only the
+    invocation callback reuses the SDK's FunctionTool contract.
+    """
+    schema = tool_schema(tool)
+    return FunctionTool(
+        name=tool.name,
+        description=tool.description or tool.name,
+        params_json_schema=schema,
+        on_invoke_tool=mcp_tool_invoker(tool, schema),
+        strict_json_schema=False,
+    )
 
 
 async def _call_mcp_tool(

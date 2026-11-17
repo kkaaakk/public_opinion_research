@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from agents import Agent, ModelSettings, RunConfig
+from agents import Agent, FunctionTool, ModelSettings, RunConfig
 from langchain_core.callbacks import BaseCallbackHandler
 
 from open_deep_research.configuration import Configuration
@@ -208,15 +208,17 @@ async def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     tool = producer.function_tool(
-        name="lookup_notice",
-        description="Read one synthetic Orion validation notice. A and B are independent; request both together before answering.",
-        params_json_schema={
-            "type": "object",
-            "properties": {"notice_id": {"type": "string", "enum": ["A", "B"]}},
-            "required": ["notice_id"],
-            "additionalProperties": False,
-        },
-        invoke=lookup_notice,
+        FunctionTool(
+            name="lookup_notice",
+            description="Read one synthetic Orion validation notice. A and B are independent; request both together before answering.",
+            params_json_schema={
+                "type": "object",
+                "properties": {"notice_id": {"type": "string", "enum": ["A", "B"]}},
+                "required": ["notice_id"],
+                "additionalProperties": False,
+            },
+            on_invoke_tool=lookup_notice,
+        )
     )
     settings = ModelSettings(max_tokens=2048, parallel_tool_calls=True)
     if parse_model_ref(model_ref).provider == "deepseek":

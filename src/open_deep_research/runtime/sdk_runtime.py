@@ -45,7 +45,7 @@ from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
 from open_deep_research.mcp.domain_filter import get_tool_domain
-from open_deep_research.mcp.tool_wrapper import mcp_tool_invoker, tool_schema
+from open_deep_research.mcp.tool_wrapper import mcp_function_tool
 from open_deep_research.observability.telemetry import (
     annotate,
     business_span,
@@ -564,21 +564,18 @@ class SDKAgentRuntime:
             raise ValueError(
                 f"Tool {tool.name!r} is outside {self.role}'s allowed domains."
             )
-        schema = tool_schema(tool)
         if isinstance(tool, BusinessTool):
-            invoke = tool.sdk_tool.on_invoke_tool
+            declared = tool.sdk_tool
             drain_on_cancel = tool.drain_on_cancel
         else:
-            invoke = mcp_tool_invoker(tool, schema)
+            # MCP keeps its server-owned Schema and protocol invoker.
+            declared = mcp_function_tool(tool)
             drain_on_cancel = bool(
                 getattr(tool, "func", None) and not getattr(tool, "coroutine", None)
             )
         return self.harness.function_tool(
-            name=tool.name,
-            description=tool.description or tool.name,
-            params_json_schema=schema,
-            invoke=partial(executor.invoke, tool.name, invoke),
-            strict_json_schema=False,
+            declared,
+            invoke=partial(executor.invoke, declared.name, declared.on_invoke_tool),
             error_formatter=format_tool_error,
             drain_on_cancel=drain_on_cancel,
         )

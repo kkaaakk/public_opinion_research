@@ -13,7 +13,7 @@
 
 ## 1. 模块定位
 
-`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。四个业务角色通过 `_business_agent_tools` 按允许的领域筛选。Python 声明使用 SDK 的 `function_tool` 生成并校验参数，从 `ToolContext` 取得运行配置。工具名称、描述和 Schema 来自 SDK 声明，领域与 effect 随声明一起注册。
+`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。四个业务角色通过 `_business_agent_tools` 按允许的领域筛选。普通 Python 工具用官方 `@function_tool` 声明：名称、描述、JSON Schema、参数校验和默认值都由 SDK 生成，工具体只把通过校验的参数交给 `ToolExecutor`。`tools/__init__.py:register_tool` 只附加 domain、effect 与取消排空策略，不重建声明。
 
 `utils.py` 和 RAG 公共入口继续提供已有的 Tavily、RAG LangChain 导出，供直接调用这些工具的客户端使用。
 
@@ -200,9 +200,9 @@ class MCPConfig(BaseModel):
 ## 6. 业务 Agent 中的工具执行
 
 1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect。已有 `dbos-events-v1` 的目录可缺少 effect。旧目录中的社媒工具按 `protected` 执行尚未提交的调用，因为旧目录没有记录社媒后端的 effect。
-2. `SDKAgentRuntime._register_tool` 把声明交给 `SDKContextHarness`。DBOSRunner 在 Workflow 内调用 SDK，由 Harness 保持 `por.agent_tool` 的位置和回执格式。
+2. `SDKAgentRuntime._register_tool` 只替换已有 FunctionTool 的 `on_invoke_tool`，把调用交给 `SDKContextHarness`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具由 `mcp_function_tool` 按服务方 Schema 构造同等声明。DBOSRunner 在 Workflow 内调用 SDK，由 Harness 保持 `por.agent_tool` 的位置和回执格式。
 3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。验参通过后才进入业务函数及外部效果边界。
-4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执。已有操作缺少对应的 Step 结果时，恢复会停止并要求核对。
+4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。已有操作缺少对应的 Step 结果时，恢复会停止并要求核对。
 5. Harness 以 Tool Call ID 共享在途结果，并在取消时等待已启动的同步工具及其回执。已提交的 Step 恢复原输出、状态、工具身份、操作 ID 和局部用量。成功结果由 Harness 批量交给 Research Graph。 [执行架构](agent-loop.md) · [DBOS Step](https://docs.dbos.dev/python/tutorials/step-tutorial)
 
 普通工具失败形成与调用配对的错误输出，供模型继续处理。取消和执行控制故障沿原生执行链传播。
@@ -232,5 +232,5 @@ class MCPConfig(BaseModel):
 ## 9. 扩展新工具
 
 1. 在对应业务模块实现工具函数。第一个参数声明为 SDK 的 `ToolContext`，其余参数用 Python 类型和默认值生成模型可见 Schema。
-2. 用 `python_tool` 声明工具名称、说明、domain 和 effect。声明会使用 SDK 的 `function_tool`，并将校验后的调用接入统一执行入口。
+2. 用官方 `@function_tool(...)` 装饰器声明工具，再用 `register_tool(..., domain=..., effect=...)` 附加业务元数据。工具体调用 `ToolExecutor.execute` 执行实际业务函数；同步业务函数由 Executor 放入线程，并在 `drain_on_cancel=True` 时等待线程与回执完成。
 3. 将声明加入 Registry 对应的装配分支。角色领域白名单决定可见范围。

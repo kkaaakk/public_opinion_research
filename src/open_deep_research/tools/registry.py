@@ -3,6 +3,7 @@
 
 from typing import Any
 
+from agents import function_tool
 from agents.tool_context import ToolContext
 from langchain_core.messages import MessageLikeRepresentation, filter_messages
 from langchain_core.runnables import RunnableConfig
@@ -11,7 +12,7 @@ from langchain_core.tools import BaseTool
 from open_deep_research.config_values import get_config_value
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
 from open_deep_research.search.tavily import web_search, web_search_raw
-from open_deep_research.tools import BusinessTool, ToolEffect, python_tool
+from open_deep_research.tools import BusinessTool, ToolEffect, register_tool
 
 
 def tool_effect(tool: BusinessTool | BaseTool) -> ToolEffect:
@@ -24,22 +25,40 @@ def tool_effect(tool: BusinessTool | BaseTool) -> ToolEffect:
     return effect if effect in ("read", "idempotent") else "protected"
 
 
-@python_tool(
-    domain="core",
-    effect="read",
-    description="Strategic reflection tool for research planning",
-)
-async def think_tool(_context: ToolContext, reflection: str) -> str:
+# 仅记录反思内容，不执行外部调用。
+async def _record_reflection(reflection: str) -> str:
     return f"Reflection recorded: {reflection}"
 
 
-@python_tool(
-    domain="core",
-    effect="read",
-    description="Call this tool to indicate that the research is complete.",
+@function_tool(
+    description_override="Strategic reflection tool for research planning",
+    use_docstring_info=False,
+    strict_mode=False,
+    failure_error_function=None,
 )
-async def ResearchComplete(_context: ToolContext) -> str:
+async def think_tool(context: ToolContext, reflection: str) -> str:
+    return await context.context.tool_executor.execute(
+        context, _record_reflection, reflection
+    )
+
+
+# 完成信号本身不产生内容。
+async def _complete_research() -> str:
     return ""
+
+
+@function_tool(
+    description_override="Call this tool to indicate that the research is complete.",
+    use_docstring_info=False,
+    strict_mode=False,
+    failure_error_function=None,
+)
+async def ResearchComplete(context: ToolContext) -> str:
+    return await context.context.tool_executor.execute(context, _complete_research)
+
+
+think_tool = register_tool(think_tool, domain="core", effect="read")
+ResearchComplete = register_tool(ResearchComplete, domain="core", effect="read")
 
 
 # 按搜索供应商选择原生搜索声明或项目搜索工具。

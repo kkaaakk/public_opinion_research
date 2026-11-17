@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 
 import pytest
-from agents import Agent, FunctionTool
+from agents import Agent, FunctionTool, function_tool
 from agents.exceptions import ModelBehaviorError
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from agents.tool_context import ToolContext
@@ -38,7 +38,7 @@ from open_deep_research.runtime.sdk_runtime import (
     _ReasoningStopped,
     _RunBudget,
 )
-from open_deep_research.tools import python_tool
+from open_deep_research.tools import register_tool
 
 ROLES = PUBLIC_OPINION_AGENT_ORDER
 TOKENS = Usage(
@@ -736,9 +736,21 @@ def test_sync_tool_cancellation_drains_actual_thread_result_and_usage(native):
 
         if native:
 
-            @python_tool(name="web_search", domain="web_search", description="Search")
-            def tool(_context: ToolContext, query: str, limit: int = 3):
-                return blocking(query, limit)
+            @function_tool(
+                name_override="web_search",
+                description_override="Search",
+                use_docstring_info=False,
+                strict_mode=False,
+                failure_error_function=None,
+            )
+            async def declared(context: ToolContext, query: str, limit: int = 3):
+                return await context.context.tool_executor.execute(
+                    context, blocking, query, limit=limit
+                )
+
+            tool = register_tool(
+                declared, domain="web_search", effect="read", drain_on_cancel=True
+            )
         else:
             tool = _tool(func=blocking)
         runtime = _runtime(
@@ -903,7 +915,7 @@ def test_standalone_business_harness_observes_live_nested_budget_without_runtime
             )
             return response.content
 
-        tool = harness.function_tool(
+        declared = FunctionTool(
             name="nested_model",
             description="Collect nested model evidence",
             params_json_schema={
@@ -911,8 +923,9 @@ def test_standalone_business_harness_observes_live_nested_budget_without_runtime
                 "properties": {},
                 "additionalProperties": False,
             },
-            invoke=invoke,
+            on_invoke_tool=invoke,
         )
+        tool = harness.function_tool(declared)
         model = ScriptedModel(
             [
                 [function_call(tool.name, "{}", call_id="nested")],
@@ -941,15 +954,18 @@ def test_standalone_business_harness_observes_live_nested_budget_without_runtime
 def test_native_sdk_tool_owns_defaults_and_receives_call_context():
     called = []
 
-    @python_tool(
-        domain="web_search",
-        name="web_search",
-        description="Search cited evidence",
-        effect="read",
+    @function_tool(
+        name_override="web_search",
+        description_override="Search cited evidence",
+        use_docstring_info=False,
+        strict_mode=False,
+        failure_error_function=None,
     )
-    async def search(context: ToolContext, query: str, limit: int = 3):
+    async def declared(context: ToolContext, query: str, limit: int = 3):
         called.append((query, limit, context.tool_call_id))
         return "evidence"
+
+    search = register_tool(declared, domain="web_search", effect="read")
 
     runtime = _runtime(
         tools=[search],
@@ -982,13 +998,21 @@ def test_concurrent_native_duplicate_shares_the_original_and_its_budget():
         release = asyncio.Event()
         calls = []
 
-        @python_tool(domain="web_search", effect="read", description="Search")
-        async def web_search(context: ToolContext, query: str):
+        @function_tool(
+            name_override="web_search",
+            description_override="Search",
+            use_docstring_info=False,
+            strict_mode=False,
+            failure_error_function=None,
+        )
+        async def declared(context: ToolContext, query: str):
             calls.append(query)
             entered.set()
             await release.wait()
             capture_budget_usage({"model_calls": 1})
             return "same result"
+
+        web_search = register_tool(declared, domain="web_search", effect="read")
 
         async def during_run(_call):
             tool = runtime.agent.tools[0]
@@ -1040,9 +1064,17 @@ def test_protected_sdk_validation_runs_before_external_admission(monkeypatch):
     from open_deep_research.runtime import tool_executor
     from open_deep_research.workflow.execution import stage_context
 
-    @python_tool(domain="web_search", description="Search")
-    async def web_search(_context: ToolContext, query: str) -> str:
+    @function_tool(
+        name_override="web_search",
+        description_override="Search",
+        use_docstring_info=False,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def declared(_context: ToolContext, query: str) -> str:
         pytest.fail("Invalid input must not reach the business callable")
+
+    web_search = register_tool(declared, domain="web_search")
 
     def start(*args):
         pytest.fail("Invalid input must not enter operations")
@@ -1073,6 +1105,72 @@ def test_protected_sdk_validation_runs_before_external_admission(monkeypatch):
     record = runtime.harness.results["invalid"]
     assert record.status == "failed"
     assert record.operation_id is None
+
+
+def test_protected_tool_config_is_read_after_operation_admission(monkeypatch):
+    from open_deep_research.runtime import tool_executor
+    from open_deep_research.workflow.execution import stage_context
+
+    class Scope:
+        run_id = "test"
+
+        async def observe(self, *args, **kwargs):
+            return None
+
+    events = []
+
+    def start(*args):
+        events.append("admitted")
+
+    def finish(*args):
+        events.append("settled")
+
+    monkeypatch.setattr(tool_executor, "start_operation", start)
+    monkeypatch.setattr(tool_executor, "finish_operation", finish)
+
+    async def business(context: ToolContext) -> str:
+        config = context.context.tool_executor.tool_config(context)
+        events.append(config["metadata"]["operation_id"])
+        return "protected result"
+
+    @function_tool(
+        name_override="web_search",
+        description_override="Search",
+        use_docstring_info=False,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def declared(context: ToolContext, query: str) -> str:
+        return await context.context.tool_executor.execute(
+            context, business, context
+        )
+
+    web_search = register_tool(declared, domain="web_search")
+
+    async def during_run(_call):
+        arguments = '{"query":"q"}'
+        context = ToolContext(
+            context=runtime.harness,
+            tool_name=web_search.name,
+            tool_call_id="protected",
+            tool_arguments=arguments,
+        )
+        token = stage_context.set(Scope())
+        try:
+            output = await runtime.agent.tools[0].on_invoke_tool(context, arguments)
+        finally:
+            stage_context.reset(token)
+        assert output == "protected result"
+        return [assistant_message("completed")]
+
+    runtime = _runtime(
+        tools=[web_search], model=ScriptedModel([ModelStep.respond(during_run)])
+    )
+    asyncio.run(runtime.run("task"))
+    operation_id = events[1]
+    assert events[0] == "admitted" and operation_id and events[2] == "settled"
+    assert runtime.harness.results["protected"].operation_id == operation_id
+    assert runtime.harness.results["protected"].effect_status == "returned"
 
 
 def test_native_catalog_tools_dispatch_with_their_original_defaults(monkeypatch):
