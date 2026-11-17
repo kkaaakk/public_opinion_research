@@ -5,7 +5,7 @@
 | 项目     | 内容                                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------------------------- |
 | 阅读目标 | 理解 Public Opinion 业务 Agent 可调用工具如何注册、筛选、执行和失败兜底。                                    |
-| 关键代码 | `src/open_deep_research/tools/registry.py`、`src/open_deep_research/tools/rag_tool.py`、`src/open_deep_research/runtime/business_agent.py`、`src/open_deep_research/runtime/agent_runtime.py` |
+| 关键代码 | `src/open_deep_research/tools/registry.py`、`src/open_deep_research/tools/rag_tool.py`、`src/open_deep_research/runtime/business_agent.py`、`src/open_deep_research/runtime/tool_executor.py` |
 | 上游文档 | [Agent Loop 模块说明](agent-loop.md)                                                                                       |
 | 下游文档 | [RAG 模块说明](rag.md)、[RAG 检索测试记录](../evaluation/rag-retrieval-test-records.md)                                    |
 
@@ -13,19 +13,9 @@
 
 ## 1. 模块定位
 
-`tools` 模块负责把项目内能力包装成 LangChain/LangGraph 可调用工具，让 Public Opinion 业务 Agent 在工具调用循环中使用。
+`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。四个业务角色通过 `_business_agent_tools` 按允许的领域筛选。Python 声明使用 SDK 的 `function_tool` 生成并校验参数，从 `ToolContext` 取得运行配置。工具名称、描述和 Schema 来自 SDK 声明，领域与 effect 随声明一起注册。
 
-当前独立的 `src/open_deep_research/tools/` 目录包含本地 RAG 检索工具及共享装配逻辑：
-
-- `src/open_deep_research/tools/rag_tool.py`
-- `src/open_deep_research/tools/registry.py`
-
-`src/open_deep_research/utils.py` 仅保留旧导入路径的兼容导出；新调用应使用具体实现模块。
-
-因此实际工具体系可以分成两层：
-
-- 工具实现层：具体工具函数，例如 `rag_search`、`tavily_search`、`think_tool`。
-- 工具装配层：根据配置把 web search、RAG、MCP、控制工具组合成业务 Agent 可用工具列表。
+`utils.py` 和 RAG 公共入口继续提供已有的 Tavily、RAG LangChain 导出，供直接调用这些工具的客户端使用。
 
 ## 2. 核心工具
 
@@ -35,12 +25,7 @@
 
 - `src/open_deep_research/tools/rag_tool.py`
 
-定义：
-
-```python
-@tool(description=RAG_SEARCH_DESCRIPTION)
-async def rag_search(query: str, config: RunnableConfig = None) -> str
-```
+SDK 工具只公开 `query: str`。`rag_search_tool` 从 `ToolContext` 读取配置并调用共享检索函数。
 
 职责：
 
@@ -52,7 +37,7 @@ async def rag_search(query: str, config: RunnableConfig = None) -> str
 - 调用 `RAGPipeline.query()`。
 - 返回带 SOURCE、CHUNK ID、METADATA、EXCERPT 和 Sources 列表的纯文本上下文。
 
-返回值是字符串，因为它会作为业务 Agent 的 `ToolMessage.content` 进入后续压缩和最终报告生成阶段。
+返回的带引用文本由 SDK 配对为工具输出。Harness 收集证据，并为报告服务生成消息投影。
 
 失败时不会抛出到 agent loop，而是返回：
 
@@ -60,7 +45,7 @@ async def rag_search(query: str, config: RunnableConfig = None) -> str
 Local RAG search failed: ...
 ```
 
-这样可以避免单次本地检索异常中断整轮 deep research。
+执行入口将该返回值记录为普通工具失败，SDK 可以继续推理。
 
 ### 2.2 `tavily_search`
 
@@ -91,7 +76,7 @@ Local RAG search failed: ...
 
 当 `search_api=anthropic` 时，返回 Anthropic native web search tool schema。
 
-这类工具不是普通 LangChain `BaseTool`，而是传给模型的 provider-native tool 字典。
+这两个 provider-native 声明保留给兼容调用。业务 SDK Runtime 只接收本地可观测工具，遇到这些声明会拒绝运行。
 
 ### 2.4 `think_tool`
 
@@ -114,7 +99,7 @@ Local RAG search failed: ...
 
 位置：
 
-- `src/open_deep_research/state.py`
+- `src/open_deep_research/tools/registry.py`
 
 用途：
 
@@ -198,71 +183,35 @@ class MCPConfig(BaseModel):
 - `mcp_config.url` 存在。
 - `mcp_config.tools` 指定允许暴露的工具名。
 - 如果 `auth_required=True`，必须能拿到 MCP token。
-- MCP 工具名不能和已有工具名冲突。
+- MCP 工具与已有名称冲突时使用服务名前缀。
 
 认证逻辑：
 
 - 通过 Supabase access token 换取 MCP access token。
-- token 存入 LangGraph store。
-- 过期后自动清理并重新获取。
+- 当前配置需要鉴权时在发现阶段交换令牌。
 
 错误处理：
 
 - 对 MCP `interaction required` 错误做用户友好包装。
 - 连接失败时返回空工具列表，不中断主流程。
 
+业务路径继续通过 MCP 适配器取得服务方 Schema、认证错误、协议状态和结构化 artifact。`mcp/tool_wrapper.py` 将这些数据交给统一执行入口。SDK 的 `Agent.mcp_servers` 会由 Runner 直接发现并调用 MCP 工具，会跳过当前的工具预算、`por.agent_tool` 和 operations 回执接缝。 [Agents SDK 0.24.0 MCP 实现](https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/mcp/util.py)
+
 ## 6. 业务 Agent 中的工具执行
 
-位置：
+1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect。已有 `dbos-events-v1` 的目录可缺少 effect。旧目录中的社媒工具按 `protected` 执行尚未提交的调用，因为旧目录没有记录社媒后端的 effect。
+2. `SDKAgentRuntime._register_tool` 把声明交给 `SDKContextHarness`。DBOSRunner 在 Workflow 内调用 SDK，由 Harness 保持 `por.agent_tool` 的位置和回执格式。
+3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。验参通过后才进入业务函数及外部效果边界。
+4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执。已有操作缺少对应的 Step 结果时，恢复会停止并要求核对。
+5. Harness 以 Tool Call ID 共享在途结果，并在取消时等待已启动的同步工具及其回执。已提交的 Step 恢复原输出、状态、工具身份、操作 ID 和局部用量。成功结果由 Harness 批量交给 Research Graph。 [执行架构](agent-loop.md) · [DBOS Step](https://docs.dbos.dev/python/tutorials/step-tutorial)
 
-- `src/open_deep_research/runtime/business_agent.py`
-- `src/open_deep_research/runtime/agent_runtime.py`
+普通工具失败形成与调用配对的错误输出，供模型继续处理。取消和执行控制故障沿原生执行链传播。
 
-相关函数：
-
-- `run_business_agent(...)`
-- `_business_agent_tools(...)`
-- `_execute_tool_safely(...)`
-- `AgentRuntime.run(...)`
-
-执行流程：
-
-1. `run_business_agent` 通过 `_business_agent_tools` 装配并按角色领域白名单过滤工具。
-2. 模型基于工具列表生成 tool calls。
-3. Agent loop 从最近一条 AI 消息取出 tool calls。
-4. 通过 Budget Guard 过滤不可执行的 tool calls。
-5. 对允许执行的工具并行调用 `_execute_tool_safely`。
-6. 把结果包装成 `ToolMessage`。
-7. 根据迭代次数、`ResearchComplete`、预算状态决定继续当前角色循环或结束研究；图策略通过 `ResearchWorkspace.finalize` 收尾，标准策略通过 `_compress_research` 压缩研究结果。
-
-工具执行异常会被捕获成文本：
-
-```text
-Error executing tool: ...
-```
-
-这样单个工具异常不会直接打断 graph。
+回滚到旧 Executor 前，由支持 effect 的版本处理完已经写入带 effect 目录的活跃 Run。旧 Executor 的目录比较要求原有字段集合。
 
 ## 7. Budget Guard 对工具的影响
 
-位置：
-
-- `src/open_deep_research/budget.py`
-- `src/open_deep_research/runtime/agent_runtime.py`
-
-工具相关预算：
-
-- `max_tool_calls`
-- `max_search_calls`
-- `max_model_calls`
-- `reserve_final_report_call`
-
-影响：
-
-- 超预算的工具调用不会执行。
-- 系统会生成一个合成 `ToolMessage`，说明该工具被跳过。
-- native web search 会通过 response metadata 计入 search call。
-- `rag_search` 被标记为 search 类型，因此也会计入 search budget。
+`ToolExecutor` 和 `budget.py` 共用 `max_tool_calls` 和 `max_search_calls`。已接纳的并发工具在首次等待前占用额度，超限调用会得到配对错误。重复调用和已提交的 Step 各自复用原结果，已记账增量随恢复回执在当前调用中重建一次。 `web_search` 与 `rag_search` 计入检索配额。推理模型和报告预留沿用各自的预算规则。
 
 ## 8. 工具提示词
 
@@ -282,58 +231,6 @@ Error executing tool: ...
 
 ## 9. 扩展新工具
 
-新增一个普通 research tool 的推荐路径：
-
-1. 在合适模块中实现 async tool，并用 `@tool` 包装。
-2. 设置清晰的 description。
-3. 如果它属于检索工具，在 `get_retrieval_tools` 中按配置加入。
-4. 如果它属于常驻控制工具，在 `get_all_tools` 初始列表中加入。
-5. 如需计入 search budget，设置 metadata：
-
-```python
-tool.metadata = {
-    **(tool.metadata or {}),
-    "type": "search",
-    "name": "your_tool_name",
-}
-```
-
-1. 更新对应业务 Agent prompt 中的工具说明。
-2. 增加工具级测试和 agent loop 集成测试。
-
-## 10. 常见问题
-
-### 业务 Agent 报没有外部研究工具
-
-业务 Agent 会调用 `has_external_research_tool(tools)`。
-
-生产者和标准策略角色如果只有 `ResearchComplete` 和 `think_tool`，会抛出包含以下信息的错误：
-
-```text
-Public Opinion agent '...' (...) requires tool domains: ... Missing tools ...
-```
-
-图消费策略的风险/回应角色可以通过 ResearchWorkspace 检索图证据，不要求额外外部检索工具；对应契约见上文的无 RAG 图消费测试。
-
-解决方式：
-
-- 配置 web search。
-- 或启用 RAG 并设置 `retrieval_mode=rag_only/hybrid`。
-- 或配置 MCP 工具。
-
-### `rag_search` 不出现
-
-检查：
-
-- `rag_enabled=True`
-- `retrieval_mode` 是 `rag_only` 或 `hybrid`
-- `rag_knowledge_base_paths`、`rag_memory_paths` 或 `rag_memory_mysql_url` 至少有一个可用来源
-
-### MCP 工具不出现
-
-检查：
-
-- `mcp_config.url`
-- `mcp_config.tools`
-- 工具名是否和已有工具冲突
-- 如果 `auth_required=True`，是否有可交换的 Supabase token
+1. 在对应业务模块实现工具函数。第一个参数声明为 SDK 的 `ToolContext`，其余参数用 Python 类型和默认值生成模型可见 Schema。
+2. 用 `python_tool` 声明工具名称、说明、domain 和 effect。声明会使用 SDK 的 `function_tool`，并将校验后的调用接入统一执行入口。
+3. 将声明加入 Registry 对应的装配分支。角色领域白名单决定可见范围。

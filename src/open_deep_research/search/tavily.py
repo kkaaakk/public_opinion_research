@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 from typing import Annotated, Any, List, Literal
 
+from agents.tool_context import ToolContext
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
@@ -20,6 +21,7 @@ from open_deep_research.models import create_chat_model
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import Summary
 from open_deep_research.time_utils import get_today_str
+from open_deep_research.tools import python_tool
 
 TAVILY_SEARCH_DESCRIPTION = (
     "A search engine optimized for comprehensive, accurate, and trusted results. "
@@ -28,8 +30,7 @@ TAVILY_SEARCH_DESCRIPTION = (
 
 
 # 并发检索多条查询，对带原文的结果生成摘要并汇总来源。
-@tool(description=TAVILY_SEARCH_DESCRIPTION)
-async def tavily_search(
+async def _tavily_search(
     queries: List[str],
     max_results: Annotated[int, InjectedToolArg] = 5,
     topic: Annotated[
@@ -129,13 +130,7 @@ async def tavily_search(
 
 
 # 保留 Tavily 原始结果，跳过逐网页摘要，供研究图生产流程使用。
-@tool(
-    description=(
-        "Fetch raw, source-bound Tavily results for Research Graph extraction. "
-        "This path does not call a per-page summarization model."
-    )
-)
-async def tavily_search_raw(
+async def _tavily_search_raw(
     queries: List[str],
     max_results: Annotated[int, InjectedToolArg] = 5,
     topic: Annotated[
@@ -176,6 +171,45 @@ async def tavily_search_raw(
         {"type": "research_raw_search", "results": list(unique_results.values())},
         ensure_ascii=False,
     )
+
+
+TAVILY_RAW_DESCRIPTION = (
+    "Fetch raw, source-bound Tavily results for Research Graph extraction. "
+    "This path does not call a per-page summarization model."
+)
+
+
+@python_tool(
+    name="web_search",
+    domain="web_search",
+    effect="read",
+    description=TAVILY_SEARCH_DESCRIPTION,
+)
+async def web_search(context: ToolContext, queries: list[str]) -> str:
+    return await _tavily_search(
+        queries, config=context.context.tool_executor.tool_config(context)
+    )
+
+
+@python_tool(
+    name="web_search",
+    domain="web_search",
+    effect="read",
+    description=TAVILY_RAW_DESCRIPTION,
+)
+async def web_search_raw(context: ToolContext, queries: list[str]) -> str:
+    return await _tavily_search_raw(
+        queries, config=context.context.tool_executor.tool_config(context)
+    )
+
+
+# Direct LangChain callers use the same functions and their existing signatures.
+tavily_search = tool(
+    "tavily_search", _tavily_search, description=TAVILY_SEARCH_DESCRIPTION
+)
+tavily_search_raw = tool(
+    "tavily_search_raw", _tavily_search_raw, description=TAVILY_RAW_DESCRIPTION
+)
 
 
 # 并发发送多条 Tavily 查询，并应用结果数量、主题等搜索参数。
@@ -281,7 +315,6 @@ async def summarize_webpage(
 
 
 # 从运行配置或环境变量中解析 Tavily API 密钥。
-@tool(description="Strategic reflection tool for research planning")
 def get_tavily_api_key(config: RunnableConfig):
     """Get Tavily API key from environment or config."""
     should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")

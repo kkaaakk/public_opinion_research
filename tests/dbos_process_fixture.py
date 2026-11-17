@@ -11,6 +11,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Barrier
+from typing import Annotated
 
 os.environ.update(
     PYTHON_DOTENV_DISABLED="1",
@@ -38,17 +39,20 @@ socket.socket.connect = local_connect
 
 import pytest
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
+from agents.tool_context import ToolContext
 from dbos import DBOS, DBOSClient
 from dbos_support import NEO4J, NEO4J_PASSWORD, record_scripted_model_attempt
 from langchain_core.runnables import RunnableConfig
 from neo4j import GraphDatabase
+from pydantic import Field
 from sqlalchemy.exc import SQLAlchemyError
 from test_python_workflow_sdk import install_sdk
 from test_sdk_context import _payload
 from test_sdk_runtime import TOKENS, _tool
 
 from open_deep_research import budget
-from open_deep_research.runtime import business_agent, sdk_runtime
+from open_deep_research.runtime import business_agent, tool_executor
+from open_deep_research.tools import python_tool
 from open_deep_research.web import history
 from open_deep_research.web.executor import launch
 from open_deep_research.workflow import dbos_workflow as engine
@@ -174,7 +178,6 @@ def install(directory, scenario):
 
         from reference_research import legacy_research_patch
 
-
         async def legacy_producer(state, config, *, role):
             # Run the actual SDK/Harness, but persist the frozen 31e8ad8 wire
             # contract. No journal/Artifact fabrication or external replay.
@@ -188,9 +191,24 @@ def install(directory, scenario):
                 engine.research, role + "_agent", partial(legacy_producer, role=role)
             )
 
+    legacy_catalog = (
+        scenario == "runner-legacy-catalog"
+        and not (directory / (scenario + ".release")).exists()
+    )
+    if legacy_catalog:
+        catalog = business_agent._tool_catalog
+
+        def catalog_without_effect(available):
+            return [
+                {key: value for key, value in entry.items() if key != "effect"}
+                for entry in catalog(available)
+            ]
+
+        patch.setattr(business_agent, "_tool_catalog", catalog_without_effect)
+
     old_publish = engine._publish_stage
     old_announce = engine._announce_stage
-    old_finish_operation = sdk_runtime.finish_operation
+    old_finish_operation = tool_executor.finish_operation
     old_finish_model_attempt = budget.finish_model_attempt
     lost_receipt_producers = Barrier(2)
 
@@ -326,12 +344,16 @@ def install(directory, scenario):
 
     def finish_tool(*args):
         if (
-            scenario == "lost-receipt"
+            scenario in {"lost-receipt", "returned-without-step"}
             and args[-1] == "returned"
             and not (directory / (scenario + ".release")).exists()
         ):
+            if scenario == "returned-without-step":
+                old_finish_operation(*args)
             lost_receipt_producers.wait()
             gate(scenario)
+            if scenario == "returned-without-step":
+                return
         return old_finish_operation(*args)
 
     def finish_model(*args):
@@ -357,7 +379,7 @@ def install(directory, scenario):
     patch.setattr(engine, "_publish_stage", publish)
     patch.setattr(engine, "_announce_stage", announce)
     patch.setattr(engine, "publish_failure", failure)
-    patch.setattr(sdk_runtime, "finish_operation", finish_tool)
+    patch.setattr(tool_executor, "finish_operation", finish_tool)
     patch.setattr(budget, "finish_model_attempt", finish_model)
 
     from open_deep_research.runtime.sdk_context import SDKContextHarness
@@ -409,7 +431,10 @@ def install(directory, scenario):
             await asyncio.to_thread(gate, "runner-second")
 
     async def tool_end(self, *args, **kwargs):
-        if scenario == "runner-tool" and self.scope.role == "public_signal":
+        if (
+            scenario in {"runner-tool", "runner-legacy-catalog"}
+            and self.scope.role == "public_signal"
+        ):
             await asyncio.to_thread(gate, scenario)
         await original_tool_end(self, *args, **kwargs)
 
@@ -495,9 +520,10 @@ def install(directory, scenario):
         if role not in {"public_signal", "internal_knowledge"}:
             return []
 
-        async def effect(query, config: RunnableConfig, limit=3):
-            op = config.get("metadata", {}).get("operation_id")
-            assert op
+        async def effect(config: RunnableConfig):
+            metadata = config.get("metadata", {})
+            op = metadata.get("operation_id")
+            assert op and metadata["idempotency_key"] == op
             with sqlite3.connect(directory / "external.db", timeout=5) as db:
                 db.execute(
                     "CREATE TABLE IF NOT EXISTS effects(operation text PRIMARY KEY, role text)"
@@ -512,9 +538,30 @@ def install(directory, scenario):
                 )
             return _payload(role)
 
-        tool = _tool(role, coroutine=effect)
-        tool.metadata = {**(tool.metadata or {}), "effect": "protected"}
-        return [tool]
+        if legacy_catalog:
+
+            async def legacy_effect(query, config: RunnableConfig, limit=3):
+                return await effect(config)
+
+            tool = _tool(role, coroutine=legacy_effect)
+            tool.metadata = {**(tool.metadata or {}), "effect": "protected"}
+            return [tool]
+
+        public = role == "public_signal"
+
+        @python_tool(
+            name="web_search" if public else "rag_search",
+            domain="web_search" if public else "rag",
+            description="Search cited evidence",
+        )
+        async def search(
+            context: ToolContext,
+            query: str,
+            limit: Annotated[int, Field(ge=1, le=10)] = 3,
+        ):
+            return await effect(context.context.tool_executor.tool_config(context))
+
+        return [search]
 
     patch.setattr(business_agent, "sdk_model", model)
     patch.setattr(business_agent, "_business_agent_tools", tools)

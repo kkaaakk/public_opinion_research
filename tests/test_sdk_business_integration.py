@@ -11,7 +11,7 @@ from agents.testing import ModelStep, ScriptedModel, assistant_message, function
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from mcp.types import Tool as MCPTool
 from openai import AsyncOpenAI, InternalServerError
 from reference_workflow import PythonWorkflow
@@ -21,11 +21,13 @@ from test_sdk_models import _reply
 from test_sdk_runtime import ROLES, TOKENS, _compress, _runtime, _tool
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.mcp.tools import _tag_tools_with_domain
 from open_deep_research.models.sdk import sdk_model
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
 from open_deep_research.research_graph import ResearchWorkspace, create_context_strategy
 from open_deep_research.runtime import business_agent
 from open_deep_research.state import ResearchReview, ResearchTask
+from open_deep_research.tools.registry import tool_effect
 from open_deep_research.workflow import reporting, shared
 
 
@@ -54,6 +56,9 @@ def test_existing_mcp_adapter_schema_protocol_status_and_artifact(is_error):
         MCPTool(
             name="social_media__lookup",
             description="Read a social post",
+            annotations=ToolAnnotations(
+                readOnlyHint=True, idempotentHint=True, effect="read"
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -61,7 +66,9 @@ def test_existing_mcp_adapter_schema_protocol_status_and_artifact(is_error):
             },
         ),
     )
-    tool.metadata = {"tool_domain": "social_media"}
+    assert tool.metadata["effect"] == "read"
+    _tag_tools_with_domain([tool], "social_media")
+    assert tool_effect(tool) == "protected"
     runtime = _runtime(
         tools=[tool],
         model=ScriptedModel(

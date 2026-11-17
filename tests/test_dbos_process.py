@@ -18,6 +18,7 @@ from dbos_support import (  # noqa:F401
     holds_business_slot,
     stage_observations,
 )
+from sqlalchemy import text
 from test_python_workflow import config, initial
 
 from open_deep_research.web.durable import RunClient
@@ -221,7 +222,14 @@ def configuration(directory):
 
 
 @pytest.mark.parametrize(
-    "scenario", ["checkpoint", "lost-receipt", "legacy-checkpoint", "legacy-artifact"]
+    "scenario",
+    [
+        "checkpoint",
+        "lost-receipt",
+        "returned-without-step",
+        "legacy-checkpoint",
+        "legacy-artifact",
+    ],
 )
 def test_process_kill_journal_recovery_never_replays_unknown_tool(
     pg_database, tmp_path, scenario
@@ -287,6 +295,22 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
                     for step in client.client.list_workflow_steps(public_id)
                 )
             assert effect_count(directory, "models") == 4
+        if scenario in {"lost-receipt", "returned-without-step"}:
+            expected_outcome = (
+                "returned" if scenario == "returned-without-step" else None
+            )
+            with domain_engine().connect() as db:
+                assert db.execute(
+                    text("SELECT outcome FROM por_domain.operations WHERE run_id=:r"),
+                    {"r": run["run_id"]},
+                ).scalars().all() == [expected_outcome, expected_outcome]
+            for role in ("public_signal", "internal_knowledge"):
+                assert not any(
+                    step["function_name"] == "por.agent_tool" and step["output"]
+                    for step in client.client.list_workflow_steps(
+                        run["run_id"] + f":{role}:1"
+                    )
+                )
         kill_owned(process)
         before = effect_count(directory)
         assert before == 2
@@ -301,7 +325,7 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             directory,
         )
         result = client.get(run["run_id"], "alice")
-        if scenario != "lost-receipt":
+        if scenario not in {"lost-receipt", "returned-without-step"}:
             assert result["status"] == "completed", result["error"]
             assert result["report"]
             assert result["usage"]["model_calls"] == 26
@@ -333,8 +357,9 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
             assert result["status"] == "interrupted"
             assert result["settlement"] == "unresolved"
             assert not result["retry_safe"]
-            assert has_unconfirmed_bills_or_effects(run["run_id"])
-            assert has_unconfirmed_bills_or_effects(run["run_id"])
+            assert has_unconfirmed_bills_or_effects(run["run_id"]) is (
+                scenario == "lost-receipt"
+            )
             from open_deep_research.web.run_data import RunConflict
 
             with pytest.raises(RunConflict):

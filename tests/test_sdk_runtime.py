@@ -12,6 +12,7 @@ import pytest
 from agents import Agent, FunctionTool
 from agents.exceptions import ModelBehaviorError
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
+from agents.tool_context import ToolContext
 from agents.usage import Usage
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
@@ -37,6 +38,7 @@ from open_deep_research.runtime.sdk_runtime import (
     _ReasoningStopped,
     _RunBudget,
 )
+from open_deep_research.tools import python_tool
 
 ROLES = PUBLIC_OPINION_AGENT_ORDER
 TOKENS = Usage(
@@ -92,7 +94,6 @@ def _runtime(
     initial_budget=None,
     compress=None,
     research_round=1,
-    execute_tool=None,
 ):
     config = config or Configuration(
         research_graph_enabled=False, research_model="openai:fixture"
@@ -123,7 +124,6 @@ def _runtime(
         ),
         tools=tools if tools is not None else [_tool(role)],
         initial_budget=initial_budget or {},
-        execute_tool=execute_tool,
         compress_report=compress or _compress,
     )
 
@@ -720,7 +720,8 @@ def test_model_cancellation_keeps_started_attempt():
     asyncio.run(run())
 
 
-def test_sync_tool_cancellation_drains_actual_thread_result_and_usage():
+@pytest.mark.parametrize("native", [False, True])
+def test_sync_tool_cancellation_drains_actual_thread_result_and_usage(native):
     async def run():
         entered = threading.Event()
         release = threading.Event()
@@ -733,7 +734,13 @@ def test_sync_tool_cancellation_drains_actual_thread_result_and_usage():
             capture_budget_usage({"model_calls": 1, "input_tokens": 5})
             return "late synchronous evidence"
 
-        tool = _tool(func=blocking)
+        if native:
+
+            @python_tool(name="web_search", domain="web_search", description="Search")
+            def tool(_context: ToolContext, query: str, limit: int = 3):
+                return blocking(query, limit)
+        else:
+            tool = _tool(func=blocking)
         runtime = _runtime(
             tools=[tool],
             model=ScriptedModel(
@@ -931,18 +938,21 @@ def test_standalone_business_harness_observes_live_nested_budget_without_runtime
     asyncio.run(run())
 
 
-def test_legacy_executor_keyword_is_ignored_by_the_real_sdk_tool_path():
+def test_native_sdk_tool_owns_defaults_and_receives_call_context():
     called = []
 
-    async def search(query: str, limit: int = 3):
-        called.append(query)
+    @python_tool(
+        domain="web_search",
+        name="web_search",
+        description="Search cited evidence",
+        effect="read",
+    )
+    async def search(context: ToolContext, query: str, limit: int = 3):
+        called.append((query, limit, context.tool_call_id))
         return "evidence"
 
-    def legacy_executor(*args, **kwargs):
-        pytest.fail("The retired tool executor was called")
-
     runtime = _runtime(
-        tools=[_tool("public_signal", coroutine=search)],
+        tools=[search],
         model=ScriptedModel(
             [
                 [
@@ -953,9 +963,171 @@ def test_legacy_executor_keyword_is_ignored_by_the_real_sdk_tool_path():
                 [assistant_message("finished")],
             ]
         ),
-        execute_tool=legacy_executor,
     )
     assert not hasattr(runtime, "execute_tool")
     result = asyncio.run(runtime.run("research fixture"))
-    assert called == ["fixture"]
+    assert called == [("fixture", 3, "compat-call")]
+    declaration = runtime.agent.tools[0]
+    assert declaration.params_json_schema == search.sdk_tool.params_json_schema
+    assert declaration.params_json_schema["required"] == ["query"]
+    assert declaration.params_json_schema["properties"]["limit"]["default"] == 3
+    assert not declaration.strict_json_schema
+    assert runtime.harness.results["compat-call"].status == "succeeded"
+    assert result.budget["tool_calls"] == result.budget["search_calls"] == 1
+
+
+def test_concurrent_native_duplicate_shares_the_original_and_its_budget():
+    async def scenario():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        @python_tool(domain="web_search", effect="read", description="Search")
+        async def web_search(context: ToolContext, query: str):
+            calls.append(query)
+            entered.set()
+            await release.wait()
+            capture_budget_usage({"model_calls": 1})
+            return "same result"
+
+        async def during_run(_call):
+            tool = runtime.agent.tools[0]
+
+            async def invoke(arguments):
+                context = ToolContext(
+                    context=runtime.harness,
+                    tool_name=tool.name,
+                    tool_call_id="one-call",
+                    tool_arguments=arguments,
+                )
+                return await tool.on_invoke_tool(context, arguments)
+
+            first = asyncio.create_task(invoke('{"query":"q"}'))
+            await asyncio.wait_for(entered.wait(), 2)
+            duplicate = asyncio.create_task(invoke('{ "query": "q" }'))
+            cancelled_duplicate = asyncio.create_task(invoke('{"query":"q"}'))
+            await asyncio.sleep(0)
+            with pytest.raises(ValueError, match="reused"):
+                await invoke('{"query":"other"}')
+            cancelled_duplicate.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_duplicate
+            assert not first.done() and not duplicate.done()
+            release.set()
+            assert await asyncio.gather(first, duplicate) == [
+                "same result",
+                "same result",
+            ]
+            assert await invoke('{"query":"q"}') == "same result"
+            return [assistant_message("completed")]
+
+        runtime = _runtime(
+            tools=[web_search], model=ScriptedModel([ModelStep.respond(during_run)])
+        )
+        result = await runtime.run("task")
+        assert calls == ["q"]
+        assert result.budget["tool_calls"] == result.budget["search_calls"] == 1
+        assert result.budget["model_calls"] == 2
+        assert runtime.harness.results["one-call"].status == "succeeded"
+        assert runtime.harness.last_settlement.succeeded
+
+    asyncio.run(scenario())
+
+
+def test_protected_sdk_validation_runs_before_external_admission(monkeypatch):
+    from types import SimpleNamespace
+
+    from open_deep_research.runtime import tool_executor
+    from open_deep_research.workflow.execution import stage_context
+
+    @python_tool(domain="web_search", description="Search")
+    async def web_search(_context: ToolContext, query: str) -> str:
+        pytest.fail("Invalid input must not reach the business callable")
+
+    def start(*args):
+        pytest.fail("Invalid input must not enter operations")
+
+    monkeypatch.setattr(tool_executor, "start_operation", start)
+
+    async def during_run(_call):
+        arguments = '{"query":123}'
+        context = ToolContext(
+            context=runtime.harness,
+            tool_name=web_search.name,
+            tool_call_id="invalid",
+            tool_arguments=arguments,
+        )
+        token = stage_context.set(SimpleNamespace(run_id="test"))
+        try:
+            output = await runtime.agent.tools[0].on_invoke_tool(context, arguments)
+        finally:
+            stage_context.reset(token)
+        assert output.startswith("Error executing tool:")
+        return [assistant_message("completed")]
+
+    runtime = _runtime(
+        tools=[web_search], model=ScriptedModel([ModelStep.respond(during_run)])
+    )
+    result = asyncio.run(runtime.run("task"))
     assert result.budget["tool_calls"] == 1
+    record = runtime.harness.results["invalid"]
+    assert record.status == "failed"
+    assert record.operation_id is None
+
+
+def test_native_catalog_tools_dispatch_with_their_original_defaults(monkeypatch):
+    from open_deep_research import social_media_mcp
+    from open_deep_research.search import tavily
+    from open_deep_research.social_media.tools import fetch_comments
+    from open_deep_research.tools.registry import ResearchComplete, think_tool
+
+    searches = []
+    comments = []
+
+    async def search(queries, *, max_results, topic, include_raw_content, config):
+        searches.append((queries, max_results, topic, include_raw_content, config))
+        return []
+
+    def fetch(post_id, *, limit):
+        comments.append((post_id, limit))
+        return {"success": True, "comments": []}
+
+    monkeypatch.setattr(tavily, "tavily_search_async", search)
+    monkeypatch.setattr(social_media_mcp, "fetch_comments", fetch)
+    model = ScriptedModel(
+        [
+            [
+                function_call("web_search", {"queries": ["recall"]}, call_id="raw"),
+                function_call("fetch_comments", {"post_id": "one"}, call_id="defaults"),
+                function_call(
+                    "fetch_comments",
+                    {"post_id": "two", "limit": 7.0},
+                    call_id="integral",
+                ),
+                function_call(
+                    "fetch_comments", {"post_id": "three", "limit": "8"}, call_id="bad"
+                ),
+            ],
+            [function_call("think_tool", {"reflection": "reviewed"}, call_id="think")],
+            [function_call("ResearchComplete", {}, call_id="complete")],
+        ]
+    )
+    runtime = _runtime(
+        model=model,
+        tools=[tavily.web_search_raw, fetch_comments, think_tool, ResearchComplete],
+    )
+    result = asyncio.run(runtime.run("task"))
+    model.assert_complete()
+    assert searches == [(["recall"], 5, "general", True, runtime.runtime_config)]
+    assert sorted(comments) == [("one", 20), ("two", 7)]
+    assert set(tavily.web_search_raw.sdk_tool.params_json_schema["properties"]) == {
+        "queries"
+    }
+    assert runtime.harness.results["bad"].status == "failed"
+    assert runtime.harness.results["bad"].effect_status is None
+    assert (
+        runtime.harness.results["think"].observation == "Reflection recorded: reviewed"
+    )
+    assert runtime.harness.results["complete"].observation == ""
+    assert result.budget["tool_calls"] == 6
+    assert result.budget["search_calls"] == 1

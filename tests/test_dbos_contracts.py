@@ -492,11 +492,11 @@ def test_tool_operation_identity_never_authorizes_unknown_replay(
 ):
     import threading
 
-    from open_deep_research.runtime import sdk_runtime
+    from open_deep_research.runtime import tool_executor
     from open_deep_research.workflow import execution
 
     case = native_case
-    original = sdk_runtime.start_operation
+    original = tool_executor.start_operation
     entered, release = threading.Event(), threading.Event()
     admitted = []
 
@@ -506,13 +506,13 @@ def test_tool_operation_identity_never_authorizes_unknown_replay(
         entered.set()
         assert release.wait(20)
 
-    effect = sdk_runtime.tool_effect
+    effect = tool_executor.tool_effect
     monkeypatch.setattr(
-        sdk_runtime,
+        tool_executor,
         "tool_effect",
         lambda t: "protected" if t.name == "web_search" else effect(t),
     )
-    monkeypatch.setattr(sdk_runtime, "start_operation", guard)
+    monkeypatch.setattr(tool_executor, "start_operation", guard)
     run = case.create()
     try:
         assert entered.wait(20)
@@ -1040,14 +1040,14 @@ def test_cancellation_during_real_receipt_commit_drains_harness(
 ):
     import threading
 
-    from open_deep_research.runtime import sdk_runtime
+    from open_deep_research.runtime import tool_executor
 
     case = native_case
-    original = sdk_runtime.finish_operation
+    original = tool_executor.finish_operation
     entered, release = threading.Event(), threading.Event()
-    effect = sdk_runtime.tool_effect
+    effect = tool_executor.tool_effect
     monkeypatch.setattr(
-        sdk_runtime,
+        tool_executor,
         "tool_effect",
         lambda t: "protected" if t.name == "web_search" else effect(t),
     )
@@ -1058,7 +1058,7 @@ def test_cancellation_during_real_receipt_commit_drains_harness(
             assert release.wait(20)
         original(*args)
 
-    monkeypatch.setattr(sdk_runtime, "finish_operation", finish)
+    monkeypatch.setattr(tool_executor, "finish_operation", finish)
     run = case.create()
     try:
         assert entered.wait(20)
@@ -1256,15 +1256,15 @@ def test_tool_control_storage_errors_are_fatal_not_model_observations(
 ):
     from sqlalchemy.exc import OperationalError
 
-    from open_deep_research.runtime import sdk_runtime
+    from open_deep_research.runtime import tool_executor
 
     def fail(*args):
         raise OperationalError(
             "Synthetic admission outage", None, Exception("unavailable")
         )
 
-    monkeypatch.setattr(sdk_runtime, "tool_effect", lambda tool: "protected")
-    monkeypatch.setattr(sdk_runtime, "start_operation", fail)
+    monkeypatch.setattr(tool_executor, "tool_effect", lambda tool: "protected")
+    monkeypatch.setattr(tool_executor, "start_operation", fail)
     run = native_case.create()
     result = native_case.wait(run)
     assert result["status"] == "failed"

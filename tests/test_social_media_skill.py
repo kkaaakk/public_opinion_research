@@ -1,5 +1,5 @@
 # 用本地固定数据验证社交工具契约、别名去重和共享领域统计口径。
-"""Tests for social media MCP primitives and thin LangChain tool wrappers."""
+"""Tests for social media MCP primitives and SDK function tools."""
 
 from collections import Counter
 

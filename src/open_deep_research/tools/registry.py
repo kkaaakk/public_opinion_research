@@ -1,82 +1,46 @@
 # 根据检索模式与实际可用服务装配研究工具，并生成一致的动态工具说明。
 """Assemble the tools visible to a research agent and describe them."""
 
-from typing import Any, Literal
+from typing import Any
 
+from agents.tool_context import ToolContext
 from langchain_core.messages import MessageLikeRepresentation, filter_messages
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool
 
 from open_deep_research.config_values import get_config_value
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
-from open_deep_research.search.tavily import tavily_search, tavily_search_raw
-from open_deep_research.state import ResearchComplete
-
-ToolEffect = Literal["read", "idempotent", "protected"]
+from open_deep_research.search.tavily import web_search, web_search_raw
+from open_deep_research.tools import BusinessTool, ToolEffect, python_tool
 
 
-def tool_effect(tool: BaseTool) -> ToolEffect:
-    """Adapter-declared behavior; ambiguous tools require effect protection."""
-    effect = (tool.metadata or {}).get("effect")
-    return effect if effect in {"read", "idempotent"} else "protected"
+def tool_effect(tool: BusinessTool | BaseTool) -> ToolEffect:
+    """Treat unknown or unclassified effects as protected."""
+    effect = (
+        tool.effect
+        if isinstance(tool, BusinessTool)
+        else (tool.metadata or {}).get("effect")
+    )
+    return effect if effect in ("read", "idempotent") else "protected"
 
 
-def tag_tool_effect(tool: BaseTool, effect: ToolEffect):
-    tool.metadata = {**(tool.metadata or {}), "effect": effect}
-    return tool
-
-
-# Importing rag_tool eagerly makes the RAG package recurse
-# through rag.__init__.  Keep this tool lazy so the raw Research Graph search
-# path can be imported independently of the local RAG package.
-rag_search = None
-
-
-# 仅在需要本地检索时延迟导入 RAG 工具，降低可选依赖耦合。
-def _get_rag_search_tool():
-    """Load the local RAG tool only when a RAG retrieval mode needs it."""
-    global rag_search
-    if rag_search is None:
-        from open_deep_research.tools.rag_tool import rag_search as loaded_rag_search
-
-        rag_search = loaded_rag_search
-    return rag_search
-
-##########################
-# Reflection Tool
-##########################
-# 记录研究反思和下一步计划，作为 ReAct 循环中的显式思考工具。
-@tool(description="Strategic reflection tool for research planning")
-def think_tool(reflection: str) -> str:
-    """Tool for strategic reflection on research progress and decision-making.
-
-    Use this tool after each search to analyze results and plan next steps systematically.
-    This creates a deliberate pause in the research workflow for quality decision-making.
-
-    When to use:
-    - After receiving search results: What key information did I find?
-    - Before deciding next steps: Do I have enough to answer comprehensively?
-    - When assessing research gaps: What specific information am I still missing?
-    - Before concluding research: Can I provide a complete answer now?
-
-    Reflection should address:
-    1. Analysis of current findings - What concrete information have I gathered?
-    2. Gap assessment - What crucial information is still missing?
-    3. Quality evaluation - Do I have sufficient evidence/examples for a good answer?
-    4. Strategic decision - Should I continue searching or provide my answer?
-
-    Args:
-        reflection: Your detailed reflection on research progress, findings, gaps, and next steps
-
-    Returns:
-        Confirmation that reflection was recorded for decision-making
-    """
+@python_tool(
+    domain="core",
+    effect="read",
+    description="Strategic reflection tool for research planning",
+)
+async def think_tool(_context: ToolContext, reflection: str) -> str:
     return f"Reflection recorded: {reflection}"
 
 
-##########################
-# Tool Utils
-##########################
+@python_tool(
+    domain="core",
+    effect="read",
+    description="Call this tool to indicate that the research is complete.",
+)
+async def ResearchComplete(_context: ToolContext) -> str:
+    return ""
+
 
 # 按搜索供应商选择原生搜索声明或项目搜索工具。
 async def get_search_tool(search_api: SearchAPI):
@@ -90,54 +54,24 @@ async def get_search_tool(search_api: SearchAPI):
     """
     if search_api == SearchAPI.ANTHROPIC:
         # Anthropic's native web search with usage limits
-        return [{
-            "type": "web_search_20250305",
-            "name": "web_search",
-            "max_uses": 5
-        }]
+        return [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
 
     elif search_api == SearchAPI.OPENAI:
         # OpenAI's web search preview functionality
         return [{"type": "web_search_preview"}]
 
-    elif search_api == SearchAPI.TAVILY:
-        # Configure Tavily search tool with metadata
-        search_tool = tavily_search
-        search_tool.name = "web_search"
-        search_tool.metadata = {
-            **(search_tool.metadata or {}),
-            "type": "search",
-            "name": "web_search"
-        }
-        return [tag_tool_effect(search_tool, "read")]
+    if search_api == SearchAPI.TAVILY:
+        return [web_search]
 
-    elif search_api == SearchAPI.NONE:
-        # No search functionality configured
-        return []
-
-    # Default fallback for unknown search API types
     return []
 
 
-# 为证据生产流程选择保留原始结果的搜索工具。
 async def get_raw_search_tool(search_api: SearchAPI):
-    """Return the Producer-specific raw/batch-friendly search tool.
-
-    Native provider tools do not expose a project-controlled raw result
-    envelope, so they remain unchanged and are handled as synthetic source
-    documents by the Research Graph adapter.
-    """
+    """Select source-bound Tavily results for Graph Producers."""
     if search_api == SearchAPI.TAVILY:
-        raw_tool = tavily_search_raw
-        raw_tool.name = "web_search"
-        raw_tool.metadata = {
-            **(raw_tool.metadata or {}),
-            "type": "search",
-            "name": "web_search",
-            "research_graph_raw": True,
-        }
-        return [tag_tool_effect(raw_tool, "read")]
+        return [web_search_raw]
     return await get_search_tool(search_api)
+
 
 # 判断当前检索模式是否要求启用本地 RAG。
 def rag_requested(configurable: Configuration) -> bool:
@@ -147,6 +81,7 @@ def rag_requested(configurable: Configuration) -> bool:
         RetrievalMode.RAG_ONLY,
         RetrievalMode.HYBRID,
     }
+
 
 # 按联网、本地或混合检索模式组合检索工具。
 async def get_retrieval_tools(config: RunnableConfig):
@@ -160,15 +95,12 @@ async def get_retrieval_tools(config: RunnableConfig):
         retrieval_tools.extend(await get_search_tool(search_api))
 
     if rag_requested(configurable):
-        rag_tool = _get_rag_search_tool()
-        rag_tool.metadata = {
-            **(rag_tool.metadata or {}),
-            "type": "search",
-            "name": "rag_search",
-        }
-        retrieval_tools.append(tag_tool_effect(rag_tool, "idempotent"))
+        from open_deep_research.tools.rag_tool import rag_search_tool
+
+        retrieval_tools.append(rag_search_tool)
 
     return retrieval_tools
+
 
 # 汇总研究控制、搜索和 MCP 工具，形成当前运行的基础工具集合。
 async def get_all_tools(config: RunnableConfig):
@@ -182,35 +114,13 @@ async def get_all_tools(config: RunnableConfig):
     """
     from open_deep_research.mcp import load_mcp_tools
 
-    # Start with core research tools
-    tools = [tag_tool_effect(tool(ResearchComplete), "read"), tag_tool_effect(think_tool, "read")]
-
-    # Add configured retrieval tools
-    retrieval_tools = await get_retrieval_tools(config)
-    tools.extend(retrieval_tools)
-
-    # Track existing tool names to prevent conflicts
+    tools = [ResearchComplete, think_tool, *await get_retrieval_tools(config)]
     existing_tool_names = {
         tool.name if hasattr(tool, "name") else tool.get("name", "web_search")
         for tool in tools
     }
+    return [*tools, *await load_mcp_tools(config, existing_tool_names)]
 
-    # Add MCP tools if configured (multi-server, fault-isolated)
-    mcp_tools = await load_mcp_tools(config, existing_tool_names)
-    tools.extend(mcp_tools)
-
-    # Tag known built-ins once at the shared loading boundary. Unknown tools
-    # remain unclassified and are therefore denied by fixed-role business agents.
-    from open_deep_research.mcp.domain_filter import (
-        get_tool_domain,
-        tag_tools_with_domain,
-    )
-
-    for available_tool in tools:
-        domain = get_tool_domain(available_tool)
-        if domain:
-            tag_tools_with_domain([available_tool], domain)
-    return tools
 
 # 判断工具集合是否包含控制工具之外的实际外部研究能力。
 def has_external_research_tool(tools: list[Any]) -> bool:
@@ -222,6 +132,7 @@ def has_external_research_tool(tools: list[Any]) -> bool:
         if getattr(available_tool, "name", None) not in core_tool_names:
             return True
     return False
+
 
 # 生成旧版静态工具说明，保留兼容入口。
 def get_research_tool_prompt(configurable: Configuration) -> str:
@@ -338,10 +249,15 @@ def build_dynamic_tool_prompt(
     if active_domains:
         inactive = sorted(set(active_domains) - active_domain_names)
     else:
-        inactive = sorted(
-            d.name for d in DOMAIN_REGISTRY
-            if d.name not in active_domain_names and not d.always_active
-        ) if buckets else []
+        inactive = (
+            sorted(
+                d.name
+                for d in DOMAIN_REGISTRY
+                if d.name not in active_domain_names and not d.always_active
+            )
+            if buckets
+            else []
+        )
     if inactive:
         labels = [get_domain_label(d) for d in inactive]
         lines.append(
@@ -356,7 +272,9 @@ def build_dynamic_tool_prompt(
         "other tools — it should be used alone to reflect on previous results.**"
     )
 
-    if any(getattr(t, "name", "") == "rag_search" for t in tools if not isinstance(t, dict)):
+    if any(
+        getattr(t, "name", "") == "rag_search" for t in tools if not isinstance(t, dict)
+    ):
         lines.append(
             "**CRITICAL: When using rag_search, only make claims that are "
             "supported by returned SOURCE citations. If the cited excerpts do "
@@ -366,10 +284,14 @@ def build_dynamic_tool_prompt(
 
     return "\n".join(lines)
 
+
 # 从工具调用消息中提取研究笔记。
 def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):
     """Extract notes from tool call messages."""
-    return [tool_msg.content for tool_msg in filter_messages(messages, include_types="tool")]
+    return [
+        tool_msg.content for tool_msg in filter_messages(messages, include_types="tool")
+    ]
+
 
 ##########################
 # Model Provider Native Websearch Utils
