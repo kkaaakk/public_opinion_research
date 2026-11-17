@@ -444,13 +444,7 @@ def install(directory, scenario):
             and self.scope.role == "public_signal"
             and self.model_calls == 2
         ):
-            from open_deep_research.runtime.sdk_context import (
-                ResearchGraphSettlementError,
-            )
-
-            raise ResearchGraphSettlementError(
-                "Controlled context failure after actual ingestion"
-            )
+            raise RuntimeError("Controlled context failure after actual ingestion")
         if (
             scenario == "runner-batch"
             and self.scope.role == "public_signal"

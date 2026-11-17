@@ -113,8 +113,6 @@ def isolated_environment(values):
         "PYTHONUTF8",
         "PYTHONIOENCODING",
         "TEST_DBOS_DATABASE_URL",
-        "TEST_DBOS_NEO4J_URI",
-        "TEST_DBOS_NEO4J_PASSWORD",
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
     }
@@ -494,15 +492,9 @@ def worker(args):
     clean = isolated_environment(os.environ)
     os.environ.clear()
     os.environ.update(clean)
-    for key in (
-        "TEST_DBOS_DATABASE_URL",
-        "TEST_DBOS_NEO4J_URI",
-        "TEST_DBOS_NEO4J_PASSWORD",
-    ):
-        if not os.environ.get(key):
-            raise ValueError("Missing isolated setting: " + key)
+    if not os.environ.get("TEST_DBOS_DATABASE_URL"):
+        raise ValueError("Missing isolated setting: TEST_DBOS_DATABASE_URL")
     local(os.environ["TEST_DBOS_DATABASE_URL"])
-    local(os.environ["TEST_DBOS_NEO4J_URI"])
     local(args.healthy_url)
     os.environ.update(
         PYTHON_DOTENV_DISABLED="1",
@@ -825,12 +817,6 @@ def worker(args):
                 yield model
 
         patch.setattr(business_agent, "sdk_model", http_model)
-        case.cfg["configurable"].update(
-            research_graph_backend="neo4j",
-            research_graph_uri=os.environ["TEST_DBOS_NEO4J_URI"],
-            research_graph_username="neo4j",
-            research_graph_password=os.environ["TEST_DBOS_NEO4J_PASSWORD"],
-        )
         launch("benchmark-" + uuid4().hex)
         assert telemetry.telemetry_enabled() == traced
         if telemetry.telemetry_enabled():

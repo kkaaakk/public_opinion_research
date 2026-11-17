@@ -80,15 +80,15 @@ DBOS 的原生状态和 journal 已能判定某个步骤进行到哪里，原生
 
 ### 14. Finalizer 为什么独立运行？
 
-根和子 Workflow 的终态、已发外部调用的结算，以及 Neo4j 归档可在不同时间完成。Finalizer 可以先发布已清算的研究结局，再补偿 History。它也接收用户授权的重试命令并调用原生 rewind。
+根和子 Workflow 的终态、已发外部调用的结算，以及 PostgreSQL History 归档可在不同时间完成。Finalizer 可以先发布已清算的研究结局，再补偿 History。它也接收用户授权的重试命令并调用原生 rewind。
 
 ### 15. 取消与客户端断线有什么区别？
 
 关闭网页结束了读取连接。取消请求写入持久意图，并在同一事务入队 `por.cancel`。DBOS 级联取消，Finalizer 等业务子 Workflow 退出和已发出的请求结算。其间已调用的模型仍可能产生费用。
 
-### 16. DBOS、History、Memory 和 Research Graph 分别存什么？
+### 16. DBOS、History 和 RAG 分别存什么？
 
-`por_dbos` 保存运行与恢复记录，`por_domain` 保存业务准入和收据。Neo4j History 负责报告查询，Research Graph 按 Run 保存证据和溯源。长期 Memory 按用户、会话和稳定记忆键管理，RAG 读取知识与可索引副本。 [数据库设计](../architecture/dbos-deployment.md#数据库设计)
+`por_dbos` 保存运行与恢复记录，`por_domain` 保存业务准入、模型用量、外部操作回执和报告 History。报告 History 由 `web/history.py` 按 owner 与 generation 幂等写入。RAG 只负责企业知识索引与检索，不再有独立的长期 Memory 或 Research Graph。 [数据库设计](../architecture/dbos-deployment.md#数据库设计)
 
 ### 17. 如何升级和回滚？
 

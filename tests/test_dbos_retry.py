@@ -346,7 +346,7 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
             await asyncio.Event().wait()
         return await original(state, cfg)
 
-    async def uncertain_external_write(state, cfg, report, usage):
+    async def uncertain_external_write(state, cfg, **kwargs):
         from dbos import DBOS
 
         from open_deep_research.workflow.execution import (
@@ -376,10 +376,8 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
 
     monkeypatch.setattr(engine.research, "research_review", review)
     if outcome == "unknown":
-        case.cfg["configurable"].update(
-        )
         monkeypatch.setattr(
-            engine.reporting, "persist_report_memory", uncertain_external_write
+            engine.reporting, "compile_final_report", uncertain_external_write
         )
     run = case.create()
     failed = saved(case, run, "failed", 0)
@@ -425,21 +423,17 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
 ):
     from uuid import uuid4
 
-    from dbos_support import NEO4J, NEO4J_PASSWORD
-    from neo4j import GraphDatabase
     from test_dbos_process import configuration, effect_count, kill_owned, start, wait
     from test_python_workflow import initial
 
     from open_deep_research.web.durable import RunClient
-    from open_deep_research.web.history import Neo4jHistoryStore
+    from open_deep_research.web.history import HistoryStore
 
     client = RunClient()
     executor = "retry-fault-" + uuid4().hex
     process = start(tmp_path, executor, scenario)
     restart = None
-    store = Neo4jHistoryStore(
-        GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
-    )
+    store = HistoryStore(domain_engine())
     try:
         wait(lambda: (tmp_path / "executor-ready").exists(), process, tmp_path)
         run = client.create(
@@ -548,7 +542,6 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
         for child in (process, restart):
             if child:
                 kill_owned(child)
-        store.close()
 
 
 def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypatch):
@@ -606,7 +599,7 @@ def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeyp
         return await original_review(state, cfg)
 
     def save(records):
-        result = original_save(records)  # Real Neo4j commit before lost ACK.
+        result = original_save(records)  # Real PostgreSQL commit before lost ACK.
         if records[0].run_state_version == 2 and unavailable.is_set():
             from open_deep_research.web.history import HistoryUnavailable
 

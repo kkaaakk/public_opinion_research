@@ -17,7 +17,7 @@
 
 核心职责：
 
-- 加载本地文件、图片、PDF、代码文件和 memory。
+- 加载本地文件、图片、PDF 和代码文件。
 - 把原始数据统一成 `RAGDocument`。
 - 切分成 `RAGChunk`。
 - 生成 embedding。
@@ -35,7 +35,7 @@
 
 ```mermaid
 flowchart TD
-    Sources[Local files / file memory / MySQL memory] --> Loader[Loaders]
+    Sources[Local knowledge files] --> Loader[Loaders]
     Loader --> Docs[RAGDocument]
     Docs --> Splitter[split_documents]
     Splitter --> Chunks[RAGChunk]
@@ -81,7 +81,6 @@ flowchart TD
 - `.json` 是一个 document，后续由 splitter 按 JSON 结构切。
 - `.pdf` 按页生成多个 document。
 - 图片生成一个 document。
-- MySQL memory 每条可索引记录生成一个 document。
 
 ### 3.2 `RAGChunk`
 
@@ -113,7 +112,6 @@ chunk 会进入：
 - `score`
 - `vector_score`
 - `keyword_score`
-- `graph_score`
 - `structured_score`
 - `rerank_score`
 
@@ -226,7 +224,6 @@ class RAGIndexer
 - 写向量库。
 - 建关键词索引。
 - 创建 hybrid retriever。
-- 标记 MySQL pending memory 为 indexed。
 
 ### 5.1 `ensure_ready(force=False)`
 
@@ -241,22 +238,11 @@ class RAGIndexer
 7. 写入 vector store。
 8. 构建 BM25 或 Elasticsearch BM25。
 9. 创建 `HybridChunkRetriever`。
-10. 标记 pending MySQL memory 已索引。
-11. 保存 fingerprint 并置 ready。
+10. 保存 fingerprint 并置 ready。
 
 ### 5.2 `source_fingerprint()`
 
-包含：
-
-- knowledge base 文件 fingerprint
-- file memory fingerprint
-- MySQL memory fingerprint
-
-用于判断数据源是否变化，而不是用于 index 命名。
-
-### 5.3 `index_pending_memories()`
-
-当前实现会 `ensure_ready(force=True)`，即刷新完整索引，使本地文件和 MySQL memory 保持在同一个一致集合内。
+包含 knowledge base 文件 fingerprint，用于判断数据源是否变化，而不是用于 index 命名。
 
 ## 6. Loader 层
 
@@ -299,54 +285,7 @@ PDF 处理：
 - 根据图像类型路由到 OCR、Vision、both 或 skip。
 - 输出可检索文本和 route metadata。
 
-### 6.2 File Memory Loader
-
-文件：
-
-- `file_memory.py`
-
-入口：
-
-- `load_memory_documents_from_paths(...)`
-- `fingerprint_memory_paths(...)`
-
-支持类型：
-
-- `.json`
-- `.jsonl`
-
-支持 JSON 形态：
-
-- 单个 record
-- record 数组
-- `{ "memories": [...] }`
-- `{ "messages": [...] }`
-- `{ "items": [...] }`
-- `{ "records": [...] }`
-
-会把 record 转成 `RAGDocument`，source 使用 `memory://...` 协议以区别本地文件。
-
-### 6.3 MySQL Memory Loader
-
-文件：
-
-- `mysql_memory.py`
-
-入口：
-
-- `records_to_documents(...)`
-- `load_memory_documents_from_mysql(...)`
-- `fingerprint_mysql_memory(...)`
-
-它读取 `memory` 模块的 `ChatMemoryRecord`，只转换允许索引的 memory types。
-
-source 格式：
-
-```text
-memory://mysql/{conversation_id}/{memory_id}
-```
-
-### 6.4 Query Image Loader
+### 6.2 Query Image Loader
 
 文件：
 
@@ -357,7 +296,6 @@ memory://mysql/{conversation_id}/{memory_id}
 - 识别用户问题里附带的图片。
 - 生成临时 query context。
 - 不进入知识库索引。
-- 不进入 memory 写入。
 
 入口：
 
@@ -517,7 +455,7 @@ tokenizer 对英文保留 word token，对 CJK 按单字拆分，提供基础中
 
 - `apply_structured_metadata_boost(...)`
 
-会把 source、title、file type、language、memory type、heading、json path、page 等 metadata 转成短文本。
+会把 source、title、file type、language、heading、json path、page 等 metadata 转成短文本。
 
 如果 query term 命中这些 metadata，会给结果一个小幅加分。
 
@@ -595,7 +533,7 @@ splitter 会推断：
 重要约束：
 
 ```text
-Use only the cited excerpts below for claims about local knowledge or chat memory.
+Use only the cited excerpts below for claims about local knowledge.
 ```
 
 这样可以在 researcher、compression、final report 多阶段之后仍保留本地证据约束。
@@ -637,7 +575,6 @@ open-deep-research-rag
 | ---------------------------- | --------------------------------------- |
 | `rag_search`                 | 执行本地 RAG 查询并返回结构化 citations |
 | `rag_ensure_indexed`         | 构建或刷新索引                          |
-| `rag_index_pending_memories` | 刷新索引并标记 pending MySQL memory     |
 | `rag_status`                 | 查看 pipeline cache 和索引状态          |
 | `rag_list_sources`           | 列出配置的数据源，不构建 embedding      |
 | `rag_reset_cache`            | 清空进程内 pipeline cache               |
@@ -716,16 +653,6 @@ pipeline.query(retrieval_query, original_query=query)
 - 是否误用了 `hash` embedding。
 - chunk size 是否过大或过小。
 - reranker 是否启用。
-
-### MySQL memory 没进入索引
-
-检查：
-
-- `rag_memory_enabled=True`
-- `rag_memory_mysql_url` 配置正确。
-- `memory_conversation_id` / `memory_user_id` 是否与写入时一致。
-- `record_type` 是否在 `rag_memory_mysql_index_record_types` 中。
-- `index_status` 是否为 `pending` 或索引是否已刷新。
 
 ### RAG 引用结果被过滤
 

@@ -881,7 +881,7 @@ def failure_target(workflow):
         (
             step["function_id"]
             for step in suffix
-            if step["function_name"] in result_steps | {"por.report_memory"}
+            if step["function_name"] in result_steps
             and step.get("error")
         ),
         None,

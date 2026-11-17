@@ -56,7 +56,7 @@ from open_deep_research.workflow.state_utils import (
     workflow_state,
 )
 
-LOGGER = logging.getLogger("open_deep_research.deep_researcher")
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass

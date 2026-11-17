@@ -116,7 +116,6 @@ export type RunEvent = {
   invocation_id?: string;
   task_id?: string;
   tool_call_id?: string;
-  tool_call_id?: string;
   operation_id?: string;
   model_turn?: number;
   model_calls?: number;

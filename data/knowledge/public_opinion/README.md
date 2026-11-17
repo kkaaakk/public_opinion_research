@@ -17,7 +17,4 @@ public_opinion/
 └── faq/                   # Approved Q&A for customer-facing teams
     ├── tesla_battery_customer_faq.md
     └── media_response_faq.json
-
-# Memory Records
-data/memory/public_opinion/memories.jsonl  # Durable decisions and incident notes
 ```

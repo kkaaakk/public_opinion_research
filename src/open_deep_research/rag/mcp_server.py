@@ -112,23 +112,6 @@ def rag_ensure_indexed(
         return _error_payload("rag_ensure_indexed", exc)
 
 
-# 刷新完整索引，并更新成功同步的 MySQL 记忆状态。
-@mcp.tool(
-    name="rag_index_pending_memories",
-    description=(
-        "Refresh the configured RAG index and mark pending MySQL memory rows as indexed."
-    ),
-)
-def rag_index_pending_memories(config: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Refresh the full index and mark pending MySQL memories indexed."""
-    try:
-        pipeline = get_or_create_rag_pipeline(build_pipeline_config(config))
-        pipeline.index_pending_memories()
-        return _pipeline_status_payload(pipeline, cached=True)
-    except Exception as exc:
-        return _error_payload("rag_index_pending_memories", exc)
-
-
 # 读取管线当前状态，不强制触发索引构建。
 @mcp.tool(
     name="rag_status",
@@ -160,7 +143,7 @@ def rag_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
 @mcp.tool(
     name="rag_list_sources",
     description=(
-        "List configured local RAG source documents and memory records without building embeddings."
+        "List configured local RAG source documents without building embeddings."
     ),
 )
 def rag_list_sources(
@@ -307,7 +290,6 @@ def _retrieval_result_payload(result: RetrievalResult) -> dict[str, Any]:
         "score": result.score,
         "vector_score": result.vector_score,
         "keyword_score": result.keyword_score,
-        "graph_score": result.graph_score,
         "structured_score": result.structured_score,
         "rerank_score": result.rerank_score,
         "metadata": result.chunk.metadata,

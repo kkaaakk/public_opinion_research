@@ -22,7 +22,7 @@ flowchart TD
   G --> H[Risk then Strategy]
   H --> I[Section writers]
   I --> J[Introduction / conclusion writers]
-  J --> K[Compile / Memory / Finalizer / History]
+  J --> K[Compile / Finalizer / History]
 ```
 
 ```mermaid
@@ -36,12 +36,11 @@ flowchart TD
   E --> F[Optional preview / edit / AI revision / approval recv]
   F --> G[Freeze exact Brief version in research input]
   G --> H[Parallel Public Signal and Internal Knowledge]
-  H --> I[Review against Brief and Graph / bounded Producer Gap rounds]
+  H --> I[Review against Brief and evidence / bounded Producer Gap rounds]
   I --> J[Risk then Strategy]
   J --> K[One bounded report synthesis Step]
   K --> L[Persisted report artifact]
-  L --> P[Optional por.report_memory Step]
-  P --> M[por.finalize publishes terminal result and archives History]
+  L --> M[por.finalize publishes terminal result and archives History]
   L -. "report event" .-> S[por.events / SSE]
   M -. "terminal and archive frames" .-> S
 ```
@@ -211,23 +210,23 @@ The existing reducer preserves those fields across research and Gap packets.
 task data, once in each role's initial SDK input. Fixed AgentSpec/System instructions
 and tool admission remain unchanged. SDK history compaction keeps the pre-response
 input head verbatim; it compacts response/tool units, not that initial assignment.
-Graph context is refreshed separately by Harness. Follow-up Producers receive the
-original Brief plus their scoped Gap tasks. ResearchWorkspace/Graph Evidence,
-Finding and source ownership are unchanged. Long initial assignments still fail
-the existing protected-context capacity guard rather than silently dropping constraints.
+Tool context is refreshed separately by the Harness. Follow-up Producers receive
+the original Brief plus their scoped Gap tasks. Evidence, Finding and source
+ownership are unchanged. Long initial assignments still fail the existing
+protected-context capacity guard rather than silently dropping constraints.
 
 Old plain-string Briefs and archives remain readable. Old journals require their
 matching release; they are not migrated or replayed by this release.
 
 ## Review and reporting
 
-Review checks actual Graph findings/evidence against the Brief, with existing task
+Review checks actual role findings/evidence against the Brief, with existing task
 deduplication, round limits, budget and deterministic role merge. It creates no
 free scheduling Agent. Risk runs after the last review and Strategy after Risk.
 
 Default `report_mode="synthesis"` does not invoke section planning/writing or
 separate introductions/conclusions. `generate_final_report` receives the complete
-Brief, bounded evidence/Graph context, all four formal role reports including
+Brief, bounded evidence context, all four formal role reports including
 Risk/Strategy, and unresolved Review gaps. It uses `report_structure` and requires
 question coverage, source/evidence references and explicit uncertainty. Evidence
 is allocated bounded context with omission markers; original artifacts remain.
@@ -236,8 +235,8 @@ budget, model errors, empty or token-limited results fail explicitly. There is n
 hidden report request retry. Finalizer can authorize a retry of this pure model
 Step without replaying already committed roles/tools.
 
-`por.report` publishes the final report Event before invoking the optional
-`por.report_memory` Step. Finalizer reads native results and external receipts.
+`por.report` publishes the final report Event before the Finalizer reads native
+results and external receipts.
 The relay drains committed messages before publishing the terminal prefix and
 its `delivery` receipt. Snapshots read native phase before the plan or
 clarification payload it fences. [Result delivery](agent-loop.md#交付与执行状态)

@@ -10,7 +10,7 @@ or resource release. See the [implementation audit](../audits/langfuse-otel.md).
 | Role invocation | Native child/unit ID plus SDK Harness `invocation_id`, role and round |
 | Model usage | Actual SDK response/provider usage, plus captured single-call business-service attempts |
 | Tool effects | `por_domain.operations` stable operation ID, role/unit/native call/name and argument fingerprint; no public raw arguments |
-| Evidence | Run/role/task/round and graph call/receipt IDs link Source → Evidence → Claim → Finding |
+| Evidence | Run/role/task/round and tool call/receipt IDs link Source → Evidence → Claim → Finding |
 | Public progress | DBOS Durable Stream seq, generation and Run ID; SSE is a read projection |
 | Report archive | Stable History ID, owner, Run ID and generation-derived `run_state_version` |
 | Trace hierarchy/timing | Native DBOS + OpenInference SDK spans and selected business spans exported to Langfuse |
@@ -24,7 +24,7 @@ API, execution table, scheduler or new frontend waterfall is added.
 
 `budget.py` applies budget policy and aggregates physical use from
 `por_domain.model_attempts`. SDK Runtime captures SDK usage, and the bounded
-Graph/tool/report services record their model attempts and usage. Provider
+Tool/report services record their model attempts and usage. Provider
 usage gaps are marked as incomplete. Context admission uses estimates of prompt
 size. Request redelivery and SSE replay do not create new model attempts.
 
@@ -41,9 +41,9 @@ Database errors close admission/control writes; SSE EOF is never proof of succes
 
 LangSmith remains opt-in (`LANGSMITH_TRACING`, `LANGSMITH_API_KEY`,
 `LANGSMITH_PROJECT`). Existing RAG stage spans are retained without wrapping a
-model/tool twice. It no longer supplies native Graph root/node execution. Trace
+model/tool twice. It no longer supplies native execution ownership. Trace
 failure does not authorize repeating research or suppress a business exception.
-Avoid raw prompts, tool payloads, private memory, provider responses and secrets
+Avoid raw prompts, tool payloads, private context, provider responses and secrets
 in public events or correlation metadata; egress redaction and owner checks stay
 active. Historical LangSmith reports can still be imported into owner-scoped
 History without executing research.
@@ -69,12 +69,11 @@ run_submit                                API; only for a newly accepted Run
 `run_submit` measures intake. `por.run` measures execution. Producer workflows are siblings and can overlap.
 Within each invocation OpenInference creates SDK trace/Agent/LLM/Tool spans.
 `sdk_invocation` also covers exit settlement and failures after Runner exits.
-Other business spans are `context_build`, `context_retrieval`,
-`rolling_compaction`,
-`research_review` and `report_generation`. Counts reuse Harness facts and graph
-receipts. Context/compaction tokens are estimates, not provider usage.
+Other business spans are `rolling_compaction`, `research_review` and
+`report_generation`. Counts reuse Harness facts and effect receipts.
+Context/compaction tokens are estimates, not provider usage.
 
-Planning, intake, extraction, compaction, memory and report models remain bounded
+Planning, intake, extraction, compaction and report models remain bounded
 LangChain business services. Each actual Core model lifecycle creates one
 `langchain_generation` through OpenInference LangChain **0.1.80**. The
 model-only adapter forwards public model callbacks to OI's official handler;
@@ -161,7 +160,7 @@ OpenInference TraceConfig hides inputs/outputs, messages, prompts, invocation
 parameters, tool schemas and retrieved content. A final egress allowlist also
 sanitizes **all** spans, including DBOS/native SDK errors. It retains bounded
 identities/labels, counts, actual usage and minimal operation metadata. It removes
-raw prompts/instructions, tool parameters/results, responses, private Memory,
+raw prompts/instructions, tool parameters/results, responses, private context,
 arbitrary metadata, auth/owner fields, resource/scope attributes, exception
 descriptions, stack traces and event payloads. Only DBOS native retry numbers
 survive as `dbos.step.retry` / `dbos.step.attempt`; the raw error is removed.
@@ -176,7 +175,7 @@ There is no content-capture switch.
 
 Attributes reuse `por.run_id`, `por.workflow_id`, `por.unit_id`, `por.execution_id`,
 `por.invocation_id`, `por.role`, `por.task_id`, `por.research_round`,
-`por.generation`, `por.model_turn`, `por.tool_call_id`, `por.graph_call_id` and
+`por.generation`, `por.model_turn`, `por.tool_call_id` and
 `por.operation_id`. Only available facts are attached. `por.dbos_step_id` is native
 `DBOS.step_id`. `execution_id` is a digest of stage ID and retry generation. Token keys
 follow OpenInference. `por.status`, `por.failure_kind`, `por.error_type` and
@@ -211,13 +210,13 @@ for long Runs; sample according to SLOs. Trace absence never proves missing work
 
 Rollback with `POR_TRACING_ENABLED=false` and restart API/Executor on the same
 compatible release. No trace database cleanup or Run migration is needed.
-Preserve DBOS journals, operation receipts and Graph data.
+Preserve DBOS journals, operation receipts and PostgreSQL domain data.
 
 Keep `LANGSMITH_TRACING=false` for default metadata-only Langfuse operation.
 Explicitly enabling both does not double the budget, but LangSmith retains its
 own content-upload policy; this filter does not sanitize another provider.
 No Langfuse callback is added to LangChain tools, avoiding duplicate observations
-and a retired LangGraph dependency.
+and a dependency on the retired graph workflow engine.
 
 Studio receives no project credential or guessed deep link. Operators query
 `run_id` in their authorized Langfuse project. Multi-tenant trace-link permissions,

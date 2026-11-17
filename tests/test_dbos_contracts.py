@@ -141,7 +141,7 @@ def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(nativ
     assert all(e["duration_ms"] >= 0 for e in ends)
     tools = [e for e in sdk if e["event"] == "tool_result"]
     assert len(tools) == 2 and all(e["status"] == "succeeded" for e in tools)
-    assert all(e["tool_call_id"] and e["graph_call_id"] for e in tools)
+    assert all(e["tool_call_id"] for e in tools)
     assert any(e.get("stage") == "context_ready" for e in sdk)
     assert any(e.get("stage") == "settlement" and e["status"] == "settled" for e in sdk)
     assert not any(

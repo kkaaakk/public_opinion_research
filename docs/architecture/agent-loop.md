@@ -102,11 +102,11 @@ flowchart TD
 | 6. 并行 Producer | `research_workflow` 给 `public_signal`、`internal_knowledge` 启动各自的 `por.role`（按启用配置工作）。`role_snapshot` 为角色隔离 State。`wait_first_async` 收集先结束的子 Workflow，`assemble_research_results` 等本轮齐备后按固定角色顺序归并 `ResearchRoleResult`，含角色报告、来源、指标和预算增量。 |
 | 7. Review / Gap | `review_workflow` 用 `research.research_review` 对照 Brief 与证据。`por.review_evidence` 读取证据，单用途模型产出结构化 Review。`followup_assignments` 按任务去重、轮次、角色与预算生成新 packets，仅向有补研任务的角色分派。 |
 | 8. 风险与策略 | 补研结束后按顺序启动 `risk_assessment` 和 `response_strategy` 两个 `por.role`，分别分析风险和制定应对策略。父 Workflow 用 `apply_patch` 合并结果，Strategy 读取 Risk 输出。 |
-| 9. 报告 | `report_workflow` 默认用 `generate_final_report` 综合获批 Brief、角色报告、证据和未解 Gap。显式 `report_mode="sections"` 才启用分章节写作。`por.publish_stage` 发布阶段成果，终稿在 `por.report` 的 `report` Event 可独立读取。配置启用时后续运行 `por.report_memory`，终稿在记忆写入之前已经可读。 |
+| 9. 报告 | `report_workflow` 默认用 `generate_final_report` 综合获批 Brief、角色报告、证据和未解 Gap。显式 `report_mode="sections"` 才启用分章节写作。`por.publish_stage` 发布阶段成果，终稿在 `por.report` 的 `report` Event 可独立读取，随后由 Finalizer 归档。 |
 | 10. SSE | `events_workflow` 收集原生消息并通过 `DBOS.write_stream_async` 追加，公开 `seq = offset + 1`。GET 分页和 SSE 共用 `RunClient.read_events`，由 `Last-Event-ID` 或 `after` 补发。研究中可交付阶段报告。`delivery` Event 确认当前代次已交付前缀。 |
 | 11. Finalizer / History | `finalize_workflow` 自准入时就在等待根终态。`completion_facts` 检查业务子 Workflow 已退出活跃状态并读取清算，先发送 `_terminal`，再由 `archive_step` 归档。失败会独立重试归档；成功的 `_archive_saved` 由 relay 更新交付回执。`GET /api/history` 和详情接口读取 `por_domain.history`。 |
 
-`state.py` 定义 `messages`、`workflow`、`agents`、`research`、`report`、`runtime`。`workflow/python_state.py` 的 `copy_state`、`role_snapshot` 与 `apply_patch` 负责规范化、角色隔离和显式 reducer；跨 Workflow 传递的是序列化的 State、patch 或结果。已保存的上一版 Producer patch 仍有精确形状的读取兼容。SDK 循环内的工作上下文由 Harness 从 Tool Step、Context Step 和 Research Graph 恢复。 [角色结果格式历史](../audits/research-role-results-assembly.md)
+`state.py` 定义 `messages`、`workflow`、`agents`、`report`、`runtime`。`workflow/python_state.py` 的 `copy_state`、`role_snapshot` 与 `apply_patch` 负责规范化、角色隔离和显式 reducer；跨 Workflow 传递的是序列化的 State、patch 或结果。SDK 循环内的工作上下文由 Harness 从 DBOS Tool Step、Context Step 和原生 checkpoint 恢复。 [角色结果格式历史](../audits/research-role-results-assembly.md)
 
 ## 可靠性设计
 

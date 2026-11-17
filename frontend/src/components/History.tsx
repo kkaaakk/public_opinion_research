@@ -54,7 +54,7 @@ export function History({ api, onOpen }: { api: StudioApi; onOpen: (id: string) 
             <HistoryIcon size={16} />
             历史报告归档
           </strong>
-          <span className="muted">Neo4j History · {page?.total ?? '—'} 条</span>
+          <span className="muted">PostgreSQL History · {page?.total ?? '—'} 条</span>
         </div>
         <form className="evidence-search" onSubmit={submit}>
           <Search size={16} />

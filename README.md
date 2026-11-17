@@ -11,7 +11,7 @@ FastAPI（含 CLI 请求）经 RunClient 和 DBOSClient 将研究入 PostgreSQL 
 两个 Producer 并行汇合，经 Review/Gap 定向补查，再顺序执行 Risk → Strategy 和报告生成。
 原 LangGraph Server、业务 Graph 和手写 Agent Loop 已退役。
 
-PostgreSQL 保存 DBOS journal 和领域事实；Neo4j 保存研究证据及 History；现有长期记忆保持独立。
+PostgreSQL 保存 DBOS journal、领域事实和报告 History；研究运行不再依赖 Neo4j 或第二套长期记忆。
 部署需要 `DBOS_DATABASE_URL`、操作员访问令牌及独立 DBOS Executor，详见 [部署说明](docs/architecture/dbos-deployment.md)。
 旧 SQL 任务及旧版本 DBOS 任务须在匹配的发行版受控排空，不能跨引擎重投。
 历史记录继续读取和导入。单操作员令牌不等于多租户身份；跨主机自动接管需要额外协调。
@@ -22,10 +22,10 @@ DeerFlow 已退役；独立 RAG 配置及 DSH 分支资产保持原状。
 ## 🆕 扩展功能
 
 ### 📚 本地 RAG 知识库
-独立运行的本地 RAG 流程，支持文档加载、语义检索、GraphRAG 扩展和重排序：
+独立运行的本地 RAG 流程，支持文档加载、语义检索、混合召回和重排序：
 - **知识源**: Markdown / JSON / PDF / 图片 / 源码文件
 - **向量存储**: Milvus / FAISS / Chroma
-- **GraphRAG**: Neo4j 图扩展 or 内存图
+- **混合检索**: 向量 + BM25 + RRF 融合
 - **多模态**: OCR + Vision 图片理解和查询
 - **MCP Server**: 暴露 `rag_search` / `rag_ensure_indexed` / `rag_status` 等工具
 
@@ -41,11 +41,6 @@ DeerFlow 已退役；独立 RAG 配置及 DSH 分支资产保持原状。
 - 社交媒体数据采集与搜索 MCP Server
 - Apify 适配器对接真实平台数据（Twitter/X 等）
 - 情感分析、主题提取、风险检测
-
-### 🧠 长期记忆
-- 文件记忆（JSONL）和 MySQL 双后端
-- 对话摘要和持久记忆自动提取
-- 记忆回溯与检索增强
 
 ### 💰 预算管理
 - 可选的 token/调用次数预算守卫
@@ -231,46 +226,18 @@ python -m open_deep_research.rag.mcp_server --transport streamable-http --host 1
 暴露的工具：
 - `rag_search` — 检索本地知识库
 - `rag_ensure_indexed` — 构建/刷新索引
-- `rag_index_pending_memories` — 索引待处理记忆
 - `rag_status` — 查看索引状态
 - `rag_list_sources` — 列出知识源
 - `rag_reset_cache` — 重置缓存
 
 ## 🌐 Local Web UI
 
-### 用 Docker 启用 Research Graph
+### 数据库
 
-先启动 Docker Desktop，然后在项目根目录执行：
-
-```powershell
-# 生成本地数据库密码并配置连接；密码只保存在已被 Git 忽略的 .env 中
-.\.venv\Scripts\python.exe scripts/neo4j_local.py configure
-
-# 创建 Neo4j 5.26 LTS 容器，等待数据库健康检查通过
-docker compose --env-file .env -f compose.neo4j.yaml up -d --wait --wait-timeout 120
-
-# 验证真实 Neo4j 的图写入、溯源关系、检索与运行隔离
-.\.venv\Scripts\python.exe scripts/neo4j_local.py verify
-```
-
-容器名为 `public-opinion-neo4j`，浏览器入口是 `http://127.0.0.1:7474`，
-Bolt 地址是 `bolt://127.0.0.1:7687`。登录用户名为 `neo4j`，密码查看 `.env`
-中的 `RESEARCH_GRAPH_PASSWORD`。Compose 只向本机开放端口，使用命名数据卷
-保存数据库和日志，并在 Docker 重启后自动恢复容器。
-
-验证脚本不调用模型 API，验证后清理本次生成的临时测试图。它会同时检查四个业务
-Agent 使用 Neo4j 的初始化路径，但不会替代真实研究请求的模型调用验证。
-节点和关系使用社区版支持的复合唯一约束，图标识字段由项目数据模型校验。
-
-Research Graph 默认开启，连接参数由项目根目录的 `.env` 自动读取，日常启动无需
-设置 `RESEARCH_GRAPH_ENABLED`。首次配置后重启 Web 服务即可；如果旧终端曾临时
-关闭该功能，使用一个新终端启动，避免沿用旧的环境变量覆盖值。
-
-停止数据库可执行 `docker compose -f compose.neo4j.yaml stop`，再次启动使用上面的
-`up` 命令。命名数据卷会保留；不要使用 `down --volumes`，除非明确要删除数据库。
-
-Research Graph 与页面的 **Enable RAG** 是独立功能：前者管理本次研究的证据图，
-后者检索本地知识库。关闭 RAG 时，Web 流程会跳过依赖本地知识库的内部知识 Agent。
+研究运行只需要 PostgreSQL：DBOS journal、领域事实和报告 History 都在
+`por_domain` schema 中。部署连接、初始化与 Executor 启动见
+[部署说明](docs/architecture/dbos-deployment.md)。页面的 **Enable RAG** 与运行
+存储独立；关闭 RAG 时，Web 流程会跳过依赖本地知识库的内部知识 Agent。
 
 ### 启动页面
 
@@ -292,26 +259,14 @@ python -m open_deep_research.web.server
 成功、失败和主动停止的运行都会保留；未生成最终报告时，可查看中断前完成的阶段报告。
 刷新页面或重启 Web 服务后，已归档的记录仍可查看；打开历史记录不会重新调用模型。
 
-历史档案使用现有 **Neo4j**，复用 `RESEARCH_GRAPH_URI`、`RESEARCH_GRAPH_USERNAME`、
-`RESEARCH_GRAPH_PASSWORD` 和 `RESEARCH_GRAPH_DATABASE`，无需配置另一套数据库。
-完整报告保存在独立的 `ResearchHistory` 节点中，以研究 `run_id` 对应同次研究的证据图。
+历史档案保存在 PostgreSQL 的 `por_domain.history`，无需额外图数据库。
 每次网页研究结束或中断后自动归档，历史列表展示运行状态和时间，详情保留参数、
 已知 token 用量及原始阶段报告。Finalizer 从 DBOS 原生结果与报告 Event 读取已完成产物，
-报告交付后可以继续独立补偿归档。
-即使关闭研究图构建，已配置的 Neo4j 仍可用于报告归档。
+报告交付后可以继续独立补偿归档；归档按 owner 与 generation 幂等写入。
 
-已有的研究可以点击 **导入 LangSmith**，从 `LANGSMITH_PROJECT` 指定的项目中读取
-已经结束的研究 trace，分批保存到 Neo4j，包含失败运行。对没有最终报告的运行，
-会沿同一个 trace 查询已完成的 Agent 输出，保留不同研究轮次的原始报告，并标明
-失败阶段；这些内容以“研究阶段记录”展示。导入使用现有 LangSmith
-访问凭据，重复导入不会重复创建记录，也不会覆盖已保存的最终报告；可补充后来
-恢复的阶段输出。旧工作流的名称变化不会导致已有最终报告被过滤。LangSmith trace 有
-[数据保留期限](https://support.langchain.com/articles/8458147520-can-i-recover-deleted-traces-in-langsmith)，
-因此仅作为旧报告导入来源；已导入的历史通过 Neo4j 保存。
-
-Neo4j 暂时不可用时，页面会显示历史读取或保存失败的提示，已生成的报告仍能下载。
+数据库暂时不可用时，页面会显示历史读取或保存失败的提示，已生成的报告仍能下载。
 启用 `PUBLIC_OPINION_API_TOKEN` 后，在页面的 **访问设置** 中填写令牌；历史列表、
-报告详情、LangSmith 导入和研究 API 都使用同一认证。令牌仅在当前页面使用。
+报告详情和研究 API 都使用同一认证。令牌仅在当前页面使用。
 
 ## 📱 社交媒媒体 MCP Server
 
@@ -329,9 +284,6 @@ data/
 │   ├── historical_cases/       #   历史案例
 │   ├── pr_playbooks/           #   PR 预案
 │   └── product_docs/           #   产品文档
-├── memory/                     # 长期记忆存储
-│   ├── chat_memory.jsonl       #   对话记忆
-│   └── public_opinion/         #   舆情记忆
 ├── social_media/               # 社交媒媒体数据
 │   ├── sample_posts.jsonl      #   示例帖子
 │   └── bulk_mock_posts.jsonl   #   批量模拟数据

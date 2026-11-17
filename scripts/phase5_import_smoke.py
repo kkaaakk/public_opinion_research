@@ -45,7 +45,6 @@ def main():
     sys.meta_path.insert(0, RetiredEngineGuard())
     modules = [
         "open_deep_research",
-        "deep_researcher",
         "configuration",
         "state",
         "budget",
@@ -55,6 +54,7 @@ def main():
         "runtime.business_agent",
         "runtime.sdk_runtime",
         "runtime.sdk_context",
+        "runtime.compaction",
         "workflow",
         "workflow.dbos_workflow",
         "workflow.dbos_config",
@@ -73,7 +73,6 @@ def main():
         "rag.mcp_server",
         "social_media_mcp",
         "social_media_apify_api",
-        "memory",
         "mcp.tools",
         "tools.registry",
     ]

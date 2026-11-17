@@ -35,8 +35,6 @@ def main():
         parser.error("Acceptance requires an isolated loopback Langfuse")
     for name in (
         "TEST_DBOS_DATABASE_URL",
-        "TEST_DBOS_NEO4J_URI",
-        "TEST_DBOS_NEO4J_PASSWORD",
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
     ):

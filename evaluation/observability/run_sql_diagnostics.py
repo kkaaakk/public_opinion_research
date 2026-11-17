@@ -252,15 +252,9 @@ def worker(args):
     clean = bench.isolated_environment(os.environ)
     os.environ.clear()
     os.environ.update(clean)
-    for key in (
-        "TEST_DBOS_DATABASE_URL",
-        "TEST_DBOS_NEO4J_URI",
-        "TEST_DBOS_NEO4J_PASSWORD",
-    ):
-        if not os.environ.get(key):
-            raise ValueError("Explicit isolated setting missing: " + key)
+    if not os.environ.get("TEST_DBOS_DATABASE_URL"):
+        raise ValueError("Explicit isolated setting missing: TEST_DBOS_DATABASE_URL")
     bench.local(os.environ["TEST_DBOS_DATABASE_URL"])
-    bench.local(os.environ["TEST_DBOS_NEO4J_URI"])
     bench.local(args.healthy_url)
     os.environ.update(
         PYTHON_DOTENV_DISABLED="1",
@@ -272,7 +266,7 @@ def worker(args):
     from dbos import DBOS
     from dbos_support import NativeCase
 
-    from open_deep_research.web.history import Neo4jHistoryStore
+    from open_deep_research.web.history import HistoryStore
     from open_deep_research.workflow.run_facts import RunFacts
 
     probe = SQLProbe()
@@ -496,7 +490,7 @@ def worker(args):
 
     RunClient.get = get_run
     for target, method in (
-        (Neo4jHistoryStore, "save"),
+        (HistoryStore, "save"),
         (RunFacts, "release"),
         (RunFacts, "publish"),
     ):
