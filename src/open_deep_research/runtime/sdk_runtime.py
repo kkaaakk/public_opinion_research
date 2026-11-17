@@ -11,7 +11,6 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any
 
 from agents import Agent, FunctionTool, Model, ModelSettings, RunConfig
@@ -53,8 +52,8 @@ from open_deep_research.observability.telemetry import (
 )
 from open_deep_research.research_graph.compaction import summarize_compactable_history
 from open_deep_research.research_graph.workspace import ResearchWorkspace
-from open_deep_research.runtime.sdk_context import SDKContextHarness, tool_usage
-from open_deep_research.runtime.tool_executor import ToolExecutor, format_tool_error
+from open_deep_research.runtime.sdk_context import SDKContextHarness
+from open_deep_research.runtime.tool_executor import ToolExecutor, tool_usage
 from open_deep_research.tools import BusinessTool, tool_result_text
 from open_deep_research.workflow.dbos_config import native_client, settings
 from open_deep_research.workflow.execution import (
@@ -573,12 +572,7 @@ class SDKAgentRuntime:
             drain_on_cancel = bool(
                 getattr(tool, "func", None) and not getattr(tool, "coroutine", None)
             )
-        return self.harness.function_tool(
-            declared,
-            invoke=partial(executor.invoke, declared.name, declared.on_invoke_tool),
-            error_formatter=format_tool_error,
-            drain_on_cancel=drain_on_cancel,
-        )
+        return executor.bind(declared, drain_on_cancel=drain_on_cancel)
 
     def _report_messages(self, task: str) -> list[Any]:
         messages: list[Any] = [HumanMessage(content=task)]

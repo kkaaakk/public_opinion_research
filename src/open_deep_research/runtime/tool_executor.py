@@ -1,16 +1,27 @@
-"""Admit SDK tool calls and guard external effects inside por.agent_tool."""
+"""Own the durable lifecycle of every SDK business tool call.
+
+The SDK still owns tool declarations, argument validation and defaults. This
+executor owns admission, the ``por.agent_tool`` DBOS Step, committed-result
+recovery, in-flight de-duplication and the protected external-effect receipts.
+The Context Harness only records and projects the results it is handed back.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
+from dataclasses import asdict, replace
+from functools import partial
 from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING, Any
 
+from agents import FunctionTool
 from agents.exceptions import MCPToolCancellationError
 from agents.tool_context import ToolContext
 from dbos import DBOS
+from dbos import error as dbos_error
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -30,6 +41,8 @@ from open_deep_research.workflow.execution import (
     ExecutionControlError,
     commit_receipt,
     finish_operation,
+    finish_owned,
+    native_step_available,
     owned_io,
     stage_context,
     start_operation,
@@ -39,8 +52,14 @@ from open_deep_research.workflow.execution import (
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
 
+    from open_deep_research.runtime.sdk_context import (
+        ObservedToolResult,
+        SDKContextHarness,
+    )
     from open_deep_research.runtime.sdk_runtime import _RunBudget
     from open_deep_research.tools import BusinessTool
+
+tool_usage: ContextVar[dict | None] = ContextVar("tool_usage", default=None)
 
 
 class _ToolRejected(Exception):
@@ -82,7 +101,7 @@ def _result_text(name: str, output: Any) -> str:
 
 
 class ToolExecutor:
-    """Share the role's permission and budget policy across all tool calls."""
+    """Share one role's permission, budget and durable tool lifecycle."""
 
     def __init__(
         self,
@@ -99,24 +118,150 @@ class ToolExecutor:
         self.runtime_config = runtime_config
         self.budget = budget
         self.tools = tools
+        self._tool_calls: dict[str, asyncio.Future[Any]] = {}
 
-    def _increment(self, name: str) -> dict[str, Any]:
-        return budget_from_tool_calls([{"name": name}], self.tools)
+    def bind(self, tool: FunctionTool, *, drain_on_cancel: bool = False) -> FunctionTool:
+        """Bind an SDK declaration to this executor's durable invocation.
+
+        The SDK keeps the model-visible name, description, Schema, validation
+        and defaults; only the invocation callback is replaced.
+        """
+        return replace(
+            tool,
+            on_invoke_tool=partial(
+                self.invoke, tool, drain_on_cancel=drain_on_cancel
+            ),
+        )
 
     async def invoke(
         self,
-        name: str,
-        declared_invoke: Callable[[ToolContext[Any], str], Awaitable[str]],
+        tool: FunctionTool,
         context: ToolContext[Any],
         arguments: str,
-    ) -> str:
-        """Admit a call before the SDK validates and runs its declaration.
+        *,
+        drain_on_cancel: bool = False,
+    ) -> Any:
+        """Run one SDK tool call through the native ``por.agent_tool`` Step."""
+        if arguments != context.tool_arguments:
+            raise ValueError("Tool arguments do not match the SDK call context.")
+        harness = context.context
+        record = harness.start_tool(context)
+        call_id = record.tool_call_id
+        if original := self._tool_calls.get(call_id):
+            # Preserve the native Step slot while sharing the first result,
+            # including when that result is restored from the journal.
+            return await self._tool_step(
+                harness, record, partial(asyncio.shield, original)
+            )
 
-        Permission and budget are reserved before the first await, so invalid
-        input and failed attempts are still accounted for. ``declared_invoke``
-        is the SDK's own callback (or the MCP schema adapter): it validates the
-        arguments before the tool body enters the external-effect boundary.
-        """
+        completion = asyncio.get_running_loop().create_future()
+        self._tool_calls[call_id] = completion
+        try:
+            output = await self._tool_step(
+                harness,
+                record,
+                partial(
+                    self._execute,
+                    tool,
+                    context,
+                    arguments,
+                    drain_on_cancel=drain_on_cancel,
+                ),
+            )
+        except BaseException as exc:
+            completion.set_exception(exc)
+            completion.exception()
+            raise
+        completion.set_result(output)
+        return output
+
+    async def drain(self, timeout: float) -> bool:
+        """Wait for in-flight tool calls; ``False`` means the bounded wait expired."""
+        in_flight = [call for call in self._tool_calls.values() if not call.done()]
+        if not in_flight:
+            return True
+        _, live = await asyncio.wait(in_flight, timeout=timeout)
+        return not live
+
+    async def _tool_step(
+        self,
+        harness: SDKContextHarness,
+        record: ObservedToolResult,
+        execute: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        if not native_step_available():
+            return await execute()
+        executed = False
+
+        async def invoke_step():
+            nonlocal executed
+            executed = True
+            local = {}
+            token = tool_usage.set(local)
+            try:
+                output = await execute()
+            finally:
+                tool_usage.reset(token)
+            return {
+                "output": output,
+                "record": asdict(harness.results[record.tool_call_id]),
+                "budget": local,
+            }
+
+        saved = await DBOS.run_step_async(
+            {"name": "por.agent_tool", "preemptible": True}, invoke_step
+        )
+        if not executed:
+            harness.restore_tool(saved["record"])
+            self.budget.add(saved["budget"])
+        return saved["output"]
+
+    async def _execute(
+        self,
+        tool: FunctionTool,
+        context: ToolContext[Any],
+        arguments: str,
+        *,
+        drain_on_cancel: bool,
+    ) -> Any:
+        harness = context.context
+        if harness.closing:
+            harness.record_tool(
+                context, "cancelled", None, error_type="CancelledError"
+            )
+            raise asyncio.CancelledError()
+        try:
+            self._authorize(tool.name, context)
+            self._admit(tool.name)
+            call = tool.on_invoke_tool(context, arguments)
+            if drain_on_cancel:
+                output, _ = await finish_owned(asyncio.ensure_future(call))
+            else:
+                output = await call
+        except (asyncio.CancelledError, dbos_error.DBOSWorkflowCancelledError):
+            harness.record_tool(context, "cancelled", None, error_type="CancelledError")
+            raise
+        except Exception as exc:
+            if isinstance(exc, ExecutionControlError):
+                harness.record_tool(
+                    context, "failed", None, error_type=type(exc).__name__
+                )
+                raise
+            output = format_tool_error(context, exc)
+            harness.record_tool(
+                context,
+                "cancelled"
+                if isinstance(exc, MCPToolCancellationError)
+                else "failed",
+                output,
+                error_type=type(exc).__name__,
+            )
+            return output
+        else:
+            harness.record_tool(context, "succeeded", output)
+            return output
+
+    def _authorize(self, name: str, context: ToolContext[Any]) -> None:
         tool = self.tools[name]
         if (
             context.tool_name != name
@@ -126,6 +271,9 @@ class ToolExecutor:
             raise _ToolRejected(
                 f"Tool {name!r} is no longer authorized for {self.role}."
             )
+
+    def _admit(self, name: str) -> None:
+        """Reserve before validation and before the first await."""
         increment = self._increment(name)
         projected = self.budget.projected()
         if is_over_budget(self.config, projected) or not can_spend_tool_call(
@@ -135,7 +283,9 @@ class ToolExecutor:
             self.budget.add(budget_usage_with_reason(reason))
             raise _ToolRejected(reason)
         self.budget.add(increment)
-        return await declared_invoke(context, arguments)
+
+    def _increment(self, name: str) -> dict[str, Any]:
+        return budget_from_tool_calls([{"name": name}], self.tools)
 
     def tool_config(self, context: ToolContext[Any]) -> RunnableConfig:
         """Give each invoker its own operation metadata.
@@ -224,7 +374,7 @@ class ToolExecutor:
                     if iscoroutinefunction(function):
                         output = await function(*args, **kwargs)
                     else:
-                        # The Harness owns this task until the thread and receipt finish.
+                        # The executor owns this task until the thread and receipt finish.
                         output = await asyncio.to_thread(function, *args, **kwargs)
                 finally:
                     self.budget.add(captured)

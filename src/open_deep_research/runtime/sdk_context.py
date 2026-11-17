@@ -1,8 +1,10 @@
 """Opt-in Agents SDK boundary for the existing ResearchWorkspace strategies.
 
-Runner owns the agent loop. This adapter observes local tools, commits completed
-evidence batches at the model-input seam, and substitutes only persisted text
-outputs. The SDK's native calls, reasoning items, and output pairing stay intact.
+Runner owns the agent loop and ToolExecutor owns the durable tool lifecycle.
+This adapter prepares model context, observes the run, and records the tool
+results ToolExecutor hands back so evidence batches can be committed at the
+model-input seam. The SDK's native calls, reasoning items, and output pairing
+stay intact.
 """
 
 from __future__ import annotations
@@ -11,11 +13,8 @@ import asyncio
 import copy
 import json
 import time
-from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
-from functools import partial
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from agents import Agent, FunctionTool, RunConfig, RunContextWrapper, RunHooks, Runner
@@ -53,7 +52,6 @@ from open_deep_research.research_graph.schema import stable_id
 from open_deep_research.research_graph.workspace import ResearchWorkspace, ToolBatchItem
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
-    finish_owned,
     is_cancellation,
     native_step_available,
     owned_cleanup,
@@ -61,7 +59,8 @@ from open_deep_research.workflow.execution import (
     unconfirmed,
 )
 
-tool_usage: ContextVar[dict | None] = ContextVar("tool_usage", default=None)
+if TYPE_CHECKING:
+    from open_deep_research.runtime.tool_executor import ToolExecutor
 
 ToolStatus = Literal["running", "succeeded", "failed", "cancelled", "unobserved"]
 DEFAULT_EVIDENCE_TOOLS = frozenset({"web_search", "rag_search"})
@@ -111,12 +110,11 @@ class ResearchGraphSettlementError(RuntimeError):
 class SDKContextHarness(RunHooks):
     """Bind exactly one SDK invocation to one research run, role, and task.
 
-    ``function_tool`` rebinds an existing SDK FunctionTool's invocation callback
-    without rebuilding its declaration. Plain decorated FunctionTools remain
-    observable but are never presumed successful: their error formatter can hide
-    failures. For local MCP, supply ``mcp_result`` and ``tool_error`` as the
-    server's public custom-data extractor and failure formatter respectively.
-    Hosted tools have no local execution result and are excluded from ingestion.
+    ToolExecutor owns tool execution, the ``por.agent_tool`` Step and
+    de-duplication; this harness records what it hands back. Plain decorated
+    FunctionTools bound directly to the SDK remain observable but are never
+    presumed successful: their error formatter can hide failures. Hosted tools
+    have no local execution result and are excluded from ingestion.
     """
 
     def __init__(
@@ -168,7 +166,7 @@ class SDKContextHarness(RunHooks):
         self._retrieved_signature = ""
         self._response_starts: list[str] = []
         self._owned_contexts: set[str] = set()
-        self._tool_calls: dict[str, asyncio.Future[Any]] = {}
+        self.tool_executor: ToolExecutor | None = None
         self._batch_lock = asyncio.Lock()
         self._agent: Agent[Any] | None = None
         self._started = False
@@ -341,7 +339,13 @@ class SDKContextHarness(RunHooks):
                 "Research run/role/task context does not match this SDK invocation."
             )
 
-    def _start(self, context: ToolContext[Any]) -> ObservedToolResult:
+    @property
+    def closing(self) -> bool:
+        """Return whether the invocation has started its exit settlement."""
+        return self._closing
+
+    def start_tool(self, context: ToolContext[Any]) -> ObservedToolResult:
+        """Return the single observed record for one native tool call."""
         self._check(context.context)
         call_id = context.tool_call_id
         if not call_id:
@@ -385,7 +389,23 @@ class SDKContextHarness(RunHooks):
         self.results[call_id] = result
         return result
 
-    def _record(
+    def restore_tool(self, saved: dict[str, Any]) -> None:
+        """Restore one committed ``por.agent_tool`` record into this collector."""
+        restored = ObservedToolResult(**saved)
+        current = self.results.get(restored.tool_call_id)
+        if (
+            current is None
+            or restored.graph_call_id != current.graph_call_id
+            or restored.tool_name != current.tool_name
+            or restored.arguments_json != current.arguments_json
+        ):
+            raise ExecutionControlError(
+                "Committed tool result does not match this call"
+            )
+        if not current.consumed:
+            self.results[restored.tool_call_id] = restored
+
+    def record_tool(
         self,
         context: ToolContext[Any],
         status: ToolStatus,
@@ -393,7 +413,7 @@ class SDKContextHarness(RunHooks):
         *,
         error_type: str | None = None,
     ) -> None:
-        result = self._start(context)
+        result = self.start_tool(context)
         if result.status != "running":
             if result.status != status or result.observation != observation:
                 raise ValueError("Conflicting duplicate tool result.")
@@ -421,133 +441,6 @@ class SDKContextHarness(RunHooks):
                 },
             )
 
-    def function_tool(
-        self,
-        tool: FunctionTool,
-        *,
-        invoke: Callable[[ToolContext[Any], str], Awaitable[Any]] | None = None,
-        is_success: Callable[[Any], bool] | None = None,
-        errors_as_results: bool = True,
-        error_formatter: Callable[[ToolContext[Any], Exception], str] | None = None,
-        drain_on_cancel: bool = False,
-    ) -> FunctionTool:
-        """Bind an existing SDK declaration to this collector.
-
-        Only the invocation callback is replaced: the SDK keeps the tool's name,
-        description, JSON Schema, strictness and failure policy. ``invoke``
-        overrides that callback when the runtime adds admission or a protocol
-        adapter; the invoker owns argument validation and execution.
-        Tools returning business error envelopes must supply ``is_success``.
-        Cancellation always propagates. No SDK private fields are modified.
-        """
-        declared = tool.on_invoke_tool if invoke is None else invoke
-
-        async def execute_observed(context: ToolContext[Any], arguments: str) -> Any:
-            if self._closing:
-                self._record(context, "cancelled", None, error_type="CancelledError")
-                raise asyncio.CancelledError()
-            try:
-                call = declared(context, arguments)
-                if drain_on_cancel:
-                    output, _ = await finish_owned(asyncio.ensure_future(call))
-                else:
-                    output = await call
-                success = is_success(output) if is_success is not None else True
-            except (asyncio.CancelledError, dbos_error.DBOSWorkflowCancelledError):
-                self._record(context, "cancelled", None, error_type="CancelledError")
-                raise
-            except Exception as exc:
-                if isinstance(exc, ExecutionControlError):
-                    self._record(context, "failed", None, error_type=type(exc).__name__)
-                    raise
-                output = (
-                    error_formatter(context, exc)
-                    if error_formatter is not None
-                    else default_tool_error_function(context, exc)
-                )
-                self._record(
-                    context,
-                    "cancelled"
-                    if isinstance(exc, MCPToolCancellationError)
-                    else "failed",
-                    output,
-                    error_type=type(exc).__name__,
-                )
-                if not errors_as_results:
-                    raise
-                return output
-            else:
-                self._record(context, "succeeded" if success else "failed", output)
-                return output
-
-        async def observed(context: ToolContext[Any], arguments: str) -> Any:
-            if arguments != context.tool_arguments:
-                raise ValueError("Tool arguments do not match the SDK call context.")
-            record = self._start(context)
-            call_id = record.tool_call_id
-            if original := self._tool_calls.get(call_id):
-                # Preserve the native Step slot while sharing the first result,
-                # including when that result is restored from the journal.
-                return await self._tool_step(record, partial(asyncio.shield, original))
-
-            completion = asyncio.get_running_loop().create_future()
-            self._tool_calls[call_id] = completion
-            try:
-                output = await self._tool_step(
-                    record, partial(execute_observed, context, arguments)
-                )
-            except BaseException as exc:
-                completion.set_exception(exc)
-                completion.exception()
-                raise
-            completion.set_result(output)
-            return output
-
-        return replace(tool, on_invoke_tool=observed)
-
-    async def _tool_step(
-        self, record: ObservedToolResult, execute: Callable[[], Awaitable[Any]]
-    ) -> Any:
-        if not native_step_available():
-            return await execute()
-        executed = False
-
-        async def invoke_step():
-            nonlocal executed
-            executed = True
-            local = {}
-            token = tool_usage.set(local)
-            try:
-                output = await execute()
-            finally:
-                tool_usage.reset(token)
-            return {
-                "output": output,
-                "record": asdict(self.results[record.tool_call_id]),
-                "budget": local,
-            }
-
-        saved = await DBOS.run_step_async(
-            {"name": "por.agent_tool", "preemptible": True}, invoke_step
-        )
-        if not executed:
-            restored = ObservedToolResult(**saved["record"])
-            if (
-                restored.tool_call_id != record.tool_call_id
-                or restored.graph_call_id != record.graph_call_id
-                or restored.tool_name != record.tool_name
-                or restored.arguments_json != record.arguments_json
-            ):
-                raise ExecutionControlError(
-                    "Committed tool result does not match this call"
-                )
-            if not self.results[record.tool_call_id].consumed:
-                self.results[record.tool_call_id] = restored
-            budget = getattr(self, "run_budget", None)
-            if budget is not None:
-                budget.add(saved["budget"])
-        return saved["output"]
-
     def mcp_result(self, data: MCPToolCustomDataContext) -> dict[str, str]:
         """Collect local MCP status before the SDK discards the isError flag."""
         context = data.run_context
@@ -566,14 +459,16 @@ class SDKContextHarness(RunHooks):
                 for block in blocks
                 if isinstance(block, dict) and block.get("type") == "text"
             )
-        self._record(context, "failed" if data.is_error else "succeeded", observation)
+        self.record_tool(
+            context, "failed" if data.is_error else "succeeded", observation
+        )
         return {"research_sdk_run_id": self.sdk_run_id}
 
     def tool_error(self, context: RunContextWrapper[Any], error: Exception) -> str:
         """Preserve local MCP/function failure status when formatting a tool error."""
         output = default_tool_error_function(context, error)
         if isinstance(context, ToolContext):
-            self._record(
+            self.record_tool(
                 context,
                 "cancelled"
                 if isinstance(error, MCPToolCancellationError)
@@ -589,7 +484,7 @@ class SDKContextHarness(RunHooks):
         """Observe per-call identity without treating the hook as a batch boundary."""
         self._check(context.context)
         if isinstance(context, ToolContext):
-            recorded = self._start(context)
+            recorded = self.start_tool(context)
             if recorded.operation_id is not None:
                 annotate(
                     operation_id=recorded.operation_id,
@@ -611,14 +506,14 @@ class SDKContextHarness(RunHooks):
     ) -> None:
         """Mark unwrapped tools unobserved; never infer success from an end hook."""
         if isinstance(context, ToolContext):
-            recorded = self._start(context)
+            recorded = self.start_tool(context)
             if recorded.operation_id is not None:
                 annotate(
                     operation_id=recorded.operation_id,
                     effect_status=recorded.effect_status,
                 )
             if recorded.status == "running":
-                self._record(context, "unobserved", result)
+                self.record_tool(context, "unobserved", result)
             self.events.append(("tool_end", context.tool_call_id))
             started = self._tool_started_at.pop(context.tool_call_id, None)
             await self._observe(
@@ -1090,11 +985,10 @@ class SDKContextHarness(RunHooks):
         error_type = None
         cancellation = None
         try:
-            in_flight = [call for call in self._tool_calls.values() if not call.done()]
-            if in_flight:
-                _, live = await asyncio.wait(in_flight, timeout=self.settlement_timeout)
-                if live:
-                    error_type = "ToolDrainTimeout"
+            if self.tool_executor is not None and not await self.tool_executor.drain(
+                self.settlement_timeout
+            ):
+                error_type = "ToolDrainTimeout"
             await asyncio.wait_for(self._flush(), timeout=self.settlement_timeout)
         except asyncio.CancelledError as exc:
             error_type, cancellation = "CancelledError", exc

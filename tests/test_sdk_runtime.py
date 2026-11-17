@@ -38,7 +38,8 @@ from open_deep_research.runtime.sdk_runtime import (
     _ReasoningStopped,
     _RunBudget,
 )
-from open_deep_research.tools import register_tool
+from open_deep_research.runtime.tool_executor import ToolExecutor
+from open_deep_research.tools import BusinessTool, register_tool
 
 ROLES = PUBLIC_OPINION_AGENT_ORDER
 TOKENS = Usage(
@@ -925,7 +926,17 @@ def test_standalone_business_harness_observes_live_nested_budget_without_runtime
             },
             on_invoke_tool=invoke,
         )
-        tool = harness.function_tool(declared)
+        business = BusinessTool(declared, domain="web_search", effect="read")
+        executor = ToolExecutor(
+            role=workspace.role,
+            allowed_domains=frozenset({"web_search"}),
+            config=config,
+            runtime_config={},
+            budget=budget,
+            tools={business.name: business},
+        )
+        harness.tool_executor = executor
+        tool = executor.bind(declared)
         model = ScriptedModel(
             [
                 [function_call(tool.name, "{}", call_id="nested")],
@@ -1229,3 +1240,85 @@ def test_native_catalog_tools_dispatch_with_their_original_defaults(monkeypatch)
     assert runtime.harness.results["complete"].observation == ""
     assert result.budget["tool_calls"] == 6
     assert result.budget["search_calls"] == 1
+
+
+def test_tool_executor_owns_agent_tool_step_and_restores_committed_result(monkeypatch):
+    from open_deep_research.runtime import sdk_context, tool_executor
+
+    class StepDBOS:
+        workflow_id = None
+        executor_id = None
+        replay = False
+        saved = None
+        names: list[str] = []
+
+        @classmethod
+        async def run_step_async(cls, options, func):
+            cls.names.append(options["name"])
+            if cls.replay:
+                return cls.saved
+            cls.saved = await func()
+            return cls.saved
+
+    class HarnessDBOS:
+        # A recovering execution keeps the same workflow identity.
+        workflow_id = "fixture-workflow"
+        executor_id = "fixture-executor"
+
+    monkeypatch.setattr(tool_executor, "DBOS", StepDBOS)
+    monkeypatch.setattr(tool_executor, "native_step_available", lambda: True)
+    monkeypatch.setattr(sdk_context, "DBOS", HarnessDBOS)
+
+    calls = []
+
+    async def business(query: str) -> str:
+        calls.append(query)
+        capture_budget_usage({"model_calls": 1})
+        return "durable evidence"
+
+    @function_tool(
+        name_override="web_search",
+        description_override="Search",
+        use_docstring_info=False,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def declared(context: ToolContext, query: str) -> str:
+        return await context.context.tool_executor.execute(context, business, query)
+
+    tool = register_tool(declared, domain="web_search", effect="read")
+
+    def scripted():
+        return ScriptedModel(
+            [
+                [function_call("web_search", '{"query":"q"}', call_id="step")],
+                [assistant_message("finished")],
+            ],
+            default_usage=TOKENS,
+        )
+
+    first = _runtime(tools=[tool], model=scripted())
+    first_result = asyncio.run(first.run("task"))
+    assert calls == ["q"]
+    assert StepDBOS.names == ["por.agent_tool"]
+    assert StepDBOS.saved["record"]["status"] == "succeeded"
+    assert StepDBOS.saved["budget"]["tool_calls"] == 1
+    assert StepDBOS.saved["budget"]["model_calls"] == 1
+    assert first.harness.results["step"].observation == "durable evidence"
+    assert first_result.budget["tool_calls"] == 1
+    assert first_result.budget["model_calls"] == 3
+
+    StepDBOS.replay = True
+    calls.clear()
+    second = _runtime(tools=[tool], model=scripted())
+    second_result = asyncio.run(second.run("task"))
+    assert calls == []
+    assert StepDBOS.names == ["por.agent_tool", "por.agent_tool"]
+    assert second.harness.results["step"].status == "succeeded"
+    assert second.harness.results["step"].observation == "durable evidence"
+    assert (
+        second.harness.results["step"].graph_call_id
+        == first.harness.results["step"].graph_call_id
+    )
+    assert second_result.budget["tool_calls"] == 1
+    assert second_result.budget["model_calls"] == 3

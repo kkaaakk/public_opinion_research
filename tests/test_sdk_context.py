@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+from functools import partial
 
 import pytest
 from agents import Agent, FileSearchTool, FunctionTool, function_tool
@@ -30,6 +31,10 @@ from open_deep_research.runtime.sdk_context import (
     ResearchGraphSettlementError,
     SDKContextHarness,
 )
+from open_deep_research.runtime.sdk_runtime import _RunBudget
+from open_deep_research.runtime.tool_executor import ToolExecutor
+from open_deep_research.tools import BusinessTool
+from open_deep_research.workflow.execution import ExecutionControlError
 
 EMPTY_SCHEMA = {"type": "object", "properties": {}, "additionalProperties": False}
 SEARCH_SCHEMA = {
@@ -157,24 +162,40 @@ def _workspace(
     return workspace, store, graph_model
 
 
-def _tool(
-    harness, invoke=None, *, name="web_search", errors_as_results=True, is_success=None
-):
+def _executor(harness) -> ToolExecutor:
+    if harness.tool_executor is None:
+        harness.tool_executor = ToolExecutor(
+            role=harness.workspace.role,
+            allowed_domains=frozenset({"web_search"}),
+            config=harness.workspace.configurable,
+            runtime_config={},
+            budget=_RunBudget(initial={}),
+            tools={},
+        )
+    return harness.tool_executor
+
+
+def _tool(harness, invoke=None, *, name="web_search"):
     async def search(context, arguments):
         return _payload(json.loads(arguments)["label"])
+
+    raw = invoke or search
+
+    async def execute(context, arguments):
+        return await harness.tool_executor.execute(
+            context, partial(raw, context, arguments)
+        )
 
     declared = FunctionTool(
         name=name,
         description="Fixture research tool",
         params_json_schema=SEARCH_SCHEMA,
-        on_invoke_tool=invoke or search,
+        on_invoke_tool=execute,
         strict_json_schema=False,
     )
-    return harness.function_tool(
-        declared,
-        errors_as_results=errors_as_results,
-        is_success=is_success,
-    )
+    executor = _executor(harness)
+    executor.tools[name] = BusinessTool(declared, domain="web_search", effect="read")
+    return executor.bind(declared)
 
 
 def _context(call):
@@ -310,12 +331,7 @@ def test_failed_non_evidence_and_business_error_results_do_not_enter_graph(tmp_p
                 name="producer",
                 model=model,
                 tools=[
-                    _tool(
-                        harness,
-                        search,
-                        is_success=lambda result: not isinstance(result, dict)
-                        or result.get("ok") is True,
-                    ),
+                    _tool(harness, search),
                     _tool(harness, name="think_tool"),
                 ],
             ),
@@ -496,13 +512,13 @@ def test_remaining_batch_is_settled_on_normal_and_exception_exits(tmp_path, term
 
         async def bad(context, arguments):
             await ready.wait()
-            raise LookupError("fixture tool exception")
+            raise ExecutionControlError("fixture tool exception")
 
         calls = [function_call("web_search", {"label": "good"}, call_id="good")]
         tools = [_tool(harness, good)]
         if terminal == "tool_exception":
             calls.append(function_call("bad", {"label": "bad"}, call_id="bad"))
-            tools.append(_tool(harness, bad, name="bad", errors_as_results=False))
+            tools.append(_tool(harness, bad, name="bad"))
         model = ScriptedModel([calls])
         agent = Agent(
             name="producer",
@@ -521,7 +537,7 @@ def test_remaining_batch_is_settled_on_normal_and_exception_exits(tmp_path, term
             ) as failure:
                 await harness.run(agent, "assignment", max_turns=1)
             if terminal == "tool_exception":
-                assert isinstance(failure.value.__cause__, LookupError)
+                assert isinstance(failure.value.__cause__, ExecutionControlError)
         assert store.writes == 1
         assert harness.results["good"].consumed
         assert harness.last_settlement.succeeded
@@ -807,10 +823,10 @@ def test_scope_and_conflicting_native_call_identity_are_rejected(tmp_path):
             tool_call_id="id",
             tool_arguments='{"label":"a"}',
         )
-        harness._record(context, "succeeded", _payload("a"))
-        harness._record(context, "succeeded", _payload("a"))
+        harness.record_tool(context, "succeeded", _payload("a"))
+        harness.record_tool(context, "succeeded", _payload("a"))
         with pytest.raises(ValueError, match="Conflicting duplicate"):
-            harness._record(context, "succeeded", _payload("changed"))
+            harness.record_tool(context, "succeeded", _payload("changed"))
         changed = ToolContext(
             context=harness,
             tool_name="web_search",
@@ -818,10 +834,10 @@ def test_scope_and_conflicting_native_call_identity_are_rejected(tmp_path):
             tool_arguments='{"label":"b"}',
         )
         with pytest.raises(ValueError, match="different invocation"):
-            harness._start(changed)
+            harness.start_tool(changed)
         context.context = object()
         with pytest.raises(ValueError, match="does not match"):
-            harness._start(context)
+            harness.start_tool(context)
         workspace.scope.task_id = "changed-task"
         with pytest.raises(ValueError, match="does not match"):
             harness._check(harness)
