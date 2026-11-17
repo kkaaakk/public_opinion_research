@@ -34,15 +34,13 @@ const SDKTrace = lazy(() => import('./components/SDKTrace').then((m) => ({ defau
 const NativeTrace = lazy(() =>
   import('./components/NativeTrace').then((m) => ({ default: m.NativeTrace })),
 );
-const Evidence = lazy(() => import('./components/Evidence').then((m) => ({ default: m.Evidence })));
 const Reports = lazy(() => import('./components/Reports').then((m) => ({ default: m.Reports })));
 const History = lazy(() => import('./components/History').then((m) => ({ default: m.History })));
-type Tab = 'workflow' | 'sdk' | 'dbos' | 'evidence' | 'reports';
+type Tab = 'workflow' | 'sdk' | 'dbos' | 'reports';
 const tabs: [Tab, string][] = [
   ['workflow', '工作流'],
   ['sdk', 'SDK 追踪'],
   ['dbos', 'DBOS'],
-  ['evidence', '证据'],
   ['reports', '报告'],
 ];
 const connectionLabels: Record<Connection | 'idle', string> = {
@@ -596,17 +594,6 @@ export default function App() {
                     </>
                   ) : (
                     <Empty>打开 Run 后读取 DBOS Journal</Empty>
-                  ))}
-                {tab === 'evidence' &&
-                  (runId ? (
-                    <Evidence
-                      key={`${runId}:${authRevision}`}
-                      api={api}
-                      runId={runId}
-                      replay={replayCursor !== null}
-                    />
-                  ) : (
-                    <Empty>打开 Run 后查看持久研究证据</Empty>
                   ))}
                 {tab === 'reports' && <Reports reports={reports} />}
                 <Timeline

@@ -3,13 +3,10 @@ import {
   array,
   boolean,
   integer,
-  jsonObject,
-  optionalString,
   parseRoleReports,
   parseUsage,
   record,
   string,
-  type EvidencePage,
   type ExecutionPage,
   type HistoryItem,
   type HistoryPage,
@@ -51,38 +48,6 @@ export function parseExecution(v: unknown): ExecutionPage {
     next_workflow_offset: integer(r.next_workflow_offset),
     steps_has_more: boolean(r.steps_has_more),
     next_offset: integer(r.next_offset),
-  };
-}
-export function parseEvidence(v: unknown): EvidencePage {
-  const r = record(v);
-  return {
-    run_id: string(r.run_id),
-    available: boolean(r.available),
-    reason: optionalString(r.reason),
-    nodes: array(r.nodes).map((item) => {
-      const n = record(item);
-      return {
-        node_id: string(n.node_id),
-        node_type: string(n.node_type),
-        role: optionalString(n.role),
-        task_id: optionalString(n.task_id),
-        research_round: n.research_round == null ? undefined : integer(n.research_round),
-        properties: jsonObject(n.properties),
-      };
-    }),
-    edges: array(r.edges).map((item) => {
-      const e = record(item);
-      return {
-        edge_id: string(e.edge_id),
-        relation_type: string(e.relation_type),
-        source_id: string(e.source_id),
-        target_id: string(e.target_id),
-      };
-    }),
-    has_more: boolean(r.has_more),
-    next_cursor: optionalString(r.next_cursor),
-    edges_has_more: boolean(r.edges_has_more),
-    next_edge_cursor: optionalString(r.next_edge_cursor),
   };
 }
 function historyItem(v: unknown): HistoryItem {

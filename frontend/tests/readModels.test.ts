@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { parseArchive, parseEvidence, parseExecution } from '../src/readModels';
+import { parseArchive, parseExecution } from '../src/readModels';
 import { parseSnapshot } from '../src/protocol';
 import { snapshot } from './fixtures';
 it('rejects incorrectly typed optional snapshot fields before render', () => {
@@ -29,17 +29,7 @@ it('validates native step identities and nullable actual times', () => {
   expect(parseExecution(data).steps[0].completed_at_epoch_ms).toBeNull();
   expect(() => parseExecution({ ...data, steps: [{ function_id: '1' }] })).toThrow();
 });
-it('validates evidence properties and archive report data', () => {
-  expect(() =>
-    parseEvidence({
-      run_id: 'run',
-      available: true,
-      nodes: [{ node_id: 'n', node_type: 'Evidence', properties: 'invalid' }],
-      edges: [],
-      has_more: false,
-      edges_has_more: false,
-    }),
-  ).toThrow();
+it('validates archive report data', () => {
   expect(() =>
     parseArchive({
       id: '1',

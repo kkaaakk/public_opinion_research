@@ -163,31 +163,6 @@ export type ExecutionPage = {
   steps_has_more: boolean;
   next_offset: number;
 };
-export type EvidenceNode = {
-  node_id: string;
-  node_type: string;
-  role?: string;
-  research_round?: number;
-  task_id?: string;
-  properties: Record<string, Json>;
-};
-export type EvidenceEdge = {
-  edge_id: string;
-  relation_type: string;
-  source_id: string;
-  target_id: string;
-};
-export type EvidencePage = {
-  run_id: string;
-  available: boolean;
-  reason?: string;
-  nodes: EvidenceNode[];
-  edges: EvidenceEdge[];
-  has_more: boolean;
-  next_cursor?: string;
-  edges_has_more: boolean;
-  next_edge_cursor?: string;
-};
 export type HistoryItem = {
   id: string;
   run_id: string;
