@@ -35,9 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from open_deep_research.config_values import without_retired_execution_selectors  # noqa: E402
 from open_deep_research.web.history import (  # noqa: E402, I001
     HistoryUnavailable,
-    close_history_store,
     get_history_store,
-    import_langsmith_history,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -80,12 +78,9 @@ async def lifespan(_app: FastAPI):
         from open_deep_research.web.durable import close_run_client
 
         try:
-            await asyncio.to_thread(close_history_store)
+            await asyncio.to_thread(close_run_client)
         finally:
-            try:
-                await asyncio.to_thread(close_run_client)
-            finally:
-                await asyncio.to_thread(shutdown_telemetry)
+            await asyncio.to_thread(shutdown_telemetry)
 
 
 app = FastAPI(
@@ -269,7 +264,7 @@ def list_history(
     limit: int = Query(default=10, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100_000),
 ) -> JSONResponse:
-    """List and search completed reports from the existing Neo4j database."""
+    """List and search completed reports from the business database."""
     _require_authorization(raw)
     from open_deep_research.web.run_data import public_payload
 
@@ -282,14 +277,6 @@ def list_history(
     return JSONResponse(
         content=public_payload(data), headers={"Cache-Control": "no-store"}
     )
-
-
-# 将已有 LangSmith 研究输出导入历史库，避免追踪过期后丢失。
-@app.post("/api/history/import/langsmith")
-def import_history(raw: Request) -> dict:
-    """Preserve existing LangSmith reports before their traces expire."""
-    _require_authorization(raw)
-    return import_langsmith_history(get_history_store())
 
 
 # 读取指定历史报告及当时研究参数，不存在时返回相应 HTTP 错误。

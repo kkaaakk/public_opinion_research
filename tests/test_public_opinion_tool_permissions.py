@@ -34,7 +34,7 @@ def _names(tools) -> set[str]:
 
 # 构造角色权限测试的运行配置。
 def _config() -> dict:
-    return {"configurable": {"research_graph_enabled": False}}
+    return {"configurable": {}}
 
 
 # 替换基础工具来源，避免连接真实 MCP 或搜索服务。

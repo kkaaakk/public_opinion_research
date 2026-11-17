@@ -1,10 +1,9 @@
-"""Opt-in Agents SDK boundary for the existing ResearchWorkspace strategies.
+"""SDK context lifecycle for one business Agent invocation.
 
-Runner owns the agent loop and ToolExecutor owns the durable tool lifecycle.
-This adapter prepares model context, observes the run, and records the tool
-results ToolExecutor hands back so evidence batches can be committed at the
-model-input seam. The SDK's native calls, reasoning items, and output pairing
-stay intact.
+The SDK owns the agent loop and ToolExecutor owns the durable tool lifecycle.
+This harness records the tool results the executor hands back, keeps the native
+protocol pairing intact, and provides the single durable seam for bounded
+history compaction.
 """
 
 from __future__ import annotations
@@ -14,159 +13,105 @@ import copy
 import json
 import time
 from dataclasses import asdict, dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from agents import Agent, FunctionTool, RunConfig, RunContextWrapper, RunHooks, Runner
-from agents.exceptions import MCPToolCancellationError
 from agents.items import ModelResponse, TResponseInputItem
-from agents.mcp import MCPToolCustomDataContext
 from agents.memory import Session
 from agents.result import RunResult
 from agents.run import CallModelData, ModelInputData
-from agents.tool import Tool, default_tool_error_function
+from agents.tool import Tool
 from agents.tool_context import ToolContext
 from dbos import DBOS
 from dbos import error as dbos_error
 from dbos_openai_agents import DBOSRunner
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from open_deep_research.budget import (
-    budget_capture,
-    capture_budget_usage,
-    merge_budget_usage,
-)
+from open_deep_research.budget import budget_capture, capture_budget_usage
 from open_deep_research.observability.telemetry import (
     annotate,
     correlation,
     observed,
     telemetry_enabled,
 )
-from open_deep_research.research_graph.compaction import micro_compact_messages
-from open_deep_research.research_graph.models import (
-    RelevantSubgraph,
-    WorkingContext,
-    WriteReceipt,
-)
-from open_deep_research.research_graph.schema import stable_id
-from open_deep_research.research_graph.workspace import ResearchWorkspace, ToolBatchItem
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
     is_cancellation,
     native_step_available,
     owned_cleanup,
     stage_context,
-    unconfirmed,
 )
 
-if TYPE_CHECKING:
-    from open_deep_research.runtime.tool_executor import ToolExecutor
-
 ToolStatus = Literal["running", "succeeded", "failed", "cancelled", "unobserved"]
-DEFAULT_EVIDENCE_TOOLS = frozenset({"web_search", "rag_search"})
 
 
 @dataclass
 class ObservedToolResult:
-    """Keep native and graph-scoped identities plus explicit execution facts."""
+    """One native tool call and the execution facts the executor reported."""
 
-    run_id: str
     sdk_run_id: str
-    role: str
-    task_id: str
-    tool_name: str
     tool_call_id: str
-    graph_call_id: str
+    tool_name: str
     arguments_json: str
     args: Any
     model_turn: int
     status: ToolStatus = "running"
     observation: Any = None
     error_type: str | None = None
-    consumed: bool = False
     operation_id: str | None = None
     effect_status: str | None = None
 
 
 @dataclass(frozen=True)
 class BatchSettlement:
-    """Report remaining evidence and live calls without claiming durable execution."""
+    """Report live tool calls without claiming durable execution."""
 
     reason: str
-    pending_call_ids: tuple[str, ...]
     in_flight_call_ids: tuple[str, ...]
     error_type: str | None = None
 
     @property
     def succeeded(self) -> bool:
-        """Return whether all observed terminal results have been accounted for."""
-        return not (self.pending_call_ids or self.in_flight_call_ids or self.error_type)
-
-
-class ResearchGraphSettlementError(RuntimeError):
-    """Signal uncommitted evidence after an otherwise completed SDK run."""
+        """Return whether every observed tool call reached a terminal state."""
+        return not (self.in_flight_call_ids or self.error_type)
 
 
 class SDKContextHarness(RunHooks):
-    """Bind exactly one SDK invocation to one research run, role, and task.
+    """Bind exactly one SDK invocation to one research role and task.
 
     ToolExecutor owns tool execution, the ``por.agent_tool`` Step and
-    de-duplication; this harness records what it hands back. Plain decorated
+    de-duplication; this harness records what it hands back. Decorated
     FunctionTools bound directly to the SDK remain observable but are never
-    presumed successful: their error formatter can hide failures. Hosted tools
-    have no local execution result and are excluded from ingestion.
+    presumed successful: their error formatter can hide failures.
     """
 
     def __init__(
         self,
-        workspace: ResearchWorkspace,
         *,
-        evidence_tools: frozenset[str] = DEFAULT_EVIDENCE_TOOLS,
-        consumer_refresh_every: int = 0,
-        update_consumer_context: bool = False,
-        context_max_chars: int = 16_000,
+        role: str,
+        task_id: str,
+        research_round: int = 1,
         settlement_timeout: float = 30.0,
     ) -> None:
-        """Configure a run-local collector; zero consumer refresh means first call only."""
-        # Standard mode reuses the same execution collector and exit drain, but
-        # neither retrieves graph context nor submits evidence.
-        if workspace.run_id == stable_id("RUN", workspace.role):
-            raise ValueError(
-                "Supply an explicit research run_id when creating the workspace."
-            )
-        if (
-            context_max_chars < 1024
-            or settlement_timeout <= 0
-            or consumer_refresh_every < 0
-        ):
-            raise ValueError(
-                "Invalid context bound, refresh interval, or settlement timeout."
-            )
-        self.workspace = workspace
-        self.scope = workspace.scope.model_copy(deep=True)
+        """Configure one run-local collector for this role invocation."""
+        if settlement_timeout <= 0:
+            raise ValueError("Settlement timeout must be positive.")
+        self.role = str(role)
+        self.task_id = str(task_id)
+        self.research_round = max(1, int(research_round or 1))
         self.sdk_run_id = (
-            stable_id("SDK", DBOS.workflow_id, self.scope.task_id)
-            if DBOS.workflow_id is not None
-            else uuid4().hex
+            f"SDK_{uuid4().hex}"
+            if DBOS.workflow_id is None
+            else f"SDK_{DBOS.workflow_id}_{self.role}_{self.task_id}"
         )
-        self.evidence_tools = frozenset(evidence_tools)
-        self.consumer_refresh_every = consumer_refresh_every
-        self.update_consumer_context = update_consumer_context
-        self.context_max_chars = context_max_chars
         self.settlement_timeout = settlement_timeout
         self.results: dict[str, ObservedToolResult] = {}
         self.events: list[tuple[str, str]] = []
         self.model_calls = 0
-        self.budget_usage: dict[str, Any] = {}
         self.last_settlement: BatchSettlement | None = None
-        self._compacted: dict[str, str] = {}
-        self._needs_context_update: set[str] = set()
-        self._batch_errors: dict[str, str] = {}
-        self._context_text = ""
-        self._retrieved_signature = ""
         self._response_starts: list[str] = []
         self._owned_contexts: set[str] = set()
-        self.tool_executor: ToolExecutor | None = None
+        self.tool_executor: Any | None = None
         self._batch_lock = asyncio.Lock()
         self._agent: Agent[Any] | None = None
         self._started = False
@@ -182,10 +127,10 @@ class SDKContextHarness(RunHooks):
             await scope.observe(
                 kind,
                 dict(
-                    role=self.scope.role,
+                    role=self.role,
                     invocation_id=self.sdk_run_id,
-                    task_id=self.scope.task_id,
-                    research_round=self.scope.research_round,
+                    task_id=self.task_id,
+                    research_round=self.research_round,
                     model_turn=self.model_calls,
                     **metadata,
                 ),
@@ -194,59 +139,33 @@ class SDKContextHarness(RunHooks):
                 call_id=metadata.get("tool_call_id") if kind == "tool_result" else None,
             )
 
-    def _durable_snapshot(self):
-        """Freeze data only; never serialize stores, clients, locks or live tasks."""
-        if self.workspace.pending_ingestions:
-            raise unconfirmed("Evidence batch remains unconfirmed")
-        names = (
-            "model_calls",
-            "budget_usage",
-            "_compacted",
-            "_batch_errors",
-            "_context_text",
-            "_retrieved_signature",
-            "_response_starts",
-        )
-        state = {name: copy.deepcopy(getattr(self, name)) for name in names}
-        for name in ("_needs_context_update", "_owned_contexts"):
-            state[name] = sorted(getattr(self, name))
-        state["results"] = {
-            key: {
-                k: v
-                for k, v in asdict(value).items()
-                if k not in {"observation", "arguments_json", "args"}
-            }
-            for key, value in self.results.items()
-        }
-        state["workspace"] = dict(
-            working_context=self.workspace.working_context.model_dump(mode="json"),
-            relevant_subgraph=self.workspace.relevant_subgraph.model_dump(mode="json"),
-            receipts={
-                k: v.model_dump(mode="json") for k, v in self.workspace.receipts.items()
+    def _extra_snapshot(self) -> dict[str, Any]:
+        """Return invocation-local business state owned by a subclass."""
+        return {}
+
+    def _restore_extra(self, state: dict[str, Any]) -> None:
+        """Restore invocation-local business state owned by a subclass."""
+
+    def _durable_snapshot(self) -> dict[str, Any]:
+        """Freeze data only; never serialize clients, locks or live tasks."""
+        state: dict[str, Any] = {
+            "model_calls": self.model_calls,
+            "_response_starts": copy.deepcopy(self._response_starts),
+            "results": {
+                key: {
+                    k: v
+                    for k, v in asdict(value).items()
+                    if k not in {"observation", "arguments_json", "args"}
+                }
+                for key, value in self.results.items()
             },
-            rolling_summary=self.workspace.rolling_summary,
-            metrics=self.workspace.metrics.as_dict(),
-        )
-        # The business Harness extends this collector with bounded history and
-        # admission data. These are invocation-local, never another journal.
-        if hasattr(self, "run_budget"):
-            state["business"] = dict(
-                delta=self.run_budget.delta,
-                compacted_turns=sorted(self._compacted_turns),
-                summary_references=sorted(self._summary_references),
-            )
+        }
+        state.update(self._extra_snapshot())
         return copy.deepcopy(state)
 
-    def _restore_durable_snapshot(self, state):
-        for name, value in state.items():
-            if name.startswith("_") or name in {"model_calls", "budget_usage"}:
-                setattr(
-                    self,
-                    name,
-                    set(value)
-                    if name in {"_needs_context_update", "_owned_contexts"}
-                    else value,
-                )
+    def _restore_durable_snapshot(self, state: dict[str, Any]) -> None:
+        self.model_calls = state["model_calls"]
+        self._response_starts = state["_response_starts"]
         for key, value in state["results"].items():
             if key not in self.results:
                 raise ValueError(
@@ -254,36 +173,15 @@ class SDKContextHarness(RunHooks):
                 )
             for name, field in value.items():
                 setattr(self.results[key], name, field)
-        saved = state["workspace"]
-        self.workspace.working_context = WorkingContext.model_validate(
-            saved["working_context"]
-        )
-        self.workspace.relevant_subgraph = RelevantSubgraph.model_validate(
-            saved["relevant_subgraph"]
-        )
-        self.workspace.receipts = {
-            k: WriteReceipt.model_validate(v) for k, v in saved["receipts"].items()
-        }
-        self.workspace.rolling_summary = saved["rolling_summary"]
-        metrics = dict(saved["metrics"])
-        self.workspace.metrics.quality = metrics.pop("quality", {})
-        self.workspace.metrics.values = metrics
-        if "business" in state:
-            saved = state["business"]
-            self.run_budget.delta = saved["delta"]
-            self._compacted_turns = set(saved["compacted_turns"])
-            self._summary_references = set(saved["summary_references"])
+        self._restore_extra(state)
 
-    async def durable_filter_model_input(self, data):
-        """Checkpoint a bounded evidence/context transaction and its mutable data.
+    async def durable_filter_model_input(self, data: CallModelData[Any]) -> ModelInputData:
+        """Checkpoint bounded history compaction and its mutable data.
 
-        Model calls made by this bounded transaction share its Step. The Agent
-        loop itself stays outside it; each Agent model call is DBOSRunner's Step.
-        Evidence commits use stable Graph identities, and nested models retain their physical usage.
+        The Agent loop stays outside the Step; each Agent model call is
+        DBOSRunner's Step. One bounded transaction shares this compaction Step.
         """
         self._check(data.context)
-        if hasattr(self, "run_budget"):
-            self.items = list(data.model_data.input)
 
         async def prepare():
             from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
@@ -299,19 +197,13 @@ class SDKContextHarness(RunHooks):
                         result = data.model_data
                     finally:
                         self._filter_usage = None
-            except ResearchGraphSettlementError as exc:
-                capture_budget_usage(usage)
-                raise unconfirmed(
-                    "Research evidence checkpoint requires reconciliation"
-                ) from exc
             except BaseException:
                 capture_budget_usage(usage)
                 raise
-            snapshot = self._durable_snapshot()
             return {
                 "input": result.input,
                 "instructions": result.instructions,
-                "state": snapshot,
+                "state": self._durable_snapshot(),
                 "usage": usage,
                 "stop": stop,
             }
@@ -328,16 +220,17 @@ class SDKContextHarness(RunHooks):
         return ModelInputData(input=saved["input"], instructions=saved["instructions"])
 
     def _check(self, context: Any) -> None:
-        if (
-            context is not self
-            or self.workspace.scope != self.scope
-            or self.workspace.run_id != self.scope.run_id
-            or self.workspace.role != self.scope.role
-            or self.workspace.task.task_id != self.scope.task_id
-        ):
+        if context is not self:
+            raise ValueError("SDK invocation context does not match this harness.")
+
+    async def filter_model_input(self, data: CallModelData[Any]) -> ModelInputData:
+        """Return the native input unchanged unless a subclass bounds it."""
+        self._check(data.context)
+        if self._agent is not None and data.agent is not self._agent:
             raise ValueError(
-                "Research run/role/task context does not match this SDK invocation."
+                "Handoffs/nested roles require a separate SDKContextHarness."
             )
+        return data.model_data
 
     @property
     def closing(self) -> bool:
@@ -368,20 +261,9 @@ class SDKContextHarness(RunHooks):
                 raise ValueError("Tool call ID was reused for a different invocation.")
             return existing
         result = ObservedToolResult(
-            run_id=self.scope.run_id,
             sdk_run_id=self.sdk_run_id,
-            role=self.scope.role,
-            task_id=self.scope.task_id,
-            tool_name=context.tool_name,
             tool_call_id=call_id,
-            graph_call_id=stable_id(
-                "CALL",
-                self.scope.run_id,
-                self.scope.role,
-                self.scope.task_id,
-                self.sdk_run_id,
-                call_id,
-            ),
+            tool_name=context.tool_name,
             arguments_json=context.tool_arguments,
             args=args,
             model_turn=self.model_calls,
@@ -395,15 +277,13 @@ class SDKContextHarness(RunHooks):
         current = self.results.get(restored.tool_call_id)
         if (
             current is None
-            or restored.graph_call_id != current.graph_call_id
             or restored.tool_name != current.tool_name
             or restored.arguments_json != current.arguments_json
         ):
             raise ExecutionControlError(
                 "Committed tool result does not match this call"
             )
-        if not current.consumed:
-            self.results[restored.tool_call_id] = restored
+        self.results[restored.tool_call_id] = restored
 
     def record_tool(
         self,
@@ -424,59 +304,6 @@ class SDKContextHarness(RunHooks):
             error_type,
         )
         self.events.append((f"tool_{status}", result.tool_call_id))
-        if self.workspace.transcript is not None:
-            self.workspace.transcript.append(
-                "sdk_tool_result",
-                {
-                    "sdk_run_id": self.sdk_run_id,
-                    "role": self.scope.role,
-                    "task_id": self.scope.task_id,
-                    "tool_call_id": result.tool_call_id,
-                    "graph_call_id": result.graph_call_id,
-                    "tool_name": result.tool_name,
-                    "args": result.args,
-                    "status": status,
-                    "observation": observation,
-                    "error_type": error_type,
-                },
-            )
-
-    def mcp_result(self, data: MCPToolCustomDataContext) -> dict[str, str]:
-        """Collect local MCP status before the SDK discards the isError flag."""
-        context = data.run_context
-        if not isinstance(context, ToolContext):
-            raise TypeError("Local MCP collection requires the SDK ToolContext.")
-        observation: Any = (
-            dict(data.structured_content)
-            if data.structured_content is not None
-            else None
-        )
-        if data.is_error or observation is None:
-            output = data.tool_output
-            blocks = output if isinstance(output, list) else [output]
-            observation = "\n".join(
-                str(block.get("text", ""))
-                for block in blocks
-                if isinstance(block, dict) and block.get("type") == "text"
-            )
-        self.record_tool(
-            context, "failed" if data.is_error else "succeeded", observation
-        )
-        return {"research_sdk_run_id": self.sdk_run_id}
-
-    def tool_error(self, context: RunContextWrapper[Any], error: Exception) -> str:
-        """Preserve local MCP/function failure status when formatting a tool error."""
-        output = default_tool_error_function(context, error)
-        if isinstance(context, ToolContext):
-            self.record_tool(
-                context,
-                "cancelled"
-                if isinstance(error, MCPToolCancellationError)
-                else "failed",
-                output,
-                error_type=type(error).__name__,
-            )
-        return output
 
     async def on_tool_start(
         self, context: RunContextWrapper[Any], agent: Agent[Any], tool: Tool
@@ -490,10 +317,7 @@ class SDKContextHarness(RunHooks):
                     operation_id=recorded.operation_id,
                     effect_status=recorded.effect_status,
                 )
-            annotate(
-                tool_call_id=recorded.tool_call_id,
-                graph_call_id=recorded.graph_call_id,
-            )
+            annotate(tool_call_id=recorded.tool_call_id)
             self.events.append(("tool_start", context.tool_call_id))
             self._tool_started_at[context.tool_call_id] = time.monotonic()
 
@@ -520,7 +344,6 @@ class SDKContextHarness(RunHooks):
                 "tool_result",
                 name=recorded.tool_name,
                 tool_call_id=recorded.tool_call_id,
-                graph_call_id=recorded.graph_call_id,
                 status=recorded.status,
                 **(
                     {"duration_ms": (time.monotonic() - started) * 1000}
@@ -597,311 +420,6 @@ class SDKContextHarness(RunHooks):
             ),
         )
 
-    def _message_view(self) -> list[Any]:
-        """Build a LangChain view only for strategy compaction, never for the provider."""
-        messages: list[Any] = [HumanMessage(content=self.workspace.task.objective)]
-        turns = sorted({result.model_turn for result in self.results.values()})
-        for turn in turns:
-            results = [
-                result
-                for result in self.results.values()
-                if result.model_turn == turn and result.status != "running"
-            ]
-            if not results:
-                continue
-            messages.append(
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "name": result.tool_name,
-                            "id": result.graph_call_id,
-                            "args": result.args
-                            if isinstance(result.args, dict)
-                            else {},
-                        }
-                        for result in results
-                    ],
-                )
-            )
-            messages.extend(
-                ToolMessage(
-                    content=result.observation
-                    if isinstance(result.observation, str)
-                    else json.dumps(
-                        result.observation, ensure_ascii=False, default=str
-                    ),
-                    tool_call_id=result.graph_call_id,
-                    name=result.tool_name,
-                )
-                for result in results
-            )
-        return messages
-
-    async def _flush(self) -> bool:
-        async with self._batch_lock:
-            pending = [
-                result
-                for result in self.results.values()
-                if not result.consumed and result.status != "running"
-            ]
-            evidence = []
-            for result in pending:
-                if (
-                    self.workspace.strategy.is_producer
-                    and result.status == "succeeded"
-                    and result.tool_name in self.evidence_tools
-                ):
-                    evidence.append(result)
-                else:
-                    result.consumed = True
-            if not evidence:
-                if pending and self.workspace.strategy.is_producer:
-                    compacted = micro_compact_messages(
-                        self._message_view(),
-                        dict(self.workspace.receipts),
-                        recent_raw_steps=int(
-                            getattr(self.workspace.configurable, "recent_raw_steps", 3)
-                        ),
-                    )
-                    self._remember_compaction(compacted.messages)
-                return False
-            updated = False
-            for turn in sorted({result.model_turn for result in evidence}):
-                # Preserve the original SDK model batch identity across retries,
-                # including when later model turns add more completed tools.
-                group = [result for result in evidence if result.model_turn == turn]
-                updated = await self._flush_evidence(group) or updated
-            return updated
-
-    @observed("persist_tool_results")
-    async def _flush_evidence(self, evidence: list[ObservedToolResult]) -> bool:
-        self.events.append(("batch_start", str(len(evidence))))
-        await self._observe(
-            "harness", stage="persist_batch", status="started", batch_size=len(evidence)
-        )
-        previous_receipts = dict(self.workspace.receipts)
-        context_calls_before = int(
-            self.workspace.metrics.as_dict().get("context_manager_calls", 0) or 0
-        )
-        call_ids = {result.tool_call_id for result in evidence}
-        try:
-            outcome = await self.workspace.ingest(
-                self._message_view(),
-                [
-                    ToolBatchItem(
-                        result.tool_name,
-                        result.graph_call_id,
-                        result.args,
-                        result.observation,
-                        True,
-                    )
-                    for result in evidence
-                ],
-            )
-            if not outcome.succeeded:
-                self._batch_errors.update(
-                    {
-                        call_id: outcome.error_type or "ResearchGraphError"
-                        for call_id in call_ids
-                    }
-                )
-                if (
-                    int(
-                        self.workspace.metrics.as_dict().get("context_manager_calls", 0)
-                        or 0
-                    )
-                    <= context_calls_before
-                ):
-                    self._needs_context_update.update(call_ids)
-                self.workspace.receipts.clear()
-                self.workspace.receipts.update(previous_receipts)
-                self.events.append(("batch_failed", str(len(evidence))))
-                await self._observe(
-                    "harness",
-                    stage="persist_batch",
-                    status="failed",
-                    batch_size=len(evidence),
-                )
-                return False
-        except BaseException:
-            if (
-                int(
-                    self.workspace.metrics.as_dict().get("context_manager_calls", 0)
-                    or 0
-                )
-                <= context_calls_before
-            ):
-                self._needs_context_update.update(call_ids)
-            self.workspace.receipts.clear()
-            self.workspace.receipts.update(previous_receipts)
-            raise
-        if (
-            call_ids & self._needs_context_update
-            and int(
-                self.workspace.metrics.as_dict().get("context_manager_calls", 0) or 0
-            )
-            <= context_calls_before
-        ):
-            # A failed context update cannot be acknowledged by the legacy
-            # URL-cache fast path, which does not rebuild Working Context.
-            self.workspace.receipts.clear()
-            self.workspace.receipts.update(previous_receipts)
-            self.events.append(("batch_recovery_incomplete", str(len(evidence))))
-            await self._observe(
-                "harness",
-                stage="persist_batch",
-                status="unresolved",
-                batch_size=len(evidence),
-            )
-            return False
-        self._needs_context_update.difference_update(call_ids)
-        for call_id in call_ids:
-            self._batch_errors.pop(call_id, None)
-        self.budget_usage = merge_budget_usage(self.budget_usage, outcome.budget_usage)
-        self._remember_compaction(outcome.messages)
-        for result in evidence:
-            result.consumed = True
-        self.events.append(("batch_end", str(len(evidence))))
-        await self._observe(
-            "harness",
-            stage="persist_batch",
-            status="completed",
-            batch_size=len(evidence),
-            compacted_calls=len(self._compacted),
-        )
-        return True
-
-    def _remember_compaction(self, messages: list[Any]) -> None:
-        by_graph_id = {result.graph_call_id: result for result in self.results.values()}
-        for message in messages:
-            if (
-                isinstance(message, ToolMessage)
-                and message.tool_call_id in self.workspace.receipts
-            ):
-                original = by_graph_id.get(message.tool_call_id)
-                if (
-                    original is not None
-                    and original.status == "succeeded"
-                    and original.tool_name in self.evidence_tools
-                ):
-                    receipt = self.workspace.receipts[message.tool_call_id]
-                    referenced = set(
-                        [
-                            *receipt.source_ids,
-                            *receipt.evidence_ids,
-                            *receipt.claim_ids,
-                            *receipt.finding_ids,
-                            *receipt.duplicate_source_ids,
-                        ]
-                    )
-                    # Legacy URL-only dedup can acknowledge a fresh, unwritten
-                    # Source ID. Keep raw output unless the write receipt proves
-                    # every reference; do not publish a fabricated graph pointer.
-                    if not referenced.issubset(receipt.node_ids):
-                        self._compacted.pop(original.tool_call_id, None)
-                        self.events.append(
-                            ("compaction_deferred", original.tool_call_id)
-                        )
-                        continue
-                    self._compacted[original.tool_call_id] = str(message.content)
-
-    @observed("context_build")
-    async def filter_model_input(self, data: CallModelData[Any]) -> ModelInputData:
-        """Commit a complete tool batch, then inject one bounded current context."""
-        self._check(data.context)
-        if self._agent is not None and data.agent is not self._agent:
-            raise ValueError(
-                "Handoffs/nested roles require a separate SDKContextHarness."
-            )
-        self.events.append(("input_filter", str(self.model_calls + 1)))
-        await self._observe("harness", stage="input_filter", status="started")
-        updated = await self._flush()
-        if not self.workspace.strategy.graph_enabled:
-            self.model_calls += 1
-            await self._observe(
-                "harness",
-                stage="input_filter",
-                status="completed",
-                reason="graph_disabled",
-            )
-            return data.model_data
-        # Business roles request per-turn refresh; standalone Phase 0 callers
-        # retain the explicit refresh interval and retrieval-only default.
-        refresh_due = bool(
-            self.model_calls
-            and self.consumer_refresh_every
-            and self.model_calls % self.consumer_refresh_every == 0
-        )
-        if not self._context_text or updated or refresh_due:
-            await self._observe("harness", stage="context_retrieval", status="started")
-            self.workspace.context_for(query_suffix="SDK current task")
-            await self._observe(
-                "harness",
-                stage="context_retrieval",
-                status="completed",
-                nodes=len(self.workspace.relevant_subgraph.nodes),
-                edges=len(self.workspace.relevant_subgraph.edges),
-            )
-        signature = self.workspace.relevant_subgraph.model_dump_json(exclude={"query"})
-        changed = signature != self._retrieved_signature
-        refresh = changed or refresh_due
-        if (
-            not self.workspace.strategy.is_producer
-            and self.update_consumer_context
-            and self.workspace.relevant_subgraph.nodes
-            and changed
-        ):
-            await self._observe("harness", stage="working_context", status="started")
-            await self.workspace.update_working_context([])
-            await self._observe("harness", stage="working_context", status="completed")
-        self._retrieved_signature = signature
-        if not self._context_text or updated or refresh:
-            body = self.workspace.protected_context(include_summary=False)
-            identity = f"run={self.scope.run_id} sdk_run={self.sdk_run_id} role={self.scope.role} task={self.scope.task_id}\n"
-            bound = self.context_max_chars - len(identity) - 160
-            if bound <= 0:
-                raise ValueError(
-                    "Research identity exceeds the configured context bound."
-                )
-            self._context_text = (
-                "<SDK Research Context>\n"
-                + identity
-                + body[:bound]
-                + ("\n[Research context bounded]" if len(body) > bound else "")
-                + "\n</SDK Research Context>"
-            )
-            self._owned_contexts.add(self._context_text)
-        items = []
-        for item in data.model_data.input:
-            if (
-                item.get("role") == "user"
-                and isinstance(item.get("content"), str)
-                and item["content"] in self._owned_contexts
-            ):
-                continue
-            if (
-                item.get("type") == "function_call_output"
-                and isinstance(item.get("output"), str)
-                and item.get("call_id") in self._compacted
-            ):
-                item = {**item, "output": self._compacted[item["call_id"]]}
-            items.append(item)
-        self.model_calls += 1
-        await self._observe(
-            "harness",
-            stage="context_ready",
-            status="completed",
-            context_chars=len(self._context_text),
-            compacted_calls=len(self._compacted),
-            nodes=len(self.workspace.relevant_subgraph.nodes),
-            edges=len(self.workspace.relevant_subgraph.edges),
-        )
-        return ModelInputData(
-            input=[{"role": "user", "content": self._context_text}, *items],
-            instructions=data.model_data.instructions,
-        )
-
     @staticmethod
     def _item_key(item: dict[str, Any]) -> str:
         return json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
@@ -934,7 +452,8 @@ class SDKContextHarness(RunHooks):
             units.append((turn, list(items[start:end])))
         return list(items[: boundaries[0][0]]), units
 
-    def can_compact_unit(self, items: list[TResponseInputItem]) -> bool:
+    @staticmethod
+    def can_compact_unit(items: list[TResponseInputItem]) -> bool:
         """Admit complete function-call/output units and their reasoning as one slice."""
         calls = [
             item.get("call_id") for item in items if item.get("type") == "function_call"
@@ -961,23 +480,10 @@ class SDKContextHarness(RunHooks):
                 return False
             if item.get("role") in {"user", "system", "developer"}:
                 return False
-        if self.workspace.strategy.is_producer:
-            for call_id in calls:
-                result = self.results.get(call_id)
-                if (
-                    result is None
-                    or result.status != "succeeded"
-                    or not result.consumed
-                ):
-                    return False
-                if result.tool_name in self.evidence_tools:
-                    receipt = self.workspace.receipts.get(result.graph_call_id)
-                    if receipt is None or not receipt.has_complete_node_references:
-                        return False
         return True
 
     async def settle(self, reason: str) -> BatchSettlement:
-        """Drain observed tools and evidence without replaying any business tool.
+        """Drain observed tools without replaying any business tool.
 
         A late, cancellation-resistant tool can outlive the bounded drain. Its
         record stays live and callers may explicitly settle again once it ends.
@@ -989,24 +495,18 @@ class SDKContextHarness(RunHooks):
                 self.settlement_timeout
             ):
                 error_type = "ToolDrainTimeout"
-            await asyncio.wait_for(self._flush(), timeout=self.settlement_timeout)
         except asyncio.CancelledError as exc:
             error_type, cancellation = "CancelledError", exc
         except Exception as exc:
             error_type = type(exc).__name__
         settlement = BatchSettlement(
             reason=reason,
-            pending_call_ids=tuple(
-                result.tool_call_id
-                for result in self.results.values()
-                if not result.consumed and result.status != "running"
-            ),
             in_flight_call_ids=tuple(
                 result.tool_call_id
                 for result in self.results.values()
                 if result.status == "running"
             ),
-            error_type=error_type or next(iter(self._batch_errors.values()), None),
+            error_type=error_type,
         )
         self.last_settlement = settlement
         self.events.append(("settlement", reason))
@@ -1015,7 +515,6 @@ class SDKContextHarness(RunHooks):
             stage="settlement",
             reason=reason,
             status="settled" if settlement.succeeded else "unresolved",
-            pending_calls=len(settlement.pending_call_ids),
             in_flight_calls=len(settlement.in_flight_call_ids),
             **({"error_type": settlement.error_type} if settlement.error_type else {}),
         )
@@ -1034,10 +533,9 @@ class SDKContextHarness(RunHooks):
             except BaseException:
                 capture_budget_usage(usage)
                 raise
-            state = self._durable_snapshot()
             return {
                 "settlement": asdict(result),
-                "state": state,
+                "state": self._durable_snapshot(),
                 "usage": usage,
             }
 
@@ -1047,7 +545,6 @@ class SDKContextHarness(RunHooks):
         self._restore_durable_snapshot(saved["state"])
         capture_budget_usage(saved["usage"])
         value = saved["settlement"]
-        value["pending_call_ids"] = tuple(value["pending_call_ids"])
         value["in_flight_call_ids"] = tuple(value["in_flight_call_ids"])
         self.last_settlement = BatchSettlement(**value)
         return self.last_settlement
@@ -1087,9 +584,7 @@ class SDKContextHarness(RunHooks):
             isinstance(tool, FunctionTool) and tool.tool_output_guardrails
             for tool in agent.tools
         ) or any(server.tool_output_guardrails for server in agent.mcp_servers):
-            raise ValueError(
-                "Tool output guardrails are unsupported by the evidence collector."
-            )
+            raise ValueError("Tool output guardrails are unsupported by this harness.")
         config = run_config or RunConfig(
             tracing_disabled=not telemetry_enabled(), trace_include_sensitive_data=False
         )
@@ -1112,10 +607,9 @@ class SDKContextHarness(RunHooks):
         self._started = True
         identity = correlation(
             harness=self,
-            run_id=self.scope.run_id,
-            role=self.scope.role,
-            task_id=self.scope.task_id,
-            research_round=self.scope.research_round,
+            role=self.role,
+            task_id=self.task_id,
+            research_round=self.research_round,
             invocation_id=self.sdk_run_id,
         )
         identity.__enter__()
@@ -1133,8 +627,8 @@ class SDKContextHarness(RunHooks):
             self._closing = True
             settlement = await self._settle_on_exit("completed")
             if not settlement.succeeded:
-                raise ResearchGraphSettlementError(
-                    f"Unsettled Research Graph results: {settlement}"
+                raise ExecutionControlError(
+                    f"Unsettled SDK tool results: {settlement}"
                 )
             return result
         except dbos_error.DBOSWorkflowConflictIDError:
@@ -1207,3 +701,11 @@ class InspectionTranscript:
 
     async def clear_session(self):
         self.items.clear()
+
+
+__all__ = [
+    "BatchSettlement",
+    "InspectionTranscript",
+    "ObservedToolResult",
+    "SDKContextHarness",
+]

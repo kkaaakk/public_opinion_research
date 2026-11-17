@@ -17,7 +17,6 @@ from pydantic import BaseModel, TypeAdapter
 from sqlalchemy import text
 
 from open_deep_research.llm.errors import ModelInvocationError
-from open_deep_research.research_graph.models import RelevantSubgraph
 from open_deep_research.state import (
     ClarifyWithUser,
     ResearchQuestion,
@@ -40,7 +39,6 @@ _MODELS = {
         ResearchTask,
         ClarifyWithUser,
         ResearchQuestion,
-        RelevantSubgraph,
         Summary,
         PlanDecision,
         BriefRevision,
@@ -194,7 +192,6 @@ def sdk_observation(payload: dict) -> dict:
         "task_id",
         "tool_call_id",
         "operation_id",
-        "graph_call_id",
         "stage",
         "error_type",
         "reason",

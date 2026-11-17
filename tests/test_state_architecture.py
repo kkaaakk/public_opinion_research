@@ -1,26 +1,17 @@
-# 验证五个状态域的归属、并发合并、动态任务载荷及最终记忆保存。
-"""Regression tests for the domain-owned Deep Research state architecture."""
+# 验证四个状态域的归属、并发合并、动态任务载荷及角色上下文。
+"""Regression tests for the domain-owned research state architecture."""
 
-import asyncio
-
-from langchain_core.messages import HumanMessage
-
-import open_deep_research.deep_researcher as deep_researcher_module
-import open_deep_research.memory.writer as memory_writer
-import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
-from open_deep_research.runtime import SDKAgentRuntime as AgentRuntime
+from open_deep_research.runtime import business_agent
 from open_deep_research.state import (
-    AgentState,
     DeepResearchState,
-    PublicOpinionState,
     ResearchReview,
     ResearchTask,
     agents_reducer,
-    research_reducer,
     runtime_reducer,
     workflow_reducer,
 )
+from open_deep_research.workflow.research import _build_followup_send_payload
 
 
 # 构造标准研究任务供状态合并测试使用。
@@ -36,73 +27,53 @@ def _task(task_id: str, role: str = "public_signal") -> ResearchTask:
 
 # 验证顶层状态只包含约定状态域和原生消息。
 def test_top_level_state_contains_only_owned_domains_and_messages() -> None:
-    """The checkpoint schema exposes six stable top-level concepts."""
+    """The checkpoint schema exposes four stable domains plus messages."""
     assert set(DeepResearchState.__annotations__) == {
         "messages",
         "workflow",
         "agents",
-        "research",
         "report",
         "runtime",
     }
 
 
-# 验证旧状态别名共用同一个规范结构。
-def test_state_aliases_share_one_schema_source_of_truth() -> None:
-    """Main, subgraph, and compatibility names resolve to one schema object."""
-    assert AgentState is DeepResearchState
-    assert PublicOpinionState is DeepResearchState
-    assert not hasattr(deep_researcher_module, "deep_researcher_builder")
-    assert not hasattr(deep_researcher_module, "public_opinion_builder")
+# 验证旧状态别名和兼容域已删除。
+def test_legacy_state_aliases_and_domains_are_gone() -> None:
+    import open_deep_research.state as state_module
+
+    assert not hasattr(state_module, "AgentState")
+    assert not hasattr(state_module, "PublicOpinionState")
+    assert not hasattr(state_module, "ResearchState")
+    assert not hasattr(state_module, "research_reducer")
 
 
-# 验证并行角色的报告、记忆和摘要不会互相覆盖。
-def test_parallel_agents_merge_report_memory_and_summary_by_role() -> None:
+# 验证并行角色的报告不会互相覆盖。
+def test_parallel_agents_merge_reports_by_role() -> None:
     """Parallel producer updates cannot overwrite another role's state."""
     merged = agents_reducer(
-        {},
-        {
-            "public_signal": {
-                "report": "public report",
-                "memory": [{"content": "public memory"}],
-                "rolling_summary": "public summary",
-            }
-        },
+        {}, {"public_signal": {"report": "public report"}}
     )
     merged = agents_reducer(
-        merged,
-        {
-            "internal_knowledge": {
-                "report": "internal report",
-                "memory": [{"content": "internal memory"}],
-                "rolling_summary": "internal summary",
-            }
-        },
+        merged, {"internal_knowledge": {"report": "internal report"}}
     )
-    assert merged["public_signal"]["memory"][0]["content"] == "public memory"
+    assert merged["public_signal"]["report"] == "public report"
     assert merged["internal_knowledge"]["report"] == "internal report"
-    assert merged["public_signal"]["rolling_summary"] == "public summary"
+    assert set(merged["public_signal"]) == {"report"}
 
 
-# 验证工作上下文和运行统计合并时不丢失其他角色数据。
-def test_working_context_and_runtime_updates_merge_without_cross_role_loss() -> None:
-    """Workspace context, budget, and metrics use their domain reducers."""
-    research = research_reducer(
-        {"run_id": "run-1", "working_contexts": {"public_signal": {"v": 1}}},
-        {"working_contexts": {"internal_knowledge": {"v": 2}}},
-    )
+# 验证预算合并保留各角色的用量。
+def test_runtime_budget_merges_without_losing_usage() -> None:
     runtime = runtime_reducer(
-        {"budget": {"model_calls": 1}, "metrics": {"retrieved_nodes": 2}},
-        {"budget": {"model_calls": 2}, "metrics": {"retrieved_nodes": 3}},
+        {"budget": {"model_calls": 1}},
+        {"budget": {"model_calls": 2}},
     )
-    assert set(research["working_contexts"]) == {"public_signal", "internal_knowledge"}
     assert runtime["budget"]["model_calls"] == 3
-    assert runtime["metrics"]["retrieved_nodes"] == 5
+    assert "metrics" not in runtime
 
 
 # 验证补充 Send 按完整状态域传输数据。
 def test_followup_send_transports_domain_packets() -> None:
-    """Dynamic Send payloads carry aggregates and no former flat channels."""
+    """Dynamic Send payloads carry aggregates and no removed domains."""
     task = _task("gap-1")
     state = {
         "messages": [],
@@ -112,16 +83,14 @@ def test_followup_send_transports_domain_packets() -> None:
             "review": ResearchReview(research_complete=False, next_tasks=[task]),
         },
         "agents": {"public_signal": {"report": "round one"}},
-        "research": {"run_id": "run-1", "working_contexts": {}},
         "report": {},
-        "runtime": {"budget": {}, "metrics": {}},
+        "runtime": {"budget": {}},
     }
-    payload = deep_researcher_module._build_followup_send_payload(state, [task], 2)
+    payload = _build_followup_send_payload(state, [task], 2)
     assert set(payload) == {
         "messages",
         "workflow",
         "agents",
-        "research",
         "report",
         "runtime",
     }
@@ -142,50 +111,27 @@ def test_workflow_reducer_can_clear_pending_tasks_without_losing_history() -> No
     assert [item.task_id for item in merged["completed_tasks"]] == ["gap-1"]
 
 
-# 验证私有记忆只注入一次动态上下文。
-def test_private_memory_has_one_dynamic_context_entry() -> None:
-    """Private memory is in the assignment and absent from the stable system prompt."""
+# 验证角色任务包含上游报告且提示词不再声明私有记忆。
+def test_assignment_uses_formal_role_reports_only() -> None:
+    """Downstream roles receive upstream reports, never a private memory record."""
     state = {
         "workflow": {"brief": "brief", "round": 1},
-        "agents": {"public_signal": {"memory": [{"content": "PRIVATE_SENTINEL"}]}},
+        "agents": {
+            "public_signal": {"report": "PUBLIC_SENTINEL"},
+            "internal_knowledge": {"report": "INTERNAL_SENTINEL"},
+        },
     }
-    assignment = business_agent_module._build_business_agent_assignment(
-        state, "public_signal"
+    assignment = business_agent._build_business_agent_assignment(
+        state, "risk_assessment"
     )
-    spec = get_public_opinion_agent_spec("public_signal")
+    assert "PUBLIC_SENTINEL" in assignment
+    assert "INTERNAL_SENTINEL" in assignment
+    spec = get_public_opinion_agent_spec("risk_assessment")
     system_prompt = spec.format_system_prompt(
         retrieval_tool_prompt="tools",
         mcp_prompt="",
         date="2026-09-12",
         organization_context="org",
     )
-    dynamic_context = AgentRuntime.format_private_memory(
-        state["agents"]["public_signal"]
-    )
-    assert "PRIVATE_SENTINEL" not in assignment
-    assert dynamic_context.count("PRIVATE_SENTINEL") == 1
-    assert "PRIVATE_SENTINEL" not in system_prompt
-
-
-# 验证最终报告完成后仍调用对话记忆持久化。
-def test_final_report_still_persists_conversation_memory(monkeypatch) -> None:
-    """Conversation persistence remains outside research-run state."""
-    captured = {}
-
-    # 记录最终报告阶段传给记忆持久化入口的参数。
-    def fake_persist(**kwargs):
-        captured.update(kwargs)
-
-    monkeypatch.setattr(memory_writer, "persist_conversation_memory", fake_persist)
-    asyncio.run(
-        deep_researcher_module.maybe_persist_chat_memory(
-            {
-                "messages": [HumanMessage(content="question")],
-                "workflow": {"brief": "brief"},
-            },
-            {"configurable": {"rag_memory_write_enabled": True}},
-            "final report",
-        )
-    )
-    assert captured["summary"] == "final report"
-    assert captured["memories"] == ["brief"]
+    assert "PRIVATE" not in system_prompt
+    assert "<Memory Policy>" not in system_prompt

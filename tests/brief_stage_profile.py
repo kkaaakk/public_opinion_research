@@ -64,7 +64,6 @@ async def measure(kind):
     cfg = {
         "configurable": {
             "allow_clarification": True,
-            "research_graph_enabled": False,
             "research_model": "fixture:profile",
             "final_report_model": "fixture:profile",
             "budget_enabled": True,

@@ -1,17 +1,8 @@
-# 汇总知识、记忆和用户图片加载器，并保留旧测试补丁入口。
-"""Public RAG loader API.
-
-This package keeps the old `open_deep_research.rag.loaders` import path while
-splitting knowledge, file-memory, MySQL-memory, and query-image helpers into
-focused modules.
-"""
+# 汇总知识文档与用户图片加载器，并保留测试补丁入口。
+"""Public RAG loader API."""
 
 from open_deep_research.rag.loaders import knowledge as _knowledge
 from open_deep_research.rag.loaders import query_images as _query_images
-from open_deep_research.rag.loaders.file_memory import (
-    fingerprint_memory_paths,
-    load_memory_documents_from_paths,
-)
 from open_deep_research.rag.loaders.knowledge import (
     CODE_EXTENSION_LANGUAGE_MAP,
     DEFAULT_RAG_VISION_CLASSIFICATION_PROMPT,
@@ -44,11 +35,6 @@ from open_deep_research.rag.loaders.knowledge import (
     quick_ocr_probe_image_bytes_text,
     quick_ocr_probe_image_text,
     route_image_for_rag,
-)
-from open_deep_research.rag.loaders.mysql_memory import (
-    fingerprint_mysql_memory,
-    load_memory_documents_from_mysql,
-    records_to_documents,
 )
 
 _KNOWLEDGE_PATCHABLE_NAMES = (
@@ -116,14 +102,9 @@ __all__ = [
     "extract_routed_image_bytes_text",
     "extract_routed_image_text",
     "fingerprint_knowledge_base_paths",
-    "fingerprint_memory_paths",
-    "fingerprint_mysql_memory",
     "load_documents_from_paths",
-    "load_memory_documents_from_mysql",
-    "load_memory_documents_from_paths",
     "normalize_image_classification_label",
     "quick_ocr_probe_image_bytes_text",
     "quick_ocr_probe_image_text",
-    "records_to_documents",
     "route_image_for_rag",
 ]

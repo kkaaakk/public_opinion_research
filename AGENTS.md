@@ -5,7 +5,7 @@
 Phase 5 retires the LangGraph business workflow and handwritten Agent loop.
 The only new research chain is FastAPI/CLI Run API -> native DBOS 3.3.0
 Workflow/Step/Queue -> SDKAgentRuntime -> official DBOSRunner 0.3.0 -> OpenAI Agents SDK 0.24.0 ->
-Research Graph Context Harness -> existing business tools.
+SDK Context Harness -> existing business tools.
 
 Read `docs/audits/openai-agents-phase5.md`, the migration plan,
 `docs/audits/openai-agents-phase4-dbos.md` and
@@ -22,8 +22,8 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `dbos-events-v1`. Pending `dbos-domain-v1` journals
-must drain with the matching release before cutover. Native Stream offsets
+Application version is `por-vertical-v1`. Pending `dbos-events-v1` and earlier
+journals must drain with their matching release before cutover. Native Stream offsets
 drive SSE resume. The single writer records one delivery Event per published
 prefix. Finalizer reads native results and the effect ledger before publishing
 terminal frames and compensates History independently. Pending
@@ -31,17 +31,24 @@ terminal frames and compensates History independently. Pending
 `dbosrunner-native-interaction-v1` and earlier journals must drain on their
 matching release. The earlier PR #44 preview `dbosrunner-brief-idempotency-v1`, if deployed,
 also needs its matching release. See `docs/architecture/dbos-deployment.md`.
-SDK runtime version remains `sdk-phase5-v1`.
+SDK runtime version is `sdk-vertical-v1`.
 Pending `dbos-phase5-v1` journals must drain on their matching release;
 the new Executor must not replay those older relay command sequences.
 Pending Phase 4 DBOS journals must drain on their matching release/Executor.
 Old SQL Runs also drain on their original release; no migration/replay is implied.
-Legacy report archives retain their owner policy and read/import support.
+Report archives live in PostgreSQL (`por_domain.history`) under the existing owner policy.
 
-The SDK owns all four business Agent loops. Planning, intake, review, report,
-extraction/compaction and memory model calls remain bounded single-purpose
-LangChain business services. They do not execute an Agent/tool loop. RAG and
-Research Graph retain separate ownership. Unknown model aliases use a 32,768-token
+The runtime no longer has a Research Graph, Working Context, Context Manager,
+Agent private memory, MySQL long-term memory or Neo4j history. Do not reintroduce
+a graph store, a second memory lifecycle or a compatibility switch. Research
+State carries only `messages`, `workflow`, `agents` (role reports), `report` and
+`runtime.budget`. Each SDK invocation keeps its rolling summary and compacted
+turn window invocation-local; DBOS Steps persist them without a second history.
+
+The SDK owns all four business Agent loops. Planning, intake, review, report and
+rolling compaction model calls remain bounded single-purpose LangChain business
+services. They do not execute an Agent/tool loop. RAG retains separate ownership.
+Unknown model aliases use a 32,768-token
 application window unless explicitly configured; this is not a provider claim.
 DBOSRunner owns SDK model checkpoints; explicit tool and bounded Context Steps
 rebuild the Harness. Plan/Review/Report use native dynamic model Steps. A new
@@ -76,11 +83,8 @@ in the migration plan, which links to the original Git evidence.
 - `social_media/domain.py` and `social_media/records.py`: shared domain rules
   and record helpers. `social_media_mcp.py` and `social_media_apify_api.py` own
   their distinct MCP/HTTP, pagination, normalization and persistence semantics.
-- `rag/`: knowledge indexing/retrieval and its knowledge graph. `research_graph/`:
-  research evidence, findings, provenance and run-scoped context. Keep their
-  data ownership separate.
-- `memory/`: long-term business memory, independently of conversation sessions,
-  checkpoints and report archives. `web/history.py` owns report history.
+- `rag/`: enterprise knowledge indexing and hybrid retrieval. Report history is
+  owned by `web/history.py` in PostgreSQL; there is no runtime evidence graph.
 - `models/`, `llm/`, `mcp/`, `tools/`: provider adapters, invocation,
   protocol clients and tool admission. `web/runs.py` owns Run authentication.
 - `web/`: FastAPI and the existing static UI; `evaluation/` and `tests/`:

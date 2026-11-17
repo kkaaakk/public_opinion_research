@@ -61,7 +61,6 @@ from open_deep_research.workflow.python_state import (
     read_research_result,
     role_snapshot,
 )
-from open_deep_research.workflow.state_utils import agents_for_new_run
 
 
 async def send_event(run_id, event_type, **data):
@@ -345,9 +344,6 @@ async def report_workflow(run_id, initial):
             patch = await reporting.compile_final_report(state, cfg, fail_on_error=True)
         saved = await stable_result({"patch": patch})
         await publish_stage(saved)
-        report = patch.get("report", {}).get("final") or state["report"].get("final")
-        if Configuration.from_runnable_config(cfg).rag_memory_write_enabled:
-            await reporting.persist_report_memory(state, cfg, report, {})
         apply_patch(state, saved["patch"])
     return state
 
@@ -417,11 +413,7 @@ async def research_workflow(run_id, initial):
                     "completed_tasks": [],
                 },
             },
-            "agents": {"type": "override", "value": agents_for_new_run(state)},
-            "research": {
-                "type": "override",
-                "value": {"run_id": run_id, "working_contexts": {}},
-            },
+            "agents": {"type": "override", "value": {}},
         },
     )
     packets = {role: state for role in RESEARCH_ROLES}

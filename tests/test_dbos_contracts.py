@@ -998,7 +998,6 @@ def test_sdk_session_is_private_to_role_invocation_not_workflow_recovery(
         {"dbos_database_url": "bad"},
         {"max_model_calls": 99999},
         {"organization_context": "override"},
-        {"research_graph_uri": "bolt://foreign"},
         {"topic": ""},
         {"workflow_backend": "langgraph"},
         {"business_agent_runtime": "legacy"},
@@ -1099,50 +1098,6 @@ def test_persisted_cancel_intent_survives_request_ack_loss(native_case, monkeypa
     assert result["settlement"] == "settled" and len(case.models) == 2
     assert original(run["run_id"], "alice")["cancel_requested"]
 
-
-def test_memory_commit_with_lost_ack_reuses_saved_report_and_business_key(
-    native_case, monkeypatch
-):
-    from open_deep_research.workflow import dbos_workflow as engine
-
-    case = native_case
-    calls = []
-
-    async def commit_memory(state, config, report):
-        with domain_engine().begin() as db:
-            db.execute(
-                text(
-                    "CREATE TABLE IF NOT EXISTS external_memory_effects(id text PRIMARY KEY)"
-                )
-            )
-            db.execute(
-                text(
-                    "INSERT INTO external_memory_effects VALUES ('one') ON CONFLICT DO NOTHING"
-                )
-            )
-        calls.append(report)
-        if len(calls) == 1:
-            raise RuntimeError("Memory committed but acknowledgement is unknown")
-
-    monkeypatch.setattr(engine.reporting, "maybe_persist_chat_memory", commit_memory)
-    case.cfg["configurable"].update(
-        rag_memory_write_enabled=True, rag_memory_mysql_url="mysql+pymysql://offline"
-    )
-    run = case.create()
-    failed = case.wait(run, lambda r: r["archive_status"] == "saved")
-    assert failed["status"] == "failed" and failed["retry_safe"] and failed["report"]
-    retry_observed_failure(case, run, "memory-lost-ack", failed)
-    result = case.wait(
-        run, lambda r: r["generation"] == 1 and r["archive_status"] == "saved"
-    )
-    assert result["status"] == "completed" and calls == [failed["report"]] * 2
-    assert result["report"] == failed["report"]
-    assert len(case.models) == 4 and result["usage"] == failed["usage"]
-    with domain_engine().connect() as db:
-        assert db.scalar(text("SELECT count(*) FROM external_memory_effects")) == 1
-
-
-@pytest.mark.parametrize("pg_database", [{"RUN_APPROVAL_SECONDS": 1}], indirect=True)
 def test_approval_expiry_gap_before_recv_is_still_enforced(native_case, monkeypatch):
     from open_deep_research.workflow import dbos_workflow as engine
 

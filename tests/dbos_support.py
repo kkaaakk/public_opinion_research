@@ -9,12 +9,11 @@ from uuid import uuid4
 
 import pytest
 from dbos import DBOS
-from neo4j import GraphDatabase
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from open_deep_research.web.durable import RunClient, close_run_client
-from open_deep_research.web.history import Neo4jHistoryStore
+from open_deep_research.web.history import HistoryStore
 from open_deep_research.web.run_data import RunConflict
 from open_deep_research.workflow.dbos_config import (
     domain_engine,
@@ -27,8 +26,6 @@ BASE_URL = os.environ.get(
     "TEST_DBOS_DATABASE_URL",
     "postgresql+psycopg://por_execution:local-dbos-development-only@127.0.0.1:15434/por_execution",
 )
-NEO4J = os.environ.get("TEST_DBOS_NEO4J_URI", "bolt://127.0.0.1:17689")
-NEO4J_PASSWORD = os.environ.get("TEST_DBOS_NEO4J_PASSWORD", "local-dbos-test-only")
 
 
 @pytest.fixture
@@ -53,7 +50,6 @@ def pg_database(monkeypatch, request, tmp_path):
         "BUSINESS_AGENT_RUNTIME",
         "WORKFLOW_BACKEND",
         "ALLOW_PLAN_FEEDBACK",
-        "RESEARCH_GRAPH_ENABLED",
     ):
         monkeypatch.delenv(name_, raising=False)
     options = getattr(request, "param", {})
@@ -240,9 +236,7 @@ class NativeCase:
         )
         self.client = RunClient()
         self.owner = "alice"
-        self.history = Neo4jHistoryStore(
-            GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
-        )
+        self.history = HistoryStore(domain_engine())
         patch.setattr(history, "get_history_store", lambda: self.history)
 
     def create(self, *, owner="alice", key=None, approval=False, session=None):
@@ -306,4 +300,3 @@ def native_case(pg_database, monkeypatch, tmp_path, request):
                 )
         time.sleep(0.3)
         DBOS.destroy(workflow_completion_timeout_sec=2)
-        case.history.close()

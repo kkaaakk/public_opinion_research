@@ -7,11 +7,7 @@ from typing import Any, Mapping
 
 from mcp.server.fastmcp import FastMCP
 
-from open_deep_research.rag.loaders import (
-    load_documents_from_paths,
-    load_memory_documents_from_mysql,
-    load_memory_documents_from_paths,
-)
+from open_deep_research.rag.loaders import load_documents_from_paths
 from open_deep_research.rag.query_rewriter import (
     api_key_for_model,
     maybe_rewrite_query_with_model,
@@ -50,7 +46,7 @@ def build_pipeline_config(config: Mapping[str, Any] | RAGPipelineConfig | None =
 @mcp.tool(
     name="rag_search",
     description=(
-        "Search configured local RAG documents and memory. Returns answer-ready "
+        "Search configured local RAG documents. Returns answer-ready "
         "cited context plus structured citations."
     ),
 )
@@ -245,7 +241,7 @@ def _pipeline_status_payload(pipeline: RAGPipeline, cached: bool) -> dict[str, A
     }
 
 
-# 加载配置中的知识和记忆来源，用于来源列表等操作。
+# 加载配置中的企业知识来源，用于来源列表等操作。
 def _load_configured_documents(config: RAGPipelineConfig) -> list[RAGDocument]:
     documents: list[RAGDocument] = []
     if config.knowledge_base_paths:
@@ -262,24 +258,6 @@ def _load_configured_documents(config: RAGPipelineConfig) -> list[RAGDocument]:
                 vision_max_tokens=config.vision_max_tokens,
             )
         )
-    if config.memory_enabled and config.memory_paths:
-        documents.extend(
-            load_memory_documents_from_paths(
-                config.memory_paths,
-                json_text_fields=config.memory_json_text_fields,
-            )
-        )
-    if config.memory_enabled and config.memory_mysql_url:
-        documents.extend(
-            load_memory_documents_from_mysql(
-                database_url=config.memory_mysql_url,
-                table_name=config.memory_mysql_table,
-                conversation_id=config.memory_conversation_id,
-                user_id=config.memory_user_id,
-                limit=config.memory_mysql_limit,
-                record_types=config.memory_mysql_index_record_types,
-            )
-        )
     return documents
 
 
@@ -287,10 +265,6 @@ def _load_configured_documents(config: RAGPipelineConfig) -> list[RAGDocument]:
 def _config_summary(config: RAGPipelineConfig) -> dict[str, Any]:
     return {
         "knowledge_base_paths": config.knowledge_base_paths,
-        "memory_enabled": config.memory_enabled,
-        "memory_paths": config.memory_paths,
-        "has_memory_mysql_url": bool(config.memory_mysql_url),
-        "memory_mysql_table": config.memory_mysql_table,
         "embedding_provider": config.embedding_provider,
         "embedding_model": config.embedding_model,
         "vectorstore_provider": config.vectorstore_provider,
@@ -305,7 +279,6 @@ def _config_summary(config: RAGPipelineConfig) -> dict[str, Any]:
         "chunk_overlap": config.chunk_overlap,
         "multimodal_enabled": config.multimodal_enabled,
         "vision_enabled": config.vision_enabled,
-        "graph_enabled": config.graph_enabled,
     }
 
 

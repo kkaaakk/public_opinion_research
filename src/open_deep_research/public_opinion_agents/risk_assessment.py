@@ -1,4 +1,4 @@
-# 配置风险评估角色：交叉核验主张并分析合规、法律和产品风险。
+﻿# 配置风险评估角色：交叉核验主张并分析合规、法律和产品风险。
 """Risk assessment agent specification."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec
@@ -44,7 +44,7 @@ AGENT = PublicOpinionAgentSpec(
         "Use search_posts, fetch_comments, or search_complaints to follow up on social evidence from public_signal when needed.",
         "Do not draft public statements; response language belongs to response_strategy.",
     ),
-    memory_policy=(
+    report_policy=(
         "Preserve claim-to-source mapping so downstream reports can cite evidence.",
         "Keep risk reasons concise and auditable.",
         "Flag uncertainty rather than upgrading severity without evidence.",
@@ -59,5 +59,4 @@ AGENT = PublicOpinionAgentSpec(
         "Pass verified facts, risk level, risk register, and unresolved gaps to response_strategy.",
         "Highlight claims that should not be repeated publicly because they are unsupported.",
     ),
-    context_strategy="research_graph_consumer",
 )

@@ -4,10 +4,10 @@
 
 | 项目     | 内容                                                                                          |
 | -------- | --------------------------------------------------------------------------------------------- |
-| 阅读目标 | 理解本地知识库和 memory 如何变成可引用的 `rag_search` 上下文。                                |
+| 阅读目标 | 理解企业知识库如何变成可引用的 `rag_search` 上下文。                                |
 | 关键代码 | `src/open_deep_research/rag/`、`src/open_deep_research/tools/rag_tool.py`                     |
 | 上游文档 | [Tools 模块说明](tools.md)、[SDK 迁移边界](openai-agents-sdk-migration-plan.md)               |
-| 下游文档 | [Memory 模块说明](memory.md)、[RAG 检索测试记录](../evaluation/rag-retrieval-test-records.md) |
+| 下游文档 | [RAG 检索测试记录](../evaluation/rag-retrieval-test-records.md) |
 
 建议按顶层流程、数据结构、pipeline / indexer / loader、召回与重排、citation 的顺序阅读。若只做调参，可先看第 19 节配置速查和第 20 节常见问题。
 
@@ -23,7 +23,7 @@
 - 生成 embedding。
 - 写入向量库。
 - 构建关键词索引。
-- 执行 hybrid retrieval、GraphRAG expansion、rerank。
+- 执行 hybrid retrieval、rerank。
 - 格式化带 SOURCE 的 answer-ready context。
 - 作为 agent tool 和 MCP server 对外暴露。
 
@@ -44,7 +44,6 @@ flowchart TD
     Chunks --> BM25[BM25 / Elasticsearch]
     VectorStore --> Retriever[HybridChunkRetriever]
     BM25 --> Retriever
-    Retriever --> Graph[Optional GraphRAG]
     Graph --> Reranker[Reranker]
     Reranker --> Authority[Authority adjustment]
     Authority --> Citations[build_answer_ready_context]
@@ -118,7 +117,7 @@ chunk 会进入：
 - `structured_score`
 - `rerank_score`
 
-这些分数字段用于调试一条结果是被向量、关键词、图扩展、结构化 metadata 还是 reranker 拉上来的。
+这些分数字段用于调试一条结果是被向量、关键词、结构化 metadata 还是 reranker 拉上来的。
 
 ### 3.4 `Citation`
 
@@ -169,8 +168,6 @@ chunk 会进入：
 - keyword backend
 - reranker backend
 - multimodal 参数
-- memory 参数
-- graph 参数
 - authority rerank 参数
 
 默认后端：
@@ -498,7 +495,6 @@ tokenizer 对英文保留 word token，对 CJK 按单字拆分，提供基础中
 1. 向量库返回 dense vector results。
 2. BM25 / Elasticsearch 返回 keyword results。
 3. 用 Reciprocal Rank Fusion 融合排名。
-4. 可选 GraphRAG expansion。
 5. 结构化 metadata boost。
 6. 返回 top candidates 给 reranker。
 
@@ -524,98 +520,6 @@ tokenizer 对英文保留 word token，对 CJK 按单字拆分，提供基础中
 会把 source、title、file type、language、memory type、heading、json path、page 等 metadata 转成短文本。
 
 如果 query term 命中这些 metadata，会给结果一个小幅加分。
-
-## 12. GraphRAG Expansion
-
-位置：
-
-- `src/open_deep_research/rag/graph.py`
-
-支持后端：
-
-- `memory`
-- `neo4j`
-
-作用：
-
-- 在 vector + BM25 找到 seed chunks 后，根据共享实体/术语扩展邻居 chunk。
-- 它不替代向量召回和关键词召回，只补充相关上下文。
-
-配置：
-
-- `graph_enabled`
-- `graph_backend`
-- `graph_max_neighbors`
-- `graph_weight`
-- `neo4j_uri`
-- `neo4j_username`
-- `neo4j_password`
-- `neo4j_database`
-
-这里的图保存知识库 **chunk 的术语/结构关系**，服务于本地检索扩展；[Research Graph](../research-graph-context-harness.md) 保存某次研究的来源、Evidence、Claim、Finding 和工作上下文，二者不共享业务职责。
-
-### 12.1 术语提取与可选依赖
-
-[`TermExtractor`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/rag/graph_terms.py) 使用正则候选与中英文停用词，可选 spaCy 英文 NER、jieba 中文分词及基于语料的 IDF 过滤。配置通过 `RAGPipelineConfig` / `rag/config.py` 子配置传到 retriever：
-
-| 外层配置 | 当前对应默认值 | 作用 |
-| --- | --- | --- |
-| `rag_graph_ner_enabled` | `True` | 尝试使用 spaCy NER |
-| `rag_graph_idf_enabled` | `True` | 过滤低于指定 IDF 分位阈值的常见词 |
-| `rag_graph_idf_threshold_percentile` | `85.0` | IDF 过滤的分位参数 |
-| `rag_graph_confidence_threshold` | `0.15` | 术语邻居候选的启发式 confidence 下限 |
-| `rag_structural_edges_enabled` | `False` | 内存后端的附加结构边 |
-
-spaCy/jieba 延迟加载，包缺失时保留正则路径。若 spaCy 已安装而 `en_core_web_sm` 缺失，当前加载器会尝试下载模型；离线运行应事先准备依赖/模型或关闭 NER。不要将“延迟加载”理解为运行时绝不会访问网络。
-
-### 12.2 自适应扩展与诊断边界
-
-[`decide_expansion`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/rag/graph_adaptive.py) 使用三个启发信号，至少两个满足阈值才扩展：
-
-- 查询具体程度：长词或首字母大写词比例，阈值 `0.3`；不是直接对查询做命名实体识别。
-- 种子来源集中度：前四个种子中最大来源占比，阈值 `0.5`；集中度高视为有利信号。
-- 术语信息量：从前三个种子取得术语，计算 IDF 式信息量，阈值 `0.3`。
-
-两类 graph index 的 `expand(..., adaptive=True)` 默认启用该判断；低质量信号会直接保留种子结果。判断对象保存在 index 的内部 `_last_expansion_decision` 诊断字段。`RetrievalResult.graph_expansion_decision` 虽有可选 schema 字段，当前扩展/检索代码没有把对象写回该字段，不能依赖每条结果携带 decision。
-
-### 12.3 评分、confidence 与结构边
-
-术语邻居评分由 [graph_scoring.py](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/rag/graph_scoring.py) 计算：
-
-```text
-overlap_factor = min(1.0, shared_term_count / 3)
-graph_score = graph_weight * max(seed_score, 0.1) * overlap_factor * informativeness
-confidence = 0.5 * overlap_factor + 0.5 * informativeness
-```
-
-空共享词、非正 seed_score 或 graph_weight 返回零分。`informativeness` 优先使用共享词 IDF 相对阈值的归一化值，无 IDF 统计时回退词长启发式；confidence 是过滤分数，未校准为概率。术语候选低于 `graph_confidence_threshold` 时被过滤。
-
-[graph_structured.py](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/rag/graph_structured.py) 提供 `SAME_SOURCE`（随位置距离衰减）、`NEXT_CHUNK`（权重 `1.0`）、`SHARED_TITLE`（`0.8`）与 `SHARED_JSON_PATH`（`0.6`）边。`NEXT_CHUNK` 仅能匹配 `*-chunk-N` 格式，不能保证所有实际 chunk ID 都有相邻边。
-
-当前 `create_graph_index` 只向**内存后端**传递结构边开关；Neo4j 后端继续使用术语共现扩展。内存结构候选按 `graph_weight * max(seed_score, 0.1) * struct_weight * 0.5` 评分，并将该分数与同一阈值比较，未使用术语候选的 confidence 公式。结构/术语候选随后按 chunk ID 合并并受 `graph_max_neighbors` 限制。
-
-`graph_scoring.py` 的 `RECOMMENDED_GRAPH_PARAMS` 目前是**等待 sweep 校准的占位表**，不是已有评测支持的类别推荐，也不是按查询类别自动应用的运行配置。实际取值来自当前配置；参数选择应附对应数据集、模型、后端和输出结果。
-
-### 12.4 Ablation、参数扫描与测试
-
-[evaluate_rag_retrieval.py](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/evaluate_rag_retrieval.py) 的 `--graph-ablation` 对同一数据集比较 graph on/off，并按类别输出指标：
-
-| 指标 | 当前计算口径 |
-| --- | --- |
-| `graph_benefit_rate` | 有预期来源的案例中，graph off 未命中、on 命中的比例 |
-| `graph_noise_rate` | 同类案例中，graph on 新增非预期来源的案例比例 |
-| `graph_net_effect` | benefit rate 减 noise rate |
-| `avg_graph_rank_change` | 两边均命中时，首个预期来源的 off 排名减 on 排名的均值 |
-
-[sweep_graph_params.py](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/sweep_graph_params.py) 扫描 `graph_weight × graph_max_neighbors`，保留 graph off 基线，输出 hit/recall/precision/MRR、变化量及按 hit/recall 筛选的 Pareto 候选。它不会自动改写配置或校准上述占位表。
-
-```bash
-python tests/evaluate_rag_retrieval.py --graph-ablation --graph-backend memory --vectorstore-provider memory
-python tests/sweep_graph_params.py --cases tests/rag_eval_cases.jsonl --graph-backend memory --vectorstore-provider memory --output graph-sweep.json
-python -m pytest tests/test_graph_rag_ablation.py tests/test_rag_retrieval_evaluation.py -q
-```
-
-前两条是检索质量实验，需准备实际语义 embedding/reranker 及所选可选依赖；`hash` embedding 被质量评测入口拒绝。它们不是纯离线单元测试通过的证明，也不自动证明某个组件提高质量。组件合同由 [test_graph_rag_ablation.py](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/test_graph_rag_ablation.py) 验证，真实检索效果应另附对应实验记录。
 
 ## 13. Reranker 层
 
@@ -780,10 +684,7 @@ pipeline.query(retrieval_query, original_query=query)
 | `rag_keyword_backend`            | keyword 后端                       |
 | `rag_rrf_rank_constant`          | RRF 排名融合常数                   |
 | `rag_structured_metadata_weight` | metadata 命中加权                  |
-| `rag_graph_enabled`              | 是否启用 GraphRAG                  |
 | `rag_authority_rerank_enabled`   | 是否启用权威性降权                 |
-| `rag_memory_enabled`             | 是否把 memory 纳入 RAG             |
-| `rag_memory_mysql_url`           | MySQL memory URL                   |
 | `rag_multimodal_enabled`         | 是否启用图片/PDF 图像页处理        |
 | `rag_query_rewrite_enabled`      | 是否启用 query rewrite             |
 

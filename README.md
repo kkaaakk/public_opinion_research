@@ -1,8 +1,8 @@
 # 🔬 Public Opinion Research
 
-> 当前应用版本为 `dbos-events-v1`。研究经过 Plan、可恢复澄清和 Brief 审批，再进入四角色研究及 Review/Gap，默认生成一份综合报告。 [Brief 合同](docs/architecture/research-brief.md)
+> 当前应用版本为 `por-vertical-v1`。研究经过 Plan、可恢复澄清和 Brief 审批，再进入四角色研究及 Review/Gap，默认生成一份综合报告。 [Brief 合同](docs/architecture/research-brief.md)
 
-基于 DBOS、OpenAI Agents SDK、RAG、MCP 和四角色协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了本地 RAG 知识库、舆情分析、社交媒体监控、长期记忆等能力。
+基于 DBOS、OpenAI Agents SDK、RAG、MCP 和四角色协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了企业知识 RAG、舆情分析、社交媒体监控和可追溯来源记录等能力。
 
 ## 当前架构
 
@@ -139,18 +139,15 @@ LangSmith 可选保留在 RAG、报告等 LangChain 单次服务调用和业务 
 
 ```
 src/open_deep_research/
-├── deep_researcher.py          # 业务服务兼容导出；执行使用 Run API
 ├── configuration.py            # 配置管理
-├── state.py                    # 五个业务状态域与消息
+├── state.py                    # 四个业务状态域与消息
 ├── prompts.py                  # 系统提示词
 ├── utils.py                    # 旧工具导入路径的兼容导出
 ├── budget.py                   # 预算守卫
 ├── workflow/                   # DBOS 编排、持久步骤、纯状态归并与业务服务
-├── runtime/                    # SDK Runner 装配与 Research Graph Context Harness
+├── runtime/                    # SDK Runner 装配、Context Harness 与滚动压缩
 ├── public_opinion_agents/      # 四个业务角色、提示词、权限与输出合同
-├── research_graph/             # Run 范围的证据、来源、检索与上下文
-├── rag/                        # 知识加载、索引、向量/图检索、重排与 RAG MCP
-├── memory/                     # 文件/MySQL 长期记忆、抽取、索引与回查
+├── rag/                        # 企业知识加载、索引、向量/关键词检索与重排
 ├── social_media/               # 共享领域规则与记录处理
 ├── social_media_mcp.py         # 社媒 MCP Server
 ├── social_media_apify_api.py   # Apify HTTP 适配器
@@ -176,9 +173,9 @@ src/open_deep_research/
 | Compression | `openai:gpt-4.1` | 研究内容压缩 |
 | Final Report | `openai:gpt-4.1` | 最终报告生成 |
 
-模型引用采用 `provider:model` 格式。四角色 Agent 通过 `models.sdk.sdk_model()` 使用官方 SDK Model；当前 Web 准入支持 OpenAI/DeepSeek。规划、报告、RAG、抽取和记忆等单次业务服务通过 `open_deep_research.models.create_chat_model()` 创建 LangChain `BaseChatModel`，保留 Anthropic、Google、Groq 和火山方舟等适配器。两类模型对象分别用于各自调用边界。
+模型引用采用 `provider:model` 格式。四角色 Agent 通过 `models.sdk.sdk_model()` 使用官方 SDK Model；当前 Web 准入支持 OpenAI/DeepSeek。规划、报告、RAG、滚动压缩等单次业务服务通过 `open_deep_research.models.create_chat_model()` 创建 LangChain `BaseChatModel`，保留 Anthropic、Google、Groq 和火山方舟等适配器。两类模型对象分别用于各自调用边界。
 
-推荐的双模型路由是：网页摘要、RAG 查询改写、Research Graph 抽取、上下文管理和滚动压缩使用 `volcengine:doubao-seed-2-0-mini-260428`；研究 Agent、研究压缩和最终报告使用 `deepseek:deepseek-flash`。Volcengine 引用既支持预置 Model ID（如 `volcengine:doubao-seed-2-0-mini-260428`），也支持自定义 endpoint ID（如 `volcengine:ep-...`），工厂只剥离 provider 前缀。火山方舟需要 `ARK_API_KEY`，可用 `ARK_BASE_URL` 覆盖默认端点；DeepSeek 需要 `DEEPSEEK_API_KEY`。真实 API 冒烟测试仅在显式设置 `RUN_LIVE_MODEL_TESTS=1` 后运行，例如 `python scripts/model_provider_smoke.py --provider volcengine --model doubao-seed-2-0-mini-260428`。
+推荐的双模型路由是：网页摘要、RAG 查询改写和滚动压缩使用 `volcengine:doubao-seed-2-0-mini-260428`；研究 Agent、研究压缩和最终报告使用 `deepseek:deepseek-flash`。Volcengine 引用既支持预置 Model ID（如 `volcengine:doubao-seed-2-0-mini-260428`），也支持自定义 endpoint ID（如 `volcengine:ep-...`），工厂只剥离 provider 前缀。火山方舟需要 `ARK_API_KEY`，可用 `ARK_BASE_URL` 覆盖默认端点；DeepSeek 需要 `DEEPSEEK_API_KEY`。真实 API 冒烟测试仅在显式设置 `RUN_LIVE_MODEL_TESTS=1` 后运行，例如 `python scripts/model_provider_smoke.py --provider volcengine --model doubao-seed-2-0-mini-260428`。
 
 ### 搜索 API
 
@@ -192,15 +189,11 @@ config = {
         "rag_enabled": True,
         "retrieval_mode": "hybrid",          # web_only / rag_only / hybrid
         "rag_knowledge_base_paths": ["./data/knowledge"],
-        "rag_memory_enabled": True,
-        "rag_memory_paths": ["./data/memory/chat_memory.jsonl"],
         "rag_top_k": 4,
         "rag_chunk_size": 800,
         "rag_embedding_provider": "sentence_transformers",
         "rag_vectorstore_provider": "milvus",
         "rag_reranker_provider": "cross_encoder",
-        "rag_graph_enabled": True,
-        "rag_graph_backend": "neo4j",
         "rag_multimodal_enabled": True,
         "rag_query_rewrite_enabled": True,
     }
@@ -356,7 +349,7 @@ python -m ruff check --select E,F,I --ignore E501 src/open_deep_research tests/c
 
 # 编译与 import smoke
 python -m compileall -q src/open_deep_research
-python -c "import open_deep_research.deep_researcher; import open_deep_research.runtime; import open_deep_research.rag"
+python -c "import open_deep_research.runtime; import open_deep_research.rag; import open_deep_research.workflow"
 
 # 需要网络下载模型或外部基础设施的集成测试
 python -m pytest -m integration

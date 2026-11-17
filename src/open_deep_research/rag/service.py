@@ -6,8 +6,6 @@
 2. run hybrid retrieval;
 3. run reranking;
 4. format answer-ready cited context.
-
-Memory-specific loading and MySQL indexing details live behind the indexer.
 """
 
 import hashlib
@@ -17,21 +15,16 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
-from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, model_validator
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.memory.context import get_conversation_id, get_user_id
-from open_deep_research.memory.types import INDEXABLE_MEMORY_TYPES
 from open_deep_research.observability.langsmith import trace_span
 from open_deep_research.rag.citations import build_answer_ready_context
 from open_deep_research.rag.config import (
     ChunkingConfig,
     EmbeddingConfig,
-    GraphRAGConfig,
     HybridRetrievalConfig,
     KeywordSearchConfig,
-    MemoryConfig,
     MultimodalConfig,
     RerankerConfig,
     VectorstoreConfig,
@@ -75,19 +68,6 @@ class RAGPipelineConfig(BaseModel):
     vision_model: str = DEFAULT_RAG_VISION_MODEL
     vision_prompt: str = DEFAULT_RAG_VISION_PROMPT
     vision_max_tokens: int = 512
-    memory_enabled: bool = False
-    memory_paths: Optional[list[str]] = Field(
-        default_factory=lambda: ["data/memory/chat_memory.jsonl"]
-    )
-    memory_json_text_fields: Optional[list[str]] = None
-    memory_mysql_url: Optional[str] = None
-    memory_mysql_table: str = "rag_chat_memories"
-    memory_mysql_limit: int = 1000
-    memory_mysql_index_record_types: Optional[list[str]] = Field(
-        default_factory=lambda: list(INDEXABLE_MEMORY_TYPES)
-    )
-    memory_conversation_id: Optional[str] = None
-    memory_user_id: Optional[str] = None
     hash_embedding_dimensions: int = 256
     keyword_top_k: int = 12
     keyword_backend: str = "memory"
@@ -95,19 +75,6 @@ class RAGPipelineConfig(BaseModel):
     elasticsearch_index: str = "rag_chunks"
     rrf_rank_constant: int = 60
     structured_metadata_weight: float = 0.15
-    graph_enabled: bool = False
-    graph_backend: str = "neo4j"
-    graph_max_neighbors: int = 4
-    graph_weight: float = 0.35
-    graph_ner_enabled: bool = True
-    graph_idf_enabled: bool = True
-    graph_idf_threshold_percentile: float = 85.0
-    graph_confidence_threshold: float = 0.15
-    structural_edges_enabled: bool = False
-    neo4j_uri: Optional[str] = "bolt://localhost:7687"
-    neo4j_username: Optional[str] = "neo4j"
-    neo4j_password: Optional[str] = None
-    neo4j_database: Optional[str] = None
     authority_rerank_enabled: bool = True
 
     # 展开显式设置的子配置字段；平铺字段优先，避免默认值污染字段设置状态。
@@ -128,10 +95,8 @@ class RAGPipelineConfig(BaseModel):
             "vectorstore": VectorstoreConfig,
             "reranker": RerankerConfig,
             "multimodal": MultimodalConfig,
-            "memory": MemoryConfig,
             "keyword_search": KeywordSearchConfig,
             "hybrid_retrieval": HybridRetrievalConfig,
-            "graph_rag": GraphRAGConfig,
             "chunking": ChunkingConfig,
         }
 
@@ -212,22 +177,6 @@ class RAGPipelineConfig(BaseModel):
             vision_max_tokens=self.vision_max_tokens,
         )
 
-    # 返回当前记忆来源及范围配置的只读视图。
-    @property
-    def memory(self) -> MemoryConfig:
-        """Memory subsystem configuration (read-only view)."""
-        return MemoryConfig(
-            enabled=self.memory_enabled,
-            paths=self.memory_paths,
-            json_text_fields=self.memory_json_text_fields,
-            mysql_url=self.memory_mysql_url,
-            mysql_table=self.memory_mysql_table,
-            mysql_limit=self.memory_mysql_limit,
-            mysql_index_record_types=self.memory_mysql_index_record_types,
-            conversation_id=self.memory_conversation_id,
-            user_id=self.memory_user_id,
-        )
-
     # 返回关键词检索子配置的只读视图。
     @property
     def keyword_search(self) -> KeywordSearchConfig:
@@ -246,26 +195,6 @@ class RAGPipelineConfig(BaseModel):
         return HybridRetrievalConfig(
             rrf_rank_constant=self.rrf_rank_constant,
             structured_metadata_weight=self.structured_metadata_weight,
-        )
-
-    # 返回图扩展子配置的只读视图。
-    @property
-    def graph_rag(self) -> GraphRAGConfig:
-        """Graph RAG configuration (read-only view)."""
-        return GraphRAGConfig(
-            enabled=self.graph_enabled,
-            backend=self.graph_backend,
-            max_neighbors=self.graph_max_neighbors,
-            weight=self.graph_weight,
-            ner_enabled=self.graph_ner_enabled,
-            idf_enabled=self.graph_idf_enabled,
-            idf_threshold_percentile=self.graph_idf_threshold_percentile,
-            confidence_threshold=self.graph_confidence_threshold,
-            structural_edges_enabled=self.structural_edges_enabled,
-            neo4j_uri=self.neo4j_uri,
-            neo4j_username=self.neo4j_username,
-            neo4j_password=self.neo4j_password,
-            neo4j_database=self.neo4j_database,
         )
 
     # 返回文档分块子配置的只读视图。
@@ -311,9 +240,8 @@ class RAGPipeline:
             return AnswerReadyContext(
                 query=display_query,
                 context=(
-                    "No local RAG documents or memory records were loaded. "
-                    "Check rag_knowledge_base_paths, rag_memory_paths, and "
-                    "supported file types before retrying."
+                    "No local RAG documents were loaded. "
+                    "Check rag_knowledge_base_paths and supported file types before retrying."
                 ),
             )
         if self.indexer.retriever is None:
@@ -393,11 +321,6 @@ class RAGPipeline:
     def ensure_indexed(self) -> None:
         """Compatibility hook for explicit indexing jobs."""
         self.indexer.ensure_ready()
-
-    # 刷新索引并标记已成功同步的 MySQL 记忆。
-    def index_pending_memories(self) -> None:
-        """Refresh the index and mark pending MySQL memory rows as indexed."""
-        self.indexer.index_pending_memories()
 
     # 保留在语义或词汇层面相关的候选结果。
     def _filter_results(self, results: list[RetrievalResult]) -> list[RetrievalResult]:
@@ -484,19 +407,7 @@ _SUB_TO_FLAT: dict[str, dict[str, str]] = {
         "vision_prompt": "vision_prompt",
         "vision_max_tokens": "vision_max_tokens",
     },
-    "memory": {
-        "enabled": "memory_enabled",
-        "paths": "memory_paths",
-        "json_text_fields": "memory_json_text_fields",
-        "mysql_url": "memory_mysql_url",
-        "mysql_table": "memory_mysql_table",
-        "mysql_limit": "memory_mysql_limit",
-        "mysql_index_record_types": "memory_mysql_index_record_types",
-        "conversation_id": "memory_conversation_id",
-        "user_id": "memory_user_id",
-    },
-    "keyword_search": {
-        "top_k": "keyword_top_k",
+    "keyword_search": {        "top_k": "keyword_top_k",
         "backend": "keyword_backend",
         "elasticsearch_url": "elasticsearch_url",
         "elasticsearch_index": "elasticsearch_index",
@@ -504,21 +415,6 @@ _SUB_TO_FLAT: dict[str, dict[str, str]] = {
     "hybrid_retrieval": {
         "rrf_rank_constant": "rrf_rank_constant",
         "structured_metadata_weight": "structured_metadata_weight",
-    },
-    "graph_rag": {
-        "enabled": "graph_enabled",
-        "backend": "graph_backend",
-        "max_neighbors": "graph_max_neighbors",
-        "weight": "graph_weight",
-        "ner_enabled": "graph_ner_enabled",
-        "idf_enabled": "graph_idf_enabled",
-        "idf_threshold_percentile": "graph_idf_threshold_percentile",
-        "confidence_threshold": "graph_confidence_threshold",
-        "structural_edges_enabled": "structural_edges_enabled",
-        "neo4j_uri": "neo4j_uri",
-        "neo4j_username": "neo4j_username",
-        "neo4j_password": "neo4j_password",
-        "neo4j_database": "neo4j_database",
     },
     "chunking": {
         "knowledge_base_paths": "knowledge_base_paths",
@@ -565,13 +461,6 @@ _CONFIG_TO_PIPELINE_FIELDS: dict[str, str] = {
     "vision_model": "rag_vision_model",
     "vision_prompt": "rag_vision_prompt",
     "vision_max_tokens": "rag_vision_max_tokens",
-    "memory_enabled": "rag_memory_enabled",
-    "memory_paths": "rag_memory_paths",
-    "memory_json_text_fields": "rag_memory_json_text_fields",
-    "memory_mysql_url": "rag_memory_mysql_url",
-    "memory_mysql_table": "rag_memory_mysql_table",
-    "memory_mysql_limit": "rag_memory_mysql_limit",
-    "memory_mysql_index_record_types": "rag_memory_mysql_index_record_types",
     "hash_embedding_dimensions": "rag_hash_embedding_dimensions",
     "keyword_top_k": "rag_keyword_top_k",
     "keyword_backend": "rag_keyword_backend",
@@ -579,39 +468,18 @@ _CONFIG_TO_PIPELINE_FIELDS: dict[str, str] = {
     "elasticsearch_index": "rag_elasticsearch_index",
     "rrf_rank_constant": "rag_rrf_rank_constant",
     "structured_metadata_weight": "rag_structured_metadata_weight",
-    "graph_enabled": "rag_graph_enabled",
-    "graph_backend": "rag_graph_backend",
-    "graph_max_neighbors": "rag_graph_max_neighbors",
-    "graph_weight": "rag_graph_weight",
-    "graph_ner_enabled": "rag_graph_ner_enabled",
-    "graph_idf_enabled": "rag_graph_idf_enabled",
-    "graph_idf_threshold_percentile": "rag_graph_idf_threshold_percentile",
-    "graph_confidence_threshold": "rag_graph_confidence_threshold",
-    "structural_edges_enabled": "rag_structural_edges_enabled",
-    "neo4j_uri": "rag_neo4j_uri",
-    "neo4j_username": "rag_neo4j_username",
-    "neo4j_password": "rag_neo4j_password",
-    "neo4j_database": "rag_neo4j_database",
     "authority_rerank_enabled": "rag_authority_rerank_enabled",
 }
 
 
-# 合并应用级 rag_ 配置、直接映射及记忆身份范围，形成统一有效配置。
-# 显式 memory_* 参数覆盖自动推导的身份，用于让查询与后台记忆刷新使用相同范围。
+# 合并应用级 rag_ 配置与直接映射，形成统一有效配置。
 def build_rag_pipeline_config(
     configurable: Configuration | Mapping[str, Any] | RAGPipelineConfig | None = None,
-    runtime_config: RunnableConfig | Mapping[str, Any] | None = None,
-    *,
-    memory_user_id: str | None = None,
-    memory_conversation_id: str | None = None,
-    memory_enabled: bool | None = None,
 ) -> RAGPipelineConfig:
     """Build one effective RAG config for queries and indexing jobs.
 
     ``Configuration`` supplies the application-level ``rag_*`` settings while
     mappings support the direct and ``rag_``-prefixed shapes used by the RAG MCP.
-    Memory identity and the forced indexing mode are explicit overrides so the
-    memory refresh path cannot drift from normal query configuration.
     """
     if isinstance(configurable, RAGPipelineConfig):
         payload = configurable.model_dump()
@@ -636,21 +504,10 @@ def build_rag_pipeline_config(
             if sub_config_name in raw_config:
                 payload[sub_config_name] = raw_config[sub_config_name]
 
-    if runtime_config is not None:
-        if memory_conversation_id is None:
-            memory_conversation_id = get_conversation_id(runtime_config)
-        if memory_user_id is None:
-            memory_user_id = get_user_id(runtime_config)
     if "knowledge_base_paths" in payload and payload["knowledge_base_paths"] is None:
         # Configuration normalizes an explicitly empty path list to None, while
         # the pipeline keeps the historical empty-list meaning for this field.
         payload["knowledge_base_paths"] = []
-    if memory_conversation_id is not None:
-        payload["memory_conversation_id"] = memory_conversation_id
-    if memory_user_id is not None:
-        payload["memory_user_id"] = memory_user_id
-    if memory_enabled is not None:
-        payload["memory_enabled"] = memory_enabled
 
     return RAGPipelineConfig(**payload)
 

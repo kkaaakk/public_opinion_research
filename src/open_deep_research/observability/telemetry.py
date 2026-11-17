@@ -119,10 +119,7 @@ _BUSINESS_SPANS = frozenset(
         "por.finalize",
         "sdk_invocation",
         "context_build",
-        "context_retrieval",
-        "persist_tool_results",
         "rolling_compaction",
-        "research_graph_write",
         "research_review",
         "report_generation",
     }

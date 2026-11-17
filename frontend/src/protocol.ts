@@ -116,7 +116,7 @@ export type RunEvent = {
   invocation_id?: string;
   task_id?: string;
   tool_call_id?: string;
-  graph_call_id?: string;
+  tool_call_id?: string;
   operation_id?: string;
   model_turn?: number;
   model_calls?: number;
@@ -298,7 +298,6 @@ export function parseEvent(value: unknown): RunEvent {
     'invocation_id',
     'task_id',
     'tool_call_id',
-    'graph_call_id',
     'operation_id',
     'name',
     'status',

@@ -49,7 +49,7 @@ flowchart TD
 | 架构与模块   | [执行架构](./architecture/agent-loop.md) | 五层职责、业务流程和可靠性设计 |
 | 部署与验收   | [部署](./architecture/dbos-deployment.md) · [故障验收](./audits/dbos-architecture-closeout.md) | 数据库、上线流程及已验证范围 |
 | 面试讲解     | [项目口述与问答](./interview/index.md) | 两分钟介绍、业务链路和追问 |
-| RAG / Memory | [RAG 模块](./architecture/rag.md)                              | 本地知识库、长期记忆、检索、重排和引用 |
+| RAG | [RAG 模块](./architecture/rag.md)                              | 企业知识库、检索、重排和引用 |
 | 评估         | [RAG 检索测试记录](./evaluation/rag-retrieval-test-records.md) | 历次检索指标、配置、未命中样本和说明   |
 | 示例         | [ArXiv 示例](./examples/arxiv.md)                              | 示例研究报告和输出样本                 |
 | 知识库       | [Team Handbook](./knowledge/team-handbook.md)                  | 本地知识库样例文档                     |

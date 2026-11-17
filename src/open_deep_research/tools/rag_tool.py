@@ -1,4 +1,4 @@
-# 将本地知识与记忆检索包装为研究智能体可调用的引用上下文工具。
+# 将企业知识检索包装为研究智能体可调用的引用上下文工具。
 """Expose RAG retrieval as an agent tool."""
 
 import asyncio
@@ -20,31 +20,23 @@ from open_deep_research.rag.service import (
 from open_deep_research.tools import register_tool
 
 RAG_SEARCH_DESCRIPTION = (
-    "Search the configured local RAG sources, including local txt/md/json/pdf/image files "
-    "and optional chat memory from json/jsonl or MySQL records. Use this when the answer may exist "
-    "in local documents, notes, manuals, project files, or remembered user context."
+    "Search the configured enterprise knowledge base, including local txt/md/json/pdf/image "
+    "files. Use this when the answer may exist in company documents, playbooks, notices, "
+    "manuals or project files."
 )
 
 
 # 根据运行配置执行本地 RAG 检索，仅返回带来源引用的上下文。
 async def _rag_search(query: str, config: RunnableConfig = None) -> str:
-    """Search local knowledge and memory, returning cited context only."""
+    """Search local enterprise knowledge, returning cited context only."""
     configurable = Configuration.from_runnable_config(config)
     if not configurable.rag_enabled:
         return "Local RAG retrieval is disabled in configuration."
-
-    has_document_paths = bool(configurable.rag_knowledge_base_paths)
-    has_memory_paths = bool(
-        configurable.rag_memory_enabled and configurable.rag_memory_paths
-    )
-    has_mysql_memory = bool(
-        configurable.rag_memory_enabled and configurable.rag_memory_mysql_url
-    )
-    if not has_document_paths and not has_memory_paths and not has_mysql_memory:
-        return "No local RAG document paths or memory paths are configured."
+    if not configurable.rag_knowledge_base_paths:
+        return "No local RAG document paths are configured."
 
     try:
-        pipeline_config = build_rag_pipeline_config(configurable, config)
+        pipeline_config = build_rag_pipeline_config(configurable)
         pipeline = get_or_create_rag_pipeline(pipeline_config)
         retrieval_query = await asyncio.to_thread(
             maybe_rewrite_query_with_model,

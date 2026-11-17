@@ -117,7 +117,7 @@ async def producer():
         try:
             runtime = _runtime(
                 config=Configuration(
-                    research_graph_enabled=False, budget_enabled=True, max_model_calls=5
+                    budget_enabled=True, max_model_calls=5
                 ),
                 initial_budget={"model_calls": 2},
                 model=ScriptedModel([[assistant_message("must not execute")]]),

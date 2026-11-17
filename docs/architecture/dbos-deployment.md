@@ -1,6 +1,6 @@
 # DBOS 部署、数据库和恢复
 
-当前应用版本为 `dbos-events-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-phase5-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
+当前应用版本为 `por-vertical-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-vertical-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
 
 ## Local setup
 
@@ -64,14 +64,13 @@ $env:DBOS_DATABASE_URL = 'postgresql+psycopg://por_execution:local-dbos-developm
 | --- | --- |
 | PostgreSQL `por_dbos` | DBOS 维护原生 Workflow 状态、队列、输入输出、Step 结果、消息、Events 与 Streams。`workflow_status`、`operation_outputs` 等表由库管理。应用执行写入使用原生 API，运维按 API 查询和恢复。 |
 | PostgreSQL `por_archive_native_recovery` | 仅迁移安装存在。原 `units`、`operations` 连同数据、索引和约束归档到此；`web/run_data.py:legacy_projection` 读取旧产物、用量与未确认效果。 |
-| Neo4j History | `web/history.py:Neo4jHistoryStore` 写 `ResearchHistory`。稳定 ID 由 Run ID 派生，`run_state_version = generation + 1` 阻止旧重试代次覆盖新归档。存报告、阶段产物、用量、状态和 owner，支持历史 LangSmith 导入。 |
-| Research Graph | `research_graph/store.py` 管理每 Run 的 Source/Evidence/Claim/Finding 等，Neo4j 中按 `(run_id, node_id)`、关系 `(run_id, edge_id)` 写入。进程内后端只在所在进程可见。 |
+| PostgreSQL History | `web/history.py:HistoryStore` 写 `por_domain.history`。稳定 ID 由 Run ID 派生，`run_state_version = generation + 1` 阻止旧重试代次覆盖新归档。存报告、阶段产物、用量、状态和 owner。 |
 | 长期 Memory / RAG | 配置 MySQL 时，原始记忆在 `rag_chat_memories`（可配置表名），`memory_id` 唯一，包含用户、会话、记录类型、内容与索引状态。RAG 维护知识及可索引记忆的向量副本和独立知识图。 [Memory](memory.md) · [RAG](rag.md) |
 
 ## 事件与归档版本切换
 
 1. 停止旧版新建 Run，保留原版的控制入口与匹配的 Executor。处理排队、执行、澄清、审批、AI 修改、已授权重试、未知效果及待归档的旧 Run。先确认业务和 History 已结算，再停止仅剩等待旧消息的 `por.events` / `por.finalize`。
-2. 保存同一切换点的 `por_dbos`、`por_domain` 与业务数据备份，包括已有归档 schema、Neo4j、Memory 以及需要保留的原生 Stream。运行新版 `python -m open_deep_research.web.executor --migration-check`。其输出为 JSON；上线前确认盘点为空，包含超出恢复尝试次数的旧 journal 也需核查。
+2. 保存同一切换点的 `por_dbos`、`por_domain` 与业务数据备份，包括需要保留的原生 Stream。运行新版 `python -m open_deep_research.web.executor --migration-check`。其输出为 JSON；上线前确认盘点为空，包含超出恢复尝试次数的旧 journal 也需核查。
 3. `dbos-domain-v1` 已有五张业务表，从该版切到 `dbos-events-v1` 沿用业务 schema。若仍有旧 `por_domain.units`，在排空、备份并演练后显式运行 `--migrate-domain`。事务将旧 `units` 和 `operations` 移到 `por_archive_native_recovery`，将 `requests.released` 更名为 `reconciliation` 并移除 `occupied`，再创建当前表。需要历史读取的运行角色保留归档 schema 的 `USAGE` 和表 `SELECT`。
 4. 同步切换 API、Studio/Classic 与 Executor，核对版本、请求创建、澄清/审批、SSE/状态与 History。对已终止旧 Run，`RunClient` 读取保留的旧投影/事件/Stream、旧账单及操作记录。旧 journal 和旧回执继续保留。
 

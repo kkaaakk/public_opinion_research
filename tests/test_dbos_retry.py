@@ -377,8 +377,6 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
     monkeypatch.setattr(engine.research, "research_review", review)
     if outcome == "unknown":
         case.cfg["configurable"].update(
-            rag_memory_write_enabled=True,
-            rag_memory_mysql_url="mysql+pymysql://offline",
         )
         monkeypatch.setattr(
             engine.reporting, "persist_report_memory", uncertain_external_write

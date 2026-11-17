@@ -1,9 +1,9 @@
 # Markdown Research Brief workflow
 
-The Run API in `dbos-events-v1` uses native interaction messages with
+The Run API in `por-vertical-v1` uses native interaction messages with
 DBOS 3.3.0 and DBOSRunner 0.3.0. [Deployment and cutover](dbos-deployment.md#事件与归档版本切换)
 DBOS owns execution and recovery, Runner owns the four business Agent loops, and
-Research Graph owns evidence. Markdown carries research intent, never execution control.
+Role reports and their cited sources own evidence. Markdown carries research intent, never execution control.
 
 ## From intake to reporting
 

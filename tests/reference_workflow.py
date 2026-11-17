@@ -28,10 +28,6 @@ from open_deep_research.workflow.python_state import (
     copy_state,
     role_snapshot,
 )
-from open_deep_research.workflow.state_utils import (
-    agents_for_new_run,
-    resolve_research_run_id,
-)
 
 execution_observer = ContextVar("reference_execution_observer", default=None)
 
@@ -50,7 +46,7 @@ def failure_kind(error: BaseException) -> str:
         return "timeout"
     if isinstance(error, ModelBudgetExceeded):
         return "budget_exhausted"
-    if type(error).__name__ in {"ResearchGraphSettlementError", "ToolCallError"}:
+    if type(error).__name__ == "ToolCallError":
         return "tool_or_settlement_error"
     if type(error).__module__.startswith(("agents", "openai")):
         return "model_error"
@@ -284,11 +280,10 @@ class PythonWorkflow:
                     raise PlanApprovalRequired()
                 await commit("plan_ready", "research_init")
 
-            # Match the original research_phase's new-run boundary: retain private
-            # memory and plan, clear prior reports/summaries/tasks/Working Context.
+            # Match the original research_phase's new-run boundary: keep the
+            # Brief, clear prior reports/tasks and the prior review.
             if cursor == "research_init":
                 await begin("research_init")
-                run_id = resolve_research_run_id(state, config)
                 apply_patch(
                     state,
                     {
@@ -302,14 +297,7 @@ class PythonWorkflow:
                                 "completed_tasks": [],
                             },
                         },
-                        "agents": {
-                            "type": "override",
-                            "value": agents_for_new_run(state),
-                        },
-                        "research": {
-                            "type": "override",
-                            "value": {"run_id": run_id, "working_contexts": {}},
-                        },
+                        "agents": {"type": "override", "value": {}},
                     },
                 )
                 await commit("research_init", "research_agents")

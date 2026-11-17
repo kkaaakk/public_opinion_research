@@ -1,4 +1,4 @@
-# 配置回应策略角色：依据证据和风险评估制定口径、FAQ、行动及监测建议。
+﻿# 配置回应策略角色：依据证据和风险评估制定口径、FAQ、行动及监测建议。
 """Response strategy agent specification."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec
@@ -44,7 +44,7 @@ AGENT = PublicOpinionAgentSpec(
         "Do not use web_search or social_media_skill unless the workflow is later extended; rely on upstream reports for public evidence.",
         "Treat risk_assessment red lines as binding constraints.",
     ),
-    memory_policy=(
+    report_policy=(
         "Preserve cited internal playbook support for any recommended response language.",
         "Separate external-facing wording from internal action recommendations.",
         "Keep unresolved evidence gaps visible in the response posture.",
@@ -59,5 +59,4 @@ AGENT = PublicOpinionAgentSpec(
         "Produce the final business-facing response package for report generation.",
         "Call out any recommendation that requires human legal, PR, product, or customer-service approval.",
     ),
-    context_strategy="research_graph_consumer",
 )

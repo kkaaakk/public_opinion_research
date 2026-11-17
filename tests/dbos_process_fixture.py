@@ -42,9 +42,8 @@ from agents import function_tool
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from agents.tool_context import ToolContext
 from dbos import DBOS, DBOSClient
-from dbos_support import NEO4J, NEO4J_PASSWORD, record_scripted_model_attempt
+from dbos_support import record_scripted_model_attempt
 from langchain_core.runnables import RunnableConfig
-from neo4j import GraphDatabase
 from pydantic import Field
 from sqlalchemy.exc import SQLAlchemyError
 from test_python_workflow_sdk import install_sdk
@@ -57,6 +56,7 @@ from open_deep_research.tools import register_tool
 from open_deep_research.web import history
 from open_deep_research.web.executor import launch
 from open_deep_research.workflow import dbos_workflow as engine
+from open_deep_research.workflow.dbos_config import domain_engine
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
     stage_context,
@@ -95,9 +95,7 @@ def install(directory, scenario):
         on_plan=record_plan if plan_mode != "normal" else None,
         on_revision=record_revision if scenario.startswith("revision-") else None,
     )
-    store = history.Neo4jHistoryStore(
-        GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
-    )
+    store = history.HistoryStore(domain_engine())
     patch.setattr(history, "get_history_store", lambda: store)
     if scenario == "plan-error":
         from langchain_core.runnables import RunnableLambda

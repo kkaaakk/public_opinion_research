@@ -1,7 +1,7 @@
 # Execution observability and usage
 
 DBOS controls execution; Langfuse observes it through OpenTelemetry (OTel).
-Research Graph owns evidence. Traces cannot authorize retries, recovery, cancel
+Role reports and their cited sources own evidence. Traces cannot authorize retries, recovery, cancel
 or resource release. See the [implementation audit](../audits/langfuse-otel.md).
 
 | Fact | Owner and correlation |
@@ -70,7 +70,7 @@ run_submit                                API; only for a newly accepted Run
 Within each invocation OpenInference creates SDK trace/Agent/LLM/Tool spans.
 `sdk_invocation` also covers exit settlement and failures after Runner exits.
 Other business spans are `context_build`, `context_retrieval`,
-`persist_tool_results`, `rolling_compaction`, `research_graph_write`,
+`rolling_compaction`,
 `research_review` and `report_generation`. Counts reuse Harness facts and graph
 receipts. Context/compaction tokens are estimates, not provider usage.
 
@@ -195,8 +195,8 @@ auth or baggage is propagated. Retries/recovery emit fresh span identities under
 the persisted caller. A killed process cannot finish/export its in-flight spans.
 Unknown effects remain quarantined; completed tools are never replayed for traces.
 
-Current application and SDK Runtime versions are `dbos-events-v1` and
-`sdk-phase5-v1`. When a matching-version journal lacks the optional OTel carrier,
+Current application and SDK Runtime versions are `por-vertical-v1` and
+`sdk-vertical-v1`. When a matching-version journal lacks the optional OTel carrier,
 the Run ID still groups its observations. Earlier journals use their matching
 Executor for drain. [Deployment](dbos-deployment.md)
 
@@ -231,7 +231,7 @@ throughput benchmarks remain unsupported.
 .venv/Scripts/python.exe -m pytest -m integration tests/test_telemetry_dbos.py --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1
 ```
 
-Native tests use actual DBOS/PostgreSQL/Neo4j, ScriptedModel, parallel roles,
+Native tests use actual DBOS/PostgreSQL, ScriptedModel, parallel roles,
 review/gap, cancel, safe/native Step retries, process kill/restart and a loopback
 OTLP protobuf receiver. The receiver verifies transport and hierarchy, **not**
 the Langfuse UI. For an existing Cloud/self-hosted installation, supply real
