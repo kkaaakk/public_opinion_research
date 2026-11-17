@@ -646,10 +646,7 @@ async function openHistory(id) {
         resultsTitle.textContent = record.report ? '研究报告' : '研究阶段记录';
         if (Object.keys(record.usage || {}).length) renderUsage(record.usage);
         else usageBar.classList.add('hidden');
-        const graph = record.graph || {};
-        const evidenceInfo = graph.sources || graph.evidence || graph.findings
-            ? ' · ' + graph.sources + ' 个来源 / ' + graph.evidence + ' 条证据' : '';
-        reportMeta.textContent = truncate(record.topic, 180) + ' · ' + formatDate(record.completed_at) + evidenceInfo;
+        reportMeta.textContent = truncate(record.topic, 180) + ' · ' + formatDate(record.completed_at);
         const incomplete = (record.status || 'completed') !== 'completed' || !record.report;
         reportNotice.classList.toggle('hidden', !incomplete);
         if (incomplete) reportNotice.textContent = record.report

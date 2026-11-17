@@ -100,7 +100,7 @@ flowchart TD
 | 4. 图片与 Plan | `planning_workflow` 第一轮调用 `intake.enrich_query_images`，有图片时将理解结果纳入消息。`intake.plan_research` 根据消息、图像和配置返回 `ask_user` 或带 Markdown Brief 的 `ready`。模型调用使用 `por.llm` / `por.llm_sync`（有独立 Step 边界时），`por.stage_result` 在 patch 有消息时固定其 ID。 |
 | 5. 澄清与 Brief | 根以 `phase`、`clarification`、`plan` Event 发布待处理内容，`receive_interaction` 通过 DBOS `recv` 等待对应 owner、版本和截止时间的决定。最多发布三轮澄清，答复或跳过写进同一 Run 的消息。需审批时，手工编辑生成新版本，AI 修改用以请求键绑定 ID 的 `por.plan` 子 Workflow，仍受原审批截止时间约束。批准当前版本或无需审批时，根写 `brief_locked` 并将 Brief 元数据放入 Research 输入。 [交互协议](research-brief.md) |
 | 6. 并行 Producer | `research_workflow` 给 `public_signal`、`internal_knowledge` 启动各自的 `por.role`（按启用配置工作）。`role_snapshot` 为角色隔离 State。`wait_first_async` 收集先结束的子 Workflow，`assemble_research_results` 等本轮齐备后按固定角色顺序归并 `ResearchRoleResult`，含角色报告、来源、指标和预算增量。 |
-| 7. Review / Gap | `review_workflow` 用 `research.research_review` 对照 Brief 与证据。`por.review_evidence` 读取证据，单用途模型产出结构化 Review。`followup_assignments` 按任务去重、轮次、角色与预算生成新 packets，仅向有补研任务的角色分派。 |
+| 7. Review / Gap | `review_workflow` 用 `research.research_review` 对照 Brief 与角色报告，单用途模型产出结构化 Review。`followup_assignments` 按任务去重、轮次、角色与预算生成新 packets，仅向有补研任务的角色分派。 |
 | 8. 风险与策略 | 补研结束后按顺序启动 `risk_assessment` 和 `response_strategy` 两个 `por.role`，分别分析风险和制定应对策略。父 Workflow 用 `apply_patch` 合并结果，Strategy 读取 Risk 输出。 |
 | 9. 报告 | `report_workflow` 默认用 `generate_final_report` 综合获批 Brief、角色报告、证据和未解 Gap。显式 `report_mode="sections"` 才启用分章节写作。`por.publish_stage` 发布阶段成果，终稿在 `por.report` 的 `report` Event 可独立读取，随后由 Finalizer 归档。 |
 | 10. SSE | `events_workflow` 收集原生消息并通过 `DBOS.write_stream_async` 追加，公开 `seq = offset + 1`。GET 分页和 SSE 共用 `RunClient.read_events`，由 `Last-Event-ID` 或 `after` 补发。研究中可交付阶段报告。`delivery` Event 确认当前代次已交付前缀。 |
