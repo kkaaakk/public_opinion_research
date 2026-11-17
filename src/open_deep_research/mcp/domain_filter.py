@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 
 from langchain_core.tools import BaseTool
 
+from open_deep_research.tools import BusinessTool
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -182,9 +184,7 @@ def iter_domain_labels(domains: set[str]) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
-_NATIVE_WEB_SEARCH_TYPES = frozenset(
-    {"web_search_20250305", "web_search_preview"}
-)
+_NATIVE_WEB_SEARCH_TYPES = frozenset({"web_search_20250305", "web_search_preview"})
 
 
 # 优先解析工具领域元数据，并兼容已知内置工具及原生搜索声明。
@@ -195,7 +195,13 @@ def get_tool_domain(tool) -> str | None:
     tools and provider-native web-search declarations are also resolved here so
     business-agent filtering can apply one consistent domain policy.
     """
-    metadata = tool.get("metadata") if isinstance(tool, Mapping) else getattr(tool, "metadata", None)
+    if isinstance(tool, BusinessTool):
+        return tool.domain
+    metadata = (
+        tool.get("metadata")
+        if isinstance(tool, Mapping)
+        else getattr(tool, "metadata", None)
+    )
     if isinstance(metadata, Mapping) and "tool_domain" in metadata:
         return str(metadata["tool_domain"])
 
@@ -233,7 +239,7 @@ def tag_tools_with_domain(tools: list, domain: str) -> list:
     if domain not in _DOMAIN_BY_NAME:
         raise ValueError(f"Unknown tool domain: {domain}")
     for tool in tools:
-        if isinstance(tool, Mapping):
+        if isinstance(tool, (Mapping, BusinessTool)):
             continue
         metadata = getattr(tool, "metadata", None) or {}
         tool.metadata = {**metadata, "tool_domain": domain}
@@ -241,9 +247,9 @@ def tag_tools_with_domain(tools: list, domain: str) -> list:
 
 
 # 将工具列表按领域归组，供提示词和权限逻辑复用。
-def classify_tools(tools: list[BaseTool]) -> dict[str, list[BaseTool]]:
+def classify_tools(tools: list) -> dict[str, list]:
     """Group *tools* by their domain category."""
-    buckets: dict[str, list[BaseTool]] = {}
+    buckets: dict[str, list] = {}
     for tool in tools:
         domain = _tool_domain(tool)
         buckets.setdefault(domain, []).append(tool)

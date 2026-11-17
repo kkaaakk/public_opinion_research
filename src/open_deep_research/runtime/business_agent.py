@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 from dbos import DBOS
@@ -22,7 +23,8 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import remove_up_to_last_ai_message
 from open_deep_research.llm.errors import is_token_limit_exceeded
-from open_deep_research.mcp.domain_filter import get_tool_domain, tag_tools_with_domain
+from open_deep_research.mcp.domain_filter import get_tool_domain
+from open_deep_research.mcp.tool_wrapper import tool_schema
 from open_deep_research.models import configurable_chat_model
 from open_deep_research.models.sdk import sdk_model
 from open_deep_research.prompts import (
@@ -40,11 +42,13 @@ from open_deep_research.runtime.sdk_runtime import AgentRuntimeResult, SDKAgentR
 from open_deep_research.social_media.tools import get_social_media_tools
 from open_deep_research.state import DeepResearchState, ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
+from open_deep_research.tools import BusinessTool
 from open_deep_research.tools.registry import (
     build_dynamic_tool_prompt,
     get_all_tools,
     get_raw_search_tool,
     has_external_research_tool,
+    tool_effect,
 )
 from open_deep_research.workflow.execution import native_step_available
 from open_deep_research.workflow.state_utils import (
@@ -228,9 +232,7 @@ async def _business_agent_tools(
         all_tools = [tool for tool in all_tools if tool_name(tool) not in raw_names]
         all_tools.extend(raw_search_tools)
     if "social_media" in allowed_domains:
-        all_tools.extend(
-            tag_tools_with_domain(get_social_media_tools(), "social_media")
-        )
+        all_tools.extend(get_social_media_tools())
 
     filtered_tools = []
     rejected_tools = []
@@ -402,6 +404,41 @@ def _build_state_patch(
 
 
 # 装配模型、工具和工作区，执行指定角色并返回状态更新。
+def _tool_catalog(tools: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": tool.name,
+            "domain": get_tool_domain(tool),
+            "description": tool.description,
+            "schema": tool_schema(tool),
+            "effect": tool_effect(tool),
+        }
+        if isinstance(tool, (BusinessTool, BaseTool))
+        else tool
+        for tool in tools
+    ]
+
+
+def _restore_role_tools(admitted, tools):
+    current = _tool_catalog(tools)
+    if admitted == current:
+        return tools
+    # Existing dbos-events-v1 journals used the same catalog without effect.
+    if admitted != [
+        {key: value for key, value in entry.items() if key != "effect"}
+        for entry in current
+    ]:
+        raise ValueError("Role tool definitions changed during recovery")
+    # An older catalog cannot tell which social backend was used. Preserve
+    # replay of committed Step results and fence new calls conservatively.
+    return [
+        replace(tool, effect="protected")
+        if isinstance(tool, BusinessTool) and tool.domain == "social_media"
+        else tool
+        for tool in tools
+    ]
+
+
 async def run_business_agent(
     *,
     role: str,
@@ -428,35 +465,18 @@ async def run_business_agent(
     if native_step_available():
         tools = None
 
-        def catalog(available):
-            descriptions = []
-            for tool in available:
-                if not isinstance(tool, BaseTool):
-                    descriptions.append(tool)
-                    continue
-                schema = tool.tool_call_schema
-                descriptions.append(
-                    {
-                        "name": tool.name,
-                        "domain": get_tool_domain(tool),
-                        "description": tool.description,
-                        "schema": schema
-                        if isinstance(schema, dict)
-                        else schema.model_json_schema(),
-                    }
-                )
-            return descriptions
-
         async def discover():
             nonlocal tools
             tools = await _business_agent_tools(config, role, spec)
-            return catalog(tools)
+            return _tool_catalog(tools)
 
         admitted = await DBOS.run_step_async(
             {"name": "por.role_tools", "preemptible": True}, discover
         )
-        if tools is None and admitted != await discover():
-            raise ValueError("Role tool definitions changed during recovery")
+        if tools is None:
+            tools = _restore_role_tools(
+                admitted, await _business_agent_tools(config, role, spec)
+            )
     else:
         tools = await _business_agent_tools(config, role, spec)
     # Consumers retrieve their evidence through ResearchWorkspace, so they

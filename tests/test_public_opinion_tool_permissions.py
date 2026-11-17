@@ -16,7 +16,9 @@ class FixtureTool:
     """Small tool-shaped fixture with optional domain metadata."""
 
     # 保存工具名及测试领域标签。
-    def __init__(self, name: str, domain: str | None = None, *, with_metadata: bool = True):
+    def __init__(
+        self, name: str, domain: str | None = None, *, with_metadata: bool = True
+    ):
         self.name = name
         if with_metadata:
             self.metadata = {} if domain is None else {"tool_domain": domain}
@@ -62,7 +64,9 @@ def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
         FixtureTool("document_convert", "document"),
         FixtureTool("legacy_lookup", "external_mcp"),
     ]
-    _patch_tool_source(monkeypatch, tools, [FixtureTool("social_search")])
+    _patch_tool_source(
+        monkeypatch, tools, [FixtureTool("social_search", "social_media")]
+    )
 
     filtered = asyncio.run(
         business_agent_module._business_agent_tools(_config(), "public_signal")
@@ -124,8 +128,13 @@ def test_response_strategy_does_not_get_mcp_write_tools(monkeypatch) -> None:
 
 
 # 验证所有角色都拒绝未知领域。
-@pytest.mark.parametrize("role", ["public_signal", "internal_knowledge", "risk_assessment", "response_strategy"])
-def test_unknown_domain_is_denied_for_every_business_agent(monkeypatch, role: str) -> None:
+@pytest.mark.parametrize(
+    "role",
+    ["public_signal", "internal_knowledge", "risk_assessment", "response_strategy"],
+)
+def test_unknown_domain_is_denied_for_every_business_agent(
+    monkeypatch, role: str
+) -> None:
     """An unregistered domain cannot pass a role's allowlist fallback."""
     tools = [
         FixtureTool("ResearchComplete"),
@@ -134,9 +143,7 @@ def test_unknown_domain_is_denied_for_every_business_agent(monkeypatch, role: st
     ]
     _patch_tool_source(monkeypatch, tools)
 
-    filtered = asyncio.run(
-        business_agent_module._business_agent_tools(_config(), role)
-    )
+    filtered = asyncio.run(business_agent_module._business_agent_tools(_config(), role))
 
     assert _names(filtered) == {"ResearchComplete"}
 
@@ -188,9 +195,9 @@ def test_agent_domain_allowlists_are_explicit() -> None:
     assert PUBLIC_OPINION_AGENT_SPECS["public_signal"].allowed_domains == frozenset(
         {"core", "web_search", "social_media"}
     )
-    assert PUBLIC_OPINION_AGENT_SPECS["internal_knowledge"].allowed_domains == frozenset(
-        {"core", "rag"}
-    )
+    assert PUBLIC_OPINION_AGENT_SPECS[
+        "internal_knowledge"
+    ].allowed_domains == frozenset({"core", "rag"})
     assert PUBLIC_OPINION_AGENT_SPECS["risk_assessment"].allowed_domains == frozenset(
         {"core", "web_search", "rag", "social_media"}
     )
@@ -216,3 +223,33 @@ def test_shared_loader_tags_known_builtin_domains() -> None:
 
     assert get_tool_domain(core_tools["ResearchComplete"]) == "core"
     assert get_tool_domain(core_tools["think_tool"]) == "core"
+
+
+def test_native_catalog_fences_effect_changes_and_restores_legacy_tools(monkeypatch):
+    from dataclasses import replace
+
+    from open_deep_research.social_media.tools import get_social_media_tools
+
+    monkeypatch.setenv("SOCIAL_MEDIA_DATA_PATHS", "fixture")
+    monkeypatch.delenv("SOCIAL_MEDIA_API_BASE_URL", raising=False)
+    monkeypatch.delenv("PUBLIC_OPINION_API_BASE_URL", raising=False)
+    social = get_social_media_tools()[0]
+    assert social.effect == "read"
+    # The social adapter is synchronous, so cancellation must drain its thread.
+    assert social.drain_on_cancel
+    available = [social]
+    catalog = business_agent_module._tool_catalog(available)
+    assert catalog[0]["effect"] == "read"
+    assert business_agent_module._restore_role_tools(catalog, available) == available
+    with pytest.raises(ValueError, match="definitions changed"):
+        business_agent_module._restore_role_tools(
+            catalog, [replace(social, effect="protected")]
+        )
+
+    old_catalog = [{key: value for key, value in catalog[0].items() if key != "effect"}]
+    restored = business_agent_module._restore_role_tools(old_catalog, available)
+    assert restored[0].sdk_tool is social.sdk_tool
+    assert restored[0].effect == "protected"
+    old_catalog[0]["schema"] = {}
+    with pytest.raises(ValueError, match="definitions changed"):
+        business_agent_module._restore_role_tools(old_catalog, available)

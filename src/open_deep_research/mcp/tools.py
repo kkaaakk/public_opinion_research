@@ -235,7 +235,10 @@ def _tag_tools_with_domain(tools: list[BaseTool], server_name: str) -> list[Base
         if isinstance(tool, dict):
             continue
         metadata = dict(getattr(tool, "metadata", None) or {})
-        metadata.setdefault("mcp_server", server_name)
+        # An MCP server can supply arbitrary annotation fields. Replay policy
+        # comes from the trusted local transport configuration below.
+        metadata.pop("effect", None)
+        metadata["mcp_server"] = server_name
         tool.metadata = metadata
     return tagged
 

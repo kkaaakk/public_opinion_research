@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from agents import Agent, ModelSettings, RunConfig
+from agents import Agent, FunctionTool, ModelSettings, RunConfig
 from langchain_core.callbacks import BaseCallbackHandler
 
 from open_deep_research.configuration import Configuration
@@ -26,6 +26,9 @@ from open_deep_research.research_graph import (
 )
 from open_deep_research.research_graph.workspace import TaskDescriptor
 from open_deep_research.runtime.sdk_context import SDKContextHarness
+from open_deep_research.runtime.sdk_runtime import _RunBudget
+from open_deep_research.runtime.tool_executor import ToolExecutor
+from open_deep_research.tools import BusinessTool
 
 LOGGER = logging.getLogger(__name__)
 
@@ -207,7 +210,7 @@ async def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
 
-    tool = producer.function_tool(
+    declared = FunctionTool(
         name="lookup_notice",
         description="Read one synthetic Orion validation notice. A and B are independent; request both together before answering.",
         params_json_schema={
@@ -216,8 +219,19 @@ async def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "required": ["notice_id"],
             "additionalProperties": False,
         },
-        invoke=lookup_notice,
+        on_invoke_tool=lookup_notice,
     )
+    business = BusinessTool(declared, domain="web_search", effect="read")
+    executor = ToolExecutor(
+        role=producer_workspace.role,
+        allowed_domains=frozenset({"web_search"}),
+        config=config,
+        runtime_config={},
+        budget=_RunBudget(initial={}),
+        tools={business.name: business},
+    )
+    producer.tool_executor = executor
+    tool = executor.bind(declared)
     settings = ModelSettings(max_tokens=2048, parallel_tool_calls=True)
     if parse_model_ref(model_ref).provider == "deepseek":
         settings.extra_body = {"thinking": {"type": args.thinking}}

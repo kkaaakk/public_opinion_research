@@ -13,14 +13,12 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from agents import Agent, Model, ModelSettings, RunConfig
-from agents.exceptions import MaxTurnsExceeded, MCPToolCancellationError
+from agents import Agent, FunctionTool, Model, ModelSettings, RunConfig
+from agents.exceptions import MaxTurnsExceeded
 from agents.retry import ModelRetrySettings
 from agents.run import ModelInputData
-from agents.tool_context import ToolContext
 from dbos import DBOS
 from dbos import error as dbos_error
-from jsonschema.validators import validator_for
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from sqlalchemy.exc import SQLAlchemyError
@@ -30,10 +28,8 @@ from open_deep_research.budget import (
     begin_model_call,
     budget_capture,
     budget_from_sdk_usage,
-    budget_from_tool_calls,
     budget_usage_with_reason,
     can_spend_model_call,
-    can_spend_tool_call,
     capture_budget_usage,
     context_pressure_ratio,
     diff_budget_usage,
@@ -48,6 +44,7 @@ from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
 from open_deep_research.mcp.domain_filter import get_tool_domain
+from open_deep_research.mcp.tool_wrapper import mcp_function_tool
 from open_deep_research.observability.telemetry import (
     annotate,
     business_span,
@@ -55,23 +52,18 @@ from open_deep_research.observability.telemetry import (
 )
 from open_deep_research.research_graph.compaction import summarize_compactable_history
 from open_deep_research.research_graph.workspace import ResearchWorkspace
-from open_deep_research.runtime.sdk_context import SDKContextHarness, tool_usage
-from open_deep_research.tools.registry import tool_effect
-from open_deep_research.web.run_data import digest
+from open_deep_research.runtime.sdk_context import SDKContextHarness
+from open_deep_research.runtime.tool_executor import ToolExecutor, tool_usage
+from open_deep_research.tools import BusinessTool, tool_result_text
 from open_deep_research.workflow.dbos_config import native_client, settings
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
-    commit_receipt,
-    finish_operation,
     owned_io,
     stage_context,
-    start_operation,
-    unconfirmed,
 )
 
 SDK_RUNTIME_VERSION = "sdk-phase5-v1"
 
-ToolExecutor = Callable[..., Awaitable[tuple[str, dict[str, Any], bool]]]
 CompressionCallback = Callable[
     [list[Any], str, str, dict[str, Any]],
     Awaitable[tuple[str, list[str], dict[str, Any]]],
@@ -95,20 +87,6 @@ class SDKContextLimitExceeded(RuntimeError):
 
 class _ReasoningStopped(Exception):
     """Stop Runner at a public hook, then finish the existing business report."""
-
-
-class _ToolRejected(Exception):
-    """Return a paired SDK tool error without invoking the business tool."""
-
-
-def _text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list) and all(
-        isinstance(block, dict) and block.get("type") == "text" for block in value
-    ):
-        return "\n".join(str(block.get("text", "")) for block in value)
-    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 class MeteredModel(Model):
@@ -487,7 +465,6 @@ class SDKAgentRuntime:
         tools: list[Any],
         initial_budget: Mapping[str, Any],
         compress_report: CompressionCallback,
-        execute_tool: ToolExecutor | None = None,
     ) -> None:
         """Bind one AgentSpec to its SDK model, tools and ResearchWorkspace."""
         self.role = role
@@ -500,8 +477,6 @@ class SDKAgentRuntime:
         self.system_prompt = system_prompt
         self.tools = tools
         self.initial_budget = dict(initial_budget or {})
-        # Compatibility-only constructor keyword; Runner owns tool execution.
-        del execute_tool
         self.compress_report = compress_report
         self.rolling_summary = str(self.agent_state.get("rolling_summary") or "")
         self.workspace.rolling_summary = self.rolling_summary
@@ -581,250 +556,23 @@ class SDKAgentRuntime:
         """Return cumulative business usage for admission, without submitting it."""
         return self.run_budget.projected()
 
-    def _register_tool(self, tool: BaseTool) -> Any:
-        name = tool.name
+    def _register_tool(
+        self, tool: BusinessTool | BaseTool, executor: ToolExecutor
+    ) -> FunctionTool:
         if get_tool_domain(tool) not in self.spec.allowed_domains:
-            raise ValueError(f"Tool {name!r} is outside {self.role}'s allowed domains.")
-        # tool_call_schema excludes RunnableConfig and injected runtime fields.
-        # Keep optional/default fields unchanged instead of making them required.
-        schema = tool.tool_call_schema
-        schema = schema if isinstance(schema, dict) else schema.model_json_schema()
-        validator_class = validator_for(schema)
-        validator_class.check_schema(schema)
-        validator = validator_class(schema)
-        # The harness retains these invokers through its SDK Agent. Capture only
-        # execution dependencies, never the Runtime or one of its bound methods.
-        allowed_domains = self.spec.allowed_domains
-        role = self.role
-        effect = tool_effect(tool)
-        config = self.config
-        runtime_config = self.runtime_config
-        budget = self.run_budget
-        tool_tasks = self._tool_tasks
-
-        async def invoke(context: ToolContext[Any], arguments: str) -> str:
-            # Recheck execution permission rather than relying only on visibility.
-            if get_tool_domain(tool) not in allowed_domains or tool.name != name:
-                raise _ToolRejected(
-                    f"Tool {name!r} is no longer authorized for {role}."
-                )
-            # A repeated native call ID shares its original result, including an
-            # in-flight execution. Different IDs remain separate business calls.
-            previous = tool_tasks.get(context.tool_call_id)
-            if previous is not None:
-                return await asyncio.shield(previous)
-
-            async def execute() -> str:
-                call = {"name": name, "id": context.tool_call_id}
-                increment = budget_from_tool_calls([call], {name: tool})
-                if is_over_budget(
-                    config, budget.projected()
-                ) or not can_spend_tool_call(config, budget.projected(), increment):
-                    budget.add(
-                        budget_usage_with_reason(
-                            f"Budget guard skipped {name}: tool or search budget exhausted."
-                        ),
-                    )
-                    raise _ToolRejected(
-                        f"Budget guard skipped {name}: tool or search budget exhausted."
-                    )
-                # Reserve before awaiting: SDK parallel calls cannot overbook.
-                budget.add(increment)
-                args = json.loads(arguments)
-                validator.validate(args)
-                scope = stage_context.get()
-                record = context.context.results[context.tool_call_id]
-                operation_id = None
-                call_config = runtime_config
-                if scope is not None and effect == "protected":
-                    operation_id = digest(
-                        (DBOS.workflow_id, name, context.tool_call_id)
-                    )
-                    try:
-                        _, cancelled = await owned_io(
-                            start_operation,
-                            scope.run_id,
-                            DBOS.workflow_id,
-                            DBOS.executor_id,
-                            operation_id,
-                            name,
-                            digest(args),
-                        )
-                    except SQLAlchemyError as exc:
-                        raise ExecutionControlError(
-                            "External tool admission storage unavailable"
-                        ) from exc
-                    if cancelled is not None:
-                        await commit_receipt(
-                            finish_operation, scope.run_id, operation_id, "not_executed"
-                        )
-                        raise cancelled
-                    record.operation_id = operation_id
-                    call_config = {
-                        **runtime_config,
-                        "metadata": {
-                            **runtime_config.get("metadata", {}),
-                            "operation_id": operation_id,
-                            "idempotency_key": operation_id,
-                        },
-                    }
-                if scope is not None:
-                    try:
-                        await scope.observe(
-                            "tool",
-                            {
-                                "role": role,
-                                "name": name,
-                                "tool_call_id": context.tool_call_id,
-                                "invocation_id": context.context.sdk_run_id,
-                                "operation_id": operation_id,
-                                "status": "started",
-                                **increment,
-                            },
-                            call_id=context.tool_call_id + ":started",
-                        )
-                    except BaseException as exc:
-                        if operation_id is not None:
-                            await commit_receipt(
-                                finish_operation,
-                                scope.run_id,
-                                operation_id,
-                                "not_executed",
-                            )
-                        if isinstance(exc, SQLAlchemyError):
-                            raise ExecutionControlError(
-                                "Tool observation storage unavailable"
-                            ) from exc
-                        raise
-                record.effect_status = "started"
-                try:
-                    with budget_capture() as captured:
-                        try:
-                            output = await tool.ainvoke(
-                                {
-                                    "type": "tool_call",
-                                    "id": context.tool_call_id,
-                                    "name": name,
-                                    "args": args,
-                                },
-                                call_config,
-                            )
-                        finally:
-                            budget.add(captured)
-                    result = decode_output(output)
-                except BaseException as exc:
-                    if operation_id is not None:
-                        await commit_receipt(
-                            finish_operation, scope.run_id, operation_id, "unknown"
-                        )
-                        record.effect_status = "uncertain"
-                        if isinstance(exc, Exception):
-                            raise unconfirmed(
-                                "External tool result requires reconciliation"
-                            ) from exc
-                    raise
-                if operation_id is not None:
-                    await commit_receipt(
-                        finish_operation, scope.run_id, operation_id, "returned"
-                    )
-                record.effect_status = "returned"
-                if scope is not None:
-                    await scope.observe(
-                        "tool",
-                        {
-                            "role": role,
-                            "name": name,
-                            "tool_call_id": context.tool_call_id,
-                            "invocation_id": context.context.sdk_run_id,
-                            "operation_id": operation_id,
-                            "status": "returned",
-                        },
-                        call_id=context.tool_call_id + ":returned",
-                    )
-                return result
-
-            def decode_output(output):
-                if isinstance(output, ToolMessage):
-                    if output.status == "error":
-                        raise _ToolRejected(_text(output.content))
-                    artifact = output.artifact
-                    structured = (
-                        artifact.get("structured_content")
-                        if isinstance(artifact, dict)
-                        else getattr(artifact, "structured_content", None)
-                    )
-                    content = output.content
-                    if isinstance(content, list) and any(
-                        not isinstance(block, dict) or block.get("type") != "text"
-                        for block in content
-                    ):
-                        raise _ToolRejected(
-                            "SDK business tools currently support text/structured results; "
-                            "multimodal MCP outputs require a verified content adapter."
-                        )
-                    output = (
-                        {"content": content, "structured_content": structured}
-                        if structured is not None
-                        else content
-                    )
-                # These are explicit existing business/protocol error envelopes,
-                # not guesses based on arbitrary tool text or the SDK end hook.
-                envelope = (
-                    output.get("structured_content", output)
-                    if isinstance(output, dict)
-                    else output
-                )
-                if isinstance(output, str):
-                    try:
-                        envelope = json.loads(output)
-                    except ValueError:
-                        pass
-                if isinstance(envelope, dict) and envelope.get("status") == "cancelled":
-                    raise MCPToolCancellationError(_text(output))
-                if isinstance(envelope, dict) and (
-                    ("isError" in envelope and envelope["isError"] is not False)
-                    or ("ok" in envelope and envelope["ok"] is False)
-                    or ("success" in envelope and envelope["success"] is not True)
-                    or (
-                        "status" in envelope
-                        and envelope["status"]
-                        not in {"ok", "success", "succeeded", "completed"}
-                    )
-                ):
-                    raise _ToolRejected(_text(output))
-                if (
-                    name == "rag_search"
-                    and isinstance(output, str)
-                    and output.startswith("Local RAG search failed:")
-                ):
-                    raise _ToolRejected(output)
-                return _text(output)
-
-            pending = asyncio.create_task(execute())
-            tool_tasks[context.tool_call_id] = pending
-            if (
-                getattr(tool, "func", None) is not None
-                and getattr(tool, "coroutine", None) is None
-            ):
-                # A running thread cannot be killed by cancelling its awaiter.
-                # Keep the collector live so the existing bounded exit drain
-                # records its actual result and nested usage when it completes.
-                while True:
-                    try:
-                        return await asyncio.shield(pending)
-                    except asyncio.CancelledError:
-                        if pending.cancelled():
-                            raise
-            return await pending
-
-        return self.harness.function_tool(
-            name=name,
-            description=tool.description or name,
-            params_json_schema=schema,
-            invoke=invoke,
-            strict_json_schema=False,
-            error_formatter=lambda _context, error: f"Error executing tool: {error}",
-        )
+            raise ValueError(
+                f"Tool {tool.name!r} is outside {self.role}'s allowed domains."
+            )
+        if isinstance(tool, BusinessTool):
+            declared = tool.sdk_tool
+            drain_on_cancel = tool.drain_on_cancel
+        else:
+            # MCP keeps its server-owned Schema and protocol invoker.
+            declared = mcp_function_tool(tool)
+            drain_on_cancel = bool(
+                getattr(tool, "func", None) and not getattr(tool, "coroutine", None)
+            )
+        return executor.bind(declared, drain_on_cancel=drain_on_cancel)
 
     def _report_messages(self, task: str) -> list[Any]:
         messages: list[Any] = [HumanMessage(content=task)]
@@ -861,7 +609,8 @@ class SDKAgentRuntime:
                 output_ids.add(item["call_id"])
                 messages.append(
                     ToolMessage(
-                        content=_text(item["output"]), tool_call_id=item["call_id"]
+                        content=tool_result_text(item["output"]),
+                        tool_call_id=item["call_id"],
                     )
                 )
             elif item.get("role") == "assistant":
@@ -881,7 +630,7 @@ class SDKAgentRuntime:
             if result.tool_call_id not in output_ids and result.status != "running":
                 messages.append(
                     ToolMessage(
-                        content=_text(result.observation),
+                        content=tool_result_text(result.observation),
                         tool_call_id=result.tool_call_id,
                         name=result.tool_name,
                     )
@@ -895,7 +644,6 @@ class SDKAgentRuntime:
                 "SDKAgentRuntime requires an official SDK Model, not a LangChain model."
             )
         self.run_budget = _RunBudget(initial=self.initial_budget)
-        self._tool_tasks: dict[str, asyncio.Task[str]] = {}
         # Preserve the existing Producer's admitted tools, excluding controls.
         self.harness = _BusinessAgentHarness(
             workspace=self.workspace,
@@ -904,27 +652,34 @@ class SDKAgentRuntime:
             evidence_tools=frozenset(
                 tool.name
                 for tool in self.tools
-                if isinstance(tool, BaseTool)
+                if isinstance(tool, (BusinessTool, BaseTool))
                 and tool.name not in {"think_tool", "ResearchComplete"}
             ),
         )
-        registered = []
-        names: set[str] = set()
+        tools: dict[str, BusinessTool | BaseTool] = {}
         for tool in self.tools:
-            if not isinstance(tool, BaseTool):
+            if not isinstance(tool, (BusinessTool, BaseTool)):
                 raise TypeError(
-                    "SDK business runtime requires callable BaseTools; hosted/native search is not verified."
+                    "SDK business runtime requires local function tools; hosted/native search is not verified."
                 )
-            if tool.name in names:
+            if tool.name in tools:
                 raise ValueError(f"Duplicate business tool name: {tool.name}")
-            names.add(tool.name)
-            registered.append(self._register_tool(tool))
+            tools[tool.name] = tool
+        executor = ToolExecutor(
+            self.role,
+            self.spec.allowed_domains,
+            self.config,
+            self.runtime_config,
+            self.run_budget,
+            tools,
+        )
+        self.harness.tool_executor = executor
         scope = stage_context.get()
         self.agent = Agent(
             name=self.spec.display_name,
             instructions=self.system_prompt,
             model=MeteredModel(self.model) if scope else self.model,
-            tools=registered,
+            tools=[self._register_tool(tool, executor) for tool in tools.values()],
             output_type=None,
             model_settings=ModelSettings(
                 max_tokens=self.config.research_model_max_tokens,

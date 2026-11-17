@@ -99,7 +99,14 @@ def test_official_runner_process_reuses_model_and_tool(pg_database, tmp_path, wi
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "window", ["runner-model", "runner-tool", "runner-batch", "batch-error-cache"]
+    "window",
+    [
+        "runner-model",
+        "runner-tool",
+        "runner-legacy-catalog",
+        "runner-batch",
+        "batch-error-cache",
+    ],
 )
 def test_business_runner_process_restores_harness_and_fences_unknown_batch(
     pg_database, tmp_path, window
@@ -155,10 +162,21 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
 
         steps = native_client().list_workflow_steps(public_id)
         assert any("_model_call_step" in s["function_name"] for s in steps)
-        if window == "runner-tool":
-            assert any(
-                s["function_name"] == "por.agent_tool" and s["output"] for s in steps
+        if window in {"runner-tool", "runner-legacy-catalog"}:
+            catalog = next(
+                s["output"] for s in steps if s["function_name"] == "por.role_tools"
             )
+            assert catalog[0].get("effect") == (
+                None if window == "runner-legacy-catalog" else "protected"
+            )
+            tool_step = next(s for s in steps if s["function_name"] == "por.agent_tool")
+            receipt = tool_step["output"]
+            assert receipt["output"]
+            assert receipt["record"]["tool_call_id"] == "effect-public_signal"
+            assert receipt["record"]["status"] == "succeeded"
+            assert receipt["record"]["operation_id"]
+            assert receipt["record"]["effect_status"] == "returned"
+            assert receipt["budget"]["tool_calls"] == 1
         lc_before = (
             effect_count(tmp_path, "lc_models")
             if window in {"runner-batch", "batch-error-cache"}
@@ -221,6 +239,21 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
             assert after[internal_id].output == committed
             assert after[internal_id].completed_at == before[internal_id].completed_at
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == 2
+        if window in {"runner-tool", "runner-legacy-catalog"}:
+            restored_steps = native_client().list_workflow_steps(public_id)
+            assert [
+                s for s in restored_steps if s["function_name"] == "por.agent_tool"
+            ] == [tool_step]
+            graph_context = [
+                s["output"]
+                for s in restored_steps
+                if s["function_name"] == "por.agent_context" and s["output"]
+            ]
+            assert any(
+                state["state"]["results"]["effect-public_signal"]["consumed"]
+                for state in graph_context
+                if "effect-public_signal" in state["state"]["results"]
+            )
     finally:
         kill_owned(proc)
 

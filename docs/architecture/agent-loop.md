@@ -24,8 +24,8 @@ flowchart LR
     ROLE --> RT["SDKAgentRuntime"]
     RT --> H["SDKContextHarness"]
     H --> SDK["官方 DBOSRunner.run / Agents SDK"]
-    SDK --> TS["por.agent_tool"]
-    TS --> Tools["Tavily / RAG / MCP / 社媒等"]
+    SDK --> TE["ToolExecutor · 准入、预算、por.agent_tool 和回执"]
+    TE --> Tools["Tavily / RAG / MCP / 社媒等"]
     H --> Graph[("Research Graph")]
     REPORT --> Mem[("可选长期 Memory")]
     EX --> EV["por.events"]
@@ -49,7 +49,7 @@ flowchart LR
 | --- | --- |
 | API / RunClient | `web/runs.py:create_run` 验证令牌、Idempotency-Key、Session 格式与参数。`web/durable.py:RunClient` 按 owner 检查 Session、请求指纹、容量及未结算效果，用 `DBOSClient` 接受请求并提交取消、审批、澄清与重试授权。CLI 是 HTTP 客户端。 |
 | DBOS | `web/executor.py:launch` 注册队列并启动监听。`workflow/dbos_workflow.py` 定义 Workflow 和 Step。DBOS 用同一 PostgreSQL 中的 journal 决定恢复位置，管理 Workflow 状态、消息、Event、Stream 及 rewind。 |
-| Agent Runtime / Harness | `runtime/business_agent.py:run_business_agent` 按 AgentSpec 装配任务和工具，经 `SDKAgentRuntime.run` 进入 `SDKContextHarness.run`。Harness 注册工具与 hooks，管理证据、角色上下文和私有记忆输入，生产 Workflow 内调用官方 `DBOSRunner.run`。Runner 持久化模型响应并约束工具进入顺序。Harness 用 `por.agent_tool`、`por.agent_context` 和 `por.agent_settlement` 三类 Step 恢复工具结果及局部上下文。 |
+| Agent Runtime / Harness | `runtime/business_agent.py:run_business_agent` 按 AgentSpec 装配任务和工具，经 `SDKAgentRuntime.run` 进入 `SDKContextHarness.run`。Runtime 把 SDK 声明绑定到 `ToolExecutor`，后者负责准入、预算、`por.agent_tool`、去重和恢复。Harness 管理 hooks、证据、角色上下文和私有记忆输入，生产 Workflow 内调用官方 `DBOSRunner.run`。Runner 持久化模型响应并约束工具进入顺序。Harness 用 `por.agent_context` 和 `por.agent_settlement` 恢复上下文，并接收 `por.agent_tool` 恢复后的工具记录。 |
 | 业务可靠性 | `budget.py` 负责共享配额、最终报告预留及 `model_attempts` 收据。`workflow/execution.py` 结合取消意图和原生 Executor 所有权保护外部效果，`operations` 只记录需要保护的工具。Graph、Memory 与 History 使用各自的稳定业务键。 |
 | 结果交付 | `events_workflow` 单写 Stream。`RunClient.get` 和 `web/observations.py` 按需查询原生状态、输出及业务结算。`web/runs.py:event_stream` 提供 SSE，`finalize_workflow` 清算、归档补偿及执行用户已授权的重试。History 有独立读取接口。 |
 
@@ -120,7 +120,7 @@ flowchart TD
 
 ### 执行可靠性
 
-匹配应用版本和 Executor 身份重启后，DBOS 从持久输入重新进入 Workflow，读取已提交的 Step 结果。SDK 的 `_model_call_step` 返回已保存的模型响应，`por.agent_tool` 返回已保存的工具输出及局部用量，Context Step 补齐 Harness 所需状态。已完成的 Step 命中 journal 时不会进入 provider 函数。子 Workflow 使用稳定 ID，可恢复一侧 Producer 的未完成部分并读取另一侧结果。父 Workflow 在两侧齐备后用同一 reducer 和固定顺序合并。 [DBOS 恢复](https://docs.dbos.dev/architecture#how-workflow-recovery-works) · [官方 DBOSRunner 集成](https://docs.dbos.dev/integrations/openai-agents)
+匹配应用版本和 Executor 身份重启后，DBOS 从持久输入重新进入 Workflow，读取已提交的 Step 结果。SDK 的 `_model_call_step` 返回已保存的模型响应，`ToolExecutor` 调度的 `por.agent_tool` 返回已保存的工具输出及局部用量，Context Step 补齐 Harness 所需状态。已完成的 Step 命中 journal 时不会进入 provider 函数或业务工具。子 Workflow 使用稳定 ID，可恢复一侧 Producer 的未完成部分并读取另一侧结果。父 Workflow 在两侧齐备后用同一 reducer 和固定顺序合并。 [DBOS 恢复](https://docs.dbos.dev/architecture#how-workflow-recovery-works) · [官方 DBOSRunner 集成](https://docs.dbos.dev/integrations/openai-agents)
 
 原生取消会沿 child Workflow 级联，根可能先进入终态。Finalizer 再检查仍活跃的业务子 Workflow，并等待已发起调用结算。人工重试需要新键、观测到的 `state_version`、当前代次终态已交付以及安全失败。`RunClient.retry` 只写授权和消息；`por.finalize` 验证授权绑定的实际失败版本和外部回执，按失败叶子到根逐个 `rewind_workflow` 并等待子结果。安全目标限于可重试的 Plan、Review 或 Report 后缀。旧键只能确认原授权。 [DBOS 取消与 rewind](https://docs.dbos.dev/python/tutorials/workflow-management)
 

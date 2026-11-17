@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from open_deep_research import budget
-from open_deep_research.runtime import sdk_runtime
+from open_deep_research.runtime import tool_executor
 from open_deep_research.workflow import execution
 
 pytestmark = pytest.mark.integration
@@ -20,16 +20,16 @@ def test_finished_receipt_retries_control_only(
     case = native_case
     injected = []
     lock = threading.Lock()
-    module = budget if boundary == "model" else sdk_runtime
+    module = budget if boundary == "model" else tool_executor
     name = "finish_model_attempt" if boundary == "model" else "finish_operation"
     original = getattr(module, name)
-    original_effect = sdk_runtime.tool_effect
+    original_effect = tool_executor.tool_effect
 
     def effect(tool):
         return "protected" if tool.name == "web_search" else original_effect(tool)
 
     if boundary == "protected_tool":
-        monkeypatch.setattr(sdk_runtime, "tool_effect", effect)
+        monkeypatch.setattr(tool_executor, "tool_effect", effect)
 
     def fail_once(*args):
         with lock:
