@@ -360,6 +360,7 @@ class SDKContextHarness(RunHooks):
         input_items: list[TResponseInputItem],
     ) -> None:
         """Record the public lifecycle order of actual model requests."""
+        self.model_calls += 1
         self.events.append(("llm_start", str(self.model_calls)))
         self._model_started_at = time.monotonic()
         await self._observe("model_started")

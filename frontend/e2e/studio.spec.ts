@@ -87,26 +87,6 @@ test('actual FastAPI → DBOS → SDK → Graph: approval, trace, replay, refres
   });
   expect(readability).toBeGreaterThanOrEqual(12);
   await page.getByRole('tab', { name: 'SDK 追踪', exact: true }).click();
-  const debugPage = await page.request.get(`/api/runs/${id}/event-page?after=0&limit=500`, {
-    headers: { Authorization: 'Bearer studio-browser-test-only' },
-  });
-  const debugItems = (await debugPage.json()).items.filter(
-    (e: { type?: string }) => e.type === 'sdk_event',
-  );
-  console.log(
-    'SDK_DEBUG',
-    JSON.stringify(
-      debugItems.map((e: Record<string, unknown>) => [
-        e.event,
-        e.role,
-        e.invocation_id,
-        e.model_turn,
-        e.tool_call_id,
-        e.status,
-      ]),
-    ),
-  );
-  console.log('ROW_DEBUG', await page.locator('.span-row').allTextContents());
   await expect(page.locator('.span-row')).toHaveCount(8); // six actual SDK calls + two tools
   await page.locator('.span-row').first().click();
   await expect(page.locator('.selected-detail')).toContainText('invocation_id');
