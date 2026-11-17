@@ -1301,7 +1301,6 @@ def test_native_workflow_matches_frozen_business_reference(
     with monkeypatch.context() as patch:
         state, cfg, *_ = install_sdk(patch, tmp_path / "reference")
         state["workflow"]["brief"] = result["plan"]["brief"]
-        state["research"]["run_id"] = run["run_id"]
         cfg["configurable"]["research_run_id"] = run["run_id"]
         # The oracle starts at unchanged research ownership, after the new Plan.
         # Account exactly the native planning artifacts rather than forging zero cost.
@@ -1637,14 +1636,9 @@ def test_research_results_are_joined_after_both_native_children(
     # DBOS JSON persistence sorts object keys. Observe the actual join before
     # serialization, then compare persisted values rather than JSON key order.
     assert len(joined) == 1
-    assert list(joined[0]["research"]["working_contexts"]) == [
-        "public_signal",
-        "internal_knowledge",
-    ]
+    assert set(joined[0]["agents"]) == {"public_signal", "internal_knowledge"}
     for role in ("public_signal", "internal_knowledge"):
         assert output["agents"][role] == joined[0]["agents"][role]
-        for field in ("working_contexts", "working_context_scopes"):
-            assert output["research"][field][role] == joined[0]["research"][field][role]
     assert result["usage"]["model_calls"] == 26
     assert len(result["role_reports"]) == 4
     assert len(case.runtimes) == 4

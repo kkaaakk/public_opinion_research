@@ -147,7 +147,7 @@ def main():
         failed = set()
 
         async def review(state, config):
-            run_id = state["research"]["run_id"]
+            run_id = config["configurable"]["research_run_id"]
             if (
                 "retry-once" in config["configurable"].get("organization_context", "")
                 and run_id not in failed
