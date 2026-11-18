@@ -10,7 +10,6 @@ from typing import Any
 from dbos import DBOS
 from langchain_core.messages import HumanMessage, SystemMessage, filter_messages
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool
 
 from open_deep_research.budget import (
     ainvoke_model_with_budget,
@@ -24,7 +23,6 @@ from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import remove_up_to_last_ai_message
 from open_deep_research.llm.errors import is_token_limit_exceeded
 from open_deep_research.mcp.domain_filter import get_tool_domain
-from open_deep_research.mcp.tool_wrapper import tool_schema
 from open_deep_research.models import configurable_chat_model
 from open_deep_research.models.sdk import sdk_model
 from open_deep_research.prompts import (
@@ -346,10 +344,10 @@ def _tool_catalog(tools: list[Any]) -> list[dict[str, Any]]:
             "name": tool.name,
             "domain": get_tool_domain(tool),
             "description": tool.description,
-            "schema": tool_schema(tool),
+            "schema": tool.sdk_tool.params_json_schema,
             "effect": tool_effect(tool),
         }
-        if isinstance(tool, (BusinessTool, BaseTool))
+        if isinstance(tool, BusinessTool)
         else tool
         for tool in tools
     ]

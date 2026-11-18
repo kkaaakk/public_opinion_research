@@ -302,13 +302,11 @@ def install_sdk(
 
         if role == "internal_knowledge" and local_tool is not None:
             return [local_tool]
-        entry = _tool(role, coroutine=search)
-        entry.metadata = {**(entry.metadata or {}), "effect": "read"}
-        result = [entry]
+        result = [_tool(role, coroutine=search, effect="read")]
         if mode == "complete":
-            finish = _tool(role, name="ResearchComplete", domain="core")
-            finish.metadata = {**(finish.metadata or {}), "effect": "read"}
-            result.append(finish)
+            result.append(
+                _tool(role, name="ResearchComplete", domain="core", effect="read")
+            )
         return result
 
     monkeypatch.setattr(business_agent, "SDKAgentRuntime", RecordingRuntime)
@@ -415,9 +413,9 @@ def test_real_sdk_failures_settle_and_never_replay_committed_tools(
 
 
 def test_python_workflow_with_real_local_mcp_transport(monkeypatch, tmp_path):
-    from langchain_mcp_adapters.tools import load_mcp_tools
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
+    from agents.mcp import MCPServerStdio
+
+    from open_deep_research.mcp.tool_wrapper import build_mcp_tool
 
     script = tmp_path / "phase3_mcp.py"
     script.write_text(
@@ -431,29 +429,45 @@ if __name__ == "__main__":
 """,
         encoding="utf-8",
     )
+    params = {"command": sys.executable, "args": [str(script)]}
+
+    def new_server():
+        return MCPServerStdio(
+            params,
+            name="phase3-synthetic",
+            cache_tools_list=False,
+            client_session_timeout_seconds=10,
+        )
+
+    async def discover():
+        server = new_server()
+        async with server:
+            mcp_tool = next(
+                tool for tool in await server.list_tools() if tool.name == "lookup"
+            )
+            return build_mcp_tool(
+                mcp_tool,
+                server,
+                server_name="phase3-synthetic",
+                server_factory=new_server,
+                public_name="knowledge__lookup",
+                domain="rag",
+                effect="read",
+            )
+
+    tool = asyncio.run(discover())
 
     async def run():
-        async with stdio_client(
-            StdioServerParameters(command=sys.executable, args=[str(script)])
-        ) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                tool = next(
-                    t for t in await load_mcp_tools(session) if t.name == "lookup"
-                )
-                tool.name = "knowledge__lookup"
-                tool.metadata = {"tool_domain": "rag"}
-                state, cfg, runtimes, _, _, _ = install_sdk(
-                    monkeypatch, tmp_path, local_tool=tool
-                )
-                result = await PythonWorkflow().ainvoke(state, cfg)
-                assert result["report"]["final"]
-                rt = next(rt for rt in runtimes if rt.role == "internal_knowledge")
-                assert (
-                    rt.harness.results["lookup-internal_knowledge"].status
-                    == "succeeded"
-                )
-                assert all(rt.harness.last_settlement.succeeded for rt in runtimes)
+        state, cfg, runtimes, _, _, _ = install_sdk(
+            monkeypatch, tmp_path, local_tool=tool
+        )
+        result = await PythonWorkflow().ainvoke(state, cfg)
+        assert result["report"]["final"]
+        rt = next(rt for rt in runtimes if rt.role == "internal_knowledge")
+        assert (
+            rt.harness.results["lookup-internal_knowledge"].status == "succeeded"
+        )
+        assert all(rt.harness.last_settlement.succeeded for rt in runtimes)
 
     asyncio.run(run())
 

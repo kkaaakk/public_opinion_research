@@ -1,18 +1,14 @@
-# 装配多 MCP 服务连接，处理令牌认证，并隔离单个服务的初始化失败。
-"""Multi-server MCP tool loader with fault isolation.
+# 用 Agents SDK 原生 MCP 客户端装配多服务工具，并隔离单个服务的初始化失败。
+"""Multi-server MCP tool loader using the official Agents SDK clients.
 
-Extracted from ``open_deep_research.utils`` so that MCP concerns live in a
-dedicated module.  Supports:
+Every server is built, connected and queried inside its own try/except block.
+A failure in one server (bad DSN, missing runtime, auth error, timeout, …) is
+logged as a warning and the remaining servers continue to load.
 
-* The **legacy** single-server ``mcp_config`` path (HTTP / streamable-http),
-  converted into the new multi-server registry for backward compatibility.
-* **Bytebase DBHub** — database query tools via stdio (or HTTP).
-* **Microsoft MarkItDown** — file-to-markdown conversion via stdio.
-* **Feishu / Lark Official MCP** — Feishu/Lark API tools via stdio.
-
-Every server is independently loaded: a failure in one server (bad DSN,
-missing runtime, auth error, …) is logged as a warning and the remaining
-servers continue to load.
+Discovery uses a short-lived SDK connection.  Each actual tool call opens its
+own connection through :mod:`open_deep_research.mcp.tool_wrapper`, so a stale
+session cannot be reused after disconnect and the unified ``ToolExecutor``
+still owns the durable call Step.
 """
 
 from __future__ import annotations
@@ -20,35 +16,26 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 import aiohttp
+from agents.mcp import MCPServer, MCPServerStdio, MCPServerStreamableHttp
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, StructuredTool, ToolException
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.mcp.domain_filter import tag_tools_with_domain
-from open_deep_research.mcp.tool_wrapper import wrap_mcp_tools
-
-# MCP adapter imports — gracefully degrade when incompatible versions are installed.
-# langchain_mcp_adapters may require a newer mcp SDK than currently installed.
-MCP_AVAILABLE = False
-MultiServerMCPClient = None  # type: ignore[assignment,misc]
-McpError = None  # type: ignore[assignment,misc]
-try:
-    from langchain_mcp_adapters.client import MultiServerMCPClient  # noqa: F811
-
-    from mcp import McpError  # noqa: F811
-
-    MCP_AVAILABLE = True
-except (ImportError, AttributeError) as _mcp_import_err:
-    import logging as _logging
-
-    _logging.getLogger(__name__).warning(
-        "MCP adapters unavailable (%s). MCP tools will be skipped.", _mcp_import_err
-    )
+from open_deep_research.mcp.tool_wrapper import (
+    allocate_tool_name,
+    build_mcp_tool,
+)
+from open_deep_research.tools import BusinessTool, ToolEffect
 
 logger = logging.getLogger(__name__)
+
+# Bound a hung MCP request without changing the DBHub query timeout (30s) or
+# ordinary document conversions.  Zero would disable the SDK read timeout.
+_MCP_SESSION_TIMEOUT_SECONDS = 300.0
+
 
 # ---------------------------------------------------------------------------
 # DSN security
@@ -142,12 +129,6 @@ async def get_mcp_access_token(
     return None
 
 
-# 从配置存储读取令牌，并检查有效期。
-
-
-# 把 MCP 令牌保存到当前运行配置对应的存储。
-
-
 # 复用有效令牌，必要时通过 Supabase 凭据获取或刷新令牌。
 async def fetch_tokens(config: RunnableConfig) -> dict[str, Any] | None:
     """Exchange a trusted Supabase token without an engine-owned token store."""
@@ -166,81 +147,43 @@ async def fetch_tokens(config: RunnableConfig) -> dict[str, Any] | None:
     return mcp_tokens
 
 
-# 包装工具认证错误，将 MCP 的未授权响应转换为可理解的结果。
-def wrap_mcp_authenticate_tool(tool: StructuredTool) -> StructuredTool:
-    """Wrap an MCP tool so that ``-32003`` errors surface as user-friendly messages.
-
-    Preserved from the legacy single-server code path.
-    """
-    original_coroutine = tool.coroutine
-
-    # 执行原工具并捕获认证异常，同时保留其他异常的传播行为。
-    async def _authentication_wrapper(**kwargs: Any) -> Any:
-        # 沿嵌套异常结构寻找实际的 McpError，以兼容异常分组。
-        def _find_mcp_error(exc: BaseException) -> McpError | None:
-            if isinstance(exc, McpError):
-                return exc
-            if hasattr(exc, "exceptions"):
-                for sub in exc.exceptions:
-                    if found := _find_mcp_error(sub):
-                        return found
-            return None
-
-        try:
-            return await original_coroutine(**kwargs)
-        except BaseException as original_error:
-            mcp_error = _find_mcp_error(original_error)
-            if mcp_error is None:
-                raise
-            error_code = getattr(mcp_error.error, "code", None)
-            error_data = getattr(mcp_error.error, "data", None) or {}
-            if error_code == -32003:
-                message_payload = error_data.get("message", {})
-                msg = "Required interaction"
-                if isinstance(message_payload, dict):
-                    msg = message_payload.get("text") or msg
-                if url := error_data.get("url"):
-                    msg = f"{msg} {url}"
-                raise ToolException(msg) from original_error
-            raise
-
-    tool.coroutine = _authentication_wrapper
-    return tool
-
-
 # ---------------------------------------------------------------------------
-# Domain tagging — maps each MCP server to a tool domain category
+# Server specifications
 # ---------------------------------------------------------------------------
 
-_SERVER_DOMAIN_MAP: dict[str, str] = {
-    "dbhub": "database",
-    "markitdown": "document",
-    "feishu": "feishu",
-    "legacy_mcp": "external_mcp",
-    "social_media": "social_media",
-}
 
+# 保存一个 MCP 服务的可信本地策略和 SDK 连接参数。
+@dataclass(frozen=True)
+class MCPServerSpec:
+    """Trusted local policy plus the SDK-native connection parameters.
 
-# 为 MCP 工具标注权限领域和服务来源，供角色过滤及追踪使用。
-def _tag_tools_with_domain(tools: list[BaseTool], server_name: str) -> list[BaseTool]:
-    """Tag every MCP tool with its server domain and MCP server name.
-
-    ``tool_domain`` drives business-scene filtering; ``mcp_server`` is bounded
-    correlation metadata that LangChain's native tool tracing exposes to
-    LangSmith.  Neither changes tool behavior.
+    ``domain`` and ``effect`` are deliberately supplied here, never from MCP
+    server annotations.  An external server cannot lower its own protection
+    level.
     """
-    domain = _SERVER_DOMAIN_MAP.get(server_name, "external_mcp")
-    tagged = tag_tools_with_domain(tools, domain)
-    for tool in tagged:
-        if isinstance(tool, dict):
-            continue
-        metadata = dict(getattr(tool, "metadata", None) or {})
-        # An MCP server can supply arbitrary annotation fields. Replay policy
-        # comes from the trusted local transport configuration below.
-        metadata.pop("effect", None)
-        metadata["mcp_server"] = server_name
-        tool.metadata = metadata
-    return tagged
+
+    name: str
+    domain: str
+    effect: ToolEffect
+    transport: Literal["stdio", "streamable_http"]
+    params: dict[str, Any]
+
+    # 创建未连接的 SDK MCP 客户端；发现和每次调用各自使用独立实例。
+    def create(self) -> MCPServer:
+        """Return a fresh SDK server object for one connection."""
+        if self.transport == "stdio":
+            return MCPServerStdio(
+                params=self.params,
+                name=self.name,
+                cache_tools_list=False,
+                client_session_timeout_seconds=_MCP_SESSION_TIMEOUT_SECONDS,
+            )
+        return MCPServerStreamableHttp(
+            params=self.params,
+            name=self.name,
+            cache_tools_list=False,
+            client_session_timeout_seconds=_MCP_SESSION_TIMEOUT_SECONDS,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -248,14 +191,11 @@ def _tag_tools_with_domain(tools: list[BaseTool], server_name: str) -> list[Base
 # ---------------------------------------------------------------------------
 
 
-# 把旧版单服务配置转换为多服务连接格式；配置不完整时不启用。
-async def _build_legacy_config(
+# 把旧版单服务配置转换为 SDK Streamable HTTP 服务；配置不完整时不启用。
+async def _build_legacy_server(
     configurable: Configuration, config: RunnableConfig
-) -> dict[str, Any] | None:
-    """Convert the old single-server ``mcp_config`` into the new multi-server format.
-
-    Returns ``None`` when the legacy config is absent or incomplete.
-    """
+) -> MCPServerSpec | None:
+    """Convert the old single-server ``mcp_config`` into a server spec."""
     if not (configurable.mcp_config and configurable.mcp_config.url):
         return None
     if not configurable.mcp_config.tools:
@@ -276,21 +216,25 @@ async def _build_legacy_config(
 
     server_url = configurable.mcp_config.url.rstrip("/") + "/mcp"
     logger.info("Legacy MCP server configured at %s", server_url)
-    return {
-        "url": server_url,
-        "headers": headers,
-        "transport": "streamable_http",
-    }
+    params: dict[str, Any] = {"url": server_url}
+    if headers:
+        params["headers"] = headers
+    return MCPServerSpec(
+        name="legacy_mcp",
+        domain="external_mcp",
+        effect="protected",
+        transport="streamable_http",
+        params=params,
+    )
 
 
-# 校验 Node.js 和数据库连接参数后构造 DBHub 配置，失败仅影响该服务。
-def _build_dbhub_config(configurable: Configuration) -> dict[str, Any] | None:
-    """Build the Bytebase DBHub connection config.
+# 校验 Node.js 和数据库连接参数后构造 DBHub 服务，失败仅影响该服务。
+def _build_dbhub_server(configurable: Configuration) -> MCPServerSpec | None:
+    """Build the Bytebase DBHub connection spec.
 
     All checks (Node.js version, DSN validity, …) live inside this function
     so that a failure here blocks **only** DBHub, not other MCP servers.
     """
-    # --- Node.js version guard (inside DBHub scope!) ---
     node_version = _check_node_version()
     if node_version is None:
         return None  # warning already logged
@@ -306,10 +250,14 @@ def _build_dbhub_config(configurable: Configuration) -> dict[str, Any] | None:
 
     if transport == "http":
         port = configurable.dbhub_http_port or 8080
-        return {
-            "url": f"http://localhost:{port}/mcp",
-            "transport": "streamable_http",
-        }
+        return MCPServerSpec(
+            name="dbhub",
+            domain="database",
+            # HTTP mode cannot prove the remote stays read-only.
+            effect="protected",
+            transport="streamable_http",
+            params={"url": f"http://localhost:{port}/mcp"},
+        )
 
     # stdio mode (default)
     args: list[str] = ["-y", "@bytebase/dbhub", "--transport", "stdio"]
@@ -317,25 +265,30 @@ def _build_dbhub_config(configurable: Configuration) -> dict[str, Any] | None:
     # Defence-in-depth safety flags (primary access control is at the DB level)
     args.extend(["--read-only", "--max-rows", "100", "--query-timeout", "30"])
 
-    return {
-        "command": "npx",
-        "args": args,
-        "transport": "stdio",
-    }
+    return MCPServerSpec(
+        name="dbhub",
+        domain="database",
+        # The adapter-owned stdio transport enforces read-only behavior.
+        effect="read",
+        transport="stdio",
+        params={"command": "npx", "args": args},
+    )
 
 
 # 构造通过标准输入输出启动 MarkItDown 文档转换服务的配置。
-def _build_markitdown_config(configurable: Configuration) -> dict[str, Any]:
+def _build_markitdown_server(configurable: Configuration) -> MCPServerSpec:
     """Microsoft official ``markitdown-mcp`` server (stdio)."""
-    return {
-        "command": "uv",
-        "args": ["run", "markitdown-mcp"],
-        "transport": "stdio",
-    }
+    return MCPServerSpec(
+        name="markitdown",
+        domain="document",
+        effect="read",
+        transport="stdio",
+        params={"command": "uv", "args": ["run", "markitdown-mcp"]},
+    )
 
 
 # 构造飞书/Lark MCP 连接，并应用工具预设白名单。
-def _build_feishu_config(configurable: Configuration) -> dict[str, Any] | None:
+def _build_feishu_server(configurable: Configuration) -> MCPServerSpec | None:
     """Feishu / Lark official MCP with tool-preset whitelist."""
     app_id = (configurable.feishu_app_id or "").strip()
     app_secret = (configurable.feishu_app_secret or "").strip()
@@ -367,48 +320,91 @@ def _build_feishu_config(configurable: Configuration) -> dict[str, Any] | None:
     if configurable.feishu_oauth_enabled:
         args.extend(["--oauth", "--token-mode", "user_access_token"])
 
-    return {
-        "command": "npx",
-        "args": args,
-        "transport": "stdio",
-    }
+    return MCPServerSpec(
+        name="feishu",
+        domain="feishu",
+        effect="protected",
+        transport="stdio",
+        params={"command": "npx", "args": args},
+    )
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Discovery and main entry point
 # ---------------------------------------------------------------------------
 
 
-# 逐个加载已启用的 MCP 服务、包装名称并收集工具；单服务失败时记录后继续。
+# 在一个短生命周期连接中发现服务方工具，并完成 SDK 原生声明转换。
+async def _load_server_tools(
+    spec: MCPServerSpec,
+    existing_tool_names: set[str],
+    *,
+    allowed_tool_names: set[str] | None = None,
+) -> list[BusinessTool]:
+    """Discover one server and return trusted ``BusinessTool`` declarations."""
+    server = spec.create()
+    async with server:
+        mcp_tools = await server.list_tools()
+        if allowed_tool_names is not None:
+            mcp_tools = [
+                tool for tool in mcp_tools if tool.name in allowed_tool_names
+            ]
+
+        loaded: list[BusinessTool] = []
+        taken = set(existing_tool_names)
+        for mcp_tool in mcp_tools:
+            public_name = allocate_tool_name(spec.name, mcp_tool.name, taken)
+            if public_name != mcp_tool.name:
+                logger.info(
+                    "MCP tool name conflict: '%s' from server '%s' → renaming to '%s'.",
+                    mcp_tool.name,
+                    spec.name,
+                    public_name,
+                )
+            try:
+                loaded.append(
+                    build_mcp_tool(
+                        mcp_tool,
+                        server,
+                        server_name=spec.name,
+                        server_factory=spec.create,
+                        public_name=public_name,
+                        domain=spec.domain,
+                        effect=spec.effect,
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    "MCP server '%s': tool '%s' could not be declared — skipping it.",
+                    spec.name,
+                    mcp_tool.name,
+                    exc_info=True,
+                )
+                continue
+            taken.add(public_name)
+        return loaded
+
+
+# 逐个加载已启用的 MCP 服务并收集工具；单服务失败时记录后继续。
 async def load_mcp_tools(
     config: RunnableConfig,
     existing_tool_names: set[str],
-) -> list[BaseTool]:
-    """Load tools from all configured MCP servers with fault isolation.
-
-    Each server is built, connected, and queried inside its own try/except
-    block.  A failure in one server (bad DSN, missing runtime, auth error,
-    network timeout, …) is logged as a warning — the remaining servers
-    continue to load normally.
-    """
-    if not MCP_AVAILABLE:
-        logger.debug("MCP adapters not installed; skipping MCP tool loading.")
-        return []
-
+) -> list[BusinessTool]:
+    """Load tools from all configured MCP servers with fault isolation."""
     configurable = Configuration.from_runnable_config(config)
-    servers: dict[str, dict[str, Any]] = {}
+    servers: list[MCPServerSpec] = []
 
     # 1) Legacy single-server mcp_config → "legacy_mcp"
-    legacy = await _build_legacy_config(configurable, config)
+    legacy = await _build_legacy_server(configurable, config)
     if legacy:
-        servers["legacy_mcp"] = legacy
+        servers.append(legacy)
 
     # 2) Bytebase DBHub
     if configurable.dbhub_enabled and configurable.dbhub_dsn:
         try:
-            dbhub_cfg = _build_dbhub_config(configurable)
-            if dbhub_cfg:
-                servers["dbhub"] = dbhub_cfg
+            dbhub = _build_dbhub_server(configurable)
+            if dbhub:
+                servers.append(dbhub)
         except Exception:
             logger.warning(
                 "Failed to build DBHub config — DBHub disabled.", exc_info=True
@@ -417,7 +413,7 @@ async def load_mcp_tools(
     # 3) Microsoft MarkItDown
     if configurable.markitdown_enabled:
         try:
-            servers["markitdown"] = _build_markitdown_config(configurable)
+            servers.append(_build_markitdown_server(configurable))
         except Exception:
             logger.warning(
                 "Failed to build MarkItDown config — MarkItDown disabled.",
@@ -427,64 +423,42 @@ async def load_mcp_tools(
     # 4) Feishu / Lark
     if configurable.feishu_enabled and configurable.feishu_app_id:
         try:
-            feishu_cfg = _build_feishu_config(configurable)
-            if feishu_cfg:
-                servers["feishu"] = feishu_cfg
+            feishu = _build_feishu_server(configurable)
+            if feishu:
+                servers.append(feishu)
         except Exception:
             logger.warning(
                 "Failed to build Feishu config — Feishu disabled.", exc_info=True
             )
 
-    if not servers:
-        return []
-
     # --- Per-server loading with full fault isolation ---
-    all_tools: list[BaseTool] = []
-
-    for server_name, server_conn in servers.items():
+    all_tools: list[BusinessTool] = []
+    for spec in servers:
+        allowed: set[str] | None = None
+        if (
+            spec.name == "legacy_mcp"
+            and configurable.mcp_config
+            and configurable.mcp_config.tools
+        ):
+            allowed = set(configurable.mcp_config.tools)
         try:
-            client = MultiServerMCPClient({server_name: server_conn})
-            tools = await client.get_tools()
-
-            # Legacy tool-name filtering (only for the old mcp_config path)
-            if (
-                server_name == "legacy_mcp"
-                and configurable.mcp_config
-                and configurable.mcp_config.tools
-            ):
-                allowed = set(configurable.mcp_config.tools)
-                tools = [t for t in tools if t.name in allowed]
-
-            # Apply auth-error wrapper to legacy tools
-            if server_name == "legacy_mcp" and configurable.mcp_config:
-                tools = [wrap_mcp_authenticate_tool(t) for t in tools]
-
-            # Wrap with server namespace — resolves conflicts explicitly
-            wrapped = wrap_mcp_tools(server_name, tools, existing_tool_names)
-            # Tag each tool with its domain category for scene-based filtering
-            wrapped = _tag_tools_with_domain(wrapped, server_name)
-            # These adapter-owned transports enforce read-only behavior.
-            # An arbitrary MCP server annotation cannot authorize replay.
-            if server_name == "markitdown" or (
-                server_name == "dbhub" and server_conn["transport"] == "stdio"
-            ):
-                for item in wrapped:
-                    item.metadata = {**(item.metadata or {}), "effect": "read"}
-            all_tools.extend(wrapped)
-            existing_tool_names.update(t.name for t in wrapped)
-
-            logger.info(
-                "MCP server '%s': loaded %d tools%s",
-                server_name,
-                len(wrapped),
-                f" (tools: {[t.name for t in wrapped]})" if wrapped else "",
+            loaded = await _load_server_tools(
+                spec, existing_tool_names, allowed_tool_names=allowed
             )
         except Exception:
             logger.warning(
                 "MCP server '%s' failed to load — other servers will continue.",
-                server_name,
+                spec.name,
                 exc_info=True,
             )
             continue
+        all_tools.extend(loaded)
+        existing_tool_names.update(tool.name for tool in loaded)
+        logger.info(
+            "MCP server '%s': loaded %d tools%s",
+            spec.name,
+            len(loaded),
+            f" (tools: {[tool.name for tool in loaded]})" if loaded else "",
+        )
 
     return all_tools

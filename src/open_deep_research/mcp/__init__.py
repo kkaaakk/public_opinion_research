@@ -18,7 +18,6 @@ from open_deep_research.mcp.domain_filter import (
     get_domain_label,
     get_tool_domain,
     iter_domain_labels,
-    tag_tools_with_domain,
     tool_domain_summary,
 )
 from open_deep_research.mcp.tools import load_mcp_tools
@@ -33,6 +32,5 @@ __all__ = [
     "get_domain_label",
     "get_tool_domain",
     "iter_domain_labels",
-    "tag_tools_with_domain",
     "tool_domain_summary",
 ]

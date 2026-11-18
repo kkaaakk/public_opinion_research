@@ -54,7 +54,7 @@
 - `src/open_deep_research/runtime/business_agent.py:_business_agent_tools`
 - `src/open_deep_research/runtime/business_agent.py:_execute_tool_safely`
 - `src/open_deep_research/mcp/tools.py:load_mcp_tools`
-- `src/open_deep_research/mcp/tool_wrapper.py:wrap_mcp_tools`
+- `src/open_deep_research/mcp/tool_wrapper.py:build_mcp_tool`
 - `src/open_deep_research/mcp/domain_filter.py:DOMAIN_REGISTRY`
 - `src/open_deep_research/social_media/tools.py:get_social_media_tools`
 - `docs/guide/social-media-skill.md`

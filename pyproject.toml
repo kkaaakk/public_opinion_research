@@ -14,7 +14,6 @@ dependencies = [
     "langchain-community>=0.3.9",
     "langchain-openai>=0.3.28",
     "langchain-anthropic>=0.3.15",
-    "langchain-mcp-adapters>=0.1.6",
     "langchain-deepseek>=0.1.2",
     "langchain-groq>=0.2.4",
     "openai>=1.99.2",
@@ -30,7 +29,7 @@ dependencies = [
     "langsmith>=0.3.37",
     "langchain-google-vertexai>=2.0.25",
     "langchain-google-genai>=2.1.5",
-    "mcp>=1.9.4",
+    "mcp>=1.19.0",
     "markitdown-mcp>=0.0.1a4",
     "langchain-aws>=0.2.28",
     "sentence-transformers>=3.0.0",
@@ -113,7 +112,7 @@ markers = [
 cache_dir = "${MYPY_CONFIG_FILE_DIR}/.tmp/mypy-cache"
 
 [tool.uv]
-# markitdown-mcp pins mcp~=1.8.0 but langchain-mcp-adapters needs mcp>=1.9.2.
-# Override to let uv resolve both together — markitdown-mcp is only invoked
-# as a subprocess (uv run markitdown-mcp) and is disabled by default.
-override-dependencies = ["mcp>=1.9.4"]
+# markitdown-mcp pins mcp~=1.8.0 while openai-agents 0.24.0 requires
+# mcp>=1.19.0. Override so uv can resolve both — markitdown-mcp runs only as
+# a subprocess (uv run markitdown-mcp) and is disabled by default.
+override-dependencies = ["mcp>=1.19.0"]

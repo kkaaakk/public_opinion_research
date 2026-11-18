@@ -209,7 +209,7 @@ def test_authenticated_mcp_is_not_connected_when_exchange_fails(monkeypatch):
         }
     }
     result = asyncio.run(
-        tools._build_legacy_config(Configuration.from_runnable_config(config), config)
+        tools._build_legacy_server(Configuration.from_runnable_config(config), config)
     )
     assert result is None
 

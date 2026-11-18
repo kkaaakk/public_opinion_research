@@ -57,8 +57,7 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monke
     async def role():
         nonlocal attempts
         attempts += 1
-        tool = _tool(coroutine=search)
-        tool.metadata = {**(tool.metadata or {}), "effect": "read"}
+        tool = _tool(coroutine=search, effect="read")
         model = ScriptedModel(
             [
                 [

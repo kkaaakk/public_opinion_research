@@ -13,7 +13,7 @@
 
 ## 1. 模块定位
 
-`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。四个业务角色通过 `_business_agent_tools` 按允许的领域筛选。普通 Python 工具用官方 `@function_tool` 声明：名称、描述、JSON Schema、参数校验和默认值都由 SDK 生成，工具体只把通过校验的参数交给 `ToolExecutor`。`tools/__init__.py:register_tool` 只附加 domain、effect 与取消排空策略，不重建声明。
+`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。四个业务角色通过 `_business_agent_tools` 按允许的领域筛选。普通 Python 工具用官方 `@function_tool` 声明：名称、描述、JSON Schema、参数校验和默认值都由 SDK 生成，工具体只把通过校验的参数交给 `ToolExecutor`。MCP 工具由官方 `MCPServerStdio` / `MCPServerStreamableHttp` 与 `MCPUtil.to_function_tool()` 生成同等声明。`tools/__init__.py:register_tool` 只附加 domain、effect 与取消排空策略，不重建声明。
 
 `utils.py` 和 RAG 公共入口继续提供已有的 Tavily、RAG LangChain 导出，供直接调用这些工具的客户端使用。
 
@@ -165,9 +165,11 @@ class RetrievalMode(Enum):
 核心函数：
 
 - `load_mcp_tools(config, existing_tool_names)`
-- `wrap_mcp_authenticate_tool(tool)`
+- `_load_server_tools(spec, existing_tool_names)`
 - `fetch_tokens(config)`
 - `get_mcp_access_token(...)`
+
+传输使用 Agents SDK 0.24.0 官方客户端 `MCPServerStdio` / `MCPServerStreamableHttp`。`MCPServerSpec` 保存可信本地策略（`domain`、`effect`）和连接参数；发现阶段用短生命周期连接执行 `list_tools()`，再由 `MCPUtil.to_function_tool()` 生成原生 `FunctionTool` 声明。`mcp/tool_wrapper.py` 只替换 `on_invoke_tool`，让每次调用重新建立连接并进入现有 `ToolExecutor.execute()`。服务方 `annotations` 不会改变领域或 Effect。
 
 兼容的单服务器配置对象（`mcp_config` 路径）：
 
@@ -195,12 +197,12 @@ class MCPConfig(BaseModel):
 - 对 MCP `interaction required` 错误做用户友好包装。
 - 连接失败时返回空工具列表，不中断主流程。
 
-业务路径继续通过 MCP 适配器取得服务方 Schema、认证错误、协议状态和结构化 artifact。`mcp/tool_wrapper.py` 将这些数据交给统一执行入口。SDK 的 `Agent.mcp_servers` 会由 Runner 直接发现并调用 MCP 工具，会跳过当前的工具预算、`por.agent_tool` 和 operations 回执接缝。 [Agents SDK 0.24.0 MCP 实现](https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/mcp/util.py)
+业务路径使用 SDK 原生 MCP 声明取得服务方 Schema、协议状态和结构化结果。`mcp/tool_wrapper.py` 将文本、`structuredContent`、`isError`、超时和断连映射到现有执行契约；非文本多模态结果会被明确拒绝。SDK 的 `Agent.mcp_servers` 会由 Runner 直接发现并调用 MCP 工具，跳过当前的工具预算、`por.agent_tool` 和 operations 回执接缝，因此业务 Agent 不直接使用该入口。 [Agents SDK 0.24.0 MCP 实现](https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/mcp/util.py)
 
 ## 6. 业务 Agent 中的工具执行
 
 1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect。已有 `dbos-events-v1` 的目录可缺少 effect。旧目录中的社媒工具按 `protected` 执行尚未提交的调用，因为旧目录没有记录社媒后端的 effect。
-2. `SDKAgentRuntime._register_tool` 把 SDK 声明交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具由 `mcp_function_tool` 按服务方 Schema 构造同等声明。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
+2. `SDKAgentRuntime._register_tool` 把 `BusinessTool.sdk_tool` 交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具与本地工具一样以 `BusinessTool` 装配，其声明来自 `MCPUtil.to_function_tool()`。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
 3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。预算预占之后才进入业务函数及外部效果边界。
 4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。已有操作缺少对应的 Step 结果时，恢复会停止并要求核对。
 5. `ToolExecutor` 以 Tool Call ID 共享在途结果，并在取消时等待已启动的同步工具及其回执。已提交的 Step 恢复原输出、状态、工具身份、操作 ID 和局部用量；Harness 只接收恢复后的记录。成功结果由 Harness 记录并保留在 SDK 会话历史中。 [执行架构](agent-loop.md) · [DBOS Step](https://docs.dbos.dev/python/tutorials/step-tutorial)

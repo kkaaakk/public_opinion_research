@@ -12,8 +12,6 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from langchain_core.tools import BaseTool
-
 from open_deep_research.tools import BusinessTool
 
 logger = logging.getLogger(__name__)
@@ -228,24 +226,6 @@ def _tool_domain(tool) -> str:
     return get_tool_domain(tool) or "external_mcp"
 
 
-# 为 LangChain 工具写入已校验的领域标签；供应商原生工具字典保持原结构。
-def tag_tools_with_domain(tools: list, domain: str) -> list:
-    """Attach a validated ``tool_domain`` to LangChain tools.
-
-    Provider-native tool dictionaries are intentionally left unchanged because
-    their schema is provider-owned; ``get_tool_domain`` resolves known native
-    web-search declarations without treating arbitrary dictionaries as safe.
-    """
-    if domain not in _DOMAIN_BY_NAME:
-        raise ValueError(f"Unknown tool domain: {domain}")
-    for tool in tools:
-        if isinstance(tool, (Mapping, BusinessTool)):
-            continue
-        metadata = getattr(tool, "metadata", None) or {}
-        tool.metadata = {**metadata, "tool_domain": domain}
-    return tools
-
-
 # 将工具列表按领域归组，供提示词和权限逻辑复用。
 def classify_tools(tools: list) -> dict[str, list]:
     """Group *tools* by their domain category."""
@@ -257,7 +237,7 @@ def classify_tools(tools: list) -> dict[str, list]:
 
 
 # 把领域分组结果整理为可读的工具摘要。
-def tool_domain_summary(tools: list[BaseTool]) -> str:
+def tool_domain_summary(tools: list) -> str:
     """Return a human-readable summary of tools grouped by domain."""
     buckets = classify_tools(tools)
     lines: list[str] = []
