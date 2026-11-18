@@ -3,8 +3,6 @@
 
 from typing import Any
 
-from agents import function_tool
-from agents.tool_context import ToolContext
 from langchain_core.messages import MessageLikeRepresentation, filter_messages
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -12,7 +10,7 @@ from langchain_core.tools import BaseTool
 from open_deep_research.config_values import get_config_value
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
 from open_deep_research.search.tavily import web_search, web_search_raw
-from open_deep_research.tools import BusinessTool, ToolEffect, register_tool
+from open_deep_research.tools import BusinessTool, ToolEffect
 
 
 def tool_effect(tool: BusinessTool | BaseTool) -> ToolEffect:
@@ -23,42 +21,6 @@ def tool_effect(tool: BusinessTool | BaseTool) -> ToolEffect:
         else (tool.metadata or {}).get("effect")
     )
     return effect if effect in ("read", "idempotent") else "protected"
-
-
-# 仅记录反思内容，不执行外部调用。
-async def _record_reflection(reflection: str) -> str:
-    return f"Reflection recorded: {reflection}"
-
-
-@function_tool(
-    description_override="Strategic reflection tool for research planning",
-    use_docstring_info=False,
-    strict_mode=False,
-    failure_error_function=None,
-)
-async def think_tool(context: ToolContext, reflection: str) -> str:
-    return await context.context.tool_executor.execute(
-        context, _record_reflection, reflection
-    )
-
-
-# 完成信号本身不产生内容。
-async def _complete_research() -> str:
-    return ""
-
-
-@function_tool(
-    description_override="Call this tool to indicate that the research is complete.",
-    use_docstring_info=False,
-    strict_mode=False,
-    failure_error_function=None,
-)
-async def ResearchComplete(context: ToolContext) -> str:
-    return await context.context.tool_executor.execute(context, _complete_research)
-
-
-think_tool = register_tool(think_tool, domain="core", effect="read")
-ResearchComplete = register_tool(ResearchComplete, domain="core", effect="read")
 
 
 # 按搜索供应商选择原生搜索声明或项目搜索工具。
@@ -121,9 +83,9 @@ async def get_retrieval_tools(config: RunnableConfig):
     return retrieval_tools
 
 
-# 汇总研究控制、搜索和 MCP 工具，形成当前运行的基础工具集合。
+# 汇总检索与 MCP 工具，形成当前运行的基础工具集合。
 async def get_all_tools(config: RunnableConfig):
-    """Assemble complete toolkit including research, search, and MCP tools.
+    """Assemble complete toolkit including search and MCP tools.
 
     Args:
         config: Runtime configuration specifying search API and MCP settings
@@ -133,7 +95,7 @@ async def get_all_tools(config: RunnableConfig):
     """
     from open_deep_research.mcp import load_mcp_tools
 
-    tools = [ResearchComplete, think_tool, *await get_retrieval_tools(config)]
+    tools = [*await get_retrieval_tools(config)]
     existing_tool_names = {
         tool.name if hasattr(tool, "name") else tool.get("name", "web_search")
         for tool in tools
@@ -141,11 +103,11 @@ async def get_all_tools(config: RunnableConfig):
     return [*tools, *await load_mcp_tools(config, existing_tool_names)]
 
 
-# 判断工具集合是否包含控制工具之外的实际外部研究能力。
+# 判断工具集合是否包含指导之外的实际外部研究能力。
 def has_external_research_tool(tools: list[Any]) -> bool:
-    """Determine whether the tool collection includes anything beyond core control tools."""
+    """Determine whether the tool collection includes anything beyond guidance tools."""
     # load_skill only returns guidance; it is not retrieval capability.
-    core_tool_names = {"ResearchComplete", "think_tool", "load_skill"}
+    core_tool_names = {"load_skill"}
     for available_tool in tools:
         if isinstance(available_tool, dict):
             return True
@@ -180,11 +142,6 @@ def get_research_tool_prompt(configurable: Configuration) -> str:
         prompt_lines.append(
             f"{line_number}. **rag_search**: Search the configured enterprise knowledge base and return grounded excerpts with citations. Use only cited excerpts for internal-knowledge claims."
         )
-        line_number += 1
-
-    prompt_lines.append(
-        f"{line_number}. **think_tool**: For reflection and strategic planning during research."
-    )
 
     if retrieval_mode == RetrievalMode.HYBRID and rag_requested(configurable):
         prompt_lines.append(
@@ -282,9 +239,9 @@ def build_dynamic_tool_prompt(
 
     # Guardrails (always included)
     lines.append(
-        "**CRITICAL: Use think_tool after each retrieval step to reflect on "
-        "results and plan next steps. Do not call think_tool together with "
-        "other tools — it should be used alone to reflect on previous results.**"
+        "**CRITICAL: Decide from the retrieved evidence whether another retrieval "
+        "step is needed. Do not repeat the same query; stop when the evidence is "
+        "sufficient and state the remaining gaps in your final report.**"
     )
 
     if any(

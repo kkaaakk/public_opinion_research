@@ -78,33 +78,11 @@ Local RAG search failed: ...
 
 这两个 provider-native 声明保留给兼容调用。业务 SDK Runtime 只接收本地可观测工具，遇到这些声明会拒绝运行。
 
-### 2.4 `think_tool`
+### 2.4 Agent Loop 结束
 
-位置：
+业务 Agent 没有专用的反思工具或完成信号工具。模型自主决定是否继续调用检索、RAG、Skill 或 MCP 工具；当证据足够时，模型输出普通最终回复，SDK Runner 按默认 `run_llm_again` 行为结束循环。随后现有 `_finish()` 仍会整理角色研究报告并返回 `AgentRuntimeResult`。
 
-- `src/open_deep_research/tools/registry.py`
-
-职责：
-
-- 让业务 Agent 在工具调用之间记录反思。
-- 不做外部 IO。
-- 返回 `Reflection recorded: ...`。
-
-它是一个控制质量的工具，prompt 明确要求：
-
-- 业务 Agent 在检索后使用。
-- 不要和 search / RAG 工具并行调用。
-
-### 2.5 `ResearchComplete`
-
-位置：
-
-- `src/open_deep_research/tools/registry.py`
-
-用途：
-
-- 作为控制工具绑定给四个业务 Agent。
-- 业务 Agent 调用它表示自己的角色研究完成。
+`load_skill` 只返回研究方法，不计为外部检索能力；`has_external_research_tool()` 仅把它视为指导工具。
 
 ## 3. 工具装配流程
 
@@ -120,13 +98,10 @@ async def get_all_tools(config: RunnableConfig)
 
 装配顺序：
 
-1. 加入核心控制工具：
-   - `ResearchComplete`
-   - `think_tool`
-2. 调用 `get_retrieval_tools(config)` 加入检索工具。
-3. 收集已有工具名，避免 MCP 工具重名。
-4. 调用 `load_mcp_tools(config, existing_tool_names)` 加入 MCP 工具。
-5. 返回最终工具列表。
+1. 调用 `get_retrieval_tools(config)` 加入检索工具。
+2. 收集已有工具名，避免 MCP 工具重名。
+3. 调用 `load_mcp_tools(config, existing_tool_names)` 加入 MCP 工具。
+4. 返回最终工具列表。
 
 ## 4. Retrieval Mode 与工具选择
 
@@ -225,7 +200,7 @@ class MCPConfig(BaseModel):
 2. [`_role_tool_prompt`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/runtime/business_agent.py#L173) 把过滤后的同一工具列表传给 `build_dynamic_tool_prompt`，补充角色领域及实际工具名称白名单。
 3. [`PublicOpinionAgentSpec.format_system_prompt`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/public_opinion_agents/base.py#L28) 将生成的 `retrieval_tool_prompt` 注入角色系统提示词。
 
-动态说明始终要求检索后单独调用 `think_tool` 反思；只有实际列表包含 `rag_search` 时，才加入基于 SOURCE 引用作出本地知识或记忆声明的约束。允许 RAG 的角色若没有取得 `rag_search`，`_role_tool_prompt` 会说明内部资料或审批依据缺失时应明确标记，避免编造。
+动态说明要求模型根据已检索证据判断是否继续检索，并在证据足够时用普通最终回复结束；只有实际列表包含 `rag_search` 时，才加入基于 SOURCE 引用作出本地知识或记忆声明的约束。允许 RAG 的角色若没有取得 `rag_search`，`_role_tool_prompt` 会说明内部资料或审批依据缺失时应明确标记，避免编造。
 
 [`get_research_tool_prompt(configurable)`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/tools/registry.py#L213) 是已标记弃用的静态兼容 helper，仍经 `utils.py` 导出；当前四角色运行链使用上述动态入口。`retrieval_mode` 控制前置工具装配，提示词最终以角色过滤后的实际工具集合为准。
 

@@ -134,8 +134,6 @@ _DOMAIN_PROMPT_ORDER: list[tuple[str, str]] = [
 
 # Built-in (non-MCP) tool name → domain mapping
 _BUILTIN_NAME_TO_DOMAIN: dict[str, str] = {
-    "think_tool": "core",
-    "ResearchComplete": "core",
     "web_search": "web_search",
     "rag_search": "rag",
 }

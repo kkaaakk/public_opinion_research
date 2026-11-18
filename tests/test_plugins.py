@@ -43,7 +43,7 @@ from open_deep_research.workflow.execution import StageContext, stage_context
 
 ROOT = Path(__file__).resolve().parents[1]
 SOCIAL_DOMAINS = frozenset({"core", "web_search", "social_media"})
-CORE_TOOL_NAMES = {"ResearchComplete", "think_tool", "web_search"}
+CORE_TOOL_NAMES = {"web_search"}
 RETIRED_SOCIAL_TOOLS = {
     "search_posts",
     "search_complaints",
@@ -73,9 +73,9 @@ def echo(query: str) -> str:
 
 
 @server.tool()
-def think_tool(reflection: str) -> str:
+def web_search(query: str) -> str:
     """Conflict with an existing local tool name."""
-    return "remote:" + reflection
+    return "remote:" + query
 
 
 if __name__ == "__main__":
@@ -407,7 +407,7 @@ def test_plugin_discovery_reads_manifest_and_skills(tmp_path):
     _write_plugin(
         tmp_path,
         skills=[("xiaohongshu", "小红书舆情调研", "Note and comment research guidance.")],
-        tools=("think_tool",),
+        tools=("web_search",),
     )
 
     role_plugins = load_role_plugins(
@@ -417,7 +417,7 @@ def test_plugin_discovery_reads_manifest_and_skills(tmp_path):
     assert [plugin.plugin_id for plugin in role_plugins.plugins] == ["fixture-plugin"]
     plugin = role_plugins.plugins[0]
     assert plugin.version == "1.0.0"
-    assert plugin.tools == ("think_tool",)
+    assert plugin.tools == ("web_search",)
     assert plugin.servers == ()
     assert [skill.name for skill in role_plugins.skills] == ["xiaohongshu"]
     skill = role_plugins.skills[0]
@@ -638,8 +638,8 @@ def test_load_skill_rejects_unknown_and_path_names(tmp_path):
         _skill_payload(skills, "public_signal", "/etc/passwd")
 
 
-# 验证 Public Signal 保留 Tavily、移除七个本地社媒工具并只由插件提供社媒能力。
-def test_public_signal_catalog_keeps_tavily_and_drops_retired_social_tools(monkeypatch):
+# 验证 Public Signal 保留 Tavily、移除七个本地社媒工具和旧控制工具。
+def test_public_signal_catalog_keeps_tavily_and_drops_retired_tools(monkeypatch):
     monkeypatch.delenv("APIFY_TOKEN", raising=False)
 
     tools = asyncio.run(
@@ -654,6 +654,7 @@ def test_public_signal_catalog_keeps_tavily_and_drops_retired_social_tools(monke
     assert LOAD_SKILL_TOOL in names
     assert RETIRED_SOCIAL_TOOLS.isdisjoint(names)
     assert APIFY_TOOL_NAMES.isdisjoint(names)
+    assert {"think_tool", "ResearchComplete"}.isdisjoint(names)
 
 
 # 验证 Agent 按 Skill 指引依次调用 Actor 发现、详情、执行与数据集工具。
@@ -906,7 +907,7 @@ def test_global_and_plugin_mcp_servers_load_once_and_execute(tmp_path, monkeypat
     config = _config(
         tmp_path,
         markitdown_enabled=True,
-        search_api="none",
+        search_api="tavily",
         rag_enabled=False,
     )
     tools = asyncio.run(
@@ -917,9 +918,9 @@ def test_global_and_plugin_mcp_servers_load_once_and_execute(tmp_path, monkeypat
     assert calls == ["global-mcp", "fixture"]
     assert names.count("echo") == 1
     assert names.count("fixture__echo") == 1
-    # The plugin's conflicting tool is namespaced instead of replacing think_tool.
-    assert names.count("think_tool") == 1
-    assert names.count("fixture__think_tool") == 1
+    # The plugin's conflicting tool is namespaced instead of replacing web_search.
+    assert names.count("web_search") == 1
+    assert names.count("fixture__web_search") == 1
 
     model = ScriptedModel(
         [
@@ -1127,8 +1128,8 @@ def test_plugin_tool_conflicts_are_namespaced_and_references_validated(tmp_path)
 
     tools, _plugins = _load_fixture_tools(tmp_path)
     names = {tool.name for tool in tools}
-    assert "fixture__think_tool" in names
-    assert "think_tool" not in names
+    assert "fixture__web_search" in names
+    assert "web_search" not in names
 
     _write_plugin(
         tmp_path,

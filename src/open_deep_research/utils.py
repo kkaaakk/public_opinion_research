@@ -39,5 +39,4 @@ from open_deep_research.tools.registry import (
     get_search_tool,
     has_external_research_tool,
     rag_requested,
-    think_tool,
 )

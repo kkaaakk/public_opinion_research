@@ -240,12 +240,6 @@ def install_sdk(
                 if mode in {"timeout", "cancel"}:
                     blocked.set()
                     await asyncio.Event().wait()
-                if mode == "complete":
-                    return [
-                        function_call(
-                            "ResearchComplete", {"query": "done"}, call_id="complete"
-                        )
-                    ]
             return [assistant_message("producer analysis complete")]
 
         steps = [ModelStep.respond(first), ModelStep.respond(second)]
@@ -302,12 +296,7 @@ def install_sdk(
 
         if role == "internal_knowledge" and local_tool is not None:
             return [local_tool]
-        result = [_tool(role, coroutine=search, effect="read")]
-        if mode == "complete":
-            result.append(
-                _tool(role, name="ResearchComplete", domain="core", effect="read")
-            )
-        return result
+        return [_tool(role, coroutine=search, effect="read")]
 
     monkeypatch.setattr(business_agent, "SDKAgentRuntime", RecordingRuntime)
     monkeypatch.setattr(business_agent, "sdk_model", model_context)
@@ -334,11 +323,10 @@ def install_sdk(
     return original_state, cfg, runtimes, models, calls, blocked
 
 
-@pytest.mark.parametrize("mode", ["normal", "complete"])
-def test_real_full_intake_runner_report_and_research_complete(monkeypatch, tmp_path, mode):
+def test_real_full_intake_runner_report_and_natural_completion(monkeypatch, tmp_path):
     async def run():
         state, cfg, runtimes, models, calls, _ = install_sdk(
-            monkeypatch, tmp_path, mode
+            monkeypatch, tmp_path, "normal"
         )
         with budget_capture() as usage:
             result = await PythonWorkflow().ainvoke(state, cfg)
@@ -350,8 +338,6 @@ def test_real_full_intake_runner_report_and_research_complete(monkeypatch, tmp_p
         assert calls == {"public_signal": 1, "internal_knowledge": 1}
         assert result["runtime"]["budget"]["model_calls"] == 7 + usage["model_calls"]
         assert usage["model_calls"] > 0
-        if mode == "complete":
-            assert runtimes[0].harness.results["complete"].status == "succeeded"
 
     asyncio.run(run())
 

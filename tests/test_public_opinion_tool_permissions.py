@@ -57,8 +57,7 @@ def _patch_tool_source(monkeypatch, tools) -> None:
 def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
     """Public Signal cannot inherit database, Feishu, document, or RAG tools."""
     tools = [
-        FixtureTool("ResearchComplete"),
-        FixtureTool("think_tool"),
+        FixtureTool("load_skill", "core"),
         FixtureTool("web_search", "web_search"),
         FixtureTool("rag_search", "rag"),
         FixtureTool("db_query", "database"),
@@ -76,8 +75,7 @@ def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
     )
 
     assert _names(filtered) == {
-        "ResearchComplete",
-        "think_tool",
+        "load_skill",
         "web_search",
         "social_search",
     }
@@ -90,8 +88,7 @@ def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
 def test_internal_knowledge_gets_only_core_and_rag(monkeypatch) -> None:
     """Internal Knowledge cannot inherit public, database, or external MCP tools."""
     tools = [
-        FixtureTool("ResearchComplete"),
-        FixtureTool("think_tool"),
+        FixtureTool("load_skill", "core"),
         FixtureTool("rag_search", "rag"),
         FixtureTool("web_search", "web_search"),
         FixtureTool("social_search", "social_media"),
@@ -105,15 +102,14 @@ def test_internal_knowledge_gets_only_core_and_rag(monkeypatch) -> None:
         business_agent_module._business_agent_tools(_config(), "internal_knowledge")
     )
 
-    assert _names(filtered) == {"ResearchComplete", "think_tool", "rag_search"}
+    assert _names(filtered) == {"load_skill", "rag_search"}
 
 
 # 验证策略角色不获得 MCP 写入工具。
 def test_response_strategy_does_not_get_mcp_write_tools(monkeypatch) -> None:
     """Response Strategy keeps Feishu, database, document, and external tools out."""
     tools = [
-        FixtureTool("ResearchComplete"),
-        FixtureTool("think_tool"),
+        FixtureTool("load_skill", "core"),
         FixtureTool("rag_search", "rag"),
         FixtureTool("feishu_send", "feishu"),
         FixtureTool("dbhub_query", "database"),
@@ -127,7 +123,7 @@ def test_response_strategy_does_not_get_mcp_write_tools(monkeypatch) -> None:
         business_agent_module._business_agent_tools(_config(), "response_strategy")
     )
 
-    assert _names(filtered) == {"ResearchComplete", "think_tool", "rag_search"}
+    assert _names(filtered) == {"load_skill", "rag_search"}
 
 
 # 验证所有角色都拒绝未知领域。
@@ -140,7 +136,7 @@ def test_unknown_domain_is_denied_for_every_business_agent(
 ) -> None:
     """An unregistered domain cannot pass a role's allowlist fallback."""
     tools = [
-        FixtureTool("ResearchComplete"),
+        FixtureTool("load_skill", "core"),
         FixtureTool("unknown_tool", "unknown_domain"),
         {"type": "function", "function": {"name": "anonymous_unknown"}},
     ]
@@ -148,7 +144,7 @@ def test_unknown_domain_is_denied_for_every_business_agent(
 
     filtered = asyncio.run(business_agent_module._business_agent_tools(_config(), role))
 
-    assert _names(filtered) == {"ResearchComplete"}
+    assert _names(filtered) == {"load_skill"}
 
 
 # 验证缺少领域标签的工具默认不可用。
@@ -157,22 +153,25 @@ def test_unlabeled_tool_is_denied_by_default(monkeypatch) -> None:
     unlabeled = FixtureTool("ordinary_tool", with_metadata=False)
     _patch_tool_source(
         monkeypatch,
-        [FixtureTool("ResearchComplete"), FixtureTool("think_tool"), unlabeled],
+        [
+            FixtureTool("load_skill", "core"),
+            FixtureTool("web_search", "web_search"),
+            unlabeled,
+        ],
     )
 
     filtered = asyncio.run(
         business_agent_module._business_agent_tools(_config(), "response_strategy")
     )
 
-    assert _names(filtered) == {"ResearchComplete", "think_tool"}
+    assert _names(filtered) == {"load_skill"}
 
 
 # 验证仅有 MCP 来源标记不会自动授予公众信号权限。
 def test_mcp_source_does_not_grant_public_signal_authorization(monkeypatch) -> None:
     """MCP tools are admitted by domain, not merely because they came from MCP."""
     tools = [
-        FixtureTool("ResearchComplete"),
-        FixtureTool("think_tool"),
+        FixtureTool("load_skill", "core"),
         FixtureTool("social_media_mcp_search", "social_media"),
         FixtureTool("dbhub_query", "database"),
         FixtureTool("feishu_send", "feishu"),
@@ -186,8 +185,7 @@ def test_mcp_source_does_not_grant_public_signal_authorization(monkeypatch) -> N
     )
 
     assert _names(filtered) == {
-        "ResearchComplete",
-        "think_tool",
+        "load_skill",
         "social_media_mcp_search",
     }
 
@@ -209,23 +207,51 @@ def test_agent_domain_allowlists_are_explicit() -> None:
     )
 
 
-# 验证共享加载器给已知内置工具附加正确领域。
+# 验证共享加载器给已知内置工具附加正确领域，且不再注入旧控制工具。
 def test_shared_loader_tags_known_builtin_domains() -> None:
-    """Known core tools receive domain metadata at the shared loading boundary."""
+    """Known builtin tools receive domain metadata at the shared loading boundary."""
     tools = asyncio.run(
         get_all_tools(
             {
                 "configurable": {
-                    "search_api": "none",
+                    "search_api": "tavily",
                     "rag_enabled": False,
                 }
             }
         )
     )
-    core_tools = {tool.name: tool for tool in tools if hasattr(tool, "name")}
+    loaded = {tool.name: tool for tool in tools if hasattr(tool, "name")}
 
-    assert get_tool_domain(core_tools["ResearchComplete"]) == "core"
-    assert get_tool_domain(core_tools["think_tool"]) == "core"
+    assert get_tool_domain(loaded["web_search"]) == "web_search"
+    assert {"think_tool", "ResearchComplete"}.isdisjoint(loaded)
+
+
+# 验证动态与静态工具说明以及角色提示词都不再要求旧控制工具。
+def test_prompts_do_not_reference_retired_control_tools() -> None:
+    from open_deep_research.configuration import Configuration
+    from open_deep_research.tools.registry import (
+        build_dynamic_tool_prompt,
+        get_research_tool_prompt,
+    )
+
+    dynamic = build_dynamic_tool_prompt(
+        [FixtureTool("web_search", "web_search")], Configuration()
+    )
+    static = get_research_tool_prompt(Configuration())
+    for prompt in (dynamic, static):
+        assert "think_tool" not in prompt
+        assert "ResearchComplete" not in prompt
+
+    for role in PUBLIC_OPINION_AGENT_SPECS:
+        rendered = PUBLIC_OPINION_AGENT_SPECS[role].format_system_prompt(
+            retrieval_tool_prompt=dynamic,
+            mcp_prompt="",
+            date="2026-11-18",
+            organization_context="org",
+        )
+        assert "think_tool" not in rendered
+        assert "ResearchComplete" not in rendered
+        assert "normal assistant message" in rendered
 
 
 def test_native_catalog_fences_definition_changes_and_restores_legacy_catalog():

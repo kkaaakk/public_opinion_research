@@ -185,6 +185,39 @@ def test_four_roles_execute_sdk_model_tool_model_with_contracts(role):
     assert runtime.harness.results["lookup"].status == "succeeded"
 
 
+# 验证 Agent 在多轮工具调用后由普通最终回复自然结束，且仍执行报告整理。
+def test_agent_ends_naturally_after_multiple_tool_rounds():
+    queries = []
+
+    async def search(query: str, limit: int = 3):
+        queries.append(query)
+        return f"evidence for {query}"
+
+    tool = _tool(coroutine=search, effect="read")
+    model = ScriptedModel(
+        [
+            [function_call(tool.name, '{"query":"first"}', call_id="call-1")],
+            [function_call(tool.name, '{"query":"second"}', call_id="call-2")],
+            [assistant_message("final evidence summary")],
+        ],
+        default_usage=TOKENS,
+    )
+    runtime = _runtime(tools=[tool], model=model)
+    result = asyncio.run(runtime.run("collect evidence"))
+    model.assert_complete()
+
+    assert queries == ["first", "second"]
+    assert runtime.harness.results["call-1"].status == "succeeded"
+    assert runtime.harness.results["call-2"].status == "succeeded"
+    assert result.budget["tool_calls"] == 2
+    assert runtime.agent.tool_use_behavior == "run_llm_again"
+    assert {bound.name for bound in runtime.tools} == {tool.name}
+    # _finish still wraps the compressed role report around the final reply.
+    assert result.report.startswith("Agent role: public_signal")
+    assert "Role report" in result.report
+    assert "final evidence summary" in result.report
+
+
 @pytest.mark.parametrize("role", ROLES)
 @pytest.mark.parametrize(
     "arguments", ['{"query":3}', '{"limit":100}', '{"query":"q","limit":0}', "[]", "{"]
