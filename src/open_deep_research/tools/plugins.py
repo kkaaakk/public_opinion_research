@@ -14,9 +14,10 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from agents import function_tool
 from agents.tool_context import ToolContext
@@ -34,6 +35,14 @@ _PLUGIN_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _TRANSPORTS = frozenset({"stdio", "streamable_http"})
 _EFFECTS = frozenset({"read", "idempotent", "protected"})
+# 稳定身份只保留可证明非敏感的启动参数；敏感标记命中时丢弃其值。
+_SENSITIVE_ARG = re.compile(
+    r"(token|secret|password|passwd|pwd|api[-_]?key|access[-_]?key|"
+    r"credential|dsn|auth|cookie|session)",
+    re.IGNORECASE,
+)
+_CREDENTIAL_URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/@\s]*@")
+_SAFE_ARG_TOKEN = re.compile(r"^[A-Za-z0-9@._/:+=,-]{1,128}$")
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,7 @@ class RolePlugins:
     """Enabled plugins, skills and servers authorized for one role."""
 
     plugins: tuple[Plugin, ...] = ()
+    assembled_servers: frozenset[str] = frozenset()
 
     @property
     def skills(self) -> tuple[Skill, ...]:
@@ -80,19 +90,111 @@ class RolePlugins:
 
     @property
     def fingerprint(self) -> str:
-        """Identify plugin versions and skill contents in the tool catalog.
+        """Identify plugin versions, skill contents and assembled MCP servers.
 
         ``por.role_tools`` already fences definition changes during recovery;
         including this digest in the ``load_skill`` description means a skill
-        edit or plugin version bump fails closed instead of silently changing
-        guidance for a resumed Run.
+        edit, plugin version bump or MCP connection change fails closed instead
+        of silently changing guidance for a resumed Run. Only servers that were
+        actually discovered participate, so a declared-but-unavailable server
+        does not churn the catalog.
         """
-        manifest = "|".join(
-            f"{plugin.plugin_id}@{plugin.version}:"
-            + ",".join(f"{skill.name}@{skill.digest}" for skill in plugin.skills)
-            for plugin in self.plugins
+        manifest = json.dumps(
+            {
+                "plugins": [
+                    {
+                        "id": plugin.plugin_id,
+                        "version": plugin.version,
+                        "skills": sorted(
+                            (
+                                {"name": skill.name, "digest": skill.digest}
+                                for skill in plugin.skills
+                            ),
+                            key=lambda item: item["name"],
+                        ),
+                        "servers": sorted(
+                            (
+                                _server_identity(server)
+                                for server in plugin.servers
+                                if server.name in self.assembled_servers
+                            ),
+                            key=lambda item: item["name"],
+                        ),
+                    }
+                    for plugin in sorted(
+                        self.plugins, key=lambda item: item.plugin_id
+                    )
+                ]
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
         )
         return hashlib.sha256(manifest.encode("utf-8")).hexdigest()[:12]
+
+
+# 提取 MCP 服务的稳定、非敏感身份字段，避免对整个 params 做摘要。
+def _server_identity(server: MCPServerSpec) -> dict[str, Any]:
+    identity: dict[str, Any] = {
+        "name": server.name,
+        "transport": server.transport,
+    }
+    params = server.params if isinstance(server.params, dict) else {}
+    if server.transport == "streamable_http":
+        # 只保留 scheme/host/port/path，丢弃 userinfo、query 与 fragment。
+        identity["url"] = _safe_http_url(params.get("url"))
+        return identity
+    identity["command"] = str(params.get("command") or "")
+    identity["args"] = _safe_stdio_args(params.get("args"))
+    return identity
+
+
+# 去掉 URL 中的凭据、查询参数与片段，只保留可用于识别服务的地址。
+def _safe_http_url(value: Any) -> str:
+    try:
+        parts = urlsplit(str(value or "").strip())
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return ""
+    if not parts.scheme or not parts.hostname:
+        return ""
+    return f"{parts.scheme}://{parts.hostname}{port}{parts.path}"
+
+
+# 保守过滤 stdio 参数：丢弃敏感标记后的值、凭据 URI 与无法确认安全的 token。
+def _safe_stdio_args(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    safe: list[str] = []
+    skip_next = False
+    for item in value:
+        token = str(item)
+        if skip_next:
+            skip_next = False
+            continue
+        if token.startswith("-"):
+            flag, separator, inline = token.partition("=")
+            if _SENSITIVE_ARG.search(flag):
+                safe.append(flag)
+                skip_next = not separator
+                continue
+            if separator:
+                safe.append(f"{flag}={_safe_argument_value(inline)}")
+                continue
+            safe.append(token)
+            continue
+        if _CREDENTIAL_URI.match(token) or _SENSITIVE_ARG.search(token):
+            continue
+        if _SAFE_ARG_TOKEN.fullmatch(token):
+            safe.append(token)
+    return safe
+
+
+# 替换无法确认安全的参数值，避免秘密进入稳定身份摘要。
+def _safe_argument_value(value: str) -> str:
+    if _CREDENTIAL_URI.match(value) or _SENSITIVE_ARG.search(value):
+        return "***"
+    return value if _SAFE_ARG_TOKEN.fullmatch(value) else "***"
 
 
 # 从现有配置解析插件目录与启用列表；目录缺失时保持原有研究流程可用。
@@ -216,14 +318,22 @@ async def load_plugin_tools(
         )
 
     tools: list[BusinessTool] = []
+    assembled: set[str] = set()
     if role_plugins.servers:
         tools.extend(
             await load_mcp_tools(
                 config,
                 existing_tool_names,
                 extra_servers=list(role_plugins.servers),
+                # Global servers were already loaded by get_all_tools(); only
+                # plugin-declared servers belong to this second discovery pass.
+                include_configured=False,
+                loaded_servers=assembled,
             )
         )
+    role_plugins = replace(
+        role_plugins, assembled_servers=frozenset(assembled)
+    )
     load_skill = build_load_skill_tool(role_plugins, role)
     if load_skill is not None:
         tools.append(load_skill)

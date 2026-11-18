@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,11 +20,14 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from test_sdk_runtime import TOKENS, _runtime
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.mcp import tools as mcp_tools_module
+from open_deep_research.mcp.tools import MCPServerSpec
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
 from open_deep_research.runtime import business_agent as business_agent_module
-from open_deep_research.tools import BusinessTool
+from open_deep_research.tools import BusinessTool, register_tool
 from open_deep_research.tools.plugins import (
     LOAD_SKILL_TOOL,
+    _server_identity,
     _skill_payload,
     build_skill_prompt,
     load_plugin_tools,
@@ -57,6 +61,21 @@ def echo(query: str) -> str:
 def search_posts(query: str) -> str:
     """Conflict with an existing local tool name."""
     return "remote:" + query
+
+
+if __name__ == "__main__":
+    server.run()
+'''
+
+GLOBAL_MCP_SERVER = '''from mcp.server.fastmcp import FastMCP
+
+server = FastMCP("global-mcp-fixture")
+
+
+@server.tool()
+def echo(query: str) -> str:
+    """Return the query with a deterministic global marker."""
+    return "global-echo:" + query
 
 
 if __name__ == "__main__":
@@ -120,9 +139,9 @@ def _write_plugin(
 
 
 # 写入可被 SDK 原生 MCP 客户端启动的 stdio 测试服务。
-def _write_mcp_server(tmp_path: Path) -> Path:
-    script = tmp_path / "plugin_mcp_server.py"
-    script.write_text(MCP_SERVER, encoding="utf-8")
+def _write_mcp_server(tmp_path: Path, source: str = MCP_SERVER, name: str = "plugin") -> Path:
+    script = tmp_path / f"{name}_mcp_server.py"
+    script.write_text(source, encoding="utf-8")
     return script
 
 
@@ -135,6 +154,56 @@ def _stdio_server(script: Path, *, domain: str = "social_media") -> dict:
         "effect": "read",
         "params": {"command": sys.executable, "args": [str(script)]},
     }
+
+
+# 返回插件声明的 Streamable HTTP 服务条目。
+def _http_server(url: str, *, headers: dict | None = None) -> dict:
+    params: dict = {"url": url}
+    if headers:
+        params["headers"] = headers
+    return {
+        "name": "fixture",
+        "transport": "streamable_http",
+        "domain": "social_media",
+        "effect": "read",
+        "params": params,
+    }
+
+
+# 重写插件 MCP 声明，用于比较配置变化后的目录快照。
+def _rewrite_servers(tmp_path: Path, servers: list[dict]) -> None:
+    (tmp_path / "plugins" / "fixture-plugin" / "mcp.json").write_text(
+        json.dumps({"servers": servers}), encoding="utf-8"
+    )
+
+
+# 用受控替身替代服务发现，隔离连接错误并记录装配次数。
+def _fake_mcp_discovery(monkeypatch, calls: list[str] | None = None, fail: set[str] | None = None):
+    async def fake(spec, existing, *, allowed_tool_names=None):
+        if calls is not None:
+            calls.append(spec.name)
+        if fail and spec.name in fail:
+            raise RuntimeError("synthetic discovery failure")
+        public_name = "echo" if "echo" not in existing else f"{spec.name}__echo"
+        existing.add(public_name)
+        return [_fake_tool(public_name, spec.domain, spec.effect)]
+
+    monkeypatch.setattr(mcp_tools_module, "_load_server_tools", fake)
+
+
+# 构造受控替身 MCP 工具，声明与领域信息保持真实装配路径一致。
+def _fake_tool(name: str, domain: str, effect: str) -> BusinessTool:
+    @function_tool(
+        name_override=name,
+        description_override="fixture MCP tool",
+        use_docstring_info=False,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def echo(query: str) -> str:
+        return f"fake:{query}"
+
+    return register_tool(echo, domain=domain, effect=effect)
 
 
 # 验证插件清单、Skills 与声明工具被正确读取。
@@ -424,6 +493,252 @@ def test_plugin_mcp_tool_runs_through_existing_tool_executor(tmp_path):
     assert record.status == "succeeded"
     assert "plugin-echo:brand" in str(record.observation)
     assert result.budget["tool_calls"] == 1
+
+
+# 验证全局与插件 MCP 各自只装配一次，并都经 ToolExecutor 执行。
+def test_global_and_plugin_mcp_servers_load_once_and_execute(tmp_path, monkeypatch):
+    global_script = _write_mcp_server(tmp_path, GLOBAL_MCP_SERVER, "global")
+    plugin_script = _write_mcp_server(tmp_path)
+    _write_plugin(
+        tmp_path,
+        skills=[("xiaohongshu", "XHS", "Guidance.")],
+        servers=[_stdio_server(plugin_script)],
+        mcp=True,
+    )
+    global_spec = MCPServerSpec(
+        name="global-mcp",
+        domain="social_media",
+        effect="read",
+        transport="stdio",
+        params={"command": sys.executable, "args": [str(global_script)]},
+    )
+    monkeypatch.setattr(
+        mcp_tools_module, "_build_markitdown_server", lambda _config: global_spec
+    )
+    calls: list[str] = []
+    original = mcp_tools_module._load_server_tools
+
+    async def record(spec, existing, *, allowed_tool_names=None):
+        calls.append(spec.name)
+        return await original(spec, existing, allowed_tool_names=allowed_tool_names)
+
+    monkeypatch.setattr(mcp_tools_module, "_load_server_tools", record)
+
+    config = _config(
+        tmp_path,
+        markitdown_enabled=True,
+        search_api="none",
+        rag_enabled=False,
+    )
+    tools = asyncio.run(
+        business_agent_module._business_agent_tools(config, "public_signal")
+    )
+    names = [tool.name for tool in tools]
+
+    assert calls == ["global-mcp", "fixture"]
+    assert names.count("echo") == 1
+    assert names.count("fixture__echo") == 1
+
+    model = ScriptedModel(
+        [
+            [
+                function_call("echo", '{"query":"g"}', call_id="global"),
+                function_call("fixture__echo", '{"query":"p"}', call_id="plugin"),
+            ],
+            [assistant_message("done")],
+        ],
+        default_usage=TOKENS,
+    )
+    runtime = _runtime("public_signal", tools=tools, model=model)
+    result = asyncio.run(runtime.run("task"))
+
+    assert "global-echo:g" in str(runtime.harness.results["global"].observation)
+    assert "plugin-echo:p" in str(runtime.harness.results["plugin"].observation)
+    assert result.budget["tool_calls"] == 2
+
+
+# 验证 MCP 地址变化会通过现有 por.role_tools 目录校验失败关闭。
+def test_mcp_url_change_fails_closed_but_unchanged_config_passes(
+    tmp_path, monkeypatch
+):
+    _write_plugin(
+        tmp_path,
+        skills=[("xiaohongshu", "XHS", "Guidance.")],
+        servers=[_http_server("http://127.0.0.1:9000/mcp")],
+        mcp=True,
+    )
+    _fake_mcp_discovery(monkeypatch)
+
+    def load():
+        tools, _plugins = asyncio.run(
+            load_plugin_tools(
+                _config(tmp_path),
+                role="public_signal",
+                allowed_domains=SOCIAL_DOMAINS,
+                local_tool_names=set(SOCIAL_TOOLS),
+                existing_tool_names=set(SOCIAL_TOOLS),
+            )
+        )
+        return tools
+
+    tools = load()
+    catalog = business_agent_module._tool_catalog(tools)
+    reloaded = load()
+    assert business_agent_module._restore_role_tools(catalog, reloaded) is reloaded
+
+    _rewrite_servers(tmp_path, [_http_server("http://127.0.0.1:9100/mcp")])
+    changed = load()
+    assert _load_skill_tool(catalog)["description"] != _load_skill_tool(
+        business_agent_module._tool_catalog(changed)
+    )["description"]
+    with pytest.raises(ValueError, match="definitions changed"):
+        business_agent_module._restore_role_tools(catalog, changed)
+
+
+# 验证令牌轮换不改变稳定身份，且密钥不进入目录快照或日志。
+def test_token_rotation_keeps_identity_and_secrets_out_of_snapshot(
+    tmp_path, monkeypatch, caplog
+):
+    _write_plugin(
+        tmp_path,
+        skills=[("xiaohongshu", "XHS", "Guidance.")],
+        servers=[
+            _http_server(
+                "http://127.0.0.1:9000/mcp",
+                headers={"Authorization": "Bearer ${PLUGIN_FIXTURE_TOKEN}"},
+            )
+        ],
+        mcp=True,
+    )
+    _fake_mcp_discovery(monkeypatch)
+
+    def load():
+        tools, _plugins = asyncio.run(
+            load_plugin_tools(
+                _config(tmp_path),
+                role="public_signal",
+                allowed_domains=SOCIAL_DOMAINS,
+                local_tool_names=set(SOCIAL_TOOLS),
+                existing_tool_names=set(SOCIAL_TOOLS),
+            )
+        )
+        return tools
+
+    monkeypatch.setenv("PLUGIN_FIXTURE_TOKEN", "alpha-placeholder-secret")
+    first_catalog = business_agent_module._tool_catalog(load())
+    monkeypatch.setenv("PLUGIN_FIXTURE_TOKEN", "beta-placeholder-secret")
+    second = load()
+    second_catalog = business_agent_module._tool_catalog(second)
+
+    assert _load_skill_tool(first_catalog)["description"] == _load_skill_tool(
+        second_catalog
+    )["description"]
+    assert (
+        business_agent_module._restore_role_tools(first_catalog, second) is second
+    )
+    snapshot = json.dumps(first_catalog, ensure_ascii=False, default=str) + json.dumps(
+        second_catalog, ensure_ascii=False, default=str
+    )
+    for secret in ("alpha-placeholder-secret", "beta-placeholder-secret"):
+        assert secret not in snapshot
+        assert secret not in caplog.text
+
+
+# 验证只有成功装配的插件 MCP Server 参与身份摘要。
+def test_failed_plugin_mcp_server_is_excluded_from_identity(tmp_path, monkeypatch):
+    _write_plugin(
+        tmp_path,
+        skills=[("xiaohongshu", "XHS", "Guidance.")],
+        servers=[
+            _http_server("http://127.0.0.1:9000/mcp"),
+            {**_http_server("http://127.0.0.1:9001/mcp"), "name": "broken"},
+        ],
+        mcp=True,
+    )
+    _fake_mcp_discovery(monkeypatch, fail={"broken"})
+
+    def load():
+        tools, _plugins = asyncio.run(
+            load_plugin_tools(
+                _config(tmp_path),
+                role="public_signal",
+                allowed_domains=SOCIAL_DOMAINS,
+                local_tool_names=set(SOCIAL_TOOLS),
+                existing_tool_names=set(SOCIAL_TOOLS),
+            )
+        )
+        return tools
+
+    with_broken = load()
+    catalog_with_broken = business_agent_module._tool_catalog(with_broken)
+    _rewrite_servers(tmp_path, [_http_server("http://127.0.0.1:9000/mcp")])
+    without_broken = load()
+    catalog_without_broken = business_agent_module._tool_catalog(without_broken)
+
+    assert _load_skill_tool(catalog_with_broken)["description"] == _load_skill_tool(
+        catalog_without_broken
+    )["description"]
+    assert (
+        business_agent_module._restore_role_tools(catalog_with_broken, without_broken)
+        is without_broken
+    )
+
+
+# 验证 HTTP 身份只保留服务地址，丢弃凭据、查询参数和 Header。
+def test_http_identity_drops_credentials_and_query_tokens():
+    spec = MCPServerSpec(
+        name="web",
+        domain="social_media",
+        effect="read",
+        transport="streamable_http",
+        params={
+            "url": "https://user:pass@example.com:8443/mcp?token=secret-value",
+            "headers": {"Authorization": "Bearer secret-value"},
+        },
+    )
+
+    assert _server_identity(spec) == {
+        "name": "web",
+        "transport": "streamable_http",
+        "url": "https://example.com:8443/mcp",
+    }
+
+
+# 验证 stdio 身份过滤敏感参数值，同时保留可识别的非敏感启动参数。
+def test_stdio_identity_filters_secret_values_but_tracks_safe_args():
+    spec = MCPServerSpec(
+        name="db",
+        domain="database",
+        effect="read",
+        transport="stdio",
+        params={
+            "command": "npx",
+            "args": [
+                "-y",
+                "@bytebase/dbhub",
+                "--transport",
+                "stdio",
+                "--dsn",
+                "postgres://user:pass@db.local/app",
+                "--read-only",
+                "--max-rows",
+                "100",
+            ],
+        },
+    )
+
+    identity = _server_identity(spec)
+    encoded = json.dumps(identity, ensure_ascii=False)
+    assert identity["command"] == "npx"
+    assert "--dsn" in identity["args"]
+    assert "--read-only" in identity["args"]
+    assert "postgres://user:pass@db.local/app" not in encoded
+    assert "user:pass" not in encoded
+
+    changed = replace(
+        spec, params={**spec.params, "args": [*spec.params["args"], "--danger"]}
+    )
+    assert _server_identity(changed) != identity
 
 
 # 验证插件不能把外部工具挂到角色未授权的领域。
