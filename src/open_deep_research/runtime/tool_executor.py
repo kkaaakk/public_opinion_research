@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import asdict, replace
 from functools import partial
@@ -64,10 +64,6 @@ tool_usage: ContextVar[dict | None] = ContextVar("tool_usage", default=None)
 
 class _ToolRejected(Exception):
     """Return an ordinary tool error to the model."""
-
-
-def format_tool_error(_context: ToolContext[Any], error: Exception) -> str:
-    return f"Error executing tool: {error}"
 
 
 def _result_text(name: str, output: Any) -> str:
@@ -142,37 +138,31 @@ class ToolExecutor:
         drain_on_cancel: bool = False,
     ) -> Any:
         """Run one SDK tool call through the native ``por.agent_tool`` Step."""
-        if arguments != context.tool_arguments:
-            raise ValueError("Tool arguments do not match the SDK call context.")
         harness = context.context
         record = harness.start_tool(context)
         call_id = record.tool_call_id
-        if original := self._tool_calls.get(call_id):
-            # Preserve the native Step slot while sharing the first result,
-            # including when that result is restored from the journal.
-            return await self._tool_step(
-                harness, record, partial(asyncio.shield, original)
-            )
-
-        completion = asyncio.get_running_loop().create_future()
-        self._tool_calls[call_id] = completion
+        previous = self._tool_calls.get(call_id)
+        completion = None
+        if previous is None:
+            completion = asyncio.get_running_loop().create_future()
+            self._tool_calls[call_id] = completion
         try:
             output = await self._tool_step(
                 harness,
                 record,
-                partial(
-                    self._execute,
-                    tool,
-                    context,
-                    arguments,
-                    drain_on_cancel=drain_on_cancel,
-                ),
+                tool,
+                context,
+                arguments,
+                previous=previous,
+                drain_on_cancel=drain_on_cancel,
             )
         except BaseException as exc:
-            completion.set_exception(exc)
-            completion.exception()
+            if completion is not None:
+                completion.set_exception(exc)
+                completion.exception()
             raise
-        completion.set_result(output)
+        if completion is not None:
+            completion.set_result(output)
         return output
 
     async def drain(self, timeout: float) -> bool:
@@ -187,10 +177,63 @@ class ToolExecutor:
         self,
         harness: SDKContextHarness,
         record: ObservedToolResult,
-        execute: Callable[[], Awaitable[Any]],
+        tool: FunctionTool,
+        context: ToolContext[Any],
+        arguments: str,
+        *,
+        previous: asyncio.Future[Any] | None,
+        drain_on_cancel: bool,
     ) -> Any:
+        """Execute or replay one call under the ``por.agent_tool`` Step.
+
+        A duplicate call ID still consumes its own Step slot while sharing the
+        first result, including a result restored from the journal.
+        """
+
+        async def perform() -> Any:
+            if previous is not None:
+                return await asyncio.shield(previous)
+            if harness.closing:
+                harness.record_tool(
+                    context, "cancelled", None, error_type="CancelledError"
+                )
+                raise asyncio.CancelledError()
+            try:
+                self._authorize(tool.name)
+                self._admit(tool.name)
+                # The original SDK declaration validates arguments and defaults
+                # before the tool body admits a protected external operation.
+                call = tool.on_invoke_tool(context, arguments)
+                if drain_on_cancel:
+                    output, _ = await finish_owned(asyncio.ensure_future(call))
+                else:
+                    output = await call
+            except (asyncio.CancelledError, dbos_error.DBOSWorkflowCancelledError):
+                harness.record_tool(
+                    context, "cancelled", None, error_type="CancelledError"
+                )
+                raise
+            except Exception as exc:
+                if isinstance(exc, ExecutionControlError):
+                    harness.record_tool(
+                        context, "failed", None, error_type=type(exc).__name__
+                    )
+                    raise
+                output = f"Error executing tool: {exc}"
+                harness.record_tool(
+                    context,
+                    "cancelled"
+                    if isinstance(exc, MCPToolCancellationError)
+                    else "failed",
+                    output,
+                    error_type=type(exc).__name__,
+                )
+                return output
+            harness.record_tool(context, "succeeded", output)
+            return output
+
         if not native_step_available():
-            return await execute()
+            return await perform()
         executed = False
 
         async def invoke_step():
@@ -199,7 +242,7 @@ class ToolExecutor:
             local = {}
             token = tool_usage.set(local)
             try:
-                output = await execute()
+                output = await perform()
             finally:
                 tool_usage.reset(token)
             return {
@@ -216,58 +259,10 @@ class ToolExecutor:
             self.budget.add(saved["budget"])
         return saved["output"]
 
-    async def _execute(
-        self,
-        tool: FunctionTool,
-        context: ToolContext[Any],
-        arguments: str,
-        *,
-        drain_on_cancel: bool,
-    ) -> Any:
-        harness = context.context
-        if harness.closing:
-            harness.record_tool(
-                context, "cancelled", None, error_type="CancelledError"
-            )
-            raise asyncio.CancelledError()
-        try:
-            self._authorize(tool.name, context)
-            self._admit(tool.name)
-            call = tool.on_invoke_tool(context, arguments)
-            if drain_on_cancel:
-                output, _ = await finish_owned(asyncio.ensure_future(call))
-            else:
-                output = await call
-        except (asyncio.CancelledError, dbos_error.DBOSWorkflowCancelledError):
-            harness.record_tool(context, "cancelled", None, error_type="CancelledError")
-            raise
-        except Exception as exc:
-            if isinstance(exc, ExecutionControlError):
-                harness.record_tool(
-                    context, "failed", None, error_type=type(exc).__name__
-                )
-                raise
-            output = format_tool_error(context, exc)
-            harness.record_tool(
-                context,
-                "cancelled"
-                if isinstance(exc, MCPToolCancellationError)
-                else "failed",
-                output,
-                error_type=type(exc).__name__,
-            )
-            return output
-        else:
-            harness.record_tool(context, "succeeded", output)
-            return output
-
-    def _authorize(self, name: str, context: ToolContext[Any]) -> None:
-        tool = self.tools[name]
-        if (
-            context.tool_name != name
-            or tool.name != name
-            or get_tool_domain(tool) not in self.allowed_domains
-        ):
+    def _authorize(self, name: str) -> None:
+        # Registration filters each role's tools; re-read the current domain at
+        # invocation so a tool cannot keep running after its policy is revoked.
+        if get_tool_domain(self.tools[name]) not in self.allowed_domains:
             raise _ToolRejected(
                 f"Tool {name!r} is no longer authorized for {self.role}."
             )

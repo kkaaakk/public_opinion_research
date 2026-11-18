@@ -3,8 +3,9 @@
 import asyncio
 
 import pytest
-from agents import FunctionTool
+from agents import FunctionTool, function_tool
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
+from agents.tool_context import ToolContext
 from agents.usage import Usage
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ from open_deep_research.runtime.sdk_runtime import (
     _BusinessAgentHarness,
     _RunBudget,
 )
+from open_deep_research.tools import register_tool
 
 ROLES = PUBLIC_OPINION_AGENT_ORDER
 TOKENS = Usage(
@@ -363,3 +365,76 @@ def test_business_harness_snapshot_round_trip():
     assert harness.rolling_summary == "older work summarized"
     assert harness._compacted_turns == {1, 2}
     assert harness.run_budget.delta == {"model_calls": 3}
+
+
+def test_duplicate_native_call_keeps_its_step_without_reexecution(monkeypatch):
+    from open_deep_research.runtime import sdk_context, tool_executor
+
+    class StepDBOS:
+        workflow_id = None
+        executor_id = None
+        names: list[str] = []
+        saved: dict[int, dict] = {}
+
+        @classmethod
+        async def run_step_async(cls, options, func):
+            cls.names.append(options["name"])
+            index = len(cls.names) - 1
+            cls.saved[index] = await func()
+            return cls.saved[index]
+
+    class HarnessDBOS:
+        workflow_id = "fixture-workflow"
+        executor_id = "fixture-executor"
+
+    monkeypatch.setattr(tool_executor, "DBOS", StepDBOS)
+    monkeypatch.setattr(tool_executor, "native_step_available", lambda: True)
+    monkeypatch.setattr(sdk_context, "DBOS", HarnessDBOS)
+
+    calls = []
+
+    async def business(query: str) -> str:
+        calls.append(query)
+        return "durable evidence"
+
+    @function_tool(
+        name_override="web_search",
+        description_override="Search",
+        use_docstring_info=False,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def declared(context: ToolContext, query: str) -> str:
+        return await context.context.tool_executor.execute(context, business, query)
+
+    tool = register_tool(declared, domain="web_search", effect="read")
+
+    async def during_run(_call):
+        bound = runtime.agent.tools[0]
+
+        async def invoke():
+            context = ToolContext(
+                context=runtime.harness,
+                tool_name=bound.name,
+                tool_call_id="same",
+                tool_arguments='{"query":"q"}',
+            )
+            return await bound.on_invoke_tool(context, '{"query":"q"}')
+
+        assert await asyncio.gather(invoke(), invoke()) == ["durable evidence"] * 2
+        return [assistant_message("finished")]
+
+    runtime = _runtime(
+        tools=[tool], model=ScriptedModel([ModelStep.respond(during_run)])
+    )
+    result = asyncio.run(runtime.run("task"))
+    assert calls == ["q"]
+    # Each invocation keeps its own native Step slot; only the first executes
+    # the business function and reserves budget.
+    assert StepDBOS.names == ["por.agent_tool", "por.agent_tool"]
+    assert [entry["record"]["tool_call_id"] for entry in StepDBOS.saved.values()] == [
+        "same",
+        "same",
+    ]
+    assert runtime.harness.results["same"].status == "succeeded"
+    assert result.budget["tool_calls"] == 1
