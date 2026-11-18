@@ -389,8 +389,14 @@ async def _load_server_tools(
 async def load_mcp_tools(
     config: RunnableConfig,
     existing_tool_names: set[str],
+    *,
+    extra_servers: list[MCPServerSpec] | None = None,
 ) -> list[BusinessTool]:
-    """Load tools from all configured MCP servers with fault isolation."""
+    """Load tools from all configured MCP servers with fault isolation.
+
+    ``extra_servers`` lets a trusted plugin contribute additional server specs
+    through this same discovery and declaration path instead of a second client.
+    """
     configurable = Configuration.from_runnable_config(config)
     servers: list[MCPServerSpec] = []
 
@@ -430,6 +436,9 @@ async def load_mcp_tools(
             logger.warning(
                 "Failed to build Feishu config — Feishu disabled.", exc_info=True
             )
+
+    # 5) Plugin-declared servers keep their trusted local domain/effect policy.
+    servers.extend(extra_servers or [])
 
     # --- Per-server loading with full fault isolation ---
     all_tools: list[BusinessTool] = []

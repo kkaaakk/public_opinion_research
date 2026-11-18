@@ -144,7 +144,8 @@ async def get_all_tools(config: RunnableConfig):
 # 判断工具集合是否包含控制工具之外的实际外部研究能力。
 def has_external_research_tool(tools: list[Any]) -> bool:
     """Determine whether the tool collection includes anything beyond core control tools."""
-    core_tool_names = {"ResearchComplete", "think_tool"}
+    # load_skill only returns guidance; it is not retrieval capability.
+    core_tool_names = {"ResearchComplete", "think_tool", "load_skill"}
     for available_tool in tools:
         if isinstance(available_tool, dict):
             return True

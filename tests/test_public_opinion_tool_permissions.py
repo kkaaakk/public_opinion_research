@@ -43,7 +43,14 @@ def _patch_tool_source(monkeypatch, tools, social_tools=()) -> None:
     async def fake_get_all_tools(_config):
         return list(tools)
 
+    # 插件装配由独立测试覆盖，这里保持领域过滤测试只关注角色权限。
+    async def fake_load_plugin_tools(*_args, **_kwargs):
+        return [], None
+
     monkeypatch.setattr(business_agent_module, "get_all_tools", fake_get_all_tools)
+    monkeypatch.setattr(
+        business_agent_module, "load_plugin_tools", fake_load_plugin_tools
+    )
     monkeypatch.setattr(
         business_agent_module,
         "get_social_media_tools",
