@@ -325,40 +325,6 @@ def execution(
     return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
 
-@router.get("/{run_id}/evidence")
-def evidence(
-    run_id: str,
-    raw: Request,
-    after: str = Query(default="", max_length=256),
-    limit: int = Query(default=40, ge=1, le=100),
-    kind: str = Query(default="", max_length=32),
-    q: str = Query(default="", max_length=500),
-    node_id: str = Query(default="", max_length=256),
-    edge_after: str = Query(default="", max_length=256),
-) -> JSONResponse:
-    from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
-
-    from open_deep_research.web.observations import evidence_view
-
-    owner = trusted_owner(raw)
-    try:
-        data = _call(
-            evidence_view,
-            _store(),
-            run_id,
-            owner,
-            after=after,
-            limit=limit,
-            kind=kind,
-            query=q,
-            node_id=node_id,
-            edge_after=edge_after,
-        )
-    except (Neo4jError, ServiceUnavailable, SessionExpired, ValueError):
-        raise HTTPException(503, "Research Graph evidence is unavailable.") from None
-    return JSONResponse(data, headers={"Cache-Control": "no-store"})
-
-
 class ClarificationAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     version: str = Field(pattern=r"^[a-f0-9]{64}$")

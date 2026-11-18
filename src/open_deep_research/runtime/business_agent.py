@@ -1,4 +1,4 @@
-# 将角色规范、工具权限、上下文策略与共享运行时装配为业务智能体。
+# 将角色规范、工具权限与共享运行时装配为业务智能体。
 """Assemble and run one configured public-opinion business agent."""
 
 from __future__ import annotations
@@ -32,12 +32,6 @@ from open_deep_research.prompts import (
     compress_research_system_prompt,
 )
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
-from open_deep_research.research_graph import (
-    ResearchWorkspace,
-    TaskDescriptor,
-    create_context_strategy,
-)
-from open_deep_research.research_graph.schema import stable_id
 from open_deep_research.runtime.sdk_runtime import AgentRuntimeResult, SDKAgentRuntime
 from open_deep_research.social_media.tools import get_social_media_tools
 from open_deep_research.state import DeepResearchState, ResearchRoleResult
@@ -46,19 +40,15 @@ from open_deep_research.tools import BusinessTool
 from open_deep_research.tools.registry import (
     build_dynamic_tool_prompt,
     get_all_tools,
-    get_raw_search_tool,
     has_external_research_tool,
     tool_effect,
 )
 from open_deep_research.workflow.execution import native_step_available
 from open_deep_research.workflow.state_utils import (
-    agents_state,
     business_context,
     coerce_research_review,
     coerce_research_tasks,
     is_followup,
-    research_state,
-    resolve_research_run_id,
     role_context,
     role_reports,
     runtime_state,
@@ -68,6 +58,7 @@ from open_deep_research.workflow.state_utils import (
 
 LOGGER = logging.getLogger(__name__)
 _CONFIGURABLE_MODEL = configurable_chat_model()
+_PRODUCER_ROLES = frozenset({"public_signal", "internal_knowledge"})
 
 _UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
     "public_signal": (),
@@ -81,20 +72,8 @@ _UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
 }
 
 
-# 优先使用显式上下文策略，auto 时采用角色规范中的默认策略。
-def _effective_context_strategy(configurable: Configuration, spec: Any) -> str:
-    configured = configurable.context_strategy.strip().lower()
-    if configured != "auto":
-        return configured
-    return str(spec.context_strategy)
-
-
-# 取得当前角色的补充任务，首轮则按运行范围生成稳定任务描述。
-def _task_descriptor(
-    state: DeepResearchState,
-    role: str,
-    run_id: str,
-) -> TaskDescriptor:
+# 取得当前角色本轮的任务标识；补充轮次使用复核产出的稳定任务 ID。
+def _task_id(state: DeepResearchState, role: str) -> str:
     tasks = [
         task
         for task in coerce_research_tasks(
@@ -103,23 +82,11 @@ def _task_descriptor(
         if task.target_role == role
     ]
     if tasks:
-        task = tasks[0]
-        return TaskDescriptor(
-            task_id=task.task_id,
-            objective="\n".join(item.objective for item in tasks),
-            evidence_needed="\n".join(item.evidence_needed for item in tasks),
-            reason="\n".join(item.reason for item in tasks),
-            related_task_ids=tuple(item.task_id for item in tasks),
-        )
-    return TaskDescriptor(
-        task_id=stable_id("TASK", run_id, role, workflow_state(state).get("round", 1)),
-        objective=str(workflow_state(state).get("brief", "") or ""),
-        evidence_needed="Evidence required by the role contract and current research brief.",
-        reason="Initial role research task.",
-    )
+        return tasks[0].task_id
+    return f"{role}:round-{max(1, int(workflow_state(state).get('round', 1) or 1))}"
 
 
-# 组装研究简报、上游证据和角色契约；补充轮次聚焦尚未解决的证据缺口。
+# 组装研究简报、上游角色报告和角色契约；补充轮次聚焦尚未解决的证据缺口。
 def _build_business_agent_assignment(
     state: DeepResearchState,
     role: str,
@@ -129,24 +96,10 @@ def _build_business_agent_assignment(
     """Build the role's initial or gap-focused assignment."""
     configurable = configurable or Configuration.from_runnable_config({})
     spec = spec or get_public_opinion_agent_spec(role)
-    if configurable.research_graph_enabled:
-        upstream_context = (
-            "Current-run upstream evidence is stored in the scoped Research Graph. "
-            "The ResearchWorkspace will retrieve only the relevant subgraph; do not "
-            "reconstruct or request complete upstream role reports."
-        )
-        if role == "response_strategy":
-            risk_report = role_reports(state).get("risk_assessment", "")
-            upstream_context += (
-                "\n\nUpstream risk assessment (analysis, not original Graph evidence):\n"
-                + (risk_report[:12_000] or "No risk assessment report is available.")
-                + ("\n[Risk assessment bounded]" if len(risk_report) > 12_000 else "")
-            )
-    else:
-        upstream_context = role_context(
-            role_reports(state),
-            _UPSTREAM_ROLES.get(role, ()),
-        )
+    upstream_context = role_context(
+        role_reports(state),
+        _UPSTREAM_ROLES.get(role, ()),
+    )
     review = coerce_research_review(workflow_state(state).get("review"))
     review_context = (
         review.model_dump_json(indent=2) if review else "No research review yet."
@@ -187,7 +140,7 @@ def _build_business_agent_assignment(
         f"{assignment}\n\n"
         f"Current mode: follow-up research round {workflow_state(state).get('round', 2)}.\n"
         "Do not repeat the first-round comprehensive survey. Focus only on these unresolved, "
-        "decision-relevant research gaps and use the existing scoped research context:\n"
+        "decision-relevant research gaps and cite the sources you actually retrieved:\n"
         f"{chr(10).join(task_lines)}"
     )
 
@@ -213,7 +166,7 @@ def _role_tool_prompt(configurable: Configuration, spec: Any, tools: list[Any]) 
     )
 
 
-# 装配工具后按角色领域严格过滤，图生产角色使用原始搜索结果入口。
+# 装配工具后按角色领域严格过滤。
 async def _business_agent_tools(
     config: RunnableConfig,
     role: str,
@@ -222,15 +175,6 @@ async def _business_agent_tools(
     spec = spec or get_public_opinion_agent_spec(role)
     allowed_domains = spec.allowed_domains
     all_tools = await get_all_tools(config)
-    configurable = Configuration.from_runnable_config(config)
-    if (
-        configurable.research_graph_enabled
-        and _effective_context_strategy(configurable, spec) == "research_graph_producer"
-    ):
-        raw_search_tools = await get_raw_search_tool(configurable.search_api)
-        raw_names = {tool_name(tool) for tool in raw_search_tools}
-        all_tools = [tool for tool in all_tools if tool_name(tool) not in raw_names]
-        all_tools.extend(raw_search_tools)
     if "social_media" in allowed_domains:
         all_tools.extend(get_social_media_tools())
 
@@ -364,17 +308,16 @@ async def _compress_research(
     )
 
 
-# 风险与策略阶段保留原有状态增量；研究 Producer 返回独立业务结果。
+# 风险与策略阶段保留状态增量；研究 Producer 返回独立业务结果。
 def _build_state_patch(
     *,
     role: str,
     state: DeepResearchState,
     research_round: int,
     result: AgentRuntimeResult,
-    workspace: ResearchWorkspace,
 ) -> dict[str, Any]:
     followup = is_followup(state)
-    patch: dict[str, Any] = {
+    return {
         "agents": {
             role: {
                 "report": (
@@ -382,8 +325,6 @@ def _build_state_patch(
                     if result.replace_report
                     else result.report
                 ),
-                "memory": [result.memory],
-                "rolling_summary": result.rolling_summary,
             }
         },
         "workflow": {
@@ -396,14 +337,9 @@ def _build_state_patch(
         },
         "runtime": {"budget": result.budget},
     }
-    if workspace.strategy.graph_enabled:
-        workspace_update = workspace.state_update()
-        patch["research"] = workspace_update["research"]
-        patch["runtime"]["metrics"] = workspace_update["runtime"]["metrics"]
-    return patch
 
 
-# 装配模型、工具和工作区，执行指定角色并返回状态更新。
+# 将模型与工具目录表示为可比较的持久化快照。
 def _tool_catalog(tools: list[Any]) -> list[dict[str, Any]]:
     return [
         {
@@ -423,7 +359,7 @@ def _restore_role_tools(admitted, tools):
     current = _tool_catalog(tools)
     if admitted == current:
         return tools
-    # Existing dbos-events-v1 journals used the same catalog without effect.
+    # Existing journals used the same catalog without effect.
     if admitted != [
         {key: value for key, value in entry.items() if key != "effect"}
         for entry in current
@@ -456,11 +392,7 @@ async def run_business_agent(
 
     spec = get_public_opinion_agent_spec(role)
     research_round = max(1, int(workflow_state(state).get("round", 1) or 1))
-    run_id = resolve_research_run_id(state, config)
-    strategy = create_context_strategy(
-        _effective_context_strategy(configurable, spec),
-        graph_enabled=configurable.research_graph_enabled,
-    )
+    task_id = _task_id(state, role)
     assignment = _build_business_agent_assignment(state, role, configurable, spec)
     if native_step_available():
         tools = None
@@ -479,10 +411,9 @@ async def run_business_agent(
             )
     else:
         tools = await _business_agent_tools(config, role, spec)
-    # Consumers retrieve their evidence through ResearchWorkspace, so they
-    # can synthesize a report without an optional external retrieval tool.
-    uses_graph_evidence = strategy.graph_enabled and not strategy.is_producer
-    if not has_external_research_tool(tools) and not uses_graph_evidence:
+    # Consumers analyze the upstream role reports; only producers need an
+    # external retrieval tool to collect new evidence.
+    if role in _PRODUCER_ROLES and not has_external_research_tool(tools):
         required = sorted(spec.allowed_domains - {"core"})
         raise ValueError(
             f"Public Opinion agent '{role}' ({spec.display_name}) requires "
@@ -491,7 +422,7 @@ async def run_business_agent(
             "(search_api=tavily)."
         )
 
-    # 按本次调用配置创建并绑定角色实际可用的模型与工具。
+    # 按本次调用配置创建角色实际可用的模型，并允许压缩服务复用同一配置。
     def model_factory(model_name: str, max_tokens: int | None) -> Any:
         nested_model_config: dict[str, Any] = {
             "model": model_name,
@@ -502,16 +433,6 @@ async def run_business_agent(
             nested_model_config["max_tokens"] = max_tokens
         return _CONFIGURABLE_MODEL.with_config(nested_model_config)
 
-    workspace = ResearchWorkspace(
-        strategy=strategy,
-        research_state=research_state(state),
-        role=role,
-        configurable=configurable,
-        model_factory=model_factory,
-        task=_task_descriptor(state, role, run_id),
-        run_id=run_id,
-        research_round=research_round,
-    )
     system_prompt = spec.format_system_prompt(
         retrieval_tool_prompt=_role_tool_prompt(configurable, spec, tools),
         mcp_prompt=configurable.mcp_prompt or "",
@@ -538,14 +459,15 @@ async def run_business_agent(
     runtime_args: dict[str, Any] = dict(
         role=role,
         spec=spec,
-        agent_state=agents_state(state).get(role, {}),
-        workspace=workspace,
+        task_id=task_id,
+        research_round=research_round,
         config=configurable,
         runtime_config=config,
         system_prompt=system_prompt,
         tools=tools,
         initial_budget=runtime_state(state).get("budget", {}),
         compress_report=compress_report,
+        model_factory=model_factory,
     )
     # One SDK start is one provider attempt. Errors never select another engine.
     async with sdk_model(
@@ -558,21 +480,13 @@ async def run_business_agent(
             round=research_round,
             report=result.report,
             replace_report=result.replace_report,
-            memory=[result.memory],
-            rolling_summary=result.rolling_summary,
-            working_context=workspace.working_context
-            if strategy.graph_enabled
-            else None,
-            working_context_scope=workspace.scope if strategy.graph_enabled else None,
             budget_delta=result.budget,
-            metrics_delta=workspace.metrics.as_dict() if strategy.graph_enabled else {},
         )
     return _build_state_patch(
         role=role,
         state=state,
         research_round=research_round,
         result=result,
-        workspace=workspace,
     )
 
 

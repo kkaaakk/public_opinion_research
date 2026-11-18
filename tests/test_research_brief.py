@@ -30,7 +30,6 @@ CFG = {
     "configurable": {
         "research_model": "openai:gpt-4.1",
         "final_report_model": "openai:gpt-4.1",
-        "research_graph_enabled": False,
         "max_structured_output_retries": 1,
         "max_model_calls": 20,
     }

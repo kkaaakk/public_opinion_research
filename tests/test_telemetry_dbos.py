@@ -1,4 +1,4 @@
-"""Native PostgreSQL/Neo4j tracing, with the original controlled SDK fixtures."""
+"""Native PostgreSQL tracing, with the original controlled SDK fixtures."""
 
 import threading
 import time
@@ -183,19 +183,12 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
         assert tool.attributes["por.run_id"] == run["run_id"]
         assert tool.attributes["por.unit_id"].startswith(run["run_id"] + ":")
         assert tool.attributes["por.execution_id"]
-        assert (
-            tool.attributes["por.tool_call_id"] and tool.attributes["por.graph_call_id"]
-        )
+        assert tool.attributes["por.tool_call_id"]
         assert "por.operation_id" not in tool.attributes
         assert "por.effect_status" not in tool.attributes
         assert tool.attributes["por.generation"] == 0
         assert tool.attributes["por.status"] == "succeeded"
-    assert {
-        "research_review",
-        "report_generation",
-        "context_build",
-        "research_graph_write",
-    } <= {s.name for s in spans}
+    assert {"research_review", "report_generation"} <= {s.name for s in spans}
     assert result["usage"]["model_calls"] == 26
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
     # Read/SSE projections do not create spans or repeat work.
@@ -293,7 +286,7 @@ def test_followup_rounds_keep_native_call_and_invocation_identity(
         )
         == 4
     )
-    assert len({s.attributes["por.graph_call_id"] for s in tools}) == 4
+    assert len({s.attributes["por.tool_call_id"] for s in tools}) == 4
     assert case.calls == {"public_signal": 2, "internal_knowledge": 2}
 
 

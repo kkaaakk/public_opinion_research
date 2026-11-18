@@ -32,10 +32,42 @@ from opentelemetry.trace import (
     TraceFlags,
     TraceState,
 )
-from test_sdk_context import _tool, _workspace
+from test_sdk_runtime import _RunBudget
 
+from open_deep_research.configuration import Configuration
 from open_deep_research.observability import telemetry
 from open_deep_research.runtime.sdk_context import SDKContextHarness
+from open_deep_research.runtime.tool_executor import ToolExecutor
+from open_deep_research.tools import register_tool
+
+
+def _harness(role="public_signal", task_id="telemetry-task", research_round=2):
+    return SDKContextHarness(
+        role=role, task_id=task_id, research_round=research_round
+    )
+
+
+def _tool(harness):
+    async def search(label: str) -> str:
+        return f"private-result-{label}"
+
+    declared = function_tool(
+        search,
+        name_override="web_search",
+        strict_mode=True,
+        failure_error_function=None,
+    )
+    tool = register_tool(declared, domain="web_search", effect="read")
+    executor = ToolExecutor(
+        harness.role,
+        frozenset({"web_search"}),
+        Configuration(research_model="openai:fixture"),
+        {},
+        _RunBudget(initial={}),
+        {"web_search": tool},
+    )
+    harness.tool_executor = executor
+    return executor.bind(tool.sdk_tool)
 
 
 def kinds(spans, kind):
@@ -143,8 +175,7 @@ def test_runconfig_disabled_really_suppresses_openinference(
         model = ScriptedModel(
             [[assistant_message("private response")]], emit_traces=True
         )
-        workspace, _, _ = _workspace(tmp_path, producer=False)
-        run = SDKContextHarness(workspace).run if through_harness else Runner.run
+        run = _harness().run if through_harness else Runner.run
         return await run(
             Agent(name="probe", model=model),
             "private prompt",
@@ -168,9 +199,10 @@ def test_parallel_harness_native_spans_are_distinct_and_private(
         entered = []
 
         async def invoke(label, producer):
-            workspace, _, _ = _workspace(tmp_path / label, producer=producer)
-            workspace.scope.research_round = 2
-            harness = SDKContextHarness(workspace)
+            harness = _harness(
+                role="public_signal" if producer else "risk_assessment",
+                task_id=label,
+            )
 
             async def first(call):
                 entered.append(label)
@@ -237,15 +269,9 @@ def test_parallel_harness_native_spans_are_distinct_and_private(
         assert tool.attributes["por.role"] == parent.attributes["por.role"]
         assert tool.attributes["por.generation"] == 1
         assert tool.attributes["por.research_round"] == 2
-        assert tool.attributes["por.graph_call_id"].startswith("CALL_")
     assert len({s.attributes["por.invocation_id"] for s in tools}) == 2
     names = {s.name for s in spans}
-    assert {
-        "context_build",
-        "persist_tool_results",
-        "context_retrieval",
-        "research_graph_write",
-    } <= names
+    assert "sdk_invocation" in names
     exported = json.dumps([json.loads(s.to_json()) for s in spans])
     assert "secret-" not in exported
     assert "test-only-secret" not in exported
@@ -340,8 +366,7 @@ def test_original_failure_or_cancel_survives_and_is_redacted(
     trace_capture, tmp_path, cancel
 ):
     async def run():
-        workspace, _, _ = _workspace(tmp_path)
-        harness = SDKContextHarness(workspace)
+        harness = _harness(role="risk_assessment", task_id="telemetry-failure")
 
         async def fail(call):
             if cancel:
@@ -509,13 +534,12 @@ def test_responses_native_usage_and_details_are_collected(trace_capture, tmp_pat
             model = OpenAIResponsesModel(
                 model="fixture-responses", openai_client=client
             )
-            workspace, _, _ = _workspace(tmp_path, producer=False)
-            return await SDKContextHarness(workspace).run(
+            harness = _harness(role="risk_assessment", task_id="telemetry-usage")
+            return await harness.run(
                 Agent(name="agent", model=model, tools=[lookup]),
                 "private-query",
                 run_config=RunConfig(trace_include_sensitive_data=False),
             )
-
     result = asyncio.run(run())
     spans = trace_capture.spans()
     llms = kinds(spans, "LLM")
@@ -540,35 +564,29 @@ def test_rolling_compaction_exposes_estimates_and_preserves_budget(
     from test_python_workflow_sdk import install_sdk
 
     from open_deep_research.budget import budget_capture
-    from open_deep_research.research_graph.store import clear_research_graph_store_cache
 
     state, cfg, runtimes, _, calls, _ = install_sdk(monkeypatch, tmp_path, "rolling")
-    try:
-        with budget_capture() as charged:
-            result = asyncio.run(
-                PythonWorkflow().ainvoke(state, cfg, start_at="research")
-            )
-        spans = trace_capture.spans()
-        compacted = [s for s in spans if s.name == "rolling_compaction"]
-        assert compacted
-        assert all(
-            s.attributes["por.estimated_tokens_before"]
-            > s.attributes["por.estimated_tokens_after"]
-            > 0
-            for s in compacted
-        )
-        assert (
-            sum(rt.budget_usage["model_calls"] for rt in runtimes)
-            <= result["runtime"]["budget"]["model_calls"]
-        )
-        assert (
-            charged["model_calls"] + state["runtime"]["budget"]["model_calls"]
-            == result["runtime"]["budget"]["model_calls"]
-        )
-        assert calls == {"public_signal": 25, "internal_knowledge": 25}
-        assert all("private-" not in s.to_json() for s in spans)
-    finally:
-        clear_research_graph_store_cache()
+    with budget_capture() as charged:
+        result = asyncio.run(PythonWorkflow().ainvoke(state, cfg, start_at="research"))
+    spans = trace_capture.spans()
+    compacted = [s for s in spans if s.name == "rolling_compaction"]
+    assert compacted
+    assert all(
+        s.attributes["por.estimated_tokens_before"]
+        > s.attributes["por.estimated_tokens_after"]
+        > 0
+        for s in compacted
+    )
+    assert (
+        sum(rt.budget_usage["model_calls"] for rt in runtimes)
+        <= result["runtime"]["budget"]["model_calls"]
+    )
+    assert (
+        charged["model_calls"] + state["runtime"]["budget"]["model_calls"]
+        == result["runtime"]["budget"]["model_calls"]
+    )
+    assert calls == {"public_signal": 25, "internal_knowledge": 25}
+    assert all("private-" not in s.to_json() for s in spans)
 
 
 def test_real_otlp_timeout_runs_off_the_business_thread(otlp_receiver):
@@ -598,21 +616,20 @@ def test_real_otlp_timeout_runs_off_the_business_thread(otlp_receiver):
     assert otlp_receiver.spans
 
 
-def test_api_shutdown_flushes_telemetry_even_when_history_close_fails(monkeypatch):
+def test_api_shutdown_flushes_telemetry_even_when_run_client_close_fails(monkeypatch):
     from open_deep_research.web import durable, server
 
     calls = []
 
     def fail():
-        calls.append("history")
+        calls.append("run")
         raise RuntimeError("storage-close-failed")
 
     monkeypatch.setattr(telemetry, "initialize_telemetry", lambda: False)
     monkeypatch.setattr(
         telemetry, "shutdown_telemetry", lambda: calls.append("telemetry")
     )
-    monkeypatch.setattr(durable, "close_run_client", lambda: calls.append("run"))
-    monkeypatch.setattr(server, "close_history_store", fail)
+    monkeypatch.setattr(durable, "close_run_client", fail)
 
     async def close():
         async with server.lifespan(server.app):
@@ -620,4 +637,4 @@ def test_api_shutdown_flushes_telemetry_even_when_history_close_fails(monkeypatc
 
     with pytest.raises(RuntimeError, match="storage-close-failed"):
         asyncio.run(close())
-    assert calls == ["history", "run", "telemetry"]
+    assert calls == ["run", "telemetry"]

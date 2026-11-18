@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 
 
-# 封装一个舆情角色的职责、上下文策略、工具领域及输出要求。
+# 封装一个舆情角色的职责、工具领域及输出要求。
 @dataclass(frozen=True)
 class PublicOpinionAgentSpec:
     """Encapsulates the contract and policy for one business agent."""
@@ -19,10 +19,9 @@ class PublicOpinionAgentSpec:
     output_schema: tuple[str, ...]
     prompt: str
     tool_policy: tuple[str, ...]
-    memory_policy: tuple[str, ...]
+    report_policy: tuple[str, ...]
     execution_strategy: tuple[str, ...]
     handoff_policy: tuple[str, ...]
-    context_strategy: str = "standard"
 
     # 将角色职责、权限、输入输出契约渲染为专用系统提示词。
     def format_system_prompt(
@@ -47,10 +46,9 @@ class PublicOpinionAgentSpec:
             output_schema=_bullet_lines(self.output_schema),
             agent_prompt=self.prompt,
             tool_policy=_bullet_lines(self.tool_policy),
-            memory_policy=_bullet_lines(self.memory_policy),
+            report_policy=_bullet_lines(self.report_policy),
             execution_strategy=_numbered_lines(self.execution_strategy),
             handoff_policy=_bullet_lines(self.handoff_policy),
-            context_strategy=self.context_strategy,
         )
 
 
@@ -102,9 +100,9 @@ Use think_tool after each retrieval step to reflect on evidence quality and deci
 {tool_policy}
 </Tool Policy>
 
-<Memory Policy>
-{memory_policy}
-</Memory Policy>
+<Report Policy>
+{report_policy}
+</Report Policy>
 
 <Execution Strategy>
 {execution_strategy}
@@ -119,16 +117,12 @@ Return a concise role report following this schema:
 {handoff_policy}
 </Handoff Policy>
 
-<Context Strategy>
-{context_strategy}
-</Context Strategy>
-
 <Evidence Rules>
 1. Do not overstate public sentiment from thin evidence.
 2. For local RAG findings, preserve source paths, page/heading/field metadata, and citations.
 3. If rag_search does not contain enough internal evidence, say so explicitly.
 4. Distinguish facts, allegations, rumors, interpretations, and recommendations.
 5. Keep dates concrete and absolute when available.
-6. The Context Strategy is a runtime/workspace routing choice. Do not treat Research Graph
-   retrieval as a final answer or invent provenance metadata.
+6. Cite only URLs, document paths and observations you actually retrieved. Never invent
+   sources, identifiers or provenance metadata.
 </Evidence Rules>"""

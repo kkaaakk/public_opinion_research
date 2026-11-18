@@ -18,7 +18,6 @@ def _config(*, max_research_rounds: int = 2) -> dict:
     """Build a small deterministic subgraph configuration for loop tests."""
     return {
         "configurable": {
-            "research_graph_enabled": False,
             "enabled_business_agents": [
                 "public_signal",
                 "internal_knowledge",
@@ -88,7 +87,7 @@ def _fake_agent(calls: list[tuple[str, str, list[str]]]):
         ]
         calls.append((role, mode, task_ids))
         result = {
-            "agents": {role: {"report": f"{role} {mode} report", "memory": []}},
+            "agents": {role: {"report": f"{role} {mode} report"}},
             "workflow": {"completed_tasks": tasks if mode == "followup" else []},
             "runtime": {"budget": {}},
         }
@@ -112,9 +111,8 @@ def _initial_state() -> dict:
             "completed_tasks": [],
         },
         "agents": {},
-        "research": {"run_id": "fixture-run", "working_contexts": {}},
         "report": {},
-        "runtime": {"budget": {}, "metrics": {}},
+        "runtime": {"budget": {}},
     }
 
 
@@ -349,7 +347,7 @@ def test_followup_assignment_contains_only_gap_tasks() -> None:
     assignment = business_agent_module._build_business_agent_assignment(
         {
             "workflow": {"brief": "brand risk", "round": 2, "pending_tasks": [task]},
-            "agents": {"public_signal": {"report": "round one", "memory": []}},
+            "agents": {"public_signal": {"report": "round one"}},
         },
         "public_signal",
     )

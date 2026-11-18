@@ -34,13 +34,8 @@ class RetrievalMode(Enum):
 
 
 DEFAULT_RAG_KNOWLEDGE_BASE_PATHS = ["data/knowledge"]
-DEFAULT_RAG_MEMORY_PATHS = ["data/memory/chat_memory.jsonl"]
 DEFAULT_RAG_VECTORSTORE_PATH = "data/indexes/rag"
 DEFAULT_RAG_MILVUS_URI = "data/indexes/rag/milvus.db"
-DEFAULT_RAG_GRAPH_ENABLED = True
-DEFAULT_RAG_GRAPH_BACKEND = "neo4j"
-DEFAULT_RAG_NEO4J_URI = "bolt://localhost:7687"
-DEFAULT_RAG_NEO4J_USERNAME = "neo4j"
 DEFAULT_RAG_VISION_MODEL = "openai:gpt-4.1-mini"
 DEFAULT_RAG_VISION_PROMPT = (
     "Describe only the visible information in this image for RAG indexing. "
@@ -192,134 +187,7 @@ class Configuration(BaseModel):
             }
         },
     )
-    # Research Graph / Workspace configuration.  The feature is opt-in
-    # so existing standard and legacy workflows keep their current behavior.
-    context_strategy: str = Field(
-        default="auto",
-        metadata={
-            "x_oap_ui_config": {
-                "type": "select",
-                "default": "auto",
-                "description": "Context strategy override. Auto uses each public-opinion AgentSpec routing.",
-                "options": [
-                    {"label": "Auto", "value": "auto"},
-                    {"label": "Standard", "value": "standard"},
-                    {"label": "Research Graph Producer", "value": "research_graph_producer"},
-                    {"label": "Research Graph Consumer", "value": "research_graph_consumer"},
-                ],
-            }
-        },
-    )
-    research_graph_enabled: bool = Field(
-        default=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": True,
-                "description": "Enable the per-run Neo4j Research Graph and bounded Research Workspace.",
-            }
-        },
-    )
-    research_graph_backend: str = Field(
-        default="neo4j",
-        metadata={
-            "x_oap_ui_config": {
-                "type": "select",
-                "default": "neo4j",
-                "description": "Research Graph adapter. Use memory for tests/local fixtures or neo4j for production.",
-                "options": [
-                    {"label": "Neo4j", "value": "neo4j"},
-                    {"label": "Memory (tests)", "value": "memory"},
-                ],
-            }
-        },
-    )
-    research_graph_uri: Optional[str] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "Neo4j URI for Research Graph, for example bolt://localhost:7687.",
-            }
-        },
-    )
-    research_graph_username: Optional[str] = Field(
-        default="neo4j",
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "default": "neo4j",
-                "description": "Neo4j username for Research Graph. Read from environment/secret config.",
-            }
-        },
-    )
-    research_graph_password: Optional[str] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "password",
-                "description": "Neo4j password for Research Graph. Never log this value.",
-            }
-        },
-    )
-    research_graph_database: Optional[str] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "Optional Neo4j database for Research Graph.",
-            }
-        },
-    )
-    # Compatibility aliases for callers that follow the existing rag_neo4j
-    # naming convention.  Canonical code uses the research_graph_* fields.
-    research_graph_neo4j_uri: Optional[str] = Field(default=None, optional=True)
-    research_graph_neo4j_username: Optional[str] = Field(default=None, optional=True)
-    research_graph_neo4j_password: Optional[str] = Field(default=None, optional=True)
-    research_graph_neo4j_database: Optional[str] = Field(default=None, optional=True)
-    research_graph_extraction_model: str = Field(
-        default="volcengine:doubao-seed-2-0-mini-260428",
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "Structured model used once per token-aware Research Graph extraction batch.",
-            }
-        },
-    )
-    research_graph_extraction_model_max_tokens: int = Field(
-        default=4096,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "default": 4096,
-                "description": "Maximum output tokens for one graph extraction batch.",
-            }
-        },
-    )
-    research_graph_extraction_batch_tokens: int = Field(
-        default=12000,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "default": 12000,
-                "description": "Estimated input-token ceiling for each batch of raw source material.",
-            }
-        },
-    )
-    context_manager_model: str = Field(
-        default="volcengine:doubao-seed-2-0-mini-260428",
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "Structured model used to update bounded Working Context.",
-            }
-        },
-    )
-    context_manager_model_max_tokens: int = Field(default=2048, optional=True)
+    # 上下文窗口与滚动压缩：单一历史压缩机制的唯一配置。
     rolling_compaction_model: str = Field(
         default="volcengine:doubao-seed-2-0-mini-260428",
         metadata={
@@ -330,8 +198,6 @@ class Configuration(BaseModel):
         },
     )
     rolling_compaction_model_max_tokens: int = Field(default=2048, optional=True)
-    research_graph_role_report_model: Optional[str] = Field(default=None, optional=True)
-    research_graph_role_report_max_tokens: int = Field(default=8192, optional=True)
     context_compaction_threshold_ratio: float = Field(
         default=0.75,
         metadata={
@@ -340,34 +206,20 @@ class Configuration(BaseModel):
                 "default": 0.75,
                 "min": 0.70,
                 "max": 0.80,
-                "description": "Soft model-context threshold for Rolling Compact; never a research stop condition.",
+                "description": "Soft model-context threshold for rolling compaction; never a research stop condition.",
             }
         },
     )
-    context_warning_ratio: float = Field(
-        default=0.60,
+    context_capacity_tokens: Optional[int] = Field(default=None, optional=True)
+    recent_raw_steps: int = Field(
+        default=3,
         metadata={
             "x_oap_ui_config": {
                 "type": "number",
-                "default": 0.60,
-                "min": 0.0,
-                "max": 1.0,
-                "description": "Context pressure ratio that raises a warning before compaction triggers.",
+                "default": 3,
+                "description": "Newest complete agent steps kept raw during compaction.",
             }
         },
-    )
-    research_graph_context_capacity_tokens: Optional[int] = Field(default=None, optional=True)
-    recent_raw_steps: int = Field(default=3, metadata={"x_oap_ui_config": {"type": "number", "default": 3}})
-    working_context_max_active_findings: int = Field(default=8, optional=True)
-    working_context_max_active_claims: int = Field(default=16, optional=True)
-    working_context_max_active_evidence: int = Field(default=24, optional=True)
-    working_context_max_open_gaps: int = Field(default=8, optional=True)
-    working_context_max_conflicts: int = Field(default=8, optional=True)
-    research_graph_max_retrieved_nodes: int = Field(default=24, optional=True)
-    research_graph_max_retrieved_edges: int = Field(default=48, optional=True)
-    research_graph_transcript_dir: str = Field(
-        default=".tmp/runtime/transcripts",
-        metadata={"x_oap_ui_config": {"type": "text", "default": ".tmp/runtime/transcripts"}},
     )
     # 业务场景配置：企业背景、启用角色与品牌监测范围。
     business_scenario: str = Field(
@@ -774,147 +626,6 @@ class Configuration(BaseModel):
             }
         }
     )
-    rag_graph_enabled: bool = Field(
-        default=DEFAULT_RAG_GRAPH_ENABLED,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": DEFAULT_RAG_GRAPH_ENABLED,
-                "description": "Enable lightweight GraphRAG expansion over local chunks after vector+BM25 recall."
-            }
-        }
-    )
-    rag_graph_backend: str = Field(
-        default=DEFAULT_RAG_GRAPH_BACKEND,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "default": DEFAULT_RAG_GRAPH_BACKEND,
-                "description": "GraphRAG backend: memory for in-process graph expansion or neo4j for a Neo4j knowledge graph."
-            }
-        }
-    )
-    rag_graph_max_neighbors: int = Field(
-        default=4,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "slider",
-                "default": 4,
-                "min": 0,
-                "max": 20,
-                "step": 1,
-                "description": "Maximum graph-neighbor chunks to add during GraphRAG expansion."
-            }
-        }
-    )
-    rag_graph_weight: float = Field(
-        default=0.35,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "default": 0.35,
-                "min": 0.0,
-                "max": 1.0,
-                "description": "GraphRAG score weight for evidence connected to seed chunks."
-            }
-        }
-    )
-    rag_graph_ner_enabled: bool = Field(
-        default=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": True,
-                "description": "Enable spaCy NER for graph term extraction. Requires spaCy and en_core_web_sm."
-            }
-        }
-    )
-    rag_graph_idf_enabled: bool = Field(
-        default=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": True,
-                "description": "Enable IDF-weighted filtering of common terms during graph term extraction."
-            }
-        }
-    )
-    rag_graph_idf_threshold_percentile: float = Field(
-        default=85.0,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "default": 85.0,
-                "min": 0.0,
-                "max": 100.0,
-                "description": "IDF percentile threshold. Terms below this percentile are filtered out."
-            }
-        }
-    )
-    rag_graph_confidence_threshold: float = Field(
-        default=0.15,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "default": 0.15,
-                "min": 0.0,
-                "max": 1.0,
-                "description": "Minimum confidence for graph expansion candidates. Candidates below this threshold are filtered out."
-            }
-        }
-    )
-    rag_structural_edges_enabled: bool = Field(
-        default=False,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": False,
-                "description": "Enable structural edges (same source, adjacent chunks, shared metadata) in GraphRAG expansion."
-            }
-        }
-    )
-    rag_neo4j_uri: Optional[str] = Field(
-        default=DEFAULT_RAG_NEO4J_URI,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "default": DEFAULT_RAG_NEO4J_URI,
-                "description": "Neo4j bolt URI for graph_backend=neo4j, for example bolt://localhost:7687."
-            }
-        }
-    )
-    rag_neo4j_username: Optional[str] = Field(
-        default=DEFAULT_RAG_NEO4J_USERNAME,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "default": DEFAULT_RAG_NEO4J_USERNAME,
-                "description": "Neo4j username for graph_backend=neo4j."
-            }
-        }
-    )
-    rag_neo4j_password: Optional[str] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "Neo4j password for graph_backend=neo4j."
-            }
-        }
-    )
-    rag_neo4j_database: Optional[str] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "Optional Neo4j database name for graph_backend=neo4j."
-            }
-        }
-    )
     rag_authority_rerank_enabled: bool = Field(
         default=True,
         metadata={
@@ -1073,106 +784,6 @@ class Configuration(BaseModel):
                 "type": "number",
                 "default": 256,
                 "description": "Maximum output tokens for RAG query rewriting."
-            }
-        }
-    )
-    rag_memory_enabled: bool = Field(
-        default=False,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": False,
-                "description": "Whether to include chat memory records as an additional local RAG source."
-            }
-        }
-    )
-    rag_memory_paths: Optional[List[str]] = Field(
-        default_factory=lambda: list(DEFAULT_RAG_MEMORY_PATHS),
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "default": DEFAULT_RAG_MEMORY_PATHS,
-                "description": "Comma-separated paths or a JSON array of .json/.jsonl chat memory files or directories to index for RAG."
-            }
-        }
-    )
-    rag_memory_json_text_fields: Optional[List[str]] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "Optional comma-separated JSON field paths to extract from chat memory records. Leave empty to use common memory fields and messages."
-            }
-        }
-    )
-    rag_memory_mysql_url: Optional[str] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "MySQL SQLAlchemy URL for storing raw chat memory, for example mysql+pymysql://user:pass@host:3306/db."
-            }
-        }
-    )
-    rag_memory_mysql_table: str = Field(
-        default="rag_chat_memories",
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "default": "rag_chat_memories",
-                "description": "MySQL table used to store raw chat, summary, and long-term memory records."
-            }
-        }
-    )
-    rag_memory_mysql_limit: int = Field(
-        default=1000,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "default": 1000,
-                "min": 1,
-                "max": 10000,
-                "description": "Maximum number of MySQL chat memory rows to load into the RAG index."
-            }
-        }
-    )
-    rag_memory_mysql_index_record_types: Optional[List[str]] = Field(
-        default=[
-            "summary",
-            "preference",
-            "project_fact",
-            "decision",
-            "constraint",
-            "deprecated",
-        ],
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "description": "Comma-separated MySQL memory record types to vectorize for RAG. Full chat transcripts stay only in MySQL as chat_raw."
-            }
-        }
-    )
-    rag_memory_write_enabled: bool = Field(
-        default=False,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": False,
-                "description": "Whether to persist completed conversations into MySQL chat memory."
-            }
-        }
-    )
-    rag_memory_write_sync_index: bool = Field(
-        default=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "boolean",
-                "default": True,
-                "description": "Trigger a non-blocking RAG index refresh after writing chat memory to MySQL. Query-time indexing still acts as a fallback."
             }
         }
     )
@@ -1517,9 +1128,6 @@ class Configuration(BaseModel):
     @field_validator(
         "rag_knowledge_base_paths",
         "rag_json_text_fields",
-        "rag_memory_paths",
-        "rag_memory_json_text_fields",
-        "rag_memory_mysql_index_record_types",
         "enabled_business_agents",
         mode="before",
     )
@@ -1558,52 +1166,16 @@ class Configuration(BaseModel):
     def validate_rag_chunk_settings(self) -> "Configuration":
         """Validate local RAG chunking and budget settings."""
         _apply_rag_path_compatibility(self)
-        if self.context_strategy.strip().lower() not in {
-            "auto",
-            "standard",
-            "research_graph_producer",
-            "research_graph_consumer",
-        }:
-            raise ValueError("context_strategy is not supported.")
-        if self.research_graph_backend.strip().lower() not in {"neo4j", "memory", "inmemory", "local"}:
-            raise ValueError("research_graph_backend must be either neo4j or memory.")
-        if self.research_graph_uri is None and self.research_graph_neo4j_uri:
-            self.research_graph_uri = self.research_graph_neo4j_uri
-        if self.research_graph_username == "neo4j" and self.research_graph_neo4j_username:
-            self.research_graph_username = self.research_graph_neo4j_username
-        if self.research_graph_password is None and self.research_graph_neo4j_password:
-            self.research_graph_password = self.research_graph_neo4j_password
-        if self.research_graph_database is None and self.research_graph_neo4j_database:
-            self.research_graph_database = self.research_graph_neo4j_database
         if not 0.70 <= self.context_compaction_threshold_ratio <= 0.80:
             raise ValueError("context_compaction_threshold_ratio must be between 0.70 and 0.80.")
-        if not 0.0 < self.context_warning_ratio < self.context_compaction_threshold_ratio:
-            raise ValueError(
-                "context_warning_ratio must be between 0 and context_compaction_threshold_ratio."
-            )
-        positive_graph_fields = (
-            "research_graph_extraction_model_max_tokens",
-            "research_graph_extraction_batch_tokens",
-            "context_manager_model_max_tokens",
-            "rolling_compaction_model_max_tokens",
-            "research_graph_role_report_max_tokens",
-            "recent_raw_steps",
-            "working_context_max_active_findings",
-            "working_context_max_active_claims",
-            "working_context_max_active_evidence",
-            "working_context_max_open_gaps",
-            "working_context_max_conflicts",
-            "research_graph_max_retrieved_nodes",
-            "research_graph_max_retrieved_edges",
-        )
-        for field_name in positive_graph_fields:
+        for field_name in ("rolling_compaction_model_max_tokens", "recent_raw_steps"):
             if getattr(self, field_name) < 0:
                 raise ValueError(f"{field_name} must be greater than or equal to 0.")
         if (
-            self.research_graph_context_capacity_tokens is not None
-            and self.research_graph_context_capacity_tokens <= 0
+            self.context_capacity_tokens is not None
+            and self.context_capacity_tokens <= 0
         ):
-            raise ValueError("research_graph_context_capacity_tokens must be greater than 0 when set.")
+            raise ValueError("context_capacity_tokens must be greater than 0 when set.")
         if self.max_research_rounds <= 0:
             raise ValueError("max_research_rounds must be greater than 0.")
         if self.rag_chunk_size <= 0:
@@ -1618,45 +1190,12 @@ class Configuration(BaseModel):
             raise ValueError("rag_keyword_backend must be either memory or elasticsearch.")
         if not self.rag_elasticsearch_index.strip():
             raise ValueError("rag_elasticsearch_index must not be empty.")
-        if self.rag_memory_mysql_limit <= 0:
-            raise ValueError("rag_memory_mysql_limit must be greater than 0.")
-        if self.rag_memory_mysql_index_record_types:
-            allowed_memory_record_types = {
-                "chat",
-                "chat_raw",
-                "summary",
-                "memory",
-                "preference",
-                "project_fact",
-                "decision",
-                "constraint",
-                "deprecated",
-            }
-            invalid_memory_record_types = [
-                record_type
-                for record_type in self.rag_memory_mysql_index_record_types
-                if str(record_type).strip().lower() not in allowed_memory_record_types
-            ]
-            if invalid_memory_record_types:
-                raise ValueError(
-                    "rag_memory_mysql_index_record_types contains an unsupported memory type."
-                )
         if self.rag_rrf_rank_constant <= 0:
             raise ValueError("rag_rrf_rank_constant must be greater than 0.")
         if not 0 <= self.rag_structured_metadata_weight <= 1:
             raise ValueError("rag_structured_metadata_weight must be between 0 and 1.")
         if self.rag_query_rewrite_max_tokens <= 0:
             raise ValueError("rag_query_rewrite_max_tokens must be greater than 0.")
-        if self.rag_graph_backend.strip().lower() not in {"memory", "neo4j"}:
-            raise ValueError("rag_graph_backend must be either memory or neo4j.")
-        if self.rag_graph_max_neighbors < 0:
-            raise ValueError("rag_graph_max_neighbors must be greater than or equal to 0.")
-        if not 0 <= self.rag_graph_weight <= 1:
-            raise ValueError("rag_graph_weight must be between 0 and 1.")
-        if not 0.0 <= self.rag_graph_idf_threshold_percentile <= 100.0:
-            raise ValueError("rag_graph_idf_threshold_percentile must be between 0 and 100.")
-        if not 0.0 <= self.rag_graph_confidence_threshold <= 1.0:
-            raise ValueError("rag_graph_confidence_threshold must be between 0 and 1.")
         if self.rag_milvus_metric_type.strip().upper() not in {"COSINE", "IP", "L2"}:
             raise ValueError("rag_milvus_metric_type must be COSINE, IP, or L2.")
         if self.rag_multimodal_provider.strip().lower() not in {

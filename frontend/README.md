@@ -43,9 +43,9 @@ npm run build
 - 打开 Run 只读取；刷新从 seq 0 分页重建，随后按 `Last-Event-ID` 订阅。会话存储不保存孤立游标或 Token。
 - SDK 模型/工具状态、身份、实测钩子时长与 Harness 元数据来自正式后端观测。缺失字段显示「未提供」。`returned` 工具效果回执不等于 `succeeded` 业务结果。
 - 审批绑定服务端不可变 plan version；安全重试先保存 key、state_version、generation。丢 ACK 后只能确认原请求，不能自动换新 key。只有 Finalizer 应用授权。
-- DBOS 终态、SDK 清算、事件交付、Neo4j 报告归档分别展示。断线和页面切换不取消 Run；归档补偿期间继续只读观察。
+- DBOS 终态、SDK 清算、事件交付、PostgreSQL 报告归档分别展示。断线和页面切换不取消 Run；归档补偿期间继续只读观察。
 - 旧事件没有新身份/时间字段时保留可观测部分，不制造 turn、Prompt、工具参数/输出或账单。RAG 开关本身不证明某 Agent 已执行；跳过需要服务端 `step_skipped` 事实。
-- Neo4j History 只作为报告归档；打开原 Run 后才能读取 DBOS Trace。证据与原生日志面板显示当前持久视图，不宣称是回放游标处的历史快照。
+- PostgreSQL History 只作为报告归档；打开原 Run 后才能读取 DBOS Trace。原生日志面板显示当前持久视图，不宣称是回放游标处的历史快照。
 - Report Markdown 禁止 raw HTML，外部图片仅显示说明，不主动加载远程跟踪图片。
 
 协议、接口字段及所有权详见[架构与协议说明](../docs/architecture/agent-execution-studio.md)；Review、验证和截图见[实施审计](../docs/audits/agent-execution-studio.md)。
@@ -58,7 +58,7 @@ npm run build
 ```powershell
 # 仓库根目录：根锁与隔离测试服务
 uv sync --extra dev --locked --python 3.11
-docker compose -p por-studio-test -f compose.dbos.yaml up -d postgres neo4j-test --wait
+docker compose -p por-studio-test -f compose.dbos.yaml up -d postgres --wait
 # frontend/ 目录
 $env:PLAYWRIGHT_BROWSERS_PATH = '../.tmp/playwright-browsers'
 npx playwright install chromium
@@ -66,6 +66,6 @@ npm run build
 npm run test:e2e
 ```
 
-`playwright.config.ts` 启动 `tests/studio_browser_server.py`：真实 HTTP/DBOS/Neo4j/Runner/Harness，推理用官方 `ScriptedModel`，工具为可核对的合成证据。夹具创建并只删除自己的 `por_test_<uuid>` PostgreSQL 数据库。测试服务、截图数值与合成证据不能解释为真实供应商研究或费用。该入口只用于测试，不能替代生产启动方式。
+`playwright.config.ts` 启动 `tests/studio_browser_server.py`：真实 HTTP/DBOS/Runner/Harness，推理用官方 `ScriptedModel`，工具为可核对的合成证据。夹具创建并只删除自己的 `por_test_<uuid>` PostgreSQL 数据库。测试服务、截图数值与合成证据不能解释为真实供应商研究或费用。该入口只用于测试，不能替代生产启动方式。
 
 `TEST_DBOS_DATABASE_URL`、`TEST_DBOS_NEO4J_URI`、`TEST_DBOS_NEO4J_PASSWORD` 可指向其他明确隔离的本地服务。截图及失败 Trace 写入根 `.tmp/`；不要上传包含真实 operator Token 的浏览器 Trace。CI 的服务和 Token 均为一次性测试配置。

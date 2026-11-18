@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import ValidationError
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.memory import writer as memory_writer
 from open_deep_research.rag import loaders, query_images
 from open_deep_research.rag.loaders import knowledge
 from open_deep_research.rag.loaders import query_images as query_image_loader
@@ -298,8 +297,6 @@ def test_context_reaches_clarification_and_brief_without_rag_enabled(
             "allow_clarification": True,
         }
     }
-    persist = Mock()
-    monkeypatch.setattr(memory_writer, "persist_conversation_memory", persist)
     monkeypatch.setattr(intake.shared, "configurable_model", Mock())
     monkeypatch.setattr(intake, "structured_output_chain", Mock())
     invoke = AsyncMock(
@@ -354,11 +351,6 @@ def test_context_reaches_clarification_and_brief_without_rag_enabled(
         vision_runtime[0].invoke.call_args.args[0][0].content[0]["text"]
         == VISION_SETTINGS["vision_prompt"]
     )
-    assert (
-        memory_writer._messages_without_query_image_context(state["messages"])
-        == original_messages
-    )
-    persist.assert_not_called()
 
 
 @pytest.mark.parametrize(

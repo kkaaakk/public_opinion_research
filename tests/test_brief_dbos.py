@@ -1,4 +1,4 @@
-"""Actual PostgreSQL/DBOS/SDK/Neo4j interactions; inference only is scripted."""
+"""Actual PostgreSQL/DBOS/SDK interactions; inference only is scripted."""
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor

@@ -64,7 +64,6 @@ async def measure(kind):
     cfg = {
         "configurable": {
             "allow_clarification": True,
-            "research_graph_enabled": False,
             "research_model": "fixture:profile",
             "final_report_model": "fixture:profile",
             "budget_enabled": True,
@@ -127,9 +126,6 @@ def main():
     if args.samples < 2:
         parser.error("Use at least two samples")
 
-    async def no_memory(*a, **kw):
-        pass
-
     result = {
         "inference": "identical synthetic 7 input / 3 output token replies; no live provider; 3-section report fixture",
         "stages": {},
@@ -148,7 +144,6 @@ def main():
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(socket.socket, "connect", local_connect)
         patch.setattr(shared, "configurable_model", Inference())
-        patch.setattr(reporting, "maybe_persist_chat_memory", no_memory)
         for kind in ("old_plan", "new_plan", "old_report", "new_report"):
             samples = [asyncio.run(measure(kind)) for _ in range(args.samples)]
             values = [sample["seconds"] for sample in samples]

@@ -1,4 +1,4 @@
-# 验证可选追踪的配置、有限元数据、阶段区间和记账一致性。
+﻿# 验证可选追踪的配置、有限元数据、阶段区间和记账一致性。
 """Integration-boundary tests for the LangSmith tracing split.
 
 These tests exercise the project's own boundary, not the LangSmith SaaS:
@@ -351,7 +351,6 @@ def test_rag_pipeline_emits_named_stage_spans(monkeypatch):
     pipeline.indexer.retriever = HybridChunkRetriever(
         vectorstore=vectorstore,
         keyword_index=BM25Index([chunk]),
-        graph_enabled=False,
     )
     pipeline.indexer._ready = True
     pipeline.indexer._source_fingerprint = pipeline.indexer.source_fingerprint()
@@ -443,7 +442,6 @@ def test_hybrid_retriever_does_not_execute_a_stage_twice(monkeypatch):
     retriever = HybridChunkRetriever(
         vectorstore=vectorstore,
         keyword_index=keyword_index,
-        graph_enabled=False,
     )
 
     with _enabled_langsmith(monkeypatch, journal):

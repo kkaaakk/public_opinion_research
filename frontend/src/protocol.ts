@@ -116,7 +116,6 @@ export type RunEvent = {
   invocation_id?: string;
   task_id?: string;
   tool_call_id?: string;
-  graph_call_id?: string;
   operation_id?: string;
   model_turn?: number;
   model_calls?: number;
@@ -163,31 +162,6 @@ export type ExecutionPage = {
   next_workflow_offset: number;
   steps_has_more: boolean;
   next_offset: number;
-};
-export type EvidenceNode = {
-  node_id: string;
-  node_type: string;
-  role?: string;
-  research_round?: number;
-  task_id?: string;
-  properties: Record<string, Json>;
-};
-export type EvidenceEdge = {
-  edge_id: string;
-  relation_type: string;
-  source_id: string;
-  target_id: string;
-};
-export type EvidencePage = {
-  run_id: string;
-  available: boolean;
-  reason?: string;
-  nodes: EvidenceNode[];
-  edges: EvidenceEdge[];
-  has_more: boolean;
-  next_cursor?: string;
-  edges_has_more: boolean;
-  next_edge_cursor?: string;
 };
 export type HistoryItem = {
   id: string;
@@ -298,7 +272,6 @@ export function parseEvent(value: unknown): RunEvent {
     'invocation_id',
     'task_id',
     'tool_call_id',
-    'graph_call_id',
     'operation_id',
     'name',
     'status',

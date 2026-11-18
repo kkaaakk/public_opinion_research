@@ -1,4 +1,4 @@
-# 处理用户需求入口：图片上下文、需求澄清、研究简报和章节规划。
+﻿# 处理用户需求入口：图片上下文、需求澄清、研究简报和章节规划。
 """Intake stage of the public-opinion workflow."""
 
 import asyncio
@@ -39,8 +39,8 @@ from open_deep_research.prompts import (
 )
 from open_deep_research.rag import query_images
 from open_deep_research.state import (
-    AgentState,
     ClarifyWithUser,
+    DeepResearchState,
     ResearchQuestion,
     Section,
     Sections,
@@ -56,7 +56,7 @@ from open_deep_research.workflow.state_utils import (
     workflow_state,
 )
 
-LOGGER = logging.getLogger("open_deep_research.deep_researcher")
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -88,7 +88,7 @@ def _messages_without_query_image_context(messages):
 
 
 # 在研究规划前将用户图片转换为临时文本上下文。
-async def enrich_query_images(state: AgentState, config: RunnableConfig) -> dict:
+async def enrich_query_images(state: DeepResearchState, config: RunnableConfig) -> dict:
     """Convert user-question images into temporary text context before research planning."""
     configurable = Configuration.from_runnable_config(config)
     if not configurable.rag_query_image_enabled:
@@ -162,7 +162,7 @@ def budget_skip_tool_message(tool_call: dict, reason: str) -> ToolMessage:
 
 # 判断研究范围是否清晰，必要时向用户澄清，否则转入简报生成。
 async def clarification_step(
-    state: AgentState, config: RunnableConfig
+    state: DeepResearchState, config: RunnableConfig
 ) -> IntakeDecision:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
 
@@ -250,7 +250,7 @@ async def clarification_step(
 
 # 把用户消息整理为结构化研究简报，并进入规划或研究阶段。
 async def research_brief_step(
-    state: AgentState,
+    state: DeepResearchState,
     config: RunnableConfig,
 ) -> IntakeDecision:
     """Transform user messages into a structured brief for the research phase.
@@ -332,7 +332,7 @@ async def research_brief_step(
 
 # 根据已确认的简报生成章节计划。
 async def section_plan_step(
-    state: AgentState, config: RunnableConfig
+    state: DeepResearchState, config: RunnableConfig
 ) -> IntakeDecision:
     """Generate structured report sections from the research brief."""
     configurable = Configuration.from_runnable_config(config)
@@ -487,7 +487,7 @@ async def _brief_response(
     return schema.model_validate(response["parsed"]), delta
 
 
-async def plan_research(state: AgentState, config: RunnableConfig) -> dict:
+async def plan_research(state: DeepResearchState, config: RunnableConfig) -> dict:
     """One bounded decision: ask necessary questions or produce the Markdown spec."""
     from open_deep_research.workflow.brief import (
         MAX_BRIEF_TOKENS,
@@ -571,7 +571,7 @@ async def plan_research(state: AgentState, config: RunnableConfig) -> dict:
 
 
 async def revise_brief(
-    state: AgentState, config: RunnableConfig, *, feedback: str
+    state: DeepResearchState, config: RunnableConfig, *, feedback: str
 ) -> dict:
     """Revise the current Brief and return settled failures without changing it."""
     from open_deep_research.workflow.brief import (

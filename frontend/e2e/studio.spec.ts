@@ -59,7 +59,7 @@ async function retryObservedFailure(page: Page, id: string) {
   throw new Error('The observed safe failure kept advancing before retry admission');
 }
 
-test('actual FastAPI → DBOS → SDK → Graph: approval, trace, replay, refresh, evidence, report and history', async ({
+test('actual FastAPI → DBOS → SDK: approval, trace, replay, refresh, report and history', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -94,13 +94,6 @@ test('actual FastAPI → DBOS → SDK → Graph: approval, trace, replay, refres
   await page.getByRole('tab', { name: 'DBOS', exact: true }).click();
   await expect(page.locator('.native-workflow')).not.toHaveCount(0);
   await expect(page.locator('.native-steps')).toContainText(id);
-  await page.getByRole('tab', { name: '证据', exact: true }).click();
-  await expect(page.locator('.evidence-item')).not.toHaveCount(0);
-  await page.getByLabel('证据类型').selectOption('Evidence');
-  await expect(page.locator('.evidence-item').first()).toContainText('Evidence');
-  await page.locator('.evidence-item').first().click();
-  await expect(page.locator('.evidence-detail')).toContainText('引用与关系');
-  await expect(page.locator('.relation')).not.toHaveCount(0);
   await page.getByRole('tab', { name: '报告', exact: true }).click();
   await expect(page.locator('.report-panel .markdown')).toContainText('FINAL brand recall report');
   const download = page.waitForEvent('download');

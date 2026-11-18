@@ -176,13 +176,8 @@ def get_research_tool_prompt(configurable: Configuration) -> str:
             line_number += 1
 
     if rag_requested(configurable):
-        rag_sources = "local documents"
-        if configurable.rag_memory_enabled and (
-            configurable.rag_memory_paths or configurable.rag_memory_mysql_url
-        ):
-            rag_sources += " and chat memory"
         prompt_lines.append(
-            f"{line_number}. **rag_search**: Search the configured {rag_sources} and return grounded excerpts with citations. Use only cited excerpts for local-knowledge or memory claims."
+            f"{line_number}. **rag_search**: Search the configured enterprise knowledge base and return grounded excerpts with citations. Use only cited excerpts for internal-knowledge claims."
         )
         line_number += 1
 
@@ -297,8 +292,8 @@ def build_dynamic_tool_prompt(
         lines.append(
             "**CRITICAL: When using rag_search, only make claims that are "
             "supported by returned SOURCE citations. If the cited excerpts do "
-            "not support the answer, say the local knowledge base or chat "
-            "memory does not contain enough cited evidence.**"
+            "not support the answer, say the enterprise knowledge base does "
+            "not contain enough cited evidence.**"
         )
 
     return "\n".join(lines)

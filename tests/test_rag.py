@@ -15,22 +15,11 @@ from open_deep_research.rag import splitter as rag_splitter
 from open_deep_research.rag.config import (
     ChunkingConfig,
     EmbeddingConfig,
-    GraphRAGConfig,
     HybridRetrievalConfig,
     KeywordSearchConfig,
-    MemoryConfig,
     MultimodalConfig,
     RerankerConfig,
     VectorstoreConfig,
-)
-from open_deep_research.rag.graph import Neo4jGraphRAGIndex, create_graph_index
-from open_deep_research.rag.mysql_memory import (
-    build_chat_memory_records,
-    normalize_mysql_url,
-    normalize_record_types,
-    parse_mysql_memory_source,
-    records_to_documents,
-    validate_table_name,
 )
 from open_deep_research.rag.reranker import (
     CrossEncoderReranker,
@@ -87,17 +76,15 @@ def test_rag_defaults_to_milvus_for_persistent_vector_store():
     assert pipeline_config.vectorstore_provider == "milvus"
 
 
-# 验证默认知识、记忆和索引路径采用规范目录。
+# 验证默认知识库和索引路径采用规范目录。
 def test_rag_defaults_use_canonical_data_directories():
     config = Configuration()
     pipeline_config = RAGPipelineConfig()
 
     assert config.rag_knowledge_base_paths == ["data/knowledge"]
-    assert config.rag_memory_paths == ["data/memory/chat_memory.jsonl"]
     assert config.rag_vectorstore_path == "data/indexes/rag"
     assert config.rag_milvus_uri == "data/indexes/rag/milvus.db"
     assert pipeline_config.knowledge_base_paths == ["data/knowledge"]
-    assert pipeline_config.memory_paths == ["data/memory/chat_memory.jsonl"]
     assert pipeline_config.vectorstore_path == "data/indexes/rag"
     assert pipeline_config.milvus_uri == "data/indexes/rag/milvus.db"
 
@@ -137,23 +124,6 @@ def test_rag_structured_metadata_weight_defaults_to_enabled():
     assert config.rag_structured_metadata_weight == pytest.approx(0.15)
     assert pipeline_config.structured_metadata_weight == pytest.approx(0.15)
 
-
-# 验证图 RAG 默认采用 Neo4j 后端。
-def test_graph_rag_defaults_to_neo4j_backend():
-    config = Configuration()
-    pipeline_config = RAGPipelineConfig()
-
-    assert config.rag_graph_enabled is True
-    assert config.rag_graph_backend == "neo4j"
-    assert config.rag_neo4j_uri == "bolt://localhost:7687"
-    assert config.rag_neo4j_username == "neo4j"
-    assert pipeline_config.graph_enabled is False
-    assert pipeline_config.graph_backend == "neo4j"
-    assert pipeline_config.neo4j_uri == "bolt://localhost:7687"
-    assert pipeline_config.neo4j_username == "neo4j"
-
-
-# 验证结构化元数据权重不接受负数。
 def test_rag_structured_metadata_weight_rejects_negative_values():
     with pytest.raises(ValueError, match="rag_structured_metadata_weight"):
         Configuration(rag_structured_metadata_weight=-0.1)
@@ -172,10 +142,8 @@ def test_sub_config_defaults_match_flat_field_defaults():
     assert config.vectorstore == VectorstoreConfig()
     assert config.reranker == RerankerConfig()
     assert config.multimodal == MultimodalConfig()
-    assert config.memory == MemoryConfig()
     assert config.keyword_search == KeywordSearchConfig()
     assert config.hybrid_retrieval == HybridRetrievalConfig()
-    assert config.graph_rag == GraphRAGConfig()
     assert config.chunking == ChunkingConfig()
 
 
@@ -189,10 +157,6 @@ def test_flat_field_writes_reflect_in_sub_config_property():
     config = RAGPipelineConfig(embedding_provider="hash", vectorstore_provider="memory")
     assert config.embedding.provider == "hash"
     assert config.vectorstore.provider == "memory"
-
-    config2 = RAGPipelineConfig(graph_enabled=True, neo4j_uri="bolt://custom:7687")
-    assert config2.graph_rag.enabled is True
-    assert config2.graph_rag.neo4j_uri == "bolt://custom:7687"
 
 
 # ---------------------------------------------------------------------------
@@ -236,10 +200,8 @@ def test_model_dump_does_not_contain_sub_config_keys():
     assert "vectorstore" not in dumped
     assert "reranker" not in dumped
     assert "multimodal" not in dumped
-    assert "memory" not in dumped
     assert "keyword_search" not in dumped
     assert "hybrid_retrieval" not in dumped
-    assert "graph_rag" not in dumped
     assert "chunking" not in dumped
     assert "embedding_provider" in dumped
 
@@ -249,26 +211,19 @@ def test_model_fields_does_not_contain_sub_config_names():
     """model_fields should not contain sub-config property names."""
     field_names = set(RAGPipelineConfig.model_fields.keys())
     for sub_key in (
-        "embedding", "vectorstore", "reranker", "multimodal", "memory",
-        "keyword_search", "hybrid_retrieval", "graph_rag", "chunking",
+        "embedding", "vectorstore", "reranker", "multimodal",
+        "keyword_search", "hybrid_retrieval", "chunking",
     ):
         assert sub_key not in field_names
 
 
-# 验证加载器包同时保留新接口和旧兼容入口。
+# 验证加载器包导出知识文档与图片加载接口。
 def test_rag_loader_package_exports_new_and_legacy_loader_apis():
     import open_deep_research.rag.loaders as loader_package
-    from open_deep_research.rag import memory as legacy_memory
     from open_deep_research.rag import query_images as legacy_query_images
 
     assert loader_package.load_documents_from_paths is loaders.load_documents_from_paths
-    assert callable(loader_package.load_memory_documents_from_paths)
-    assert callable(loader_package.load_memory_documents_from_mysql)
     assert callable(loader_package.build_query_image_context)
-    assert (
-        legacy_memory.load_memory_documents_from_paths
-        is loader_package.load_memory_documents_from_paths
-    )
     assert callable(legacy_query_images.build_query_image_context)
 
 
@@ -398,56 +353,6 @@ def test_milvus_vectorstore_backend_adds_and_searches_chunks(monkeypatch, tmp_pa
     assert results[0].chunk.chunk_id == "chunk-a"
     assert results[0].vector_score == pytest.approx(1.0)
 
-
-# 验证图扩展可以补充相关竞品证据。
-def test_graph_rag_expands_related_competitor_evidence():
-    seed_chunk = RAGChunk(
-        content="NimbusCRM launched a free tier for SMB teams in 2025.",
-        source="internal://product",
-        title="NimbusCRM launch",
-        chunk_id="seed",
-    )
-    related_chunk = RAGChunk(
-        content="The NimbusCRM launch created pricing pressure in the SMB sales pipeline.",
-        source="internal://sales",
-        title="NimbusCRM sales feedback",
-        chunk_id="related",
-    )
-    unrelated_chunk = RAGChunk(
-        content="AtlasCRM released a mobile dashboard for field teams.",
-        source="internal://atlas",
-        title="Atlas release",
-        chunk_id="unrelated",
-    )
-    chunks = [seed_chunk, related_chunk, unrelated_chunk]
-    vectorstore = InMemoryVectorStore()
-    vectorstore.add(chunks, [[1.0, 0.0], [0.0, 1.0], [0.0, -1.0]])
-
-    retriever = HybridChunkRetriever(
-        vectorstore=vectorstore,
-        keyword_index=BM25Index(chunks),
-        graph_enabled=True,
-        graph_max_neighbors=2,
-        graph_weight=0.45,
-        graph_ner_enabled=False,
-        graph_idf_enabled=False,
-    )
-
-    results = retriever.retrieve(
-        query="NimbusCRM launch risk",
-        query_vector=[1.0, 0.0],
-        top_k=2,
-        keyword_top_k=1,
-    )
-    by_id = {result.chunk.chunk_id: result for result in results}
-
-    assert "related" in by_id
-    assert by_id["related"].graph_score is not None
-    assert by_id["related"].graph_score > 0
-    assert by_id["related"].score > 0
-
-
-# 验证同时被两个召回器命中的结果获得 RRF 优势。
 def test_reciprocal_rank_fusion_prefers_results_seen_by_both_retrievers():
     vector_only = RAGChunk(
         content="Dense-only result with a very large raw vector score.",
@@ -659,95 +564,6 @@ def test_cross_encoder_reranker_includes_structured_metadata_in_pairs(monkeypatc
     assert "h2: FAQ" in captured_pairs[0][1]
     assert "json_path: $.posts[0].content" in captured_pairs[0][1]
 
-
-# 验证 Neo4j 分块建图和共享术语邻居扩展。
-def test_neo4j_graph_rag_writes_chunks_and_expands_neighbors():
-    # 记录 Cypher 语句，并为邻居查询返回固定图结果。
-    class FakeSession:
-        # 初始化测试替身的 calls 状态。
-        def __init__(self):
-            self.calls = []
-
-        # 返回当前测试会话，兼容数据库上下文管理接口。
-        def __enter__(self):
-            return self
-
-        # 退出测试会话且不吞掉业务异常。
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-        # 记录参数化图查询，命中邻居查询时返回预设结果。
-        def run(self, query, **params):
-            self.calls.append((query, params))
-            if "RETURN neighbor.chunk_id" in query:
-                return [
-                    {
-                        "chunk_id": "related",
-                        "shared_terms": ["nimbuscrm", "pricing"],
-                    }
-                ]
-            return []
-
-    # 提供可复用的测试 Neo4j 会话。
-    class FakeDriver:
-        # 初始化测试替身的 session_obj 状态。
-        def __init__(self):
-            self.session_obj = FakeSession()
-
-        # 记录选择的数据库，并返回测试会话。
-        def session(self, database=None):
-            self.database = database
-            return self.session_obj
-
-    fake_driver = FakeDriver()
-    chunks = [
-        RAGChunk(
-            content="NimbusCRM launched a free tier.",
-            source="internal://product",
-            title="NimbusCRM launch",
-            chunk_id="seed",
-        ),
-        RAGChunk(
-            content="Free tier pricing pressure appeared in sales notes.",
-            source="internal://sales",
-            title="Sales note",
-            chunk_id="related",
-        ),
-    ]
-
-    graph_index = create_graph_index(
-        chunks,
-        backend="neo4j",
-        index_id="idx-1",
-        neo4j_uri="bolt://localhost:7687",
-        neo4j_username="neo4j",
-        neo4j_password="password",
-        neo4j_database="neo4j",
-        driver_factory=lambda *_args, **_kwargs: fake_driver,
-    )
-    results = graph_index.expand(
-        query="NimbusCRM pricing",
-        seed_results=[
-            RetrievalResult(chunk=chunks[0], score=0.5, vector_score=0.5),
-        ],
-        max_neighbors=2,
-        graph_weight=0.4,
-    )
-
-    assert isinstance(graph_index, Neo4jGraphRAGIndex)
-    assert any(
-        "MERGE (chunk:RagChunk" in query
-        for query, _params in fake_driver.session_obj.calls
-    )
-    by_id = {result.chunk.chunk_id: result for result in results}
-    assert "related" in by_id
-    assert by_id["related"].graph_score == pytest.approx(
-        0.4 * 0.5 * (2 / 3) * 0.8,
-        abs=1e-6,
-    )
-
-
-# 验证图片加载器调用 OCR 并生成索引文本。
 def test_multimodal_image_loader_extracts_ocr_text(monkeypatch, tmp_path):
     image_path = tmp_path / "pricing.png"
     image_path.write_bytes(b"fake image bytes")
@@ -1140,7 +956,7 @@ def test_query_image_context_reuses_vision_image_bytes(monkeypatch):
 
 # 验证临时图片上下文只追加一次。
 def test_enrich_query_images_appends_synthetic_context_once(monkeypatch):
-    from open_deep_research import deep_researcher
+    from open_deep_research.workflow import intake
 
     calls = []
 
@@ -1150,7 +966,7 @@ def test_enrich_query_images_appends_synthetic_context_once(monkeypatch):
         return "User image 1\nRoute: vision\nVision description:\nUploaded UI screenshot."
 
     monkeypatch.setattr(
-        deep_researcher.query_images,
+        intake.query_images,
         "build_query_image_context",
         fake_context,
     )
@@ -1169,9 +985,9 @@ def test_enrich_query_images_appends_synthetic_context_once(monkeypatch):
         ]
     }
 
-    result = asyncio.run(deep_researcher.enrich_query_images(state, config={}))
+    result = asyncio.run(intake.enrich_query_images(state, config={}))
     second_result = asyncio.run(
-        deep_researcher.enrich_query_images(
+        intake.enrich_query_images(
             {"messages": [*state["messages"], *result["messages"]]},
             config={},
         )
@@ -1748,55 +1564,6 @@ def test_rag_pipeline_handles_empty_results(tmp_path):
     assert "No relevant local knowledge base results were found" in result.context
     assert result.citations == []
 
-
-# 验证文件聊天记忆可被检索。
-@pytest.mark.integration
-def test_rag_pipeline_retrieves_chat_memory(tmp_path):
-    memory_path = tmp_path / "chat_memory.jsonl"
-    write_jsonl_file(
-        memory_path,
-        [
-            {
-                "memory_id": "pref-1",
-                "conversation_id": "thread-1",
-                "memory_type": "user_preference",
-                "content": "The user prefers Chinese explanations and likes process-first technical walkthroughs.",
-                "created_at": "2026-05-14T09:00:00+08:00",
-                "confidence": 0.95,
-            },
-            {
-                "memory_id": "noise-1",
-                "conversation_id": "thread-1",
-                "memory_type": "temporary_note",
-                "content": "Lunch discussion about noodles.",
-            },
-        ],
-    )
-
-    pipeline = RAGPipeline(
-        RAGPipelineConfig(
-            knowledge_base_paths=[],
-            memory_enabled=True,
-            memory_paths=[str(memory_path)],
-            chunk_size=180,
-            chunk_overlap=20,
-            top_k=2,
-            rerank_top_n=3,
-            embedding_provider="sentence_transformers",
-            vectorstore_provider="memory",
-            reranker_provider="simple",
-        )
-    )
-
-    result = pipeline.query("What explanation style does the user prefer?")
-
-    assert result.citations
-    assert "Chinese explanations" in result.context
-    assert any(citation.source.startswith("memory://thread-1/") for citation in result.citations)
-    assert "source_type=memory" in result.context
-
-
-# 验证来源内容变化不改变配置决定的索引 ID。
 def test_rag_index_id_stays_stable_when_file_changes(tmp_path):
     document_path = tmp_path / "policy.txt"
     write_text_file(document_path, "first policy")
@@ -1837,108 +1604,6 @@ def test_pipeline_refreshes_same_index_when_file_changes(tmp_path):
     assert "beta review" in second_result.context
 
 
-# 验证记忆文件变化保持索引身份稳定。
-def test_rag_index_id_stays_stable_when_memory_file_changes(tmp_path):
-    memory_path = tmp_path / "chat_memory.jsonl"
-    write_jsonl_file(memory_path, [{"memory_id": "m1", "content": "first memory"}])
-    config = RAGPipelineConfig(
-        knowledge_base_paths=[],
-        memory_enabled=True,
-        memory_paths=[str(memory_path)],
-        embedding_provider="sentence_transformers",
-        vectorstore_provider="memory",
-        reranker_provider="simple",
-    )
-
-    first_index_id = build_rag_index_id(config)
-    write_jsonl_file(memory_path, [{"memory_id": "m1", "content": "changed memory"}])
-    second_index_id = build_rag_index_id(config)
-
-    assert first_index_id == second_index_id
-
-
-# 验证 MySQL 记忆转换后保留原始身份和引用。
-def test_mysql_memory_records_convert_to_rag_documents():
-    records = build_chat_memory_records(
-        conversation_id="thread-1",
-        chat_content="user: Please answer in Chinese.",
-        summary="The user asked for a Chinese RAG walkthrough.",
-        memories=["The user prefers Chinese technical explanations."],
-        metadata={"owner": "user-1"},
-    )
-
-    assert [record.record_type for record in records] == [
-        "chat_raw",
-        "summary",
-        "project_fact",
-    ]
-    assert len({record.memory_id for record in records}) == 3
-
-    documents = records_to_documents(records)
-
-    assert [document.metadata["memory_type"] for document in documents] == [
-        "summary",
-        "project_fact",
-    ]
-    assert all(document.source.startswith("memory://mysql/thread-1/") for document in documents)
-    assert all(document.metadata["source_type"] == "memory" for document in documents)
-    assert all(document.metadata["memory_backend"] == "mysql" for document in documents)
-    assert "Chinese technical explanations" in documents[-1].content
-
-    all_documents = records_to_documents(
-        records,
-        index_record_types=["chat_raw", "summary", "project_fact"],
-    )
-    assert [document.metadata["memory_type"] for document in all_documents] == [
-        "chat_raw",
-        "summary",
-        "project_fact",
-    ]
-    conversation_id, memory_id = parse_mysql_memory_source(documents[-1].source)
-    assert conversation_id == "thread-1"
-    assert memory_id == records[-1].memory_id
-    assert parse_mysql_memory_source("memory://thread-1/not-mysql") is None
-    assert parse_mysql_memory_source("memory://mysql/thread/with/slash/memory-1") == (
-        "thread/with/slash",
-        "memory-1",
-    )
-
-
-# 验证记忆加载辅助函数校验连接参数和表名。
-def test_mysql_memory_helpers_validate_connection_settings():
-    assert (
-        normalize_mysql_url("mysql://user:pass@localhost:3306/rag")
-        == "mysql+pymysql://user:pass@localhost:3306/rag"
-    )
-    assert validate_table_name("rag_chat_memories") == "rag_chat_memories"
-    assert normalize_record_types(["summary", "memory", "memory"]) == [
-        "summary",
-        "project_fact",
-    ]
-    with pytest.raises(ValueError):
-        validate_table_name("rag_chat_memories;drop")
-    with pytest.raises(ValueError):
-        normalize_record_types(["debug"])
-
-
-# 验证 MySQL 记忆范围使用稳定索引标识。
-def test_rag_index_id_stays_stable_for_mysql_memory_scope():
-    config = RAGPipelineConfig(
-        knowledge_base_paths=[],
-        memory_enabled=True,
-        memory_mysql_url="mysql+pymysql://user:pass@localhost:3306/rag",
-        embedding_provider="sentence_transformers",
-        vectorstore_provider="memory",
-        reranker_provider="simple",
-    )
-
-    first_index_id = build_rag_index_id(config)
-    second_index_id = build_rag_index_id(config)
-
-    assert first_index_id == second_index_id
-
-
-# 验证影响图片抽取的配置变化会改变索引身份。
 def test_rag_index_id_changes_for_vision_extraction_settings():
     base_config = RAGPipelineConfig(
         knowledge_base_paths=["data/knowledge"],
@@ -2046,60 +1711,3 @@ def test_hybrid_mode_with_budget_exposes_web_and_rag_tools(tmp_path):
 
     assert "web_search" in tool_names
     assert "rag_search" in tool_names
-
-
-# 验证只有文件记忆来源时也会提供 RAG 工具。
-def test_rag_only_memory_exposes_rag_tool_without_document_paths(tmp_path):
-    memory_path = tmp_path / "chat_memory.jsonl"
-    write_jsonl_file(memory_path, [{"memory_id": "m1", "content": "The user prefers concise answers."}])
-
-    tools = asyncio.run(
-        get_all_tools(
-            {
-                "configurable": {
-                    "search_api": "none",
-                    "rag_enabled": True,
-                    "retrieval_mode": "rag_only",
-                    "rag_memory_enabled": True,
-                    "rag_memory_paths": [str(memory_path)],
-                    "rag_embedding_provider": "sentence_transformers",
-                    "rag_vectorstore_provider": "memory",
-                    "rag_reranker_provider": "simple",
-                }
-            }
-        )
-    )
-    tool_names = [
-        tool.name if hasattr(tool, "name") else tool.get("name", "web_search")
-        for tool in tools
-    ]
-
-    assert "rag_search" in tool_names
-    assert "web_search" not in tool_names
-
-
-# 验证只有 MySQL 记忆来源时仍启用 RAG 工具。
-def test_rag_only_mysql_memory_exposes_rag_tool_without_document_paths():
-    tools = asyncio.run(
-        get_all_tools(
-            {
-                "configurable": {
-                    "search_api": "none",
-                    "rag_enabled": True,
-                    "retrieval_mode": "rag_only",
-                    "rag_memory_enabled": True,
-                    "rag_memory_mysql_url": "mysql+pymysql://user:pass@localhost:3306/rag",
-                    "rag_embedding_provider": "sentence_transformers",
-                    "rag_vectorstore_provider": "memory",
-                    "rag_reranker_provider": "simple",
-                }
-            }
-        )
-    )
-    tool_names = [
-        tool.name if hasattr(tool, "name") else tool.get("name", "web_search")
-        for tool in tools
-    ]
-
-    assert "rag_search" in tool_names
-    assert "web_search" not in tool_names

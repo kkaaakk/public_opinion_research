@@ -36,12 +36,6 @@ DEFAULT_METRICS = (
     "misleading_rate@{k}",
     "authoritative_rate@{k}",
 )
-GRAPH_METRICS = (
-    "graph_benefit_rate",
-    "graph_noise_rate",
-    "graph_net_effect",
-    "avg_graph_rank_change",
-)
 DEFAULT_EMBEDDING_PROVIDER = "sentence_transformers"
 DEFAULT_EMBEDDING_MODEL_REPO = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_EMBEDDING_MODEL_CACHE = (
@@ -261,7 +255,6 @@ def serialize_retrieval_detail(result: Any, rank: int) -> dict[str, Any]:
         "score": getattr(result, "score", None),
         "vector_score": getattr(result, "vector_score", None),
         "keyword_score": getattr(result, "keyword_score", None),
-        "graph_score": getattr(result, "graph_score", None),
         "structured_score": getattr(result, "structured_score", None),
         "rerank_score": getattr(result, "rerank_score", None),
         "page_content": compact_text(getattr(chunk, "content", "")),
@@ -369,14 +362,6 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
                 "structured_metadata_weight",
                 0.15,
             ),
-            graph_enabled=getattr(args, "graph_enabled", False),
-            graph_backend=getattr(args, "graph_backend", "memory"),
-            graph_max_neighbors=getattr(args, "graph_max_neighbors", 4),
-            graph_weight=getattr(args, "graph_weight", 0.35),
-            neo4j_uri=getattr(args, "neo4j_uri", None),
-            neo4j_username=getattr(args, "neo4j_username", None),
-            neo4j_password=getattr(args, "neo4j_password", None),
-            neo4j_database=getattr(args, "neo4j_database", None),
             authority_rerank_enabled=not getattr(
                 args,
                 "disable_authority_rerank",
@@ -402,19 +387,11 @@ def print_run_config(args: argparse.Namespace) -> None:
     emit(f"reranker_model: {args.reranker_model}")
     emit(f"reranker_device: {args.reranker_device or 'auto'}")
     emit("fusion_method: rrf")
-    graph_backend = getattr(args, "graph_backend", "memory")
     emit(f"rrf_rank_constant: {getattr(args, 'rrf_rank_constant', 60)}")
     emit(
         "structured_metadata_weight: "
         f"{getattr(args, 'structured_metadata_weight', 0.15)}"
     )
-    emit(f"graph_enabled: {getattr(args, 'graph_enabled', False)}")
-    emit(f"graph_backend: {graph_backend}")
-    emit(f"graph_max_neighbors: {getattr(args, 'graph_max_neighbors', 4)}")
-    emit(f"graph_weight: {getattr(args, 'graph_weight', 0.35)}")
-    if graph_backend == "neo4j":
-        emit(f"neo4j_uri: {getattr(args, 'neo4j_uri', None) or 'not configured'}")
-        emit(f"neo4j_database: {getattr(args, 'neo4j_database', None) or 'default'}")
     emit(
         "authority_rerank_enabled: "
         f"{not getattr(args, 'disable_authority_rerank', False)}"
@@ -599,209 +576,11 @@ def print_miss_diagnostics(score: dict[str, Any]) -> None:
             f"score={format_optional_score(detail.get('score'))} "
             f"vector_score={format_optional_score(detail.get('vector_score'))} "
             f"keyword_score={format_optional_score(detail.get('keyword_score'))} "
-            f"graph_score={format_optional_score(detail.get('graph_score'))} "
             f"structured_score={format_optional_score(detail.get('structured_score'))} "
             f"rerank_score={format_optional_score(detail.get('rerank_score'))}"
         )
         emit(f"    page_content: {detail.get('page_content', '')}")
         emit(f"    metadata: {metadata}")
-
-
-# 对同一案例分别启用和关闭图扩展，返回对比详情。
-def score_graph_ablation_case(
-    case: dict[str, Any],
-    pipeline_on: RAGPipeline,
-    pipeline_off: RAGPipeline,
-    k: int,
-) -> dict[str, Any]:
-    """Run one case with graph on and off, return ablation detail."""
-    result_on = pipeline_on.query(case["query"])
-    result_off = pipeline_off.query(case["query"])
-
-    sources_on = [normalize_source(c.source) for c in result_on.citations]
-    sources_off = [normalize_source(c.source) for c in result_off.citations]
-    expected = set(case["expected_sources"])
-
-    # benefit: sources that are expected, retrieved with graph, but NOT without
-    benefit_sources = [
-        s for s in sources_on[:k]
-        if s in expected and s not in sources_off[:k]
-    ]
-    # noise: sources retrieved by graph that are NOT expected
-    noise_sources = [
-        s for s in sources_on[:k]
-        if s not in expected and s not in sources_off[:k]
-    ]
-
-    hit_on = 1.0 if any(s in expected for s in sources_on[:k]) else 0.0
-    hit_off = 1.0 if any(s in expected for s in sources_off[:k]) else 0.0
-
-    # rank change for expected sources
-    rank_on = _first_expected_rank(sources_on, expected, k)
-    rank_off = _first_expected_rank(sources_off, expected, k)
-    rank_change = (rank_off - rank_on) if (rank_on is not None and rank_off is not None) else None
-
-    return {
-        "id": case["id"],
-        "category": case["category"],
-        "query": case["query"],
-        "expected": case["expected_sources"],
-        "hit_graph_on": hit_on,
-        "hit_graph_off": hit_off,
-        "benefit_sources": benefit_sources,
-        "noise_sources": noise_sources,
-        "benefit_count": len(benefit_sources),
-        "noise_count": len(noise_sources),
-        "rank_graph_on": rank_on,
-        "rank_graph_off": rank_off,
-        "rank_change": rank_change,
-        "retrieved_graph_on": sources_on[:k],
-        "retrieved_graph_off": sources_off[:k],
-    }
-
-
-# 查找首个预期来源的一基排名，未命中时返回 None。
-def _first_expected_rank(
-    sources: list[str], expected: set[str], k: int,
-) -> int | None:
-    """Return the 1-based rank of the first expected source, or None."""
-    for rank, source in enumerate(sources[:k], start=1):
-        if source in expected:
-            return rank
-    return None
-
-
-# 聚合全部案例的图扩展消融结果。
-def compute_graph_ablation_metrics(
-    ablation_results: list[dict[str, Any]],
-) -> dict[str, float]:
-    """Compute aggregate graph ablation metrics over all cases."""
-    if not ablation_results:
-        return {}
-
-    total = len(ablation_results)
-    answerable = [r for r in ablation_results if r["expected"]]
-    answerable_count = len(answerable)
-    if answerable_count == 0:
-        return {}
-
-    # benefit_rate: cases where graph turned a miss into a hit
-    miss_to_hit = sum(
-        1 for r in answerable
-        if r["hit_graph_on"] > 0 and r["hit_graph_off"] == 0.0
-    )
-    # noise_rate: cases where graph introduced unexpected sources not in off
-    noise_cases = sum(1 for r in answerable if r["noise_count"] > 0)
-    # rank improvements
-    rank_changes = [
-        r["rank_change"] for r in answerable if r["rank_change"] is not None
-    ]
-
-    benefit_rate = miss_to_hit / answerable_count
-    noise_rate = noise_cases / answerable_count
-    net_effect = benefit_rate - noise_rate
-    avg_rank_change = (
-        statistics.mean(rank_changes) if rank_changes else 0.0
-    )
-
-    return {
-        "graph_benefit_rate": round(benefit_rate, 4),
-        "graph_noise_rate": round(noise_rate, 4),
-        "graph_net_effect": round(net_effect, 4),
-        "avg_graph_rank_change": round(avg_rank_change, 4),
-    }
-
-
-# 打印图开关对比报告。
-def print_ablation_report(
-    ablation_results: list[dict[str, Any]],
-    graph_metrics: dict[str, float],
-) -> None:
-    """Print a graph ablation comparison report."""
-    emit("=== Graph Ablation Report ===")
-    emit(f"cases_evaluated: {len(ablation_results)}")
-    for key, value in graph_metrics.items():
-        emit(f"{key}: {value}")
-
-    # Per-category breakdown
-    by_cat: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for r in ablation_results:
-        by_cat[r["category"]].append(r)
-
-    emit()
-    emit("By category")
-    for cat in sorted(by_cat):
-        items = by_cat[cat]
-        cat_metrics = compute_graph_ablation_metrics(items)
-        fields = " ".join(f"{k}={v}" for k, v in cat_metrics.items())
-        emit(f"  {cat} (n={len(items)}): {fields}")
-
-    # Detail: cases where graph helped or hurt
-    emit()
-    emit("Benefit cases (graph turned miss into hit):")
-    benefit_cases = [
-        r for r in ablation_results
-        if r["hit_graph_on"] > 0 and r["hit_graph_off"] == 0.0
-    ]
-    if not benefit_cases:
-        emit("  none")
-    for r in benefit_cases:
-        emit(
-            f"  {r['id']} [{r['category']}] benefit_sources={r['benefit_sources']}"
-        )
-
-    emit()
-    emit("Noise cases (graph introduced unexpected sources):")
-    noise_cases = [
-        r for r in ablation_results if r["noise_count"] > 0
-    ]
-    if not noise_cases:
-        emit("  none")
-    for r in noise_cases:
-        emit(
-            f"  {r['id']} [{r['category']}] noise_sources={r['noise_sources']}"
-        )
-
-
-# 为所有案例执行图启用和关闭的完整消融评估。
-def run_graph_ablation(
-    cases: list[dict[str, Any]],
-    args: argparse.Namespace,
-    k: int,
-) -> None:
-    """Run full graph ablation: evaluate each case with graph on and off."""
-    configure_plain_output()
-
-    # Build pipeline with graph ON
-    args.graph_enabled = True
-    pipeline_on = build_pipeline(args)
-
-    # Build pipeline with graph OFF
-    reset_rag_pipeline_cache()
-    args.graph_enabled = False
-    pipeline_off = build_pipeline(args)
-
-    emit("=== Graph Ablation: running graph ON vs OFF ===")
-    emit(f"graph_weight: {getattr(args, 'graph_weight', 0.35)}")
-    emit(f"graph_max_neighbors: {getattr(args, 'graph_max_neighbors', 4)}")
-    emit(f"graph_backend: {getattr(args, 'graph_backend', 'memory')}")
-    emit(f"cases: {len(cases)}")
-    emit()
-
-    ablation_results = []
-    for i, case in enumerate(cases, start=1):
-        if not case["expected_sources"]:
-            continue
-        result = score_graph_ablation_case(
-            case, pipeline_on, pipeline_off, k,
-        )
-        ablation_results.append(result)
-        if i % 10 == 0 or i == len(cases):
-            emit(f"  progress: {i}/{len(cases)}")
-
-    graph_metrics = compute_graph_ablation_metrics(ablation_results)
-    emit()
-    print_ablation_report(ablation_results, graph_metrics)
 
 
 # 解析检索评估和消融参数。
@@ -833,21 +612,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reranker-device", default=None)
     parser.add_argument("--rrf-rank-constant", type=int, default=60)
     parser.add_argument("--structured-metadata-weight", type=float, default=0.15)
-    parser.add_argument("--graph-enabled", action="store_true")
-    parser.add_argument(
-        "--graph-backend",
-        default="memory",
-        choices=["memory", "neo4j"],
-    )
-    parser.add_argument("--graph-max-neighbors", type=int, default=4)
-    parser.add_argument("--graph-weight", type=float, default=0.35)
-    parser.add_argument("--neo4j-uri", default=None)
-    parser.add_argument("--neo4j-username", default=None)
-    parser.add_argument("--neo4j-password", default=None)
-    parser.add_argument("--neo4j-database", default=None)
     parser.add_argument("--disable-authority-rerank", action="store_true")
-    parser.add_argument("--graph-ablation", action="store_true",
-                        help="Run graph ablation: compare retrieval with graph ON vs OFF.")
     parser.add_argument("--show-misses", action="store_true")
     args = parser.parse_args()
     try:
@@ -866,10 +631,6 @@ def main() -> None:
 
     configure_plain_output()
     cases = load_cases(args.cases)
-
-    if args.graph_ablation:
-        run_graph_ablation(cases, args, args.top_k)
-        return
 
     print_run_config(args)
     pipeline = build_pipeline(args)

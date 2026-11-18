@@ -193,7 +193,6 @@ class RunClient:
                 )
                 # Assign missing message identities before entering a Workflow.
                 state = copy_state(state)
-                state.setdefault("research", {})["run_id"] = run_id
                 data = {
                     "request": request,
                     "fingerprint": fingerprint,

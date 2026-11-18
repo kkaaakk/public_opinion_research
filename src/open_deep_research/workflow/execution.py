@@ -93,7 +93,7 @@ def failure_kind(error):
         return "budget_exhausted"
     if isinstance(error, ModelInvocationError):
         return "model_error"
-    if type(error).__name__ in {"ResearchGraphSettlementError", "ToolCallError"}:
+    if type(error).__name__ == "ToolCallError":
         return "tool_or_settlement_error"
     if type(error).__module__.startswith(("agents", "openai")):
         return "model_error"

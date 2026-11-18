@@ -30,7 +30,6 @@ def test_rag_mcp_server_registers_management_tools():
     assert {
         "rag_search",
         "rag_ensure_indexed",
-        "rag_index_pending_memories",
         "rag_status",
         "rag_list_sources",
         "rag_reset_cache",

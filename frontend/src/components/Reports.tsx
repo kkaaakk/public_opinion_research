@@ -19,7 +19,7 @@ export function Reports({
       <div className="panel-head">
         <strong>
           <FileText size={16} />
-          {archive ? 'Neo4j 报告归档' : '研究产物'}
+          {archive ? 'PostgreSQL 报告归档' : '研究产物'}
         </strong>
         <div className="filters">
           <select

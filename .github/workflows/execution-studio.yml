@@ -73,18 +73,11 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U por_execution -d por_execution"
           --health-interval 5s --health-timeout 3s --health-retries 20
-      neo4j:
-        image: neo4j:5.26.31
-        env:
-          NEO4J_AUTH: neo4j/studio-ci-test-only
-        ports: ["7687:7687"]
     env:
       PYTHON_DOTENV_DISABLED: "1"
       OPENAI_AGENTS_DISABLE_TRACING: "1"
       LANGSMITH_TRACING: "false"
       TEST_DBOS_DATABASE_URL: postgresql+psycopg://por_execution:studio-ci-test-only@127.0.0.1:5432/por_execution
-      TEST_DBOS_NEO4J_URI: bolt://127.0.0.1:7687
-      TEST_DBOS_NEO4J_PASSWORD: studio-ci-test-only
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -107,23 +100,7 @@ jobs:
           path: src/open_deep_research/web/studio/
       - run: npx playwright install --with-deps --no-shell chromium
         working-directory: frontend
-      - name: Await isolated Neo4j
-        run: |
-          uv run python - <<'PY'
-          import os, time
-          from neo4j import GraphDatabase
-          driver = GraphDatabase.driver(os.environ['TEST_DBOS_NEO4J_URI'], auth=('neo4j', os.environ['TEST_DBOS_NEO4J_PASSWORD']))
-          for attempt in range(60):
-              try:
-                  driver.verify_connectivity()
-                  break
-              except Exception:
-                  time.sleep(1)
-          else:
-              raise RuntimeError('Isolated Neo4j did not become ready')
-          driver.close()
-          PY
-      - name: Actual HTTP, DBOS, SDK, Harness and evidence in Chromium
+      - name: Actual HTTP, DBOS, SDK and Harness in Chromium
         run: npm run test:e2e
         working-directory: frontend
       - name: Preserve controlled-fixture browser evidence

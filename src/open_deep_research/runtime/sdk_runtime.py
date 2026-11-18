@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -50,8 +49,7 @@ from open_deep_research.observability.telemetry import (
     business_span,
     telemetry_enabled,
 )
-from open_deep_research.research_graph.compaction import summarize_compactable_history
-from open_deep_research.research_graph.workspace import ResearchWorkspace
+from open_deep_research.runtime.compaction import summarize_history
 from open_deep_research.runtime.sdk_context import SDKContextHarness
 from open_deep_research.runtime.tool_executor import ToolExecutor, tool_usage
 from open_deep_research.tools import BusinessTool, tool_result_text
@@ -62,7 +60,7 @@ from open_deep_research.workflow.execution import (
     stage_context,
 )
 
-SDK_RUNTIME_VERSION = "sdk-phase5-v1"
+SDK_RUNTIME_VERSION = "sdk-vertical-v1"
 
 CompressionCallback = Callable[
     [list[Any], str, str, dict[str, Any]],
@@ -75,8 +73,6 @@ class AgentRuntimeResult:
     """Serializable business result of one SDK role invocation."""
 
     report: str
-    memory: dict[str, Any]
-    rolling_summary: str
     budget: dict[str, Any] = field(default_factory=dict)
     replace_report: bool = False
 
@@ -183,27 +179,44 @@ class _RunBudget:
 
 
 class _BusinessAgentHarness(SDKContextHarness):
-    """Apply business budgets while retaining the existing Context Harness lifecycle."""
+    """Apply business budgets and the single rolling history compaction."""
 
     def __init__(
         self,
         *,
-        workspace: ResearchWorkspace,
+        role: str,
+        task_id: str,
+        research_round: int,
         config: Configuration,
         budget: _RunBudget,
-        evidence_tools: frozenset[str],
+        model_factory: Callable[[str, int | None], Any],
     ) -> None:
         super().__init__(
-            workspace,
-            evidence_tools=evidence_tools,
-            consumer_refresh_every=1,
-            update_consumer_context=True,
+            role=role, task_id=task_id, research_round=research_round
         )
         self.config = config
         self.run_budget = budget
+        self.model_factory = model_factory
         self.items: list[Any] = []
         self._compacted_turns: set[int] = set()
-        self._summary_references: set[str] = set()
+        self.rolling_summary = ""
+
+    def _extra_snapshot(self) -> dict[str, Any]:
+        return {
+            "business": {
+                "delta": self.run_budget.delta,
+                "compacted_turns": sorted(self._compacted_turns),
+                "rolling_summary": self.rolling_summary,
+            }
+        }
+
+    def _restore_extra(self, state: dict[str, Any]) -> None:
+        saved = state.get("business")
+        if saved is None:
+            return
+        self.run_budget.delta = saved["delta"]
+        self._compacted_turns = set(saved["compacted_turns"])
+        self.rolling_summary = saved["rolling_summary"]
 
     async def filter_model_input(self, data: Any) -> Any:
         self.items = list(data.model_data.input)
@@ -241,8 +254,9 @@ class _BusinessAgentHarness(SDKContextHarness):
             )
         )
 
+    @staticmethod
     def _with_summary(
-        self, head: list[Any], units: list[Any], summary: str, instructions: Any
+        head: list[Any], units: list[Any], summary: str, instructions: Any
     ) -> ModelInputData:
         summary_items = (
             [
@@ -275,10 +289,10 @@ class _BusinessAgentHarness(SDKContextHarness):
             (turn, unit) for turn, unit in units if turn not in self._compacted_turns
         ]
         current = self._with_summary(
-            head, active, self.workspace.rolling_summary, data.instructions
+            head, active, self.rolling_summary, data.instructions
         )
         capacity = (
-            self.config.research_graph_context_capacity_tokens
+            self.config.context_capacity_tokens
             or get_model_token_limit(self.config.research_model)
             # Unknown deployment aliases still get a bounded application
             # window. This is not a claim about the provider's context limit.
@@ -299,7 +313,8 @@ class _BusinessAgentHarness(SDKContextHarness):
         ]
         if not eligible:
             raise SDKContextLimitExceeded(
-                "Protected task, memory, pending evidence or recent native steps exceed context capacity; Phase 2 cannot safely discard them."
+                "Current task, rolling summary or recent native steps exceed "
+                "context capacity; they cannot be safely discarded."
             )
         removed = {turn for turn, _ in eligible}
         kept = [(turn, unit) for turn, unit in active if turn not in removed]
@@ -320,49 +335,19 @@ class _BusinessAgentHarness(SDKContextHarness):
             model_name = (
                 self.config.rolling_compaction_model or self.config.compression_model
             )
-            protected = json.dumps(head, ensure_ascii=False, default=str)
-            previous = self.workspace.rolling_summary
+            task_context = json.dumps(head, ensure_ascii=False, default=str)
+            previous = self.rolling_summary
             try:
-                summary, _ = await summarize_compactable_history(
+                summary, _ = await summarize_history(
                     history_text,
                     previous_summary=previous,
-                    protected_context=protected,
-                    model=self.workspace.model_factory(
+                    task_context=task_context,
+                    model=self.model_factory(
                         model_name, self.config.rolling_compaction_model_max_tokens
                     ),
                     model_name=model_name,
                     max_retries=self.config.max_structured_output_retries,
                 )
-                # Keep receipt identities independently of lossy model prose. They
-                # remain references, never newly verified evidence or a second graph.
-                references = set()
-                for _, unit in eligible:
-                    for item in unit:
-                        result = self.results.get(item.get("call_id"))
-                        receipt = (
-                            self.workspace.receipts.get(result.graph_call_id)
-                            if result
-                            else None
-                        )
-                        if receipt is not None:
-                            references.update(receipt.node_ids)
-                references.update(self._summary_references)
-                allowed = set(self.workspace.relevant_subgraph.node_ids) | references
-                cited = set(
-                    re.findall(
-                        r"\b(?:SRC|EVD|CLM|FND|EVT|ENT|UNT|SFD|COV)_[a-f0-9]{20}\b",
-                        summary,
-                    )
-                )
-                if not cited.issubset(allowed):
-                    raise ValueError(
-                        "Rolling summary contains unverified graph references."
-                    )
-                references.update(cited)
-                if references:
-                    summary += "\nCommitted graph references: " + ", ".join(
-                        sorted(references)
-                    )
                 if (
                     estimate_text_tokens(summary)
                     > self.config.rolling_compaction_model_max_tokens
@@ -388,15 +373,6 @@ class _BusinessAgentHarness(SDKContextHarness):
                     status="failed",
                     error_type=type(exc).__name__,
                 )
-                self.workspace.metrics.add("rolling_compact_failures")
-                if self.workspace.transcript is not None:
-                    self.workspace.transcript.append(
-                        "sdk_rolling_compact_failed",
-                        {
-                            "error_type": type(exc).__name__,
-                            "estimated_input_tokens": before,
-                        },
-                    )
                 if isinstance(exc, asyncio.CancelledError):
                     raise
                 raise SDKContextLimitExceeded(
@@ -405,12 +381,7 @@ class _BusinessAgentHarness(SDKContextHarness):
             annotate(estimated_tokens_after=after, removed_turns=len(removed))
             self.estimated_input_tokens = after
             self._compacted_turns.update(removed)
-            self._summary_references = references
-            self.workspace.rolling_summary = summary
-            self.workspace.metrics.add("rolling_compact_count")
-            self.workspace.metrics.add(
-                "rolling_compact_tokens_removed", before - after, quality="estimated"
-            )
+            self.rolling_summary = summary
             self.events.append(("rolling_compact", str(len(removed))))
             await self._observe(
                 "harness",
@@ -418,15 +389,6 @@ class _BusinessAgentHarness(SDKContextHarness):
                 status="completed",
                 removed_turns=len(removed),
             )
-            if self.workspace.transcript is not None:
-                self.workspace.transcript.append(
-                    "sdk_rolling_compact",
-                    {
-                        "turns": sorted(removed),
-                        "tokens_removed": before - after,
-                        "rolling_summary": summary,
-                    },
-                )
             return candidate
 
     async def on_llm_start(
@@ -444,8 +406,8 @@ class _BusinessAgentHarness(SDKContextHarness):
 class SDKAgentRuntime:
     """Map all four AgentSpecs to SDK Agents and run each exactly once.
 
-    Own assembly, the report envelope and private memory. Runner is the only
-    model/tool loop; no alternate runtime can execute a role.
+    Owns assembly and the report envelope. Runner is the only model/tool loop;
+    no alternate runtime can execute a role.
     """
 
     run_budget: _RunBudget
@@ -456,8 +418,8 @@ class SDKAgentRuntime:
         *,
         role: str,
         spec: Any,
-        agent_state: Mapping[str, Any],
-        workspace: ResearchWorkspace,
+        task_id: str,
+        research_round: int,
         config: Any,
         runtime_config: Any,
         model: Any,
@@ -465,12 +427,13 @@ class SDKAgentRuntime:
         tools: list[Any],
         initial_budget: Mapping[str, Any],
         compress_report: CompressionCallback,
+        model_factory: Callable[[str, int | None], Any],
     ) -> None:
-        """Bind one AgentSpec to its SDK model, tools and ResearchWorkspace."""
+        """Bind one AgentSpec to its SDK model, tools and compaction service."""
         self.role = role
         self.spec = spec
-        self.agent_state = dict(agent_state or {})
-        self.workspace = workspace
+        self.task_id = task_id
+        self.research_round = max(1, int(research_round or 1))
         self.config = config
         self.runtime_config = runtime_config
         self.model = model
@@ -478,79 +441,28 @@ class SDKAgentRuntime:
         self.tools = tools
         self.initial_budget = dict(initial_budget or {})
         self.compress_report = compress_report
-        self.rolling_summary = str(self.agent_state.get("rolling_summary") or "")
-        self.workspace.rolling_summary = self.rolling_summary
-
-    @staticmethod
-    def format_private_memory(agent_state: Mapping[str, Any]) -> str:
-        """Render only this role's private memory for dynamic model context."""
-        memories = list(agent_state.get("memory", []) or [])[-5:]
-        if not memories:
-            return "No private memory has been recorded for this agent yet."
-        entries = []
-        for index, memory in enumerate(memories, start=1):
-            if isinstance(memory, Mapping):
-                title = str(memory.get("title") or f"Memory {index}")
-                content = str(memory.get("content") or "")
-                source = str(memory.get("source") or "agent_private_memory")
-                entries.append(f"{index}. {title} [{source}]\n{content}")
-            else:
-                entries.append(f"{index}. {memory}")
-        return "\n\n".join(entries)
-
-    @staticmethod
-    def build_private_memory(
-        role: str, report: str, raw_notes: list[str]
-    ) -> dict[str, Any]:
-        """Create the bounded private-memory record owned by one role."""
-        content = str(report or "").strip()
-        if len(content) > 1800:
-            content = content[:1800].rstrip() + "\n[truncated]"
-        return {
-            "title": f"{role} completed role report",
-            "content": content or "No report content was produced.",
-            "source": "current_public_opinion_run",
-            "raw_note_count": len(raw_notes or []),
-        }
+        self.model_factory = model_factory
 
     async def _finish(
         self, task: str, messages: list[Any], budget_update: dict[str, Any]
     ) -> AgentRuntimeResult:
-        """Preserve the business report and private-memory contract for SDK roles."""
-        research_round = self.workspace.scope.research_round
-        mode = "followup" if research_round > 1 else "initial"
-        graph_final = await self.workspace.finalize(messages, self.spec.expected_output)
-        if graph_final is not None:
-            budget_update = merge_budget_usage(budget_update, graph_final.budget_usage)
-            body = graph_final.report
-            raw_notes = graph_final.raw_notes
-            replace_report = True
-            strategy_line = f"Context strategy: {self.workspace.strategy.name}\n"
-        else:
-            body, raw_notes, compression_budget = await self.compress_report(
-                messages,
-                task,
-                self.spec.expected_output,
-                merge_budget_usage(self.initial_budget, budget_update),
-            )
-            budget_update = merge_budget_usage(budget_update, compression_budget)
-            replace_report = False
-            strategy_line = ""
+        """Preserve the business report contract for SDK roles."""
+        mode = "followup" if self.research_round > 1 else "initial"
+        body, _raw_notes, compression_budget = await self.compress_report(
+            messages,
+            task,
+            self.spec.expected_output,
+            merge_budget_usage(self.initial_budget, budget_update),
+        )
+        budget_update = merge_budget_usage(budget_update, compression_budget)
         report = (
             f"Agent role: {self.role}\n"
             f"Agent name: {self.spec.display_name}\n"
-            f"Research round: {research_round}\n"
+            f"Research round: {self.research_round}\n"
             f"Research mode: {mode}\n"
-            f"{strategy_line}"
             f"Expected output: {self.spec.expected_output}\n\n{body}"
         )
-        return AgentRuntimeResult(
-            report=report,
-            memory=self.build_private_memory(self.role, report, raw_notes),
-            rolling_summary=self.workspace.rolling_summary,
-            budget=budget_update,
-            replace_report=replace_report,
-        )
+        return AgentRuntimeResult(report=report, budget=budget_update)
 
     def projected_budget(self) -> dict[str, Any]:
         """Return cumulative business usage for admission, without submitting it."""
@@ -644,17 +556,13 @@ class SDKAgentRuntime:
                 "SDKAgentRuntime requires an official SDK Model, not a LangChain model."
             )
         self.run_budget = _RunBudget(initial=self.initial_budget)
-        # Preserve the existing Producer's admitted tools, excluding controls.
         self.harness = _BusinessAgentHarness(
-            workspace=self.workspace,
+            role=self.role,
+            task_id=self.task_id,
+            research_round=self.research_round,
             config=self.config,
             budget=self.run_budget,
-            evidence_tools=frozenset(
-                tool.name
-                for tool in self.tools
-                if isinstance(tool, (BusinessTool, BaseTool))
-                and tool.name not in {"think_tool", "ResearchComplete"}
-            ),
+            model_factory=self.model_factory,
         )
         tools: dict[str, BusinessTool | BaseTool] = {}
         for tool in self.tools:
@@ -687,19 +595,7 @@ class SDKAgentRuntime:
             ),
             tool_use_behavior={"stop_at_tool_names": ["ResearchComplete"]},
         )
-        private_memory = self.format_private_memory(self.agent_state)
         inputs = [{"role": "user", "content": task}]
-        if self.agent_state.get("memory") or self.rolling_summary:
-            inputs.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "<Agent Dynamic Context>\nPrivate Agent Memory:\n"
-                        + private_memory
-                        + "\n</Agent Dynamic Context>"
-                    ),
-                }
-            )
         self.sdk_result = None
         session = None
         try:
@@ -718,8 +614,6 @@ class SDKAgentRuntime:
                     )
                     if cancelled is not None:
                         raise cancelled
-            # Graph services and report synthesis retain their existing model
-            # adapters. Capture their actual attempts once, including failures.
             with (
                 budget_capture() as nested,
                 model_budget_admission(self.config, self.run_budget.projected),
@@ -744,45 +638,16 @@ class SDKAgentRuntime:
                         raise
                     self.run_budget.add(budget_usage_with_reason(str(stopped)))
                 messages = self._report_messages(task)
-                # The old graph finalizer has no budget admission of its own.
-                # Explicitly preserve the final workflow report reserve here.
-                if self.workspace.strategy.graph_enabled and not can_spend_model_call(
-                    self.config, self.projected_budget(), reserve_final_report_call=True
-                ):
-                    self.run_budget.add(
-                        budget_usage_with_reason(
-                            "Skipped graph role report synthesis to preserve the final report budget; retained SDK notes."
-                        ),
-                    )
-                    body = "\n".join(str(message.content) for message in messages[1:])
-                    report = (
-                        f"Agent role: {self.role}\nAgent name: {self.spec.display_name}\n"
-                        f"Research round: {self.workspace.scope.research_round}\n"
-                        f"Research mode: {'followup' if self.workspace.scope.research_round > 1 else 'initial'}\n"
-                        f"Context strategy: {self.workspace.strategy.name}\n"
-                        f"Expected output: {self.spec.expected_output}\n\n"
-                        "Budget guard retained research notes without role report synthesis.\n"
-                        + body
-                    )
-                    result = AgentRuntimeResult(
-                        report=report,
-                        memory=self.build_private_memory(self.role, report, [body]),
-                        rolling_summary=self.workspace.rolling_summary,
-                        replace_report=True,
-                    )
-                else:
-                    before_report = merge_budget_usage(self.run_budget.delta, nested)
-                    with budget_capture() as report_usage:
-                        try:
-                            result = await self._finish(task, messages, before_report)
-                        except BaseException as exc:
-                            self.run_budget.add(
-                                getattr(exc, "budget_usage", report_usage)
-                            )
-                            raise
-                    self.run_budget.add(diff_budget_usage(result.budget, before_report))
-            # _finish returns the same costs for legacy callers. Use captured
-            # nested usage here instead, so none of those costs are merged twice.
+                before_report = merge_budget_usage(self.run_budget.delta, nested)
+                with budget_capture() as report_usage:
+                    try:
+                        result = await self._finish(task, messages, before_report)
+                    except BaseException as exc:
+                        self.run_budget.add(getattr(exc, "budget_usage", report_usage))
+                        raise
+                self.run_budget.add(diff_budget_usage(result.budget, before_report))
+            # _finish also returns the nested costs it was given. Use captured
+            # usage here so none of those costs are merged twice.
             self.budget_usage = merge_budget_usage(self.run_budget.delta, nested)
             result.budget = self.budget_usage
             return result

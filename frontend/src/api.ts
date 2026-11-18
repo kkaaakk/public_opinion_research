@@ -8,14 +8,13 @@ import {
   record,
   string,
   type EventPage,
-  type EvidencePage,
   type ExecutionPage,
   type HistoryPage,
   type HistoryRecord,
   type RunRequest,
   type RunSnapshot,
 } from './protocol';
-import { parseArchive, parseEvidence, parseExecution, parseHistory } from './readModels';
+import { parseArchive, parseExecution, parseHistory } from './readModels';
 
 export class ApiError extends Error {
   constructor(
@@ -123,13 +122,6 @@ export class StudioApi {
     );
     if (string(v.run_id) !== id) throw new ProtocolError('日志属于其他 Run');
     return parseExecution(v);
-  }
-  async evidence(id: string, params: URLSearchParams, signal?: AbortSignal): Promise<EvidencePage> {
-    const v = record(
-      await this.json(`/api/runs/${encodeURIComponent(id)}/evidence?${params}`, { signal }),
-    );
-    if (string(v.run_id) !== id) throw new ProtocolError('证据属于其他 Run');
-    return parseEvidence(v);
   }
   async history(query: string, offset: number, signal?: AbortSignal): Promise<HistoryPage> {
     const v = record(

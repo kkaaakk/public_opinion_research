@@ -35,8 +35,6 @@ def main():
         parser.error("Acceptance requires an isolated loopback Langfuse")
     for name in (
         "TEST_DBOS_DATABASE_URL",
-        "TEST_DBOS_NEO4J_URI",
-        "TEST_DBOS_NEO4J_PASSWORD",
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
     ):
@@ -120,10 +118,6 @@ def main():
         args.summary.parent.mkdir(parents=True, exist_ok=True)
         case = NativeCase(patch, args.summary.parent / (name + "-data"), "normal")
         case.cfg["configurable"].update(
-            research_graph_backend="neo4j",
-            research_graph_uri=os.environ["TEST_DBOS_NEO4J_URI"],
-            research_graph_username="neo4j",
-            research_graph_password=os.environ["TEST_DBOS_NEO4J_PASSWORD"],
         )
         case.state["messages"][0].content += " PRIVATE_PROMPT_SENTINEL"
 

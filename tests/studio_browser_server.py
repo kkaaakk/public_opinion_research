@@ -1,7 +1,7 @@
-"""Test-only real HTTP/DBOS/Neo4j server. Every inference/tool is controlled.
+﻿"""Test-only real HTTP/DBOS/PostgreSQL server. Every inference/tool is controlled.
 
 Never use this entry point for research. It creates and drops only a UUID test
-database, and reuses the existing isolated native-contract Neo4j service.
+database, and reuses the existing isolated native-contract PostgreSQL service.
 """
 
 # ruff: noqa: E402
@@ -46,8 +46,7 @@ import pytest
 import uvicorn
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from dbos import DBOS
-from dbos_support import BASE_URL, NEO4J, NEO4J_PASSWORD
-from neo4j import GraphDatabase
+from dbos_support import BASE_URL
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from test_python_workflow_sdk import install_sdk
@@ -59,7 +58,7 @@ from open_deep_research.web import history, runs, server
 from open_deep_research.web.durable import close_run_client
 from open_deep_research.web.executor import launch
 from open_deep_research.workflow import dbos_workflow
-from open_deep_research.workflow.dbos_config import settings
+from open_deep_research.workflow.dbos_config import domain_engine, settings
 
 
 def main():
@@ -92,16 +91,8 @@ def main():
                 raise RuntimeError("Controlled revision provider failure")
 
         _, cfg, _, _, _, _ = install_sdk(patch, Path(directory), on_revision=revise)
-        cfg["configurable"].update(
-            research_graph_backend="neo4j",
-            research_graph_uri=NEO4J,
-            research_graph_username="neo4j",
-            research_graph_password=NEO4J_PASSWORD,
-            allow_clarification=False,
-        )
-        archive = history.Neo4jHistoryStore(
-            GraphDatabase.driver(NEO4J, auth=("neo4j", NEO4J_PASSWORD))
-        )
+        cfg["configurable"].update(allow_clarification=False)
+        archive = history.HistoryStore(domain_engine())
         patch.setattr(history, "get_history_store", lambda: archive)
         patch.setattr(server, "get_history_store", lambda: archive)
         patch.setattr(server, "WEB_API_TOKEN", "studio-browser-test-only")
@@ -156,7 +147,7 @@ def main():
         failed = set()
 
         async def review(state, config):
-            run_id = state["research"]["run_id"]
+            run_id = config["configurable"]["research_run_id"]
             if (
                 "retry-once" in config["configurable"].get("organization_context", "")
                 and run_id not in failed

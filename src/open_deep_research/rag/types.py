@@ -74,8 +74,6 @@ class RetrievalResult(BaseModel):
     score: float
     vector_score: Optional[float] = None
     keyword_score: Optional[float] = None
-    graph_score: Optional[float] = None
-    graph_expansion_decision: Optional[dict] = None
     structured_score: Optional[float] = None
     rerank_score: Optional[float] = None
 

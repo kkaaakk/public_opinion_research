@@ -4,7 +4,6 @@
 import asyncio
 from types import SimpleNamespace
 
-import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.configuration import Configuration
 from open_deep_research.public_opinion_agents import (
@@ -12,11 +11,11 @@ from open_deep_research.public_opinion_agents import (
     PUBLIC_OPINION_AGENT_SPECS,
     get_public_opinion_agent_spec,
 )
-from open_deep_research.runtime import SDKAgentRuntime as AgentRuntime
 from open_deep_research.state import (
     Section,
     agents_reducer,
 )
+from open_deep_research.workflow import reporting
 
 
 # 验证注册表只包含当前精简角色。
@@ -72,36 +71,31 @@ def test_each_public_opinion_agent_owns_prompt_contract_and_policy() -> None:
         assert "<Private Agent Memory>" not in prompt
         assert "<Input Contract>" in prompt
         assert "<Tool Policy>" in prompt
-        assert "<Memory Policy>" in prompt
+        assert "<Report Policy>" in prompt
         assert "<Execution Strategy>" in prompt
         assert "<Output Schema>" in prompt
         assert spec.expected_output in prompt
 
 
-# 验证角色状态合并保持私有记忆隔离。
-def test_agents_reducer_keeps_private_memory_by_role() -> None:
-    """Private agent memory is appended under each role without cross-role mixing."""
+# 验证角色状态合并保持每个角色的报告隔离。
+def test_agents_reducer_keeps_reports_by_role() -> None:
+    """Role updates cannot overwrite another role's report."""
     current = {
-        "public_signal": {"memory": [{"content": "old public memory"}]},
-        "risk_assessment": {"memory": [{"content": "old risk memory"}]},
+        "public_signal": {"report": "old public report"},
+        "risk_assessment": {"report": "old risk report"},
     }
     update = {
-        "public_signal": {"memory": [{"content": "new public memory"}]},
-        "response_strategy": {"memory": [{"content": "new response memory"}]},
+        "public_signal": {"report": "new public report"},
+        "response_strategy": {"report": "new response report"},
     }
 
     merged = agents_reducer(current, update)
 
-    assert [entry["content"] for entry in merged["public_signal"]["memory"]] == [
-        "old public memory",
-        "new public memory",
-    ]
-    assert [entry["content"] for entry in merged["risk_assessment"]["memory"]] == [
-        "old risk memory",
-    ]
-    assert [entry["content"] for entry in merged["response_strategy"]["memory"]] == [
-        "new response memory",
-    ]
+    assert merged["public_signal"]["report"] == (
+        "old public report\n\n--- Additional role research report ---\nnew public report"
+    )
+    assert merged["risk_assessment"]["report"] == "old risk report"
+    assert merged["response_strategy"]["report"] == "new response report"
 
 
 # 验证章节写作使用完整正式角色报告。
@@ -123,7 +117,6 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
 
     monkeypatch.setattr(workflow_shared, "configurable_model", CapturingModel())
     full_report = "A" * 2_000 + "\nTAIL_EVIDENCE_MUST_REACH_SECTION_WRITER"
-    compact_memory = full_report[:1_800] + "\n[truncated]"
     state = {
         "report": {
             "sections": [
@@ -136,27 +129,18 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
             ]
         },
         "agents": {
-            "public_signal": {
-                "report": full_report,
-                "memory": [
-                    {
-                        "source": "current_public_opinion_run",
-                        "content": compact_memory,
-                    }
-                ],
-            }
+            "public_signal": {"report": full_report}
         },
         "runtime": {"budget": {}},
     }
 
     asyncio.run(
-        deep_researcher_module.section_writer(
+        reporting.section_writer(
             state,
             {
                 "configurable": {
                     "section_writer_model": "fixture:model",
-                    "research_graph_enabled": False,
-                }
+                                }
             },
         )
     )
@@ -164,19 +148,6 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     assert captured_prompts
     assert "TAIL_EVIDENCE_MUST_REACH_SECTION_WRITER" in captured_prompts[0]
 
-
-# 验证短期记忆受大小限制。
-def test_private_memory_remains_compact() -> None:
-    """Private memory keeps its bounded representation after P0-2."""
-
-    report = "B" * 2_000
-    memory = AgentRuntime.build_private_memory("public_signal", report, [])
-
-    assert len(memory["content"]) <= 1_820
-    assert memory["content"].endswith("[truncated]")
-
-
-# 验证新运行报告按规则替换上一运行输出。
 def test_role_reports_override_previous_run() -> None:
     """A new research phase replaces prior formal reports instead of merging them."""
 

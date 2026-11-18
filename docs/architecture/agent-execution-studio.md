@@ -1,6 +1,6 @@
 # Agent Execution Studio：事实协议与展示边界
 
-当前应用版本为 `dbos-events-v1`，Studio 和 Classic 共用 Run API 与 SSE 协议。 [执行架构](agent-loop.md) · [部署与切换](dbos-deployment.md) · [Markdown Research Brief](research-brief.md)
+当前应用版本为 `por-vertical-v1`，Studio 和 Classic 共用 Run API 与 SSE 协议。 [执行架构](agent-loop.md) · [部署与切换](dbos-deployment.md) · [Markdown Research Brief](research-brief.md)
 
 ## 1. 数据所有权
 
@@ -10,11 +10,10 @@
 | SDK Loop | `SDKContextHarness` 的原生 RunHooks / Runner 边界 | 展示开始/结束、实际模型轮次、工具身份与结果 |
 | 效果与清算 | `model_attempts`、`operations` 和 Finalizer | 显示模型用量、操作回执和实际工具结果，保留未知效果的核对状态 |
 | 顺序事件 | 单写者 `por.events` → DBOS Durable Stream | 以 seq 重建连续前缀；去重和只读回放 |
-| Evidence / Finding / Source | 每 Run 的 Research Graph | 只读 provenance，不与 RAG Knowledge Graph 混用 |
-| 报告归档 | Neo4j History | 查询/阅读/导出；不冒充完整 Trace |
-| 业务长期记忆 | 原 Memory 服务 | 不读取或呈现 Agent 私有记忆 |
+| 角色报告与来源 | `agents.*.report` | 只读 provenance，引用必须来自真实工具结果 |
+| 报告归档 | PostgreSQL History | 查询/阅读；不冒充完整 Trace |
 
-Planning、Intake、Review、报告、抽取和压缩依旧是有界业务服务。Studio 不把它们画成额外 SDK Agent，也不以 SDK spans 推算全部业务模型用量。
+Planning、Intake、Review、报告和滚动压缩依旧是有界业务服务。Studio 不把它们画成额外 SDK Agent，也不以 SDK spans 推算全部业务模型用量。
 
 ## 2. 只读接口
 
@@ -46,7 +45,7 @@ Planning、Intake、Review、报告、抽取和压缩依旧是有界业务服务
 | execution_id | 阶段 ID 与重试代次的摘要，用于关联同一阶段实例的观察 |
 | invocation_id / task_id / research_round | Harness 的 SDK invocation、研究任务和轮次 |
 | model_turn | 已进入 SDK 输入过滤器的原生模型轮次；对应 actual model_started/completed/failed |
-| tool_call_id / graph_call_id / operation_id | SDK 本地调用 / Research Graph provenance / 已有外部效果回执身份，彼此不混同 |
+| tool_call_id / operation_id | SDK 本地调用 / 已有外部效果回执身份，彼此不混同 |
 
 seq 是 relay 接收顺序，支持确定性回放；并行任务之间不能据此推断精确的物理开始先后。UI 同时区分 observed_at 与 relay timestamp。
 
@@ -83,7 +82,7 @@ SDK 公共字段在生产 observer 中再次 allowlist：字符串长度、非�
 
 `projection.ts` 对同一事件前缀执行纯 fold。静态拓扑为 Intake → Planning → Approval → 并行 Producers → Review/Gap → Risk → Strategy → Report；动态 Step 实例按 execution_id 区分，SDK 调用按 invocation / turn / call 区分。不能因最终 Run 成功、旧 completed_steps、旧 report 或 RAG 选择将未开始节点填成完成。补查重新进入被指定的 Producer / Review；重试保留旧失败和成功角色，只有新开始事件才产生新执行实例。
 
-回放只限制事件前缀，不恢复模型/工具，不读取未来报告填充过去的界面，且禁用审批/取消/重试。Journal 和 Research Graph 未提供按事件游标的历史快照，因此这两个独立面板会明确展示“当前持久视图”。History 归档不能转换成 Trace；必须打开原 Run 读取其 Stream。
+回放只限制事件前缀，不恢复模型/工具，不读取未来报告填充过去的界面，且禁用审批/取消/重试。Journal 和 History 未提供按事件游标的历史快照，因此原生日志面板会明确展示“当前持久视图”。History 归档不能转换成 Trace；必须打开原 Run 读取其 Stream。
 
 ## 5. 构建、验证与后续能力
 

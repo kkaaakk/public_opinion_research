@@ -7,20 +7,10 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import BaseMessage
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    JsonValue,
-    ValidationInfo,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from typing_extensions import TypedDict
 
 from open_deep_research.budget import empty_budget_usage, merge_budget_usage
-from open_deep_research.research_graph.metrics import merge_research_graph_metrics
-from open_deep_research.research_graph.models import ResearchGraphScope, WorkingContext
 
 BusinessAgentRole = Literal[
     "public_signal", "internal_knowledge", "risk_assessment", "response_strategy"
@@ -91,34 +81,7 @@ class ResearchRoleResult(BaseModel):
     round: int = Field(ge=1)
     report: str
     replace_report: bool = False
-    memory: list[dict[str, JsonValue]] = Field(default_factory=list)
-    rolling_summary: str = ""
-    working_context: WorkingContext | None = None
-    working_context_scope: ResearchGraphScope | None = None
     budget_delta: dict[str, JsonValue] = Field(default_factory=dict)
-    metrics_delta: dict[str, JsonValue] = Field(default_factory=dict)
-
-    @field_validator("working_context", "working_context_scope", mode="before")
-    @classmethod
-    def validate_graph_payload(cls, value: Any, info: ValidationInfo) -> Any:
-        if value is None:
-            return None
-        model = (
-            WorkingContext
-            if info.field_name == "working_context"
-            else ResearchGraphScope
-        )
-        payload = value.model_dump() if isinstance(value, BaseModel) else value
-        return model.model_validate(payload, extra="forbid")
-
-    @model_validator(mode="after")
-    def validate_context_scope(self) -> ResearchRoleResult:
-        scope = self.working_context_scope
-        if (self.working_context is None) != (scope is None):
-            raise ValueError("Working Context and Scope must be supplied together")
-        if scope and (scope.role != self.role or scope.research_round != self.round):
-            raise ValueError("Working Context Scope must match result role and round")
-        return self
 
 
 # 承载一条补充检索查询。
@@ -169,22 +132,11 @@ class WorkflowState(TypedDict, total=False):
     completed_tasks: list[ResearchTask]
 
 
-# 保存单个角色独占的报告、短期记忆和滚动摘要。
+# 保存单个角色独占的正式报告。
 class AgentRoleState(TypedDict, total=False):
     """State privately owned by one business agent role."""
 
     report: str
-    memory: list[dict[str, Any]]
-    rolling_summary: str
-
-
-# 保存运行标识及各角色的可序列化工作上下文。
-class ResearchState(TypedDict, total=False):
-    """Serializable references and Working Context for a research run."""
-
-    run_id: str
-    working_contexts: dict[str, dict[str, Any]]
-    working_context_scopes: dict[str, dict[str, Any]]
 
 
 # 保存章节计划、完成章节、规划反馈与最终报告。
@@ -197,12 +149,11 @@ class ReportState(TypedDict, total=False):
     final: str
 
 
-# 保存预算和观测指标，独立于业务路由状态。
+# 保存预算及观测指标，独立于业务路由状态。
 class RuntimeState(TypedDict, total=False):
     """Non-business execution accounting and observability data."""
 
     budget: dict[str, Any]
-    metrics: dict[str, Any]
 
 
 # 判断输入是否为显式替换状态的 override 指令。
@@ -309,7 +260,7 @@ def workflow_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
     return merged
 
 
-# 合并一个角色的报告和私有记忆，遵循各字段的更新规则。
+# 合并一个角色的报告，遵循替换与追加两种更新规则。
 def _merge_role_state(current: Any, incoming: Any) -> dict[str, Any]:
     left = dict(current) if isinstance(current, Mapping) else {}
     right = dict(incoming) if isinstance(incoming, Mapping) else {}
@@ -326,17 +277,6 @@ def _merge_role_state(current: Any, incoming: Any) -> dict[str, Any]:
                 if previous and report and report != previous
                 else report or previous
             )
-    if "memory" in right:
-        memory_update = right["memory"]
-        if _is_override(memory_update):
-            merged["memory"] = list(_override_value(memory_update, []) or [])
-        else:
-            additions = (
-                memory_update if isinstance(memory_update, list) else [memory_update]
-            )
-            merged["memory"] = list(left.get("memory", []) or []) + list(additions)
-    if "rolling_summary" in right:
-        merged["rolling_summary"] = str(right["rolling_summary"] or "")
     return merged
 
 
@@ -351,35 +291,6 @@ def agents_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
         for role, update in new_value.items():
             if role != "type":
                 merged[str(role)] = _merge_role_state(merged.get(str(role)), update)
-    return merged
-
-
-# 合并运行引用及按角色划分的工作上下文。
-def research_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
-    """Merge per-run references and role-scoped Working Context values."""
-    if _is_override(new_value):
-        replacement = _override_value(new_value, {})
-        return dict(replacement) if isinstance(replacement, Mapping) else {}
-    current = dict(current_value) if isinstance(current_value, Mapping) else {}
-    incoming = dict(new_value) if isinstance(new_value, Mapping) else {}
-    merged: dict[str, Any] = dict(current)
-    if incoming.get("run_id"):
-        if current.get("run_id") not in (None, "", incoming["run_id"]):
-            merged.pop("working_contexts", None)
-            merged.pop("working_context_scopes", None)
-        merged["run_id"] = str(incoming["run_id"])
-    if "working_contexts" in incoming:
-        contexts = dict(merged.get("working_contexts", {}) or {})
-        update = incoming["working_contexts"]
-        if _is_override(update):
-            contexts = dict(_override_value(update, {}) or {})
-        elif isinstance(update, Mapping):
-            contexts.update({str(role): value for role, value in update.items()})
-        merged["working_contexts"] = contexts
-    if "working_context_scopes" in incoming:
-        scopes = dict(merged.get("working_context_scopes", {}) or {})
-        scopes.update(incoming["working_context_scopes"] or {})
-        merged["working_context_scopes"] = scopes
     return merged
 
 
@@ -408,9 +319,9 @@ def report_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
     return merged
 
 
-# 独立累计预算和研究图指标，避免与流程路由混用。
+# 独立累计预算，避免与流程路由混用。
 def runtime_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
-    """Accumulate budget and graph metrics independently of routing."""
+    """Accumulate budget independently of routing."""
     if _is_override(new_value):
         replacement = _override_value(new_value, {})
         return dict(replacement) if isinstance(replacement, Mapping) else {}
@@ -424,13 +335,6 @@ def runtime_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
             if _is_override(budget)
             else merge_budget_usage(current.get("budget", {}), budget)
         )
-    if "metrics" in incoming:
-        metrics = incoming["metrics"]
-        merged["metrics"] = (
-            dict(_override_value(metrics, {}))
-            if _is_override(metrics)
-            else merge_research_graph_metrics(current.get("metrics", {}), metrics)
-        )
     return merged
 
 
@@ -440,37 +344,28 @@ class AgentInputState(TypedDict):
     messages: list[BaseMessage]
 
 
-# 组合原生消息及流程、角色、研究、报告、运行统计五个状态域。
+# 组合原生消息及流程、角色、报告、运行统计四个状态域。
 class DeepResearchState(AgentInputState):
-    """Business state: five owned domains plus messages."""
+    """Business state: four owned domains plus messages."""
 
     workflow: Annotated[WorkflowState, workflow_reducer]
     agents: Annotated[dict[str, AgentRoleState], agents_reducer]
-    research: Annotated[ResearchState, research_reducer]
     report: Annotated[ReportState, report_reducer]
     runtime: Annotated[RuntimeState, runtime_reducer]
-
-
-# Compatibility and semantic aliases only; DeepResearchState is the sole schema.
-AgentState = DeepResearchState
-PublicOpinionState = DeepResearchState
 
 
 __all__ = [
     "AgentInputState",
     "AgentRoleState",
-    "AgentState",
     "BusinessAgentRole",
     "ClarifyWithUser",
     "DeepResearchState",
     "Feedback",
-    "PublicOpinionState",
     "ReportState",
     "ResearchComplete",
     "ResearchQuestion",
     "ResearchReview",
     "ResearchRoleResult",
-    "ResearchState",
     "ResearchTask",
     "RuntimeState",
     "SearchQuery",
@@ -480,7 +375,6 @@ __all__ = [
     "WorkflowState",
     "agents_reducer",
     "report_reducer",
-    "research_reducer",
     "research_task_identity",
     "research_tasks_reducer",
     "runtime_reducer",

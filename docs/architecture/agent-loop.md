@@ -1,6 +1,6 @@
 # 业务执行与 Agent Loop
 
-当前应用版本为 `dbos-events-v1`，SDK Runtime 版本为 `sdk-phase5-v1`。根依赖锁包含 DBOS 3.3.0、`dbos-openai-agents` 0.3.0 和 OpenAI Agents SDK 0.24.0。 [部署](dbos-deployment.md) · [数据库设计](dbos-deployment.md#数据库设计) · [故障验收清单](../audits/dbos-architecture-closeout.md#故障验收清单)
+当前应用版本为 `por-vertical-v1`，SDK Runtime 版本为 `sdk-vertical-v1`。根依赖锁包含 DBOS 3.3.0、`dbos-openai-agents` 0.3.0 和 OpenAI Agents SDK 0.24.0。 [部署](dbos-deployment.md) · [数据库设计](dbos-deployment.md#数据库设计) · [故障验收清单](../audits/dbos-architecture-closeout.md#故障验收清单)
 
 ## 架构分层
 
@@ -26,8 +26,6 @@ flowchart LR
     H --> SDK["官方 DBOSRunner.run / Agents SDK"]
     SDK --> TE["ToolExecutor · 准入、预算、por.agent_tool 和回执"]
     TE --> Tools["Tavily / RAG / MCP / 社媒等"]
-    H --> Graph[("Research Graph")]
-    REPORT --> Mem[("可选长期 Memory")]
     EX --> EV["por.events"]
     EX --> FIN["por.finalize"]
     EX --> Cancel["por.cancel"]
@@ -40,7 +38,7 @@ flowchart LR
     REVIEW -. "评审结果" .-> EV
     REPORT -. "报告产物" .-> EV
     FIN -. "终态与归档消息" .-> EV
-    FIN --> Hist[("Neo4j History")]
+    FIN --> Hist[("PostgreSQL History")]
     EV --> PG
     Client -. "只读状态与 SSE" .-> API
 ```
@@ -49,8 +47,8 @@ flowchart LR
 | --- | --- |
 | API / RunClient | `web/runs.py:create_run` 验证令牌、Idempotency-Key、Session 格式与参数。`web/durable.py:RunClient` 按 owner 检查 Session、请求指纹、容量及未结算效果，用 `DBOSClient` 接受请求并提交取消、审批、澄清与重试授权。CLI 是 HTTP 客户端。 |
 | DBOS | `web/executor.py:launch` 注册队列并启动监听。`workflow/dbos_workflow.py` 定义 Workflow 和 Step。DBOS 用同一 PostgreSQL 中的 journal 决定恢复位置，管理 Workflow 状态、消息、Event、Stream 及 rewind。 |
-| Agent Runtime / Harness | `runtime/business_agent.py:run_business_agent` 按 AgentSpec 装配任务和工具，经 `SDKAgentRuntime.run` 进入 `SDKContextHarness.run`。Runtime 把 SDK 声明绑定到 `ToolExecutor`，后者负责准入、预算、`por.agent_tool`、去重和恢复。Harness 管理 hooks、证据、角色上下文和私有记忆输入，生产 Workflow 内调用官方 `DBOSRunner.run`。Runner 持久化模型响应并约束工具进入顺序。Harness 用 `por.agent_context` 和 `por.agent_settlement` 恢复上下文，并接收 `por.agent_tool` 恢复后的工具记录。 |
-| 业务可靠性 | `budget.py` 负责共享配额、最终报告预留及 `model_attempts` 收据。`workflow/execution.py` 结合取消意图和原生 Executor 所有权保护外部效果，`operations` 只记录需要保护的工具。Graph、Memory 与 History 使用各自的稳定业务键。 |
+| Agent Runtime / Harness | `runtime/business_agent.py:run_business_agent` 按 AgentSpec 装配任务和工具，经 `SDKAgentRuntime.run` 进入 `SDKContextHarness.run`。Runtime 把 SDK 声明绑定到 `ToolExecutor`，后者负责准入、预算、`por.agent_tool`、去重和恢复。Harness 管理 hooks、工具记录、滚动摘要和输入窗口；生产 Workflow 内调用官方 `DBOSRunner.run`。Runner 持久化模型响应并约束工具进入顺序。Harness 用 `por.agent_context` 和 `por.agent_settlement` 恢复上下文，并接收 `por.agent_tool` 恢复后的工具记录。 |
+| 业务可靠性 | `budget.py` 负责共享配额、最终报告预留及 `model_attempts` 收据。`workflow/execution.py` 结合取消意图和原生 Executor 所有权保护外部效果，`operations` 只记录需要保护的工具。History 使用稳定业务键。 |
 | 结果交付 | `events_workflow` 单写 Stream。`RunClient.get` 和 `web/observations.py` 按需查询原生状态、输出及业务结算。`web/runs.py:event_stream` 提供 SSE，`finalize_workflow` 清算、归档补偿及执行用户已授权的重试。History 有独立读取接口。 |
 
 `por.run` 和 `por.events` 入 `por-control`，`por.finalize` 入 `por-archive`。根通过 `por-business` 入队每轮 Plan、AI Brief 修改及 Research，以 owner 为分区键。`por.research` 内部启动角色子 Workflow，并调用 Review、Report 子 Workflow。取消请求需要时另入 `por.cancel`。
@@ -90,7 +88,7 @@ flowchart TD
     Q -. "报告" .-> L
     Q --> T
     T -->|终态帧| L
-    T --> O["归档与补偿 · Neo4j History"]
+    T --> O["归档与补偿 · PostgreSQL History"]
     O -->|归档回执| L
 ```
 
@@ -102,13 +100,13 @@ flowchart TD
 | 4. 图片与 Plan | `planning_workflow` 第一轮调用 `intake.enrich_query_images`，有图片时将理解结果纳入消息。`intake.plan_research` 根据消息、图像和配置返回 `ask_user` 或带 Markdown Brief 的 `ready`。模型调用使用 `por.llm` / `por.llm_sync`（有独立 Step 边界时），`por.stage_result` 在 patch 有消息时固定其 ID。 |
 | 5. 澄清与 Brief | 根以 `phase`、`clarification`、`plan` Event 发布待处理内容，`receive_interaction` 通过 DBOS `recv` 等待对应 owner、版本和截止时间的决定。最多发布三轮澄清，答复或跳过写进同一 Run 的消息。需审批时，手工编辑生成新版本，AI 修改用以请求键绑定 ID 的 `por.plan` 子 Workflow，仍受原审批截止时间约束。批准当前版本或无需审批时，根写 `brief_locked` 并将 Brief 元数据放入 Research 输入。 [交互协议](research-brief.md) |
 | 6. 并行 Producer | `research_workflow` 给 `public_signal`、`internal_knowledge` 启动各自的 `por.role`（按启用配置工作）。`role_snapshot` 为角色隔离 State。`wait_first_async` 收集先结束的子 Workflow，`assemble_research_results` 等本轮齐备后按固定角色顺序归并 `ResearchRoleResult`，含角色报告、来源、指标和预算增量。 |
-| 7. Review / Gap | `review_workflow` 用 `research.research_review` 对照 Brief 与证据。`por.review_evidence` 读取证据，单用途模型产出结构化 Review。`followup_assignments` 按任务去重、轮次、角色与预算生成新 packets，仅向有补研任务的角色分派。 |
+| 7. Review / Gap | `review_workflow` 用 `research.research_review` 对照 Brief 与角色报告，单用途模型产出结构化 Review。`followup_assignments` 按任务去重、轮次、角色与预算生成新 packets，仅向有补研任务的角色分派。 |
 | 8. 风险与策略 | 补研结束后按顺序启动 `risk_assessment` 和 `response_strategy` 两个 `por.role`，分别分析风险和制定应对策略。父 Workflow 用 `apply_patch` 合并结果，Strategy 读取 Risk 输出。 |
-| 9. 报告 | `report_workflow` 默认用 `generate_final_report` 综合获批 Brief、角色报告、证据和未解 Gap。显式 `report_mode="sections"` 才启用分章节写作。`por.publish_stage` 发布阶段成果，终稿在 `por.report` 的 `report` Event 可独立读取。配置启用时后续运行 `por.report_memory`，终稿在记忆写入之前已经可读。 |
+| 9. 报告 | `report_workflow` 默认用 `generate_final_report` 综合获批 Brief、角色报告、证据和未解 Gap。显式 `report_mode="sections"` 才启用分章节写作。`por.publish_stage` 发布阶段成果，终稿在 `por.report` 的 `report` Event 可独立读取，随后由 Finalizer 归档。 |
 | 10. SSE | `events_workflow` 收集原生消息并通过 `DBOS.write_stream_async` 追加，公开 `seq = offset + 1`。GET 分页和 SSE 共用 `RunClient.read_events`，由 `Last-Event-ID` 或 `after` 补发。研究中可交付阶段报告。`delivery` Event 确认当前代次已交付前缀。 |
-| 11. Finalizer / History | `finalize_workflow` 自准入时就在等待根终态。`completion_facts` 检查业务子 Workflow 已退出活跃状态并读取清算，先发送 `_terminal`，再由 `archive_step` 归档。失败会独立重试归档；成功的 `_archive_saved` 由 relay 更新交付回执。`GET /api/history` 和详情接口读取 Neo4j。 |
+| 11. Finalizer / History | `finalize_workflow` 自准入时就在等待根终态。`completion_facts` 检查业务子 Workflow 已退出活跃状态并读取清算，先发送 `_terminal`，再由 `archive_step` 归档。失败会独立重试归档；成功的 `_archive_saved` 由 relay 更新交付回执。`GET /api/history` 和详情接口读取 `por_domain.history`。 |
 
-`state.py` 定义 `messages`、`workflow`、`agents`、`research`、`report`、`runtime`。`workflow/python_state.py` 的 `copy_state`、`role_snapshot` 与 `apply_patch` 负责规范化、角色隔离和显式 reducer；跨 Workflow 传递的是序列化的 State、patch 或结果。已保存的上一版 Producer patch 仍有精确形状的读取兼容。SDK 循环内的工作上下文由 Harness 从 Tool Step、Context Step 和 Research Graph 恢复。 [角色结果格式历史](../audits/research-role-results-assembly.md)
+`state.py` 定义 `messages`、`workflow`、`agents`、`report`、`runtime`。`workflow/python_state.py` 的 `copy_state`、`role_snapshot` 与 `apply_patch` 负责规范化、角色隔离和显式 reducer；跨 Workflow 传递的是序列化的 State、patch 或结果。SDK 循环内的工作上下文由 Harness 从 DBOS Tool Step、Context Step 和原生 checkpoint 恢复。 [角色结果格式历史](../audits/research-role-results-assembly.md)
 
 ## 可靠性设计
 
@@ -128,7 +126,7 @@ flowchart TD
 
 Step 执行体与外部服务返回之间存在提交窗口。宕机发生在原生结果提交前，恢复会再次进入对应边界。调用前尚无意图记录时可开始执行；Model 或受保护 Tool 已有意图或回执而原生结果缺失时，同一调用身份会被拒绝，Run 保留已知结果并进入核对流程。保护记录可能只证明准入，`returned` 也只证明 invoker 返回。收到外部返回但 PostgreSQL 回执 ACK 丢失时，`commit_receipt` 在有限时间内补写相同收据。远端实际效果需要依据供应商记录核对。 [业务持久化审计](../audits/dbos-domain-simplification.md)
 
-已知只读工具可以在缺失 Tool Step 结果时重新执行。Graph、Memory 与 History 的写入使用各自的稳定键，效果检查结合请求取消意图和原生 Workflow/Executor 归属。PostgreSQL 的事务覆盖本库请求和原生队列，Neo4j、MySQL 和远端 provider 独立提交。操作员确认 Executor 已停止并核对外部记录后，可以记录 reconciliation 以解除 Session 准入隔离，原记录继续保留。 [数据库与运维](dbos-deployment.md)
+已知只读工具可以在缺失 Tool Step 结果时重新执行。History 写入使用稳定业务键，效果检查结合请求取消意图和原生 Workflow/Executor 归属。PostgreSQL 的事务覆盖本库请求、原生队列和报告归档，远端 provider 独立提交。操作员确认 Executor 已停止并核对外部记录后，可以记录 reconciliation 以解除 Session 准入隔离，原记录继续保留。 [数据库与运维](dbos-deployment.md)
 
 `start_model_attempt` 持请求锁检查并行调用共享的 Run 级预算，保留最终报告额度后才登记物理调用。`model_attempts` 按 `(run_id, id)` 唯一写入，返回或失败有用量时以同键更新。`RunClient` 汇总初始预算、物理回执和阶段工具统计，已提交的模型响应重放、客户端重连和归档补偿各自复用记录。缺少真实 Token 时保留已知调用数并标记 `usage_complete=false`。有 Token 上限时，未完成或不完整的账单可阻止继续花费。公开用量来自 provider 回执，实际货币费用由 provider 账单确认。
 

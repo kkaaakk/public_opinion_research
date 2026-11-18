@@ -1,4 +1,4 @@
-"""Studio egress is read-only, owner scoped and contains only admitted metadata."""
+﻿"""Studio egress is read-only, owner scoped and contains only admitted metadata."""
 
 import json
 from types import SimpleNamespace
@@ -99,112 +99,7 @@ def test_native_view_uses_public_read_apis_and_omits_payloads(request_lookup):
         (RUN, "operator"),
         ("b" * 32, "operator"),
     ]
-
-
-def test_evidence_allows_provenance_but_not_raw_tool_or_credential_fields(monkeypatch):
-    monkeypatch.setenv("TEST_GRAPH_API_KEY", "known-test-credential")
-    node = observations.public_node(
-        {
-            "node_id": "EV1",
-            "node_type": "Evidence",
-            "properties_json": json.dumps(
-                {
-                    "statement": "observed",
-                    "quote": "Bearer hidden-token",
-                    "metadata": {"password": "hidden"},
-                    "raw_content": "private",
-                    "source_path": "private-path",
-                    "arguments": "private",
-                    "url": "https://user:password@example.com/news?api_key=secret#token",
-                    "summary": "known-test-credential",
-                }
-            ),
-        }
-    )
-    assert node["properties"] == {
-        "statement": "observed",
-        "quote": "Bearer [redacted]",
-        "url": "https://example.com/news",
-        "summary": "[redacted]",
-    }
-    assert observations._source_url("javascript:alert(1)") is None
-
-
-def test_evidence_queries_run_scope_and_keyset_cursors_before_reading(
-    monkeypatch, request_lookup
-):
-    calls = []
-
-    class Driver:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            pass
-
-        def execute_query(self, cypher, **params):
-            calls.append((cypher, params))
-            assert params["run_id"] == RUN and params["routing_"] == "r"
-            if "ResearchEdge" in cypher:
-                assert cypher.count("{run_id: $run_id}") == 3
-                assert "e.edge_id > $after" in cypher
-                return (
-                    [
-                        {
-                            "edge_id": "REL1",
-                            "relation_type": "EXTRACTED_FROM",
-                            "source_id": "EV1",
-                            "target_id": "SRC1",
-                        }
-                    ],
-                    None,
-                    None,
-                )
-            assert "{run_id: $run_id}" in cypher and "n.node_id > $after" in cypher
-            return (
-                [
-                    {
-                        "node_id": "EV1",
-                        "node_type": "Evidence",
-                        "properties_json": '{"statement":"observed"}',
-                    }
-                ],
-                None,
-                None,
-            )
-
-    cfg = SimpleNamespace(
-        research_graph_enabled=True,
-        research_graph_backend="neo4j",
-        research_graph_uri="bolt://test",
-        research_graph_username="u",
-        research_graph_password="private",
-        research_graph_database=None,
-    )
-    monkeypatch.setattr(
-        observations.Configuration, "from_runnable_config", lambda _cfg: cfg
-    )
-    monkeypatch.setattr(
-        observations.GraphDatabase, "driver", lambda *_a, **_k: Driver()
-    )
-    store = SimpleNamespace()
-    view = observations.evidence_view(
-        store, RUN, "operator", after="EV0", node_id="EV1", edge_after="REL0"
-    )
-    assert view["nodes"][0]["node_id"] == "EV1"
-    assert view["edges"][0]["target_id"] == "SRC1"
-    assert [params["after"] for _, params in calls] == ["EV0", "REL0"]
-    assert all(params["node_id"] == "EV1" for _, params in calls)
-    assert (view["next_cursor"], view["next_edge_cursor"]) == ("EV1", "REL1")
-    with pytest.raises(RunNotFound):
-        observations.evidence_view(store, RUN, "other")
-    with pytest.raises(RunNotFound):
-        observations.evidence_view(store, "b" * 32, "operator")
-    assert len(calls) == 2
-    assert request_lookup == [(RUN, "operator"), (RUN, "other"), ("b" * 32, "operator")]
-
-
-@pytest.mark.parametrize("path", ["event-page", "execution", "evidence"])
+@pytest.mark.parametrize("path", ["event-page", "execution"])
 def test_all_studio_reads_require_the_existing_token(monkeypatch, path):
     monkeypatch.setattr(server, "WEB_API_TOKEN", "test-studio-token")
     monkeypatch.setattr(runs, "_store", lambda: pytest.fail("must authenticate first"))

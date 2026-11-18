@@ -57,8 +57,6 @@ def _config(**overrides):
             "planner_model": "fixture:model",
             "section_writer_model": "fixture:model",
             "final_report_model": "fixture:model",
-            "research_graph_enabled": False,
-            "rag_memory_write_enabled": False,
             "allow_plan_feedback": False,
             "budget_enabled": True,
             "max_model_calls": 10,

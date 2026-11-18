@@ -336,7 +336,7 @@ def test_sdk_credentials_and_explicit_endpoint_preserve_existing_resolution(
 
 @pytest.mark.parametrize(
     "filename, entrypoint",
-    [("sdk_model_smoke.py", "_run"), ("sdk_context_smoke.py", "run_smoke")],
+    [("sdk_model_smoke.py", "_run")],
 )
 def test_real_api_smoke_requires_explicit_opt_in_before_any_invocation(
     monkeypatch, capsys, filename, entrypoint

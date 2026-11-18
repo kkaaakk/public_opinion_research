@@ -1,18 +1,14 @@
-# 为五个状态域提供只读取值、任务转换及跨角色上下文组装工具。
+# 为四个状态域提供只读取值、任务转换及跨角色上下文组装工具。
 """Shared state access and coercion helpers for workflow nodes.
 
-One authoritative implementation for the state-shape helpers that were
-previously duplicated between the main researcher module and the business-agent
-runtime.  These are intentionally plain functions: no manager/service layer.
+One authoritative implementation for the state-shape helpers. These are
+intentionally plain functions: no manager/service layer.
 """
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Mapping
 from typing import Any
-
-from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.state import (
     ResearchReview,
@@ -21,7 +17,6 @@ from open_deep_research.state import (
 )
 
 __all__ = [
-    "agents_for_new_run",
     "agents_state",
     "business_context",
     "coerce_research_review",
@@ -29,12 +24,9 @@ __all__ = [
     "coerce_research_tasks",
     "is_followup",
     "report_state",
-    "research_state",
     "research_task_identity",
     "research_task_payload",
-    "resolve_research_run_id",
     "role_context",
-    "role_memories",
     "role_reports",
     "runtime_state",
     "tool_name",
@@ -54,19 +46,13 @@ def agents_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return dict(state.get("agents", {}) or {})
 
 
-# 复制并返回研究运行引用和工作上下文状态。
-def research_state(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the research domain of the graph state."""
-    return dict(state.get("research", {}) or {})
-
-
 # 复制并返回章节与最终报告状态域。
 def report_state(state: Mapping[str, Any]) -> dict[str, Any]:
     """Return the report domain of the graph state."""
     return dict(state.get("report", {}) or {})
 
 
-# 复制并返回预算及指标状态域。
+# 复制并返回预算状态域。
 def runtime_state(state: Mapping[str, Any]) -> dict[str, Any]:
     """Return the runtime accounting domain of the graph state."""
     return dict(state.get("runtime", {}) or {})
@@ -79,26 +65,6 @@ def role_reports(state: Mapping[str, Any]) -> dict[str, str]:
         str(role): str(value.get("report") or "")
         for role, value in agents_state(state).items()
         if isinstance(value, Mapping) and value.get("report")
-    }
-
-
-# 提取按角色隔离的私有记忆列表。
-def role_memories(state: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Map each role to its private memory list."""
-    return {
-        str(role): list(value.get("memory", []) or [])
-        for role, value in agents_state(state).items()
-        if isinstance(value, Mapping)
-    }
-
-
-# 保留私有记忆并清空上次运行的报告和滚动摘要。
-def agents_for_new_run(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Carry private memory forward while clearing run-scoped reports/summaries."""
-    return {
-        role: {"memory": list(value.get("memory", []) or [])}
-        for role, value in agents_state(state).items()
-        if isinstance(value, Mapping) and value.get("memory")
     }
 
 
@@ -177,31 +143,6 @@ def coerce_research_review(value: Any) -> ResearchReview | None:
 def research_task_payload(task: ResearchTask) -> dict[str, Any]:
     """Serialize a task for a dynamic Send payload."""
     return task.model_dump()
-
-
-# 解析稳定的研究运行范围，避免使用凭据或完整历史作为标识。
-def resolve_research_run_id(
-    state: Mapping[str, Any] | dict[str, Any],
-    config: RunnableConfig | None = None,
-) -> str:
-    """Resolve one stable run scope without exposing credentials or raw history."""
-    state_run_id = str(research_state(state).get("run_id") or "").strip()
-    if state_run_id:
-        return state_run_id
-    configurable: Mapping[str, Any] = (
-        config.get("configurable", {}) if isinstance(config, Mapping) else {}
-    )
-    for key in ("research_run_id", "thread_id", "run_id"):
-        value = str(configurable.get(key) or "").strip()
-        if value:
-            return value
-    metadata = config.get("metadata", {}) if isinstance(config, Mapping) else {}
-    for key in ("research_run_id", "thread_id", "run_id"):
-        value = str(metadata.get(key) or "").strip() if isinstance(metadata, Mapping) else ""
-        if value:
-            return value
-    # Standalone business services still need a scope for evidence.
-    return f"run_{uuid.uuid4().hex}"
 
 
 # 按指定角色筛选并格式化上游正式报告。

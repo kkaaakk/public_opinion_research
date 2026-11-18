@@ -11,19 +11,11 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import ValidationError
 from starlette.requests import Request
 
-import open_deep_research.deep_researcher as deep_researcher_module
 import open_deep_research.runtime.business_agent as business_agent_module
 import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.configuration import Configuration
-from open_deep_research.rag import mcp_server
-from open_deep_research.rag.config import HybridRetrievalConfig
-from open_deep_research.rag.indexer import RAGIndexer
-from open_deep_research.rag.service import (
-    RAGPipelineConfig,
-    build_rag_pipeline_config,
-)
-from open_deep_research.rag.types import RAGDocument
 from open_deep_research.state import Section
+from open_deep_research.workflow import reporting
 
 
 # 提供可控制令牌用量的聊天模型替身。
@@ -53,7 +45,6 @@ def _writer_config() -> dict:
     return {
         "configurable": {
             "section_writer_model": "fixture:model",
-            "research_graph_enabled": False,
         }
     }
 
@@ -81,7 +72,7 @@ def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> 
     monkeypatch.setattr(workflow_shared, "configurable_model", model)
 
     research_result = asyncio.run(
-        deep_researcher_module.section_writer(
+        reporting.section_writer(
             _section_state(
                 Section(
                     name="Risk",
@@ -94,7 +85,7 @@ def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> 
         )
     )
     final_result = asyncio.run(
-        deep_researcher_module.write_final_sections(
+        reporting.write_final_sections(
             {
                 "report": {
                     "sections": [
@@ -135,7 +126,7 @@ def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
     monkeypatch.setattr(workflow_shared, "configurable_model", model)
 
     result = asyncio.run(
-        deep_researcher_module.section_writer(
+        reporting.section_writer(
             _section_state(
                 Section(
                     name="Risk",
@@ -152,132 +143,6 @@ def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
     assert result["runtime"]["budget"]["input_tokens"] == 0
     assert result["runtime"]["budget"]["output_tokens"] == 0
     assert result["runtime"]["budget"]["total_tokens"] == 0
-
-
-# 验证纯 RRF 配置不再包含旧混合权重 alpha。
-def test_hybrid_alpha_is_removed_from_pure_rrf_configuration() -> None:
-    """The configuration surface matches the actual RRF-only ranking path."""
-    assert "rag_hybrid_alpha" not in Configuration.model_fields
-    assert "hybrid_alpha" not in RAGPipelineConfig.model_fields
-    assert "alpha" not in HybridRetrievalConfig.model_fields
-
-
-# 验证查询与记忆存储共享一致的配置构建逻辑。
-def test_shared_rag_builder_keeps_query_and_memory_store_settings_aligned() -> None:
-    """Memory overrides identity only while retaining every RAG backend setting."""
-    configurable = Configuration(
-        rag_knowledge_base_paths=["custom/knowledge"],
-        rag_milvus_uri="https://milvus.example.test",
-        rag_milvus_token="secret-token",
-        rag_milvus_db_name="research",
-        rag_milvus_metric_type="IP",
-        rag_embedding_provider="hash",
-        rag_vectorstore_provider="memory",
-        rag_reranker_provider="simple",
-        rag_graph_enabled=False,
-    )
-    query_config = build_rag_pipeline_config(
-        configurable,
-        {"configurable": {"thread_id": "conversation-1", "user_id": "user-1"}},
-    )
-    memory_config = build_rag_pipeline_config(
-        configurable,
-        memory_enabled=True,
-        memory_conversation_id="conversation-1",
-        memory_user_id="user-1",
-    )
-
-    assert query_config.knowledge_base_paths == memory_config.knowledge_base_paths
-    assert query_config.milvus_uri == memory_config.milvus_uri
-    assert query_config.milvus_token == memory_config.milvus_token
-    assert query_config.milvus_db_name == memory_config.milvus_db_name
-    assert query_config.milvus_metric_type == memory_config.milvus_metric_type
-    assert query_config.embedding_model == memory_config.embedding_model
-    assert memory_config.memory_enabled is True
-    assert memory_config.memory_conversation_id == "conversation-1"
-    assert memory_config.memory_user_id == "user-1"
-
-
-# 验证 RAG MCP 使用统一配置构建器。
-def test_rag_mcp_uses_the_shared_config_builder() -> None:
-    """The RAG MCP direct/prefixed config path resolves through the same builder."""
-    config = mcp_server.build_pipeline_config(
-        {
-            "rag_milvus_uri": "https://milvus.example.test",
-            "rag_milvus_token": "secret-token",
-            "rag_milvus_db_name": "research",
-            "rag_milvus_metric_type": "IP",
-            "rag_vectorstore_provider": "memory",
-            "rag_embedding_provider": "hash",
-            "rag_reranker_provider": "simple",
-        }
-    )
-
-    assert config.milvus_uri == "https://milvus.example.test"
-    assert config.milvus_token == "secret-token"
-    assert config.milvus_db_name == "research"
-    assert config.milvus_metric_type == "IP"
-
-
-# 验证仅本次快照中的待处理记忆被标记为已索引。
-def test_memory_index_marks_only_the_snapshotted_pending_batch(monkeypatch) -> None:
-    """A memory written during indexing remains pending for the next refresh."""
-    documents = [
-        RAGDocument(
-            content="memory A",
-            source="memory://mysql/c/A",
-            metadata={
-                "memory_backend": "mysql",
-                "memory_id": "A",
-                "index_status": "pending",
-            },
-        ),
-        RAGDocument(
-            content="memory B",
-            source="memory://mysql/c/B",
-            metadata={
-                "memory_backend": "mysql",
-                "memory_id": "B",
-                "index_status": "pending",
-            },
-        ),
-    ]
-    indexer = RAGIndexer.__new__(RAGIndexer)
-    indexer.config = build_rag_pipeline_config(
-        Configuration(
-            rag_knowledge_base_paths=[],
-            rag_memory_enabled=True,
-            rag_memory_mysql_url="mysql+pymysql://user:pass@localhost/rag",
-            rag_embedding_provider="hash",
-            rag_vectorstore_provider="memory",
-            rag_reranker_provider="simple",
-            rag_graph_enabled=False,
-        ),
-        memory_enabled=True,
-    )
-
-    marked: list[str] = []
-
-    # 记录被标记为已索引的记忆 ID，检查批次边界。
-    class FakeStore:
-        # 接收测试构造参数，不建立真实外部连接。
-        def __init__(self, **_kwargs):
-            pass
-
-        # 收集本次标记的记忆 ID，并返回处理数量。
-        def mark_records_indexed(self, memory_ids):
-            marked.extend(memory_ids)
-            return len(memory_ids)
-
-    monkeypatch.setattr(
-        "open_deep_research.rag.indexer.MySQLChatMemoryStore", FakeStore
-    )
-
-    assert RAGIndexer._pending_memory_ids(documents) == ["A", "B"]
-    indexer._mark_pending_memories_indexed(["A", "B"])
-
-    # C is deliberately not passed: it can be inserted while A/B are indexed.
-    assert marked == ["A", "B"]
 
 
 # 验证未知压缩错误向外传播。

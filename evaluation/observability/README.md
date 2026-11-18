@@ -11,16 +11,15 @@ disable paid inference, dotenv, LangSmith and non-loopback Python sockets.
 
 Start dedicated `compose.dbos.yaml` services and an official local Langfuse project.
 Pass **test-only** keys through the environment, never CLI arguments or Git:
-`TEST_DBOS_DATABASE_URL`, `TEST_DBOS_NEO4J_URI`, `TEST_DBOS_NEO4J_PASSWORD`,
-`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`. Service URLs must be loopback and
+`TEST_DBOS_DATABASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`. Service URLs must be loopback and
 must not point at business databases. The driver creates/drops only its own
 random test databases. PostgreSQL URLs require explicit test user/password/database
 and no query parameters; host/service/passfile overrides are rejected. Operator
 business environment and SDK session paths are not inherited. Local PG disables
 SSL/GSS and requires password authentication; Requests sessions ignore netrc/proxies.
 `--source-root` applies to single-case execution as well as the full matrix.
-Only random `por_test_UUID` databases are created/dropped. Evidence/History remain in the isolated Neo4j
-volume until that test project's normal cleanup.
+Only random `por_test_UUID` databases are created/dropped. Report History remains
+in the isolated PostgreSQL test database until that test project's normal cleanup.
 
 ```powershell
 .venv/Scripts/python.exe evaluation/observability/run_benchmark.py --enable-local-services --healthy-url http://127.0.0.1:33080 --output .tmp/observability/benchmark.json --repetitions 3 --runs 4 --warmup 1

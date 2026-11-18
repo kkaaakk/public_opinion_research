@@ -203,7 +203,7 @@ class MCPConfig(BaseModel):
 2. `SDKAgentRuntime._register_tool` 把 SDK 声明交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具由 `mcp_function_tool` 按服务方 Schema 构造同等声明。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
 3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。预算预占之后才进入业务函数及外部效果边界。
 4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。已有操作缺少对应的 Step 结果时，恢复会停止并要求核对。
-5. `ToolExecutor` 以 Tool Call ID 共享在途结果，并在取消时等待已启动的同步工具及其回执。已提交的 Step 恢复原输出、状态、工具身份、操作 ID 和局部用量；Harness 只接收恢复后的记录。成功结果由 Harness 批量交给 Research Graph。 [执行架构](agent-loop.md) · [DBOS Step](https://docs.dbos.dev/python/tutorials/step-tutorial)
+5. `ToolExecutor` 以 Tool Call ID 共享在途结果，并在取消时等待已启动的同步工具及其回执。已提交的 Step 恢复原输出、状态、工具身份、操作 ID 和局部用量；Harness 只接收恢复后的记录。成功结果由 Harness 记录并保留在 SDK 会话历史中。 [执行架构](agent-loop.md) · [DBOS Step](https://docs.dbos.dev/python/tutorials/step-tutorial)
 
 普通工具失败形成与调用配对的错误输出，供模型继续处理。取消和执行控制故障沿原生执行链传播。
 

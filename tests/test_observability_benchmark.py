@@ -80,8 +80,6 @@ def test_operator_configuration_and_libpq_environment_are_not_inherited():
         "PYTHONPATH": "candidate/src",
         "TEST_DBOS_DATABASE_URL": "postgresql+psycopg://fixture@127.0.0.1/test",
         "LANGFUSE_PUBLIC_KEY": "local-test-only",
-        "RESEARCH_GRAPH_URI": "bolt://business.example:7687",
-        "RESEARCH_GRAPH_TRANSCRIPT_DIR": "business-output",
         "RUN_SDK_SESSION_PATH": "business-session.sqlite",
         "OPENAI_API_KEY": "operator-key-must-not-be-read",
         "PGSERVICE": "business",

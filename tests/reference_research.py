@@ -25,14 +25,12 @@ def legacy_research_patch(result, state):
     if not isinstance(result, ResearchRoleResult):
         return result
     role = result.role
-    patch = {
+    return {
         "agents": {
             role: {
                 "report": {"type": "override", "value": result.report}
                 if result.replace_report
                 else result.report,
-                "memory": deepcopy(result.memory),
-                "rolling_summary": result.rolling_summary,
             }
         },
         "workflow": {
@@ -45,16 +43,6 @@ def legacy_research_patch(result, state):
         },
         "runtime": {"budget": deepcopy(result.budget_delta)},
     }
-    if result.working_context is not None:
-        patch["research"] = {
-            "run_id": result.working_context_scope.run_id,
-            "working_contexts": {role: result.working_context.model_dump(mode="json")},
-            "working_context_scopes": {
-                role: result.working_context_scope.model_dump(mode="json")
-            },
-        }
-        patch["runtime"]["metrics"] = deepcopy(result.metrics_delta)
-    return patch
 
 
 def merge_research_patches(
@@ -62,10 +50,10 @@ def merge_research_patches(
 ) -> None:
     """Validate ownership, then atomically join producer deltas in role order.
 
-    Budgets/metrics add; tasks deduplicate; rounds take max. Role reports append
-    unless explicitly replaced; role memory appends. Shared replacement fields
-    must agree. Section additions retain role order, then report compilation
-    selects the last valid version by name in the original plan order.
+    Budgets add; tasks deduplicate; rounds take max. Role reports append unless
+    explicitly replaced. Shared replacement fields must agree. Section additions
+    retain role order, then report compilation selects the last valid version by
+    name in the original plan order.
     """
     candidate = deepcopy(state)
     replacements: dict[str, Any] = {}
@@ -87,14 +75,6 @@ def merge_research_patches(
         for task in workflow_reducer({}, workflow).get("completed_tasks", []):
             if task.target_role != role:
                 raise ValueError(f"Producer {role} cannot complete another role's task")
-        research = patch.get("research", {})
-        if research.get("run_id", state.get("research", {}).get("run_id")) != state.get(
-            "research", {}
-        ).get("run_id"):
-            raise ValueError("Producer cannot change the research run")
-        for field in ("working_contexts", "working_context_scopes"):
-            if set(research.get(field, {})) - {role}:
-                raise ValueError(f"Producer {role} cannot write another role's {field}")
         for field in ("sections", "final"):
             if field in patch.get("report", {}):
                 value = patch["report"][field]

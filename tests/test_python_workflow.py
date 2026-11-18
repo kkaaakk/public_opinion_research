@@ -35,7 +35,6 @@ def config(**updates):
         "configurable": {
             "business_agent_runtime": "openai_agents",
             "workflow_backend": "python",
-            "research_graph_enabled": False,
             "rag_query_image_enabled": False,
             "allow_clarification": False,
             "enabled_business_agents": list(ROLES),
@@ -49,10 +48,7 @@ def initial():
     return {
         "messages": [HumanMessage(content="brand recall", id="input")],
         "workflow": {"brief": "brand recall"},
-        "agents": {
-            role: {"memory": [{"content": f"private-{role}"}]} for role in ROLES
-        },
-        "research": {"run_id": "python-run"},
+        "agents": {role: {"report": ""} for role in ROLES},
         "report": {
             "sections": [Section(name="Evidence", description="brand evidence")]
         },
@@ -91,7 +87,9 @@ def install_steps(monkeypatch, reviews=(), *, slower="public_signal"):
             for task in tasks
         ]
         assert all(
-            "memory" not in state["agents"][other] for other in ROLES if other != role
+            set(value) <= {"report"}
+            for name, value in state["agents"].items()
+            if name != role
         )
         if role in ROLES[:2] and round == 1:
             arrivals.add(role)
@@ -108,11 +106,7 @@ def install_steps(monkeypatch, reviews=(), *, slower="public_signal"):
         events.append((role, round, task_ids))
         return {
             "agents": {
-                role: {
-                    "report": f"{role}:{round}",
-                    "memory": [{"content": f"{role}:{round}"}],
-                    "rolling_summary": f"summary-{role}:{round}",
-                }
+                role: {"report": f"{role}:{round}"}
             },
             "workflow": {"round": round, "completed_tasks": tasks},
             "runtime": {
@@ -182,7 +176,8 @@ def test_true_parallel_join_order_and_private_state(monkeypatch, slower):
         assert usage["model_calls"] == 9
         assert usage["tool_calls"] == 4
         assert result["runtime"]["budget"]["input_tokens"] == 110
-        assert all(len(result["agents"][r]["memory"]) == 2 for r in ROLES)
+        assert all(result["agents"][r]["report"] for r in ROLES)
+        assert all(result["agents"][r]["report"] == f"{r}:1" for r in ROLES[:2])
         assert result["report"]["completed_sections"][0].content == "complete evidence"
         assert all(role in result["report"]["final"] for role in ROLES)
 
@@ -419,18 +414,11 @@ def test_parallel_merges_are_completion_order_independent_and_preserve_contracts
             "agents": {
                 role: {
                     "report": {"type": "override", "value": f"new-{role}"},
-                    "memory": [{"content": role}],
-                    "rolling_summary": role,
                 }
             },
             "workflow": {
                 "round": 2,
                 "completed_tasks": [gap(role, role), gap(role, role)],
-            },
-            "research": {
-                "run_id": "python-run",
-                "working_contexts": {role: {"goal": role}},
-                "working_context_scopes": {role: {"round": 2}},
             },
             "report": {
                 "completed_sections": [
@@ -447,7 +435,6 @@ def test_parallel_merges_are_completion_order_independent_and_preserve_contracts
     assert left == right
     assert len(left["workflow"]["completed_tasks"]) == 2
     assert left["runtime"]["budget"]["model_calls"] == 11
-    assert list(left["research"]["working_contexts"]) == list(ROLES[:2])
     apply_patch(left, {"agents": {"public_signal": {"report": "additional"}}})
     assert (
         "Additional role research report" in left["agents"]["public_signal"]["report"]
@@ -458,12 +445,11 @@ def test_parallel_merges_are_completion_order_independent_and_preserve_contracts
 @pytest.mark.parametrize(
     "bad_patch",
     [
-        {"agents": {"internal_knowledge": {"memory": []}}},
         {"agents": {"type": "override", "value": {}}},
+        {"agents": {"internal_knowledge": {"report": "other"}}},
         {"workflow": {"brief": "overwrite"}},
         {"workflow": {"completed_tasks": [gap("other", "internal_knowledge")]}},
         {"research": {"run_id": "another-run"}},
-        {"research": {"working_contexts": {"internal_knowledge": {}}}},
     ],
 )
 def test_invalid_parallel_writes_are_rejected_atomically(bad_patch):
@@ -488,12 +474,10 @@ def test_message_identity_and_snapshot_isolation():
     apply_patch(state, {"messages": [HumanMessage(content="edited", id="input")]})
     assert len(state["messages"]) == 1
     assert state["messages"][0].content == "edited"
+    apply_patch(state, {"agents": {"public_signal": {"report": "original"}}})
     snapshot = role_snapshot(state, "public_signal")
-    snapshot["agents"]["public_signal"]["memory"][0]["content"] = "changed"
-    assert (
-        state["agents"]["public_signal"]["memory"][0]["content"]
-        == "private-public_signal"
-    )
+    snapshot["agents"]["public_signal"]["report"] = "changed"
+    assert state["agents"]["public_signal"]["report"] == "original"
     apply_patch(state, {"messages": [RemoveMessage(id="input")]})
     assert state["messages"] == []
 
@@ -666,24 +650,5 @@ def test_final_report_error_keeps_legacy_contract_and_fails_python(
             assert patch["runtime"]["budget"]["model_calls"] == (
                 4 if known_capacity else 1
             )
-
-    asyncio.run(run())
-
-
-def test_memory_write_failure_preserves_successful_report_cost(monkeypatch):
-    async def run():
-        async def fail(*args):
-            raise RuntimeError("memory I/O failed")
-
-        monkeypatch.setattr(reporting, "maybe_persist_chat_memory", fail)
-        with pytest.raises(RuntimeError) as caught:
-            await reporting.persist_report_memory(
-                copy_state(initial()),
-                config(),
-                "report",
-                {"model_calls": 3, "input_tokens": 20},
-            )
-        assert caught.value.budget_usage["model_calls"] == 3
-        assert caught.value.budget_usage["input_tokens"] == 20
 
     asyncio.run(run())

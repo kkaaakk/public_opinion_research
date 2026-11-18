@@ -1,4 +1,4 @@
-# 配置公众信号角色：收集新闻、社交讨论、投诉及传播迹象。
+﻿# 配置公众信号角色：收集新闻、社交讨论、投诉及传播迹象。
 """Public signal agent specification."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec
@@ -49,7 +49,7 @@ AGENT = PublicOpinionAgentSpec(
         "Use web_search for official notices, news timelines, regulator statements, and competitor/category context.",
         "Do not use rag_search; internal evidence belongs to internal_knowledge.",
     ),
-    memory_policy=(
+    report_policy=(
         "Store only concise public evidence summaries in the role report.",
         "Preserve URLs, platform names, query variants, and dates for downstream verification.",
         "Flag when data source access fails, for example HTTP 403 or empty Actor output.",
@@ -65,5 +65,4 @@ AGENT = PublicOpinionAgentSpec(
         "Pass claims, representative posts, source URLs, and confidence notes to risk_assessment.",
         "Pass monitoring keywords and public narrative themes to response_strategy.",
     ),
-    context_strategy="research_graph_producer",
 )

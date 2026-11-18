@@ -1,4 +1,4 @@
-# 配置内部知识角色：检索企业资料、处置预案和历史记忆，形成内部证据。
+﻿# 配置内部知识角色：检索企业资料、处置预案和历史记忆，形成内部证据。
 """Internal knowledge agent specification."""
 
 from open_deep_research.public_opinion_agents.base import PublicOpinionAgentSpec
@@ -41,7 +41,7 @@ AGENT = PublicOpinionAgentSpec(
         "Do not use web_search or social_media_skill; external evidence belongs to public_signal.",
         "Run follow-up RAG queries when a public claim requires an internal fact check.",
     ),
-    memory_policy=(
+    report_policy=(
         "Keep source citations close to each fact.",
         "Separate durable internal facts from historical incident notes and temporary memory.",
         "Flag stale or missing internal knowledge instead of filling gaps from assumption.",
@@ -56,5 +56,4 @@ AGENT = PublicOpinionAgentSpec(
         "Pass cited company facts and rule excerpts to risk_assessment.",
         "Pass approved language, FAQs, and historical response patterns to response_strategy.",
     ),
-    context_strategy="research_graph_producer",
 )

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 import open_deep_research.workflow.shared as workflow_shared
@@ -27,12 +27,6 @@ from open_deep_research.budget import (
     structured_output_chain,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.research_graph.context_manager import ContextManager
-from open_deep_research.research_graph.extractor import GraphExtractor
-from open_deep_research.research_graph.models import (
-    ResearchGraphScope,
-    WorkingContext,
-)
 from open_deep_research.search.tavily import summarize_webpage
 
 LARGE_USAGE = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
@@ -431,125 +425,14 @@ def test_nested_retry_exhaustion_keeps_attempts_in_tool_capture():
 
 
 # ---------------------------------------------------------------------------
-# Research Graph structured calls keep exact usage
+# Business structured calls keep exact usage
 # ---------------------------------------------------------------------------
-
-
-# 构造图用量测试的固定运行范围。
-def _scope() -> ResearchGraphScope:
-    return ResearchGraphScope(
-        run_id="run-a", role="public_signal", research_round=1, task_id="t1"
-    )
-
-
-# 验证图抽取器返回模型实际上报的用量。
-def test_graph_extractor_reports_exact_usage():
-    _script(
-        _tool_step(
-            "GraphExtractionOutput",
-            {},
-            usage={"input_tokens": 120, "output_tokens": 30, "total_tokens": 150},
-        )
-    )
-    extractor = GraphExtractor(
-        model=ScriptedChat(),
-        model_name="scripted",
-        max_tokens=512,
-        max_retries=2,
-        batch_token_limit=10_000,
-    )
-    from open_deep_research.research_graph.models import RawResearchDocument
-
-    documents = [
-        RawResearchDocument(
-            source_id="SRC1", content="Official notice confirms a brake investigation."
-        )
-    ]
-
-    result = asyncio.run(extractor.extract(documents, scope=_scope()))
-    batch = result.batches[0]
-
-    assert batch.input_tokens == 120
-    assert batch.output_tokens == 30
-    assert batch.input_token_quality == "exact"
-    assert batch.output_token_quality == "exact"
-    assert batch.budget_usage["model_calls"] == 1
-
-
-# 验证上下文管理器返回精确响应令牌。
-def test_context_manager_reports_exact_usage():
-    from open_deep_research.research_graph.models import RelevantSubgraph
-
-    _script(
-        _tool_step(
-            "WorkingContextDelta",
-            {"recent_progress": "updated"},
-            usage={"input_tokens": 40, "output_tokens": 12, "total_tokens": 52},
-        )
-    )
-    manager = ContextManager(model=ScriptedChat(), model_name="scripted", max_retries=2)
-
-    result = asyncio.run(
-        manager.update(
-            task=SimpleNamespace(objective="assess safety"),
-            current=WorkingContext(current_objective="assess safety"),
-            relevant_subgraph=RelevantSubgraph(run_id="run-a"),
-            research_delta=[],
-        )
-    )
-
-    assert result.budget_usage["model_calls"] == 1
-    assert result.budget_usage["input_tokens"] == 40
-    assert result.budget_usage["output_tokens"] == 12
-
-
-# 验证滚动压缩返回实际模型用量。
-def test_rolling_compact_reports_exact_usage():
-    from open_deep_research.research_graph.compaction import rolling_compact
-
-    _script(
-        _tool_step(
-            "RollingCompactOutput",
-            {"rolling_summary": "compacted history"},
-            usage={"input_tokens": 70, "output_tokens": 20, "total_tokens": 90},
-        )
-    )
-    messages = [
-        HumanMessage(content="assignment"),
-        AIMessage(
-            content="step 0",
-            tool_calls=[{"name": "web_search", "args": {}, "id": "call-0"}],
-        ),
-        ToolMessage(content="raw 0", name="web_search", tool_call_id="call-0"),
-        AIMessage(
-            content="step 1",
-            tool_calls=[{"name": "web_search", "args": {}, "id": "call-1"}],
-        ),
-        ToolMessage(content="raw 1", name="web_search", tool_call_id="call-1"),
-    ]
-
-    result = asyncio.run(
-        rolling_compact(
-            messages,
-            previous_summary="",
-            protected_context="task",
-            model=ScriptedChat(),
-            model_name="scripted",
-            max_retries=2,
-            recent_raw_steps=1,
-        )
-    )
-
-    assert result.budget_usage["model_calls"] == 1
-    assert result.budget_usage["input_tokens"] == 70
-    assert result.budget_usage["output_tokens"] == 20
 
 
 # 验证研究复核节点保留结构化输出的原始用量。
 def test_research_review_node_reports_structured_usage(monkeypatch):
-    import open_deep_research.deep_researcher as module
+    from open_deep_research.workflow import research as module
 
-    monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
     _script(
         _tool_step(
             "ResearchReview",
@@ -565,13 +448,11 @@ def test_research_review_node_reports_structured_usage(monkeypatch):
             "public_signal": {"report": "signal"},
             "internal_knowledge": {"report": "internal"},
         },
-        "research": {},
         "report": {},
-        "runtime": {"budget": {}, "metrics": {}},
+        "runtime": {"budget": {}},
     }
     config = {
         "configurable": {
-            "research_graph_enabled": False,
             "research_model": "scripted:model",
             "max_structured_output_retries": 2,
         }
@@ -593,19 +474,17 @@ def test_research_review_node_reports_structured_usage(monkeypatch):
 
 # 提供可控制上下文与压缩结果的工作区替身。
 def _sdk_compaction(config, *, instructions="system", tools=None):
-    from agents import Agent
     from agents.run import ModelInputData
-    from test_sdk_runtime import _runtime as sdk_runtime
 
     from open_deep_research.runtime.sdk_runtime import _BusinessAgentHarness, _RunBudget
 
-    runtime = sdk_runtime(role="risk_assessment", config=config)
-    runtime.workspace.model_factory = lambda *_: ScriptedChat()
     harness = _BusinessAgentHarness(
-        workspace=runtime.workspace,
+        role="risk_assessment",
+        task_id="t1",
+        research_round=1,
         config=config,
         budget=_RunBudget({}),
-        evidence_tools=frozenset(),
+        model_factory=lambda *_: ScriptedChat(),
     )
     items = [{"role": "user", "content": "assignment"}]
     for index in range(4):
@@ -627,7 +506,7 @@ def _sdk_compaction(config, *, instructions="system", tools=None):
             ]
         )
     data = ModelInputData(input=items, instructions=instructions)
-    agent = Agent(name="fixture", tools=tools or [])
+    agent = SimpleNamespace(tools=tools or [])
     return harness, data, agent
 
 
@@ -645,7 +524,7 @@ def test_high_context_pressure_triggers_compaction():
         _tool_step("RollingCompactOutput", {"rolling_summary": "compacted history"})
     )
     harness, data, agent = _sdk_compaction(
-        Configuration(research_graph_context_capacity_tokens=1800, recent_raw_steps=1)
+        Configuration(context_capacity_tokens=1800, recent_raw_steps=1)
     )
     compacted, budget = _compact_sdk(harness, data, agent)
     assert budget["model_calls"] == 1
@@ -657,7 +536,7 @@ def test_high_context_pressure_triggers_compaction():
 def test_low_context_pressure_skips_compaction():
     _script()
     harness, data, agent = _sdk_compaction(
-        Configuration(research_graph_context_capacity_tokens=1_000_000)
+        Configuration(context_capacity_tokens=1_000_000)
     )
     compacted, budget = _compact_sdk(harness, data, agent)
     assert compacted.input == data.input
@@ -670,7 +549,7 @@ def test_system_prompt_is_part_of_context_pressure():
 
     _script(_tool_step("RollingCompactOutput", {"rolling_summary": "short"}))
     harness, data, agent = _sdk_compaction(
-        Configuration(research_graph_context_capacity_tokens=1800),
+        Configuration(context_capacity_tokens=1800),
         instructions="system policy " * 3000,
     )
     # Protected instructions cannot be discarded just to send an oversized call.
@@ -695,10 +574,10 @@ def test_tools_are_part_of_context_pressure():
     )
     _script(_tool_step("RollingCompactOutput", {"rolling_summary": "short"}))
     harness, data, agent = _sdk_compaction(
-        Configuration(research_graph_context_capacity_tokens=1800), tools=[huge]
+        Configuration(context_capacity_tokens=1800), tools=[huge]
     )
     assert harness._estimate(data, agent) > harness._estimate(
-        data, type(agent)(name="empty")
+        data, SimpleNamespace(tools=[])
     )
     with pytest.raises(SDKContextLimitExceeded, match="cannot fit"):
         _compact_sdk(harness, data, agent)
@@ -711,7 +590,7 @@ def test_pressure_estimation_uses_the_same_message_structure_as_the_call():
     from open_deep_research.budget import estimate_text_tokens
 
     harness, data, agent = _sdk_compaction(
-        Configuration(research_graph_context_capacity_tokens=1_000_000)
+        Configuration(context_capacity_tokens=1_000_000)
     )
     actual = json.dumps(
         {"instructions": data.instructions, "input": data.input, "tools": []},
@@ -786,7 +665,6 @@ def _writer_config() -> dict:
     return {
         "configurable": {
             "section_writer_model": "fixture:model",
-            "research_graph_enabled": False,
         }
     }
 
@@ -794,9 +672,8 @@ def _writer_config() -> dict:
 # 验证普通异常不会进入上下文超限恢复路径。
 def test_ordinary_exception_is_not_routed_to_token_limit_recovery(monkeypatch):
     """Regression guard for historical ``is_token_limit_exceeded(...) or True`` logic."""
-    import open_deep_research.deep_researcher as module
+    from open_deep_research.workflow import reporting as module
 
-    monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
 
     # 模拟普通供应商故障，检查不会误入令牌超限恢复。
     class _FailingModel:
@@ -816,9 +693,8 @@ def test_ordinary_exception_is_not_routed_to_token_limit_recovery(monkeypatch):
 
 # 验证已识别超限错误仍触发上下文恢复。
 def test_token_limit_exception_still_enters_context_recovery(monkeypatch):
-    import open_deep_research.deep_researcher as module
+    from open_deep_research.workflow import reporting as module
 
-    monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
     _script(_error_step(_token_limit_error()))
     monkeypatch.setattr(workflow_shared, "configurable_model", ScriptedChat())
 
@@ -854,7 +730,7 @@ def test_token_limit_detection_is_specific_to_provider_errors():
 
 # 验证兜底报告按令牌预算裁剪证据。
 def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
-    import open_deep_research.deep_researcher as module
+    from open_deep_research.workflow import reporting as module
 
     captured: dict = {}
 
@@ -870,7 +746,6 @@ def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
             return AIMessage(content="final report body")
 
     monkeypatch.setattr(workflow_shared, "configurable_model", _FinalReportModel())
-    monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
     huge_findings = "evidence line with facts, sources and citations. " * 400
     state = {
         "messages": [HumanMessage(content="brand risk question")],
@@ -883,7 +758,6 @@ def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
             "budget_enabled": True,
             "max_input_tokens": 400,
             "final_report_model_max_tokens": 100,
-            "research_graph_enabled": False,
         }
     }
 
@@ -902,9 +776,8 @@ def test_final_report_context_recovery_counts_failed_and_successful_requests(
     monkeypatch,
 ):
     """A context-limit request plus the successful retry are both budgeted."""
-    import open_deep_research.deep_researcher as module
+    from open_deep_research.workflow import reporting as module
 
-    monkeypatch.setenv("RESEARCH_GRAPH_ENABLED", "false")
     _script(
         _error_step(_token_limit_error()),
         _text_step("recovered report", usage=SMALL_USAGE),
@@ -920,7 +793,6 @@ def test_final_report_context_recovery_counts_failed_and_successful_requests(
         "configurable": {
             "final_report_model": "deepseek:deepseek-chat",
             "final_report_model_max_tokens": 1000,
-            "research_graph_enabled": False,
         }
     }
 

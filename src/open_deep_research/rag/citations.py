@@ -57,12 +57,9 @@ def build_answer_ready_context(
     lines = [
         "Local knowledge base results:",
         (
-            "Use only the cited excerpts below for claims about local knowledge "
-            "or chat memory. If the excerpts do not support an answer, say the "
-            "local knowledge base does not contain enough cited evidence. If a "
-            "source is marked memory_type=deprecated or "
-            "memory_usage=do_not_adopt, treat it as a prohibition or obsolete "
-            "fact, not a recommendation.\n"
+            "Use only the cited excerpts below for claims about local knowledge. "
+            "If the excerpts do not support an answer, say the local knowledge "
+            "base does not contain enough cited evidence.\n"
         ),
     ]
     for citation in citations:
@@ -118,16 +115,6 @@ def _format_metadata(metadata: dict) -> str:
         parts.append(f"source_status={metadata['source_status']}")
     if metadata.get("authority_adjusted_score") is not None:
         parts.append(f"authority_score={float(metadata['authority_adjusted_score']):.4f}")
-    if metadata.get("source_type") == "memory":
-        parts.append("source_type=memory")
-    if metadata.get("memory_type"):
-        parts.append(f"memory_type={metadata['memory_type']}")
-    if metadata.get("memory_usage"):
-        parts.append(f"memory_usage={metadata['memory_usage']}")
-    if metadata.get("conversation_id"):
-        parts.append(f"conversation_id={metadata['conversation_id']}")
-    if metadata.get("created_at"):
-        parts.append(f"created_at={metadata['created_at']}")
     if metadata.get("confidence") is not None:
         parts.append(f"confidence={metadata['confidence']}")
     if metadata.get("line_start") and metadata.get("line_end"):

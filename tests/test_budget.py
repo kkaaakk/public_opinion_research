@@ -508,16 +508,13 @@ def test_context_pressure_ratio_boundaries():
     assert context_pressure_ratio(1000, 1000) == pytest.approx(1.0)
 
 
-# 验证配置要求压力阈值顺序合法。
+# 验证上下文压缩阈值范围合法。
 def test_configuration_validates_pressure_ordering():
-    configurable = Configuration(
-        context_warning_ratio=0.6,
-        context_compaction_threshold_ratio=0.75,
-    )
-    assert configurable.context_warning_ratio == 0.6
+    configurable = Configuration(context_compaction_threshold_ratio=0.75)
+    assert configurable.context_compaction_threshold_ratio == 0.75
 
     with pytest.raises(ValueError):
-        Configuration(context_warning_ratio=0.9, context_compaction_threshold_ratio=0.75)
+        Configuration(context_compaction_threshold_ratio=0.95)
 
 
 # 验证只有启用预算管理时才向报告追加消耗摘要。

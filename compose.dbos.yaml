@@ -17,17 +17,5 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
-  neo4j-test:
-    image: neo4j:5.26.31
-    profiles: [test]
-    labels:
-      por-integration: dbos-phase4
-    environment:
-      NEO4J_AUTH: neo4j/local-dbos-test-only
-    ports:
-      - "127.0.0.1:17689:7687"
-    volumes:
-      - dbos-neo4j-test:/data
 volumes:
   dbos-postgres:
-  dbos-neo4j-test:

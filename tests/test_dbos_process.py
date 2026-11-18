@@ -1,4 +1,4 @@
-"""Kill/restart genuine Executors against PostgreSQL and shared Neo4j evidence."""
+"""Kill/restart genuine Executors against isolated PostgreSQL."""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ from uuid import uuid4
 
 import pytest
 from dbos_support import (  # noqa:F401
-    NEO4J,
-    NEO4J_PASSWORD,
     has_unconfirmed_bills_or_effects,
     holds_business_slot,
     stage_observations,
@@ -28,46 +26,34 @@ from open_deep_research.workflow.dbos_config import domain_engine, native_client
 pytestmark = pytest.mark.integration
 
 
-def test_actual_neo4j_outage_keeps_report_and_compensates_without_sdk_replay(
+def test_archive_outage_keeps_report_and_retries_without_sdk_replay(
     native_case, monkeypatch
 ):
-    import json
-
     from fastapi.testclient import TestClient
-    from neo4j import GraphDatabase
 
-    from open_deep_research.web import server
-    from open_deep_research.web.history import Neo4jHistoryStore
+    from open_deep_research.web import history, server
 
-    container = os.environ.get(
-        "TEST_DBOS_NEO4J_CONTAINER", "por-dbos-phase4-neo4j-test-1"
-    )
-    inspected = json.loads(
-        subprocess.check_output(["docker", "inspect", container], text=True)
-    )[0]
-    assert inspected["Config"]["Labels"].get("por-integration") == "dbos-phase4"
-    assert not any(m["Type"] == "bind" for m in inspected["Mounts"])
-    owned_id = inspected["Id"]
     case = native_case
     original_history = case.history
-    bounded = Neo4jHistoryStore(
-        GraphDatabase.driver(
-            NEO4J,
-            auth=("neo4j", NEO4J_PASSWORD),
-            connection_timeout=1,
-            connection_acquisition_timeout=2,
-            max_transaction_retry_time=0.1,
-        )
-    )
-    case.history = bounded
-    monkeypatch.setattr(server, "get_history_store", lambda: bounded)
-    monkeypatch.setattr(server, "WEB_API_TOKEN", "neo4j-outage-test-token")
-    stopped = False
+
+    class UnavailableStore(history.HistoryStore):
+        def __init__(self, engine):
+            super().__init__(engine)
+            self.available = False
+
+        def save(self, records):
+            if not self.available:
+                raise history.HistoryUnavailable(
+                    "研究历史暂时无法写入，请检查业务数据库连接。"
+                )
+            return super().save(records)
+
+    store = UnavailableStore(domain_engine())
+    case.history = store
+    monkeypatch.setattr(history, "get_history_store", lambda: store)
+    monkeypatch.setattr(server, "get_history_store", lambda: store)
+    monkeypatch.setattr(server, "WEB_API_TOKEN", "archive-outage-test-token")
     try:
-        subprocess.run(
-            ["docker", "stop", "--time", "1", owned_id], check=True, capture_output=True
-        )
-        stopped = True
         run = case.create(owner="operator")
         completed = case.wait(run)
         assert completed["status"] == "completed"
@@ -83,25 +69,15 @@ def test_actual_neo4j_outage_keeps_report_and_compensates_without_sdk_replay(
         with TestClient(server.app) as http:
             unavailable = http.get(
                 "/api/history",
-                headers={"Authorization": "Bearer neo4j-outage-test-token"},
+                headers={"Authorization": "Bearer archive-outage-test-token"},
             )
             assert unavailable.status_code == 503
             assert "local-dbos-test-only" not in unavailable.text
         before = len(case.models)
         assert before == 4
-        subprocess.run(["docker", "start", owned_id], check=True, capture_output=True)
-        stopped = False
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            try:
-                bounded.driver.verify_connectivity()
-                break
-            except Exception:
-                time.sleep(0.5)
-        else:
-            raise AssertionError("Isolated Neo4j did not restart")
-        saved = case.wait(run, lambda r: r["archive_status"] == "saved", timeout=60)
-        record = bounded.get(saved["history_id"], owner="operator")
+        store.available = True
+        saved = case.wait(run, lambda r: r["archive_status"] == "saved", timeout=90)
+        record = store.get(saved["history_id"], owner="operator")
         assert record["report"] == saved["report"] == completed["report"]
         assert saved["usage"] == completed["usage"]
         assert record["usage"] == {
@@ -114,12 +90,7 @@ def test_actual_neo4j_outage_keeps_report_and_compensates_without_sdk_replay(
             for e in case.client.read_events(run["run_id"], "operator", 0, 1000)
         )
     finally:
-        if stopped:
-            subprocess.run(
-                ["docker", "start", owned_id], check=True, capture_output=True
-            )
         case.history = original_history
-        bounded.close()
 
 
 def start(directory, executor, scenario="normal", *, queues=None):
@@ -206,12 +177,6 @@ def plan_prompts(directory):
 
 def configuration(directory):
     return config(
-        research_graph_enabled=True,
-        research_graph_backend="neo4j",
-        research_graph_uri=NEO4J,
-        research_graph_username="neo4j",
-        research_graph_password=NEO4J_PASSWORD,
-        research_graph_transcript_dir=str(directory / "t"),
         recent_raw_steps=0,
         allow_clarification=True,
         research_model="fixture:review",

@@ -308,9 +308,7 @@ def test_default_model_routing() -> None:
     deepseek = "deepseek:deepseek-flash"
     assert config.summarization_model == doubao
     assert config.rag_query_rewrite_model == doubao
-    assert config.context_manager_model == doubao
     assert config.rolling_compaction_model == doubao
-    assert config.research_graph_extraction_model == doubao
     assert config.research_model == deepseek
     assert config.compression_model == deepseek
     assert config.final_report_model == deepseek

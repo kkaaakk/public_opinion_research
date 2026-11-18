@@ -15,12 +15,9 @@ rerank 不在这里做；本模块只负责生成候选和初步排序。
 import math
 import re
 from collections import Counter, defaultdict
-from collections.abc import Callable
 from typing import Any
 
 from open_deep_research.observability.langsmith import trace_span
-from open_deep_research.rag.graph import create_graph_index
-from open_deep_research.rag.graph_terms import TermExtractor
 from open_deep_research.rag.metadata import build_structured_context_text
 from open_deep_research.rag.types import RAGChunk, RetrievalResult
 from open_deep_research.rag.vectorstore import VectorStoreBackend
@@ -99,61 +96,18 @@ class HybridChunkRetriever:
     Dense 和 BM25 的候选使用 RRF 融合，后续再交给 reranker 精排。
     """
 
-    # 绑定向量、关键词及可选图索引，保存融合召回参数。
+    # 绑定向量与关键词候选索引，保存融合召回参数。
     def __init__(
         self,
         vectorstore: VectorStoreBackend,
         keyword_index: Any,
         rrf_rank_constant: int = 60,
         structured_metadata_weight: float = 0.15,
-        graph_enabled: bool = False,
-        graph_backend: str = "memory",
-        graph_index_id: str = "default",
-        graph_max_neighbors: int = 4,
-        graph_weight: float = 0.35,
-        graph_ner_enabled: bool = True,
-        graph_idf_enabled: bool = True,
-        graph_idf_threshold_percentile: float = 85.0,
-        graph_confidence_threshold: float = 0.15,
-        structural_edges_enabled: bool = False,
-        neo4j_uri: str | None = None,
-        neo4j_username: str | None = None,
-        neo4j_password: str | None = None,
-        neo4j_database: str | None = None,
-        graph_driver_factory: Callable[..., Any] | None = None,
     ):
         self.vectorstore = vectorstore
         self.keyword_index = keyword_index
         self.rrf_rank_constant = max(1, rrf_rank_constant)
         self.structured_metadata_weight = max(0.0, structured_metadata_weight)
-        self.graph_max_neighbors = max(0, graph_max_neighbors)
-        self.graph_weight = max(0.0, graph_weight)
-        chunks = getattr(keyword_index, "chunks", [])
-        term_extractor: TermExtractor | None = None
-        if graph_enabled and chunks:
-            term_extractor = TermExtractor(
-                chunks=[f"{c.title or ''}\n{c.content}" for c in chunks],
-                ner_enabled=graph_ner_enabled,
-                idf_enabled=graph_idf_enabled,
-                idf_threshold_percentile=graph_idf_threshold_percentile,
-            )
-        self.graph_index = (
-            create_graph_index(
-                chunks,
-                backend=graph_backend,
-                index_id=graph_index_id,
-                neo4j_uri=neo4j_uri,
-                neo4j_username=neo4j_username,
-                neo4j_password=neo4j_password,
-                neo4j_database=neo4j_database,
-                driver_factory=graph_driver_factory,
-                term_extractor=term_extractor,
-                graph_confidence_threshold=graph_confidence_threshold,
-                structural_edges_enabled=structural_edges_enabled,
-            )
-            if graph_enabled and chunks
-            else None
-        )
 
     def retrieve(
         self,
@@ -207,26 +161,6 @@ class HybridChunkRetriever:
             )
             if merge_run is not None:
                 merge_run.add_outputs({"merged_count": len(fused_results)})
-
-        if self.graph_index is not None:
-            with trace_span(
-                "graph_retrieval",
-                "retriever",
-                metadata={
-                    "retriever_type": "graph",
-                    "graph_backend": type(self.graph_index).__name__,
-                    "max_neighbors": self.graph_max_neighbors,
-                    "seed_count": len(fused_results),
-                },
-            ) as graph_run:
-                fused_results = self.graph_index.expand(
-                    query=query,
-                    seed_results=fused_results,
-                    max_neighbors=self.graph_max_neighbors,
-                    graph_weight=self.graph_weight,
-                )
-                if graph_run is not None:
-                    graph_run.add_outputs({"result_count": len(fused_results)})
 
         with trace_span(
             "structured_metadata_boost",

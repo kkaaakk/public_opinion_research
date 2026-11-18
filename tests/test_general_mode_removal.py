@@ -16,8 +16,7 @@ import pytest
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.state import (
-    AgentState,
-    PublicOpinionState,
+    DeepResearchState,
     ResearchQuestion,
 )
 from open_deep_research.workflow import dbos_workflow
@@ -219,20 +218,14 @@ class TestStateCleanup:
 
     # 验证主状态不再携带旧 relevant_domains 字段。
     def test_agent_state_no_relevant_domains(self):
-        """AgentState should not have relevant_domains field."""
-        annotations = AgentState.__annotations__
+        """The state schema should not have a relevant_domains field."""
+        annotations = DeepResearchState.__annotations__
         assert "relevant_domains" not in annotations
 
     # 验证主状态不再保存 supervisor 消息通道。
     def test_agent_state_has_no_supervisor_messages(self):
-        """AgentState should not retain the unused supervisor message channel."""
-        assert "supervisor_messages" not in AgentState.__annotations__
-
-    # 验证舆情状态不再携带旧领域分类字段。
-    def test_public_opinion_state_no_relevant_domains(self):
-        """PublicOpinionState should not have relevant_domains field."""
-        annotations = PublicOpinionState.__annotations__
-        assert "relevant_domains" not in annotations
+        """The state schema should not retain a supervisor message channel."""
+        assert "supervisor_messages" not in DeepResearchState.__annotations__
 
     # 验证结构化研究问题不再返回领域分类。
     def test_research_question_no_relevant_domains(self):
@@ -277,13 +270,6 @@ class TestPromptsCleanup:
         assert not hasattr(prompts_module, "public_opinion_supervisor_prompt")
         assert not hasattr(prompts_module, "public_opinion_researcher_prompt")
         assert hasattr(prompts_module, "public_opinion_final_report_generation_prompt")
-
-    # 验证旧 supervisor 提示词生成器已移除。
-    def test_supervisor_prompt_builder_removed(self):
-        """The main graph should not retain a dead coordinator prompt builder."""
-        import open_deep_research.deep_researcher as deep_researcher_module
-
-        assert not hasattr(deep_researcher_module, "_supervisor_system_prompt")
 
     # 验证需求转换提示词不再执行工具领域分类。
     def test_transform_prompt_no_domain_classifier(self):
