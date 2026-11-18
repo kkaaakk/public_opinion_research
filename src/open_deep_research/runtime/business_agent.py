@@ -35,6 +35,11 @@ from open_deep_research.social_media.tools import get_social_media_tools
 from open_deep_research.state import DeepResearchState, ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.tools import BusinessTool
+from open_deep_research.tools.plugins import (
+    LOAD_SKILL_TOOL,
+    build_skill_prompt,
+    load_plugin_tools,
+)
 from open_deep_research.tools.registry import (
     build_dynamic_tool_prompt,
     get_all_tools,
@@ -175,6 +180,18 @@ async def _business_agent_tools(
     all_tools = await get_all_tools(config)
     if "social_media" in allowed_domains:
         all_tools.extend(get_social_media_tools())
+
+    # Plugins only contribute a role-authorized load_skill declaration and their
+    # declared MCP servers; declared local tools stay in the existing registry.
+    local_tool_names = {tool_name(tool) for tool in all_tools}
+    plugin_tools, _role_plugins = await load_plugin_tools(
+        config,
+        role=role,
+        allowed_domains=allowed_domains,
+        local_tool_names=local_tool_names,
+        existing_tool_names=set(local_tool_names),
+    )
+    all_tools.extend(plugin_tools)
 
     filtered_tools = []
     rejected_tools = []
@@ -436,6 +453,11 @@ async def run_business_agent(
         mcp_prompt=configurable.mcp_prompt or "",
         date=get_today_str(config),
         organization_context=business_context(configurable),
+        skill_prompt=(
+            build_skill_prompt(configurable, role, spec.allowed_domains)
+            if any(tool_name(tool) == LOAD_SKILL_TOOL for tool in tools)
+            else ""
+        ),
     )
 
     # 将运行时的研究压缩请求转发到共享压缩实现。

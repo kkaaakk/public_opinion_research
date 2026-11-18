@@ -75,6 +75,7 @@ def main():
         "social_media_apify_api",
         "mcp.tools",
         "tools.registry",
+        "tools.plugins",
     ]
     for name in modules:
         importlib.import_module(

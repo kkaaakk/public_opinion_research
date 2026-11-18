@@ -31,8 +31,14 @@ class PublicOpinionAgentSpec:
         mcp_prompt: str,
         date: str,
         organization_context: str,
+        skill_prompt: str = "",
     ) -> str:
         """Render this agent's dedicated system prompt."""
+        skills_section = (
+            f"\n\n<Available Skills>\n{skill_prompt}\n</Available Skills>"
+            if skill_prompt
+            else ""
+        )
         return AGENT_SYSTEM_PROMPT_TEMPLATE.format(
             date=date,
             role=self.role,
@@ -42,6 +48,7 @@ class PublicOpinionAgentSpec:
             organization_context=organization_context,
             retrieval_tool_prompt=retrieval_tool_prompt,
             mcp_prompt=mcp_prompt,
+            skills_section=skills_section,
             input_contract=_bullet_lines(self.input_contract),
             output_schema=_bullet_lines(self.output_schema),
             agent_prompt=self.prompt,
@@ -86,7 +93,7 @@ You have access to the configured research tools for this run:
 {mcp_prompt}
 
 Use think_tool after each retrieval step to reflect on evidence quality and decide whether to continue.
-</Available Tools>
+</Available Tools>{skills_section}
 
 <Input Contract>
 {input_contract}

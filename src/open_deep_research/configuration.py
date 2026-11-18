@@ -66,6 +66,9 @@ DEFAULT_PUBLIC_OPINION_AGENTS = [
     "risk_assessment",
     "response_strategy",
 ]
+# 首方插件只提供研究指导与可选 MCP 声明，不新增执行器或持久化状态。
+DEFAULT_PLUGINS = ["social-research"]
+DEFAULT_PLUGINS_DIR = str(Path(__file__).resolve().parents[2] / "plugins")
 PUBLIC_OPINION_AGENT_ALIASES = {
     "news_intelligence": "public_signal",
     "social_sentiment": "public_signal",
@@ -263,6 +266,27 @@ class Configuration(BaseModel):
                 "type": "text",
                 "default": DEFAULT_PUBLIC_OPINION_AGENTS,
                 "description": "Comma-separated business sub-agent roles available in public_opinion_risk mode.",
+            }
+        },
+    )
+    plugins_dir: str = Field(
+        default=DEFAULT_PLUGINS_DIR,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": DEFAULT_PLUGINS_DIR,
+                "description": "Directory containing plugin.json manifests and their SKILL.md guidance.",
+            }
+        },
+    )
+    enabled_plugins: Optional[List[str]] = Field(
+        default_factory=lambda: list(DEFAULT_PLUGINS),
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": DEFAULT_PLUGINS,
+                "description": "Comma-separated plugin ids assembled for their authorized roles.",
             }
         },
     )
@@ -1153,6 +1177,27 @@ class Configuration(BaseModel):
                     return normalized_items or None
             normalized_items = [item.strip() for item in stripped.split(",") if item.strip()]
             return normalized_items or None
+        return value
+
+    # 归一化插件列表，并保留显式空列表以支持完全禁用插件。
+    @field_validator("enabled_plugins", mode="before")
+    @classmethod
+    def normalize_enabled_plugins(cls, value: Any) -> Optional[list[str]]:
+        """Normalize plugin ids while keeping an explicit empty selection."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            return [item.strip() for item in stripped.split(",") if item.strip()]
         return value
 
     @model_validator(mode="before")

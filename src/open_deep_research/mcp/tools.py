@@ -385,51 +385,66 @@ async def _load_server_tools(
         return loaded
 
 
-# 逐个加载已启用的 MCP 服务并收集工具；单服务失败时记录后继续。
+# 逐个加载指定的 MCP 服务并收集工具；单服务失败时记录后继续。
 async def load_mcp_tools(
     config: RunnableConfig,
     existing_tool_names: set[str],
+    *,
+    extra_servers: list[MCPServerSpec] | None = None,
+    include_configured: bool = True,
+    loaded_servers: set[str] | None = None,
 ) -> list[BusinessTool]:
-    """Load tools from all configured MCP servers with fault isolation."""
+    """Load MCP tools with fault isolation over an explicit server scope.
+
+    ``include_configured`` selects the operator-configured servers. A plugin
+    passes ``False`` when the global pass already ran, so this function becomes
+    the one shared loader for plugin-only discovery instead of a second client.
+    ``extra_servers`` adds trusted specs to either scope, and ``loaded_servers``
+    records only servers whose discovery actually succeeded.
+    """
     configurable = Configuration.from_runnable_config(config)
     servers: list[MCPServerSpec] = []
 
-    # 1) Legacy single-server mcp_config → "legacy_mcp"
-    legacy = await _build_legacy_server(configurable, config)
-    if legacy:
-        servers.append(legacy)
+    if include_configured:
+        # 1) Legacy single-server mcp_config → "legacy_mcp"
+        legacy = await _build_legacy_server(configurable, config)
+        if legacy:
+            servers.append(legacy)
 
-    # 2) Bytebase DBHub
-    if configurable.dbhub_enabled and configurable.dbhub_dsn:
-        try:
-            dbhub = _build_dbhub_server(configurable)
-            if dbhub:
-                servers.append(dbhub)
-        except Exception:
-            logger.warning(
-                "Failed to build DBHub config — DBHub disabled.", exc_info=True
-            )
+        # 2) Bytebase DBHub
+        if configurable.dbhub_enabled and configurable.dbhub_dsn:
+            try:
+                dbhub = _build_dbhub_server(configurable)
+                if dbhub:
+                    servers.append(dbhub)
+            except Exception:
+                logger.warning(
+                    "Failed to build DBHub config — DBHub disabled.", exc_info=True
+                )
 
-    # 3) Microsoft MarkItDown
-    if configurable.markitdown_enabled:
-        try:
-            servers.append(_build_markitdown_server(configurable))
-        except Exception:
-            logger.warning(
-                "Failed to build MarkItDown config — MarkItDown disabled.",
-                exc_info=True,
-            )
+        # 3) Microsoft MarkItDown
+        if configurable.markitdown_enabled:
+            try:
+                servers.append(_build_markitdown_server(configurable))
+            except Exception:
+                logger.warning(
+                    "Failed to build MarkItDown config — MarkItDown disabled.",
+                    exc_info=True,
+                )
 
-    # 4) Feishu / Lark
-    if configurable.feishu_enabled and configurable.feishu_app_id:
-        try:
-            feishu = _build_feishu_server(configurable)
-            if feishu:
-                servers.append(feishu)
-        except Exception:
-            logger.warning(
-                "Failed to build Feishu config — Feishu disabled.", exc_info=True
-            )
+        # 4) Feishu / Lark
+        if configurable.feishu_enabled and configurable.feishu_app_id:
+            try:
+                feishu = _build_feishu_server(configurable)
+                if feishu:
+                    servers.append(feishu)
+            except Exception:
+                logger.warning(
+                    "Failed to build Feishu config — Feishu disabled.", exc_info=True
+                )
+
+    # 5) Plugin-declared servers keep their trusted local domain/effect policy.
+    servers.extend(extra_servers or [])
 
     # --- Per-server loading with full fault isolation ---
     all_tools: list[BusinessTool] = []
@@ -454,6 +469,8 @@ async def load_mcp_tools(
             continue
         all_tools.extend(loaded)
         existing_tool_names.update(tool.name for tool in loaded)
+        if loaded_servers is not None:
+            loaded_servers.add(spec.name)
         logger.info(
             "MCP server '%s': loaded %d tools%s",
             spec.name,
