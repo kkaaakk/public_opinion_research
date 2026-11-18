@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import time
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from threading import Barrier
 from typing import Annotated
@@ -533,12 +534,11 @@ def install(directory, scenario):
 
         if legacy_catalog:
 
-            async def legacy_effect(query, config: RunnableConfig, limit=3):
-                return await effect(config)
+            async def legacy_effect(context, query, limit=3):
+                return await effect(context.context.tool_executor.tool_config(context))
 
-            tool = _tool(role, coroutine=legacy_effect)
-            tool.metadata = {**(tool.metadata or {}), "effect": "protected"}
-            return [tool]
+            tool = _tool(role, with_context=legacy_effect)
+            return [replace(tool, effect="protected")]
 
         public = role == "public_signal"
 

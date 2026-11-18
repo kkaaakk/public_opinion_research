@@ -113,19 +113,19 @@
 
 - 文件：`src/open_deep_research/mcp/tools.py`
 - Symbol：`load_mcp_tools()`
-- 推荐断点：`load_mcp_tools()` 内 `MultiServerMCPClient(...)` 与 `client.get_tools()`
-- 观察变量：`servers`、`server_name`、`server_conn`、`tools`、`wrapped`
+- 推荐断点：`load_mcp_tools()` 内 `spec.create()`、`server.list_tools()` 与 `build_mcp_tool()`
+- 观察变量：`servers`、`spec.name`、`mcp_tools`、`loaded`
 
 ### 工具冲突包装
 
 - 文件：`src/open_deep_research/mcp/tool_wrapper.py`
-- Symbols：`wrap_mcp_tools()`、`prefixed_tool_name()`
-- 观察变量：`original_name`、`existing_names`、`prefixed`
+- Symbols：`allocate_tool_name()`、`prefixed_tool_name()`、`build_mcp_tool()`
+- 观察变量：`tool_name`、`taken`、`public_name`
 
 ### Tool domain
 
 - 文件：`src/open_deep_research/mcp/domain_filter.py`
-- Symbols：`DOMAIN_REGISTRY`、`get_tool_domain()`、`tag_tools_with_domain()`
+- Symbols：`DOMAIN_REGISTRY`、`get_tool_domain()`
 
 ## Skill
 

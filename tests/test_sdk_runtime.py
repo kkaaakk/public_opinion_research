@@ -1,14 +1,15 @@
 """Exercise all four business roles through the real offline SDK Runner."""
 
 import asyncio
+from dataclasses import replace
+from typing import Annotated
 
 import pytest
 from agents import FunctionTool, function_tool
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from agents.tool_context import ToolContext
 from agents.usage import Usage
-from langchain_core.tools import StructuredTool, ToolException
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from open_deep_research.budget import (
     capture_budget_usage,
@@ -23,7 +24,7 @@ from open_deep_research.runtime.sdk_runtime import (
     _BusinessAgentHarness,
     _RunBudget,
 )
-from open_deep_research.tools import register_tool
+from open_deep_research.tools import BusinessTool, register_tool
 
 ROLES = PUBLIC_OPINION_AGENT_ORDER
 TOKENS = Usage(
@@ -36,28 +37,55 @@ TOKENS = Usage(
 )
 
 
-class SearchArgs(BaseModel):
-    query: str
-    limit: int = Field(default=3, ge=1, le=10)
-
-
 def _tool(
-    role="public_signal", *, coroutine=None, func=None, name=None, domain=None, **kwargs
-):
-    async def search(query: str, limit: int = 3):
+    role="public_signal",
+    *,
+    coroutine=None,
+    func=None,
+    with_context=None,
+    name=None,
+    domain=None,
+    effect=None,
+) -> BusinessTool:
+    tool_name = name or (
+        "web_search" if role == "public_signal" else "rag_search"
+    )
+    tool_domain = domain or (
+        "web_search" if role == "public_signal" else "rag"
+    )
+
+    async def default_search(query: str, limit: int = 3):
         return f"Evidence {query}, limit={limit} [source: fixture]"
 
-    return StructuredTool(
-        name=name or ("web_search" if role == "public_signal" else "rag_search"),
-        description="Search cited evidence",
-        args_schema=SearchArgs,
-        coroutine=coroutine or (None if func else search),
-        func=func,
-        metadata={
-            "tool_domain": domain
-            or ("web_search" if role == "public_signal" else "rag")
-        },
-        **kwargs,
+    async def run_business(context, query: str, limit: int):
+        if with_context is not None:
+            return await with_context(context, query=query, limit=limit)
+        if coroutine is not None:
+            return await coroutine(query=query, limit=limit)
+        if func is not None:
+            return await asyncio.to_thread(func, query=query, limit=limit)
+        return await default_search(query=query, limit=limit)
+
+    @function_tool(
+        name_override=tool_name,
+        description_override="Search cited evidence",
+        use_docstring_info=False,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def declared(
+        context: ToolContext,
+        query: str,
+        limit: Annotated[int, Field(ge=1, le=10)] = 3,
+    ) -> str:
+        return await context.context.tool_executor.execute(
+            context, run_business, context, query, limit
+        )
+
+    return BusinessTool(
+        declared,
+        domain=tool_domain,
+        effect=effect or "protected",
     )
 
 
@@ -138,11 +166,8 @@ def test_four_roles_execute_sdk_model_tool_model_with_contracts(role):
     model.assert_complete()
     assert len(model.calls) == 2
     assert invoked == [("brand", 3)]
-    assert all(isinstance(tool, FunctionTool) for tool in runtime.agent.tools)
-    assert (
-        runtime.agent.tools[0].params_json_schema
-        == tool.tool_call_schema.model_json_schema()
-    )
+    assert all(isinstance(item, FunctionTool) for item in runtime.agent.tools)
+    assert runtime.agent.tools[0].params_json_schema == tool.sdk_tool.params_json_schema
     assert f"Agent role: {role}" in result.report
     assert "Research mode: initial" in result.report
     assert f"{role} final report" in result.report
@@ -197,7 +222,8 @@ def test_registration_and_execution_both_enforce_role_permission(role):
     tool = _tool(role)
 
     def revoke(call):
-        tool.metadata["tool_domain"] = "unclassified"
+        executor = runtime.harness.tool_executor
+        executor.tools[tool.name] = replace(tool, domain="unclassified")
         return [function_call(tool.name, '{"query":"q"}', call_id="revoked")]
 
     model = ScriptedModel(
@@ -246,20 +272,16 @@ def test_sync_async_tools_execute_once_in_sdk_parallel_batch(role):
     assert result.budget["total_tokens"] == 37
 
 
-@pytest.mark.parametrize(
-    "kind", ["raises", "handled_error", "business_error", "rag_error"]
-)
+@pytest.mark.parametrize("kind", ["raises", "business_error", "rag_error"])
 def test_explicit_tool_failure_status_is_retained(kind):
     async def fail(query: str, limit: int = 3):
-        if kind in {"raises", "handled_error"}:
-            raise ToolException("MCP transport or business failure")
+        if kind == "raises":
+            raise RuntimeError("MCP transport or business failure")
         if kind == "business_error":
             return '{"success":false,"error":"denied"}'
         return "Local RAG search failed: offline fixture"
 
-    tool = _tool(
-        "internal_knowledge", coroutine=fail, handle_tool_error=kind == "handled_error"
-    )
+    tool = _tool("internal_knowledge", coroutine=fail)
     runtime = _runtime(
         "internal_knowledge",
         tools=[tool],

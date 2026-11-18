@@ -1,30 +1,36 @@
-# 通过服务名前缀解决多个 MCP 服务的工具重名问题。
-"""Namespace MCP tools and adapt their results to the SDK execution path.
+# 把 SDK 原生 MCP 工具声明接入现有 ToolExecutor，并保留可信的本地领域与 Effect 策略。
+"""Declare SDK-native MCP tools for the unified business tool executor.
 
-Multiple MCP servers may expose tools with identical names (e.g., both
-DBHub and another server could have a ``search`` tool). This module
-provides explicit conflict detection and a safe wrapping strategy that
-preserves the original tool's behaviour while giving each tool a unique,
-server-scoped name such as ``dbhub__execute_sql``.
+The Agents SDK owns the MCP transport, tool discovery and tool Schema.  This
+module only:
+
+* resolves server-scoped names for conflicting tools,
+* attaches the trusted local ``domain`` / ``effect`` policy, and
+* routes the native MCP call through ``ToolExecutor.execute()`` so budgets,
+  role permissions, ``por.agent_tool`` and external-operation receipts remain
+  authoritative.
+
+No MCP-specific executor or second registry lives here.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
-from agents import FunctionTool
+from agents.mcp import MCPServer
+from agents.mcp.util import MCPUtil
 from agents.tool_context import ToolContext
 from jsonschema.validators import validator_for
-from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool, ToolException
 
-from open_deep_research.tools import BusinessTool, tool_result_text
+from mcp import McpError
+from open_deep_research.tools import BusinessTool, ToolEffect
 
 logger = logging.getLogger(__name__)
 
-# Characters that are safe in LangChain tool names AND MCP tool names.
-# We use double-underscore as the separator: dbhub__execute_sql
+# Double underscore keeps the server scope visible in prompts and journals.
 _SERVER_SEPARATOR = "__"
 
 
@@ -39,132 +45,182 @@ def prefixed_tool_name(server_name: str, tool_name: str) -> str:
     return f"{server_name}{_SERVER_SEPARATOR}{tool_name}"
 
 
-# 为冲突工具加服务名前缀，并维护已占用名称集合以避免后续冲突。
-def wrap_mcp_tools(
-    server_name: str,
-    tools: list[BaseTool],
-    existing_names: set[str],
-) -> list[BaseTool]:
-    """Namespace *tools* from *server_name* to avoid name collisions.
+# 为冲突工具分配唯一名称；服务名前缀仍冲突时追加稳定序号。
+def allocate_tool_name(
+    server_name: str, tool_name: str, taken: set[str]
+) -> str:
+    """Return a unique model-visible name for one MCP tool.
 
-    Every tool whose original name already appears in *existing_names* is
-    renamed to ``{server_name}__{original_name}`` and its description is
-    tagged with the server name.  Tools whose names do **not** conflict
-    keep their original name — this keeps the prompt short when there are
-    no collisions.
-
-    Parameters
-    ----------
-    server_name:
-        Short identifier for the MCP server (e.g. ``"dbhub"``).
-    tools:
-        LangChain tools returned by the MCP client for this server.
-    existing_names:
-        Set of tool names already present in the agent's tool collection.
-
-    Returns
-    -------
-    list[BaseTool]
-        The tools, potentially renamed.  **No tools are silently dropped.**
+    Non-conflicting tools keep their original name.  A tool whose name is
+    already claimed is namespaced as ``{server}__{tool}``; the rare remaining
+    collision receives a numeric suffix instead of silently dropping a tool.
     """
-    wrapped: list[BaseTool] = []
-    for tool in tools:
-        original_name = tool.name
-        if original_name in existing_names:
-            prefixed = prefixed_tool_name(server_name, original_name)
-            tagged_desc = f"[{server_name}] {tool.description or ''}"
-            logger.info(
-                "MCP tool name conflict: '%s' from server '%s' → renaming to '%s'.",
-                original_name,
-                server_name,
-                prefixed,
-            )
-            renamed = tool.model_copy(
-                update={"name": prefixed, "description": tagged_desc}
-            )
-            wrapped.append(renamed)
-        else:
-            wrapped.append(tool)
-
-    return wrapped
+    if tool_name not in taken:
+        return tool_name
+    base = prefixed_tool_name(server_name, tool_name)
+    candidate = base
+    index = 2
+    while candidate in taken:
+        candidate = f"{base}_{index}"
+        index += 1
+    return candidate
 
 
-def tool_schema(tool: BusinessTool | BaseTool) -> dict[str, Any]:
-    """Read the declaration used for both the role journal and SDK registration."""
-    if isinstance(tool, BusinessTool):
-        return tool.sdk_tool.params_json_schema
-    schema = tool.tool_call_schema
-    return schema if isinstance(schema, dict) else schema.model_json_schema()
+class MCPToolError(RuntimeError):
+    """A model-visible MCP failure that must not be reported as success."""
 
 
-def mcp_tool_invoker(tool: BaseTool, schema: dict[str, Any]):
-    """Validate MCP's advertised schema before entering the protected call."""
+# 构造 SDK 原生 FunctionTool，并把调用接到当前 ToolExecutor。
+def build_mcp_tool(
+    mcp_tool: Any,
+    server: MCPServer,
+    *,
+    server_name: str,
+    server_factory: Callable[[], MCPServer],
+    public_name: str,
+    domain: str,
+    effect: ToolEffect,
+) -> BusinessTool:
+    """Convert one SDK MCP tool and attach trusted business policy.
+
+    ``MCPUtil.to_function_tool`` owns the native name, description and Schema
+    conversion.  Only the invocation callback is replaced so every call enters
+    the existing ``ToolExecutor`` and its durable Step.
+    """
+    declaration = MCPUtil.to_function_tool(
+        mcp_tool,
+        server,
+        False,
+        agent=None,
+        # Our thin invoker owns MCP error mapping; do not let the SDK hide a
+        # failure behind a model-visible string before the executor records it.
+        failure_error_function=None,
+        tool_name_override=public_name,
+    )
+    invoker = _mcp_tool_invoker(
+        server_name=server_name,
+        server_factory=server_factory,
+        mcp_tool_name=mcp_tool.name,
+        schema=declaration.params_json_schema,
+    )
+    declared = replace(
+        declaration,
+        description=declaration.description or public_name,
+        on_invoke_tool=invoker,
+    )
+    return BusinessTool(declared, domain=domain, effect=effect)
+
+
+# 保留服务方 Schema 校验，然后进入统一 execute 边界。
+def _mcp_tool_invoker(
+    *,
+    server_name: str,
+    server_factory: Callable[[], MCPServer],
+    mcp_tool_name: str,
+    schema: dict[str, Any],
+) -> Callable[[ToolContext[Any], str], Any]:
     validator_class = validator_for(schema)
     validator_class.check_schema(schema)
     validator = validator_class(schema)
 
-    async def invoke(context: ToolContext[Any], _: str) -> Any:
-        args = context.context.results[context.tool_call_id].args
+    async def invoke(context: ToolContext[Any], _arguments: str) -> Any:
+        record = context.context.results[context.tool_call_id]
+        args = record.args
         if not isinstance(args, dict):
             raise ValueError("Tool arguments must be a JSON object.")
         validator.validate(args)
         return await context.context.tool_executor.execute(
-            context, _call_mcp_tool, tool, context, args
+            context,
+            _call_mcp_tool,
+            server_name,
+            server_factory,
+            mcp_tool_name,
+            args,
         )
 
     return invoke
 
 
-def mcp_function_tool(tool: BaseTool) -> FunctionTool:
-    """Declare one MCP adapter tool with its server-owned Schema.
-
-    MCP keeps its own protocol, authentication and structured results; only the
-    invocation callback reuses the SDK's FunctionTool contract.
-    """
-    schema = tool_schema(tool)
-    return FunctionTool(
-        name=tool.name,
-        description=tool.description or tool.name,
-        params_json_schema=schema,
-        on_invoke_tool=mcp_tool_invoker(tool, schema),
-        strict_json_schema=False,
-    )
-
-
+# 每次调用使用独立连接，断连或取消后不会复用失效会话。
 async def _call_mcp_tool(
-    tool: BaseTool, context: ToolContext[Any], args: dict[str, Any]
+    server_name: str,
+    server_factory: Callable[[], MCPServer],
+    mcp_tool_name: str,
+    args: dict[str, Any],
 ) -> Any:
-    # MCP's LangChain adapter exposes structured content in the message artifact.
-    output = await tool.ainvoke(
-        {
-            "type": "tool_call",
-            "id": context.tool_call_id,
-            "name": context.tool_name,
-            "args": args,
-        },
-        context.context.tool_executor.tool_config(context),
-    )
-    if not isinstance(output, ToolMessage):
-        return output
-    if output.status == "error":
-        raise ToolException(tool_result_text(output.content))
+    """Call the remote MCP tool over a fresh SDK connection.
 
-    content = output.content
-    if isinstance(content, list) and any(
-        not isinstance(block, dict) or block.get("type") != "text" for block in content
-    ):
-        raise ToolException(
-            "SDK business tools currently support text/structured results; "
+    MCP stdio transports own a subprocess and anyio task group, so connect,
+    call and cleanup stay in this coroutine.  The executor's Step still owns
+    the durable result and any protected-operation receipt.
+    """
+    server = server_factory()
+    try:
+        async with server:
+            result = await server.call_tool(mcp_tool_name, args)
+    except BaseException as exc:
+        interaction = _interaction_required_message(exc)
+        if interaction is not None:
+            raise MCPToolError(interaction) from exc
+        raise
+    return _normalise_result(server_name, mcp_tool_name, result)
+
+
+# 把 MCP 文本或结构化结果转成现有 executor 的文本契约。
+def _normalise_result(server_name: str, mcp_tool_name: str, result: Any) -> Any:
+    blocks: list[dict[str, Any]] = []
+    unsupported_type: str | None = None
+    for item in result.content or ():
+        item_type = getattr(item, "type", type(item).__name__)
+        if item_type == "text":
+            blocks.append({"type": "text", "text": item.text})
+        else:
+            unsupported_type = item_type
+
+    text = "\n".join(block["text"] for block in blocks)
+    if result.isError:
+        # Error content carries the actionable failure text; it keeps priority
+        # over the multimodal rejection, matching the SDK's MCP error policy.
+        raise MCPToolError(
+            text
+            or f"MCP tool '{server_name}.{mcp_tool_name}' returned an error result."
+        )
+    if unsupported_type is not None:
+        raise MCPToolError(
+            f"MCP tool '{server_name}.{mcp_tool_name}' returned unsupported "
+            f"content type {unsupported_type!r}; "
             "multimodal MCP outputs require a verified content adapter."
         )
-    artifact = output.artifact
-    structured = (
-        artifact.get("structured_content")
-        if isinstance(artifact, dict)
-        else getattr(artifact, "structured_content", None)
-    )
-    return (
-        {"content": content, "structured_content": structured}
-        if structured is not None
-        else content
-    )
+
+    structured = result.structuredContent
+    if structured is not None:
+        return {"content": blocks, "structured_content": structured}
+    return blocks
+
+
+# 从嵌套异常组中定位 MCP 交互要求，并生成可理解的结果。
+def _interaction_required_message(error: BaseException) -> str | None:
+    mcp_error = _find_mcp_error(error)
+    if mcp_error is None:
+        return None
+    error_code = getattr(mcp_error.error, "code", None)
+    error_data = getattr(mcp_error.error, "data", None) or {}
+    if error_code != -32003:
+        return None
+    message_payload = error_data.get("message", {})
+    message = "Required interaction"
+    if isinstance(message_payload, dict):
+        message = message_payload.get("text") or message
+    if url := error_data.get("url"):
+        message = f"{message} {url}"
+    return message
+
+
+# 递归查找异常组中的 McpError。
+def _find_mcp_error(error: BaseException) -> McpError | None:
+    if isinstance(error, McpError):
+        return error
+    for sub in getattr(error, "exceptions", ()):
+        if found := _find_mcp_error(sub):
+            return found
+    return None

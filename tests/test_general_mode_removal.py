@@ -284,39 +284,12 @@ class TestPromptsCleanup:
 # ── 6. MCP domain filter tests ────────────────────────────────────────
 
 
-# 独立加载领域注册模块，供旧接口清理检查。
+# 加载领域注册模块，供旧接口清理检查。
 def _load_domain_filter_module():
-    """Load domain_filter directly, bypassing mcp/__init__.py (which may fail
-    due to langchain_mcp_adapters version issues in some environments)."""
-    import importlib
-    import pathlib
-    import sys
-    import types
+    """Import the shared domain registry used by tool prompts and filtering."""
+    from open_deep_research.mcp import domain_filter
 
-    # Save and clear any cached mcp modules
-    saved = {}
-    for key in list(sys.modules):
-        if key.startswith("open_deep_research.mcp"):
-            saved[key] = sys.modules.pop(key)
-    try:
-        # Create a minimal mcp package stub that doesn't run __init__.py
-        mcp_dir = (
-            pathlib.Path(__file__).resolve().parent.parent
-            / "src"
-            / "open_deep_research"
-            / "mcp"
-        )
-        mcp_pkg = types.ModuleType("open_deep_research.mcp")
-        mcp_pkg.__path__ = [str(mcp_dir)]
-        mcp_pkg.__package__ = "open_deep_research.mcp"
-        sys.modules["open_deep_research.mcp"] = mcp_pkg
-        mod = importlib.import_module("open_deep_research.mcp.domain_filter")
-        return mod
-    finally:
-        # Restore original modules
-        sys.modules.pop("open_deep_research.mcp", None)
-        sys.modules.pop("open_deep_research.mcp.domain_filter", None)
-        sys.modules.update(saved)
+    return domain_filter
 
 
 # 检查旧筛选接口清理，同时保留领域注册与分组能力。

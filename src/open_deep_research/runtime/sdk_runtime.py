@@ -19,7 +19,6 @@ from agents.run import ModelInputData
 from dbos import DBOS
 from dbos import error as dbos_error
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.tools import BaseTool
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.budget import (
@@ -43,7 +42,6 @@ from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
 from open_deep_research.mcp.domain_filter import get_tool_domain
-from open_deep_research.mcp.tool_wrapper import mcp_function_tool
 from open_deep_research.observability.telemetry import (
     annotate,
     business_span,
@@ -469,22 +467,15 @@ class SDKAgentRuntime:
         return self.run_budget.projected()
 
     def _register_tool(
-        self, tool: BusinessTool | BaseTool, executor: ToolExecutor
+        self, tool: BusinessTool, executor: ToolExecutor
     ) -> FunctionTool:
         if get_tool_domain(tool) not in self.spec.allowed_domains:
             raise ValueError(
                 f"Tool {tool.name!r} is outside {self.role}'s allowed domains."
             )
-        if isinstance(tool, BusinessTool):
-            declared = tool.sdk_tool
-            drain_on_cancel = tool.drain_on_cancel
-        else:
-            # MCP keeps its server-owned Schema and protocol invoker.
-            declared = mcp_function_tool(tool)
-            drain_on_cancel = bool(
-                getattr(tool, "func", None) and not getattr(tool, "coroutine", None)
-            )
-        return executor.bind(declared, drain_on_cancel=drain_on_cancel)
+        return executor.bind(
+            tool.sdk_tool, drain_on_cancel=tool.drain_on_cancel
+        )
 
     def _report_messages(self, task: str) -> list[Any]:
         messages: list[Any] = [HumanMessage(content=task)]
@@ -564,11 +555,12 @@ class SDKAgentRuntime:
             budget=self.run_budget,
             model_factory=self.model_factory,
         )
-        tools: dict[str, BusinessTool | BaseTool] = {}
+        tools: dict[str, BusinessTool] = {}
         for tool in self.tools:
-            if not isinstance(tool, (BusinessTool, BaseTool)):
+            if not isinstance(tool, BusinessTool):
                 raise TypeError(
-                    "SDK business runtime requires local function tools; hosted/native search is not verified."
+                    "SDK business runtime requires BusinessTool declarations; "
+                    "hosted/native search is not verified."
                 )
             if tool.name in tools:
                 raise ValueError(f"Duplicate business tool name: {tool.name}")

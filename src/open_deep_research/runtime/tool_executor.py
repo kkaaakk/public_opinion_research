@@ -50,8 +50,6 @@ from open_deep_research.workflow.execution import (
 )
 
 if TYPE_CHECKING:
-    from langchain_core.tools import BaseTool
-
     from open_deep_research.runtime.sdk_context import (
         ObservedToolResult,
         SDKContextHarness,
@@ -106,7 +104,7 @@ class ToolExecutor:
         config: Configuration,
         runtime_config: RunnableConfig,
         budget: _RunBudget,
-        tools: dict[str, BusinessTool | BaseTool],
+        tools: dict[str, BusinessTool],
     ):
         self.role = role
         self.allowed_domains = allowed_domains
