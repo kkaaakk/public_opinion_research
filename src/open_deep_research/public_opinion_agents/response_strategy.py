@@ -34,14 +34,15 @@ AGENT = PublicOpinionAgentSpec(
         "Sources and internal playbook citations.",
     ),
     prompt=(
-        "Turn evidence into a practical response plan. Match posture to both risk_level "
-        "and heat_level: high heat with low verified risk may need monitoring and a light "
-        "holding line, while verified high risk needs escalation and concrete remediation. "
-        "Do not overpromise or introduce facts that risk_assessment has not verified."
+        "Turn evidence into a practical response plan. Match posture to both the observed "
+        "spread indicators and the assessed risk level: visible high attention with low "
+        "verified risk may need monitoring and a light holding line, while verified high "
+        "risk needs escalation and concrete remediation. Do not overpromise or introduce "
+        "facts that risk_assessment has not verified."
     ),
     tool_policy=(
         "Use rag_search when available for approved PR playbooks, FAQs, historical response patterns, and stakeholder guidance. Otherwise use cited internal evidence already in the research context and explicitly flag missing playbooks or approvals.",
-        "Do not use web_search or social_media_skill unless the workflow is later extended; rely on upstream reports for public evidence.",
+        "Do not collect public or social evidence directly; rely on upstream reports and their source URLs.",
         "Treat risk_assessment red lines as binding constraints.",
     ),
     report_policy=(
@@ -50,9 +51,9 @@ AGENT = PublicOpinionAgentSpec(
         "Keep unresolved evidence gaps visible in the response posture.",
     ),
     execution_strategy=(
-        "Read upstream reports and identify verified facts, red lines, public narratives, and heat level.",
+        "Read upstream reports and identify verified facts, red lines, public narratives, and observed spread indicators.",
         "Retrieve approved internal response principles and prior cases from RAG when available; otherwise keep missing internal guidance visible as an evidence gap.",
-        "Choose a response posture that fits risk_level, heat_level, and evidence confidence.",
+        "Choose a response posture that fits the assessed risk level, observed spread indicators, and evidence confidence.",
         "Draft concise messaging, action steps, monitoring keywords, and escalation triggers.",
     ),
     handoff_policy=(

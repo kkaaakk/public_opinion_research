@@ -201,7 +201,7 @@ class MCPConfig(BaseModel):
 
 ## 6. 业务 Agent 中的工具执行
 
-1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect。已有 `dbos-events-v1` 的目录可缺少 effect。旧目录中的社媒工具按 `protected` 执行尚未提交的调用，因为旧目录没有记录社媒后端的 effect。
+1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect。已有 `dbos-events-v1` 的目录可缺少 effect；此时当前工具声明（包括插件 Apify MCP 的 `protected`）保持不变。
 2. `SDKAgentRuntime._register_tool` 把 `BusinessTool.sdk_tool` 交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具与本地工具一样以 `BusinessTool` 装配，其声明来自 `MCPUtil.to_function_tool()`。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
 3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。预算预占之后才进入业务函数及外部效果边界。
 4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。已有操作缺少对应的 Step 结果时，恢复会停止并要求核对。

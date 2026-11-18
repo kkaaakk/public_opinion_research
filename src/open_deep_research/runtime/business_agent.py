@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from typing import Any
 
 from dbos import DBOS
@@ -31,7 +30,6 @@ from open_deep_research.prompts import (
 )
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
 from open_deep_research.runtime.sdk_runtime import AgentRuntimeResult, SDKAgentRuntime
-from open_deep_research.social_media.tools import get_social_media_tools
 from open_deep_research.state import DeepResearchState, ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.tools import BusinessTool
@@ -178,11 +176,11 @@ async def _business_agent_tools(
     spec = spec or get_public_opinion_agent_spec(role)
     allowed_domains = spec.allowed_domains
     all_tools = await get_all_tools(config)
-    if "social_media" in allowed_domains:
-        all_tools.extend(get_social_media_tools())
 
-    # Plugins only contribute a role-authorized load_skill declaration and their
-    # declared MCP servers; declared local tools stay in the existing registry.
+    # Social platform collection is contributed by the plugin's Apify MCP
+    # server, so this role only receives social tools its plugin authorizes.
+    # Plugins otherwise contribute a role-authorized load_skill declaration;
+    # declared local tools stay in the existing registry.
     local_tool_names = {tool_name(tool) for tool in all_tools}
     plugin_tools, _role_plugins = await load_plugin_tools(
         config,
@@ -374,20 +372,14 @@ def _restore_role_tools(admitted, tools):
     current = _tool_catalog(tools)
     if admitted == current:
         return tools
-    # Existing journals used the same catalog without effect.
+    # Existing journals used the same catalog without effect. Every current
+    # tool already declares its effect, including protected MCP servers.
     if admitted != [
         {key: value for key, value in entry.items() if key != "effect"}
         for entry in current
     ]:
         raise ValueError("Role tool definitions changed during recovery")
-    # An older catalog cannot tell which social backend was used. Preserve
-    # replay of committed Step results and fence new calls conservatively.
-    return [
-        replace(tool, effect="protected")
-        if isinstance(tool, BusinessTool) and tool.domain == "social_media"
-        else tool
-        for tool in tools
-    ]
+    return tools
 
 
 async def run_business_agent(

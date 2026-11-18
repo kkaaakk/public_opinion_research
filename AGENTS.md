@@ -80,9 +80,11 @@ in the migration plan, which links to the original Git evidence.
   reporting and native DBOS workflows; pure State reducers remain explicit.
 - `runtime/`: SDK Runner integration, Harness and role assembly; `public_opinion_agents/`:
   the four business roles and their prompts, contracts and tool policies.
-- `social_media/domain.py` and `social_media/records.py`: shared domain rules
-  and record helpers. `social_media_mcp.py` and `social_media_apify_api.py` own
-  their distinct MCP/HTTP, pagination, normalization and persistence semantics.
+- `tools/plugins.py` owns plugin manifest, Skill and MCP assembly; `plugins/social-research/`
+  declares the Apify hosted MCP server plus the xiaohongshu, douyin and weibo research
+  skills. There is no local social adapter or HTTP collector: social platform data is
+  collected through Apify MCP and the shared `ToolExecutor`. Do not reintroduce a
+  local social-media backend or a per-platform MCP server.
 - `rag/`: enterprise knowledge indexing and hybrid retrieval. Report history is
   owned by `web/history.py` in PostgreSQL; there is no runtime evidence graph.
 - `models/`, `llm/`, `mcp/`, `tools/`: provider adapters, invocation,

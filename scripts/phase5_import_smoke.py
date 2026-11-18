@@ -71,8 +71,6 @@ def main():
         "web.cli",
         "rag",
         "rag.mcp_server",
-        "social_media_mcp",
-        "social_media_apify_api",
         "mcp.tools",
         "tools.registry",
         "tools.plugins",

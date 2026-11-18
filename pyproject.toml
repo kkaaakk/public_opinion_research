@@ -54,8 +54,6 @@ notebooks = ["ipykernel>=6.29.5"]
 web = ["uvicorn[standard]>=0.34.3"]
 
 [project.scripts]
-social-media-mcp = "open_deep_research.social_media_mcp:main"
-apify-social-api = "open_deep_research.social_media_apify_api:main"
 deep-research-web = "open_deep_research.web.server:main"
 deep-research = "open_deep_research.web.cli:main"
 deep-research-executor = "open_deep_research.web.executor:main"

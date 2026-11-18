@@ -28,7 +28,7 @@ AGENT = PublicOpinionAgentSpec(
         "Role and scope.",
         "Claim verification table: claim, status, evidence, source, confidence, follow-up owner.",
         "Risk register: category, trigger, severity, likelihood, evidence basis, mitigation need.",
-        "Risk level and rationale, explicitly separating risk_level from heat_level.",
+        "Risk level and rationale, explicitly separating observed spread indicators from the assessed risk level.",
         "Disputed, unsupported, or missing evidence items.",
         "Sources.",
     ),
@@ -36,12 +36,14 @@ AGENT = PublicOpinionAgentSpec(
         "Act as the evidence gatekeeper. Convert public claims into a verification table "
         "and a risk register. Do not treat heat as risk by itself. Use social evidence, "
         "web sources, and internal RAG evidence together: public sources show what is said, "
-        "RAG shows what the company can support internally, and your output labels the gap."
+        "RAG shows what the company can support internally, and your output labels the gap. "
+        "Upstream reports carry observed interaction counts and source URLs, not a "
+        "precomputed risk_level or heat_level; assess risk from the evidence."
     ),
     tool_policy=(
         "Use web_search for reliable public sources, regulator signals, and current facts.",
         "Use rag_search for internal product facts, compliance red lines, approved rules, and prior cases.",
-        "Use search_posts, fetch_comments, or search_complaints to follow up on social evidence from public_signal when needed.",
+        "Do not collect social platform data directly; follow up on social evidence through public_signal's report and its source URLs.",
         "Do not draft public statements; response language belongs to response_strategy.",
     ),
     report_policy=(

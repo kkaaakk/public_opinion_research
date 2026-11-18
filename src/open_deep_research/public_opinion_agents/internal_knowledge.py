@@ -38,7 +38,7 @@ AGENT = PublicOpinionAgentSpec(
     ),
     tool_policy=(
         "Use rag_search for all internal company/product/playbook claims.",
-        "Do not use web_search or social_media_skill; external evidence belongs to public_signal.",
+        "Do not use web_search or social platform collection tools; external evidence belongs to public_signal.",
         "Run follow-up RAG queries when a public claim requires an internal fact check.",
     ),
     report_policy=(

@@ -38,7 +38,7 @@ def _config() -> dict:
 
 
 # 替换基础工具来源，避免连接真实 MCP 或搜索服务。
-def _patch_tool_source(monkeypatch, tools, social_tools=()) -> None:
+def _patch_tool_source(monkeypatch, tools) -> None:
     # 返回本测试预设的工具集合。
     async def fake_get_all_tools(_config):
         return list(tools)
@@ -50,11 +50,6 @@ def _patch_tool_source(monkeypatch, tools, social_tools=()) -> None:
     monkeypatch.setattr(business_agent_module, "get_all_tools", fake_get_all_tools)
     monkeypatch.setattr(
         business_agent_module, "load_plugin_tools", fake_load_plugin_tools
-    )
-    monkeypatch.setattr(
-        business_agent_module,
-        "get_social_media_tools",
-        lambda: list(social_tools),
     )
 
 
@@ -72,7 +67,8 @@ def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
         FixtureTool("legacy_lookup", "external_mcp"),
     ]
     _patch_tool_source(
-        monkeypatch, tools, [FixtureTool("social_search", "social_media")]
+        monkeypatch,
+        [*tools, FixtureTool("social_search", "social_media")],
     )
 
     filtered = asyncio.run(
@@ -232,30 +228,38 @@ def test_shared_loader_tags_known_builtin_domains() -> None:
     assert get_tool_domain(core_tools["think_tool"]) == "core"
 
 
-def test_native_catalog_fences_effect_changes_and_restores_legacy_tools(monkeypatch):
+def test_native_catalog_fences_definition_changes_and_restores_legacy_catalog():
     from dataclasses import replace
 
-    from open_deep_research.social_media.tools import get_social_media_tools
+    from agents import function_tool
 
-    monkeypatch.setenv("SOCIAL_MEDIA_DATA_PATHS", "fixture")
-    monkeypatch.delenv("SOCIAL_MEDIA_API_BASE_URL", raising=False)
-    monkeypatch.delenv("PUBLIC_OPINION_API_BASE_URL", raising=False)
-    social = get_social_media_tools()[0]
-    assert social.effect == "read"
-    # The social adapter is synchronous, so cancellation must drain its thread.
-    assert social.drain_on_cancel
-    available = [social]
+    from open_deep_research.tools import register_tool
+
+    @function_tool(
+        name_override="search-actors",
+        description_override="fixture Apify tool",
+        use_docstring_info=False,
+        strict_mode=False,
+        failure_error_function=None,
+    )
+    async def search_actors(keywords: str = "") -> str:
+        return keywords
+
+    available = [
+        register_tool(search_actors, domain="social_media", effect="protected")
+    ]
     catalog = business_agent_module._tool_catalog(available)
-    assert catalog[0]["effect"] == "read"
+    assert catalog[0]["effect"] == "protected"
     assert business_agent_module._restore_role_tools(catalog, available) == available
     with pytest.raises(ValueError, match="definitions changed"):
         business_agent_module._restore_role_tools(
-            catalog, [replace(social, effect="protected")]
+            catalog, [replace(available[0], effect="read")]
         )
 
+    # Existing journals stored the same catalog without the effect field.
     old_catalog = [{key: value for key, value in catalog[0].items() if key != "effect"}]
     restored = business_agent_module._restore_role_tools(old_catalog, available)
-    assert restored[0].sdk_tool is social.sdk_tool
+    assert restored[0].sdk_tool is available[0].sdk_tool
     assert restored[0].effect == "protected"
     old_catalog[0]["schema"] = {}
     with pytest.raises(ValueError, match="definitions changed"):
