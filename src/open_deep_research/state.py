@@ -17,11 +17,6 @@ BusinessAgentRole = Literal[
 ]
 
 
-# 定义研究结束标记工具的空参数结构。
-class ResearchComplete(BaseModel):
-    """Call this tool to indicate that the research is complete."""
-
-
 # 保存研究摘要与可用于引用的代表性摘录。
 class Summary(BaseModel):
     """Research summary with representative excerpts."""
@@ -362,7 +357,6 @@ __all__ = [
     "DeepResearchState",
     "Feedback",
     "ReportState",
-    "ResearchComplete",
     "ResearchQuestion",
     "ResearchReview",
     "ResearchRoleResult",

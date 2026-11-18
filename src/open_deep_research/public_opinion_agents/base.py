@@ -92,7 +92,8 @@ You have access to the configured research tools for this run:
 {retrieval_tool_prompt}
 {mcp_prompt}
 
-Use think_tool after each retrieval step to reflect on evidence quality and decide whether to continue.
+Use the tools only when they add evidence. When the retrieved evidence is sufficient,
+return your final role report as a normal assistant message; no completion tool exists.
 </Available Tools>{skills_section}
 
 <Input Contract>

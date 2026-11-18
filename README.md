@@ -37,10 +37,10 @@ DeerFlow 已退役；独立 RAG 配置及 DSH 分支资产保持原状。
 - `ResponseStrategyAgent` — 应对策略生成
 - 内置知识库：合规文档、FAQ、历史案例、PR 预案
 
-### 📱 社交媒体 MCP
-- 社交媒体数据采集与搜索 MCP Server
-- Apify 适配器对接真实平台数据（Twitter/X 等）
-- 情感分析、主题提取、风险检测
+### 📱 社媒采集（social-research 插件）
+- `social-research` 插件通过 Apify 官方托管 MCP 采集小红书、抖音、微博数据
+- 三个平台 Skill 指导 Actor 发现、Schema 核对、成本控制和证据提取
+- 社媒工具与 Tavily 一样经过 `BusinessTool` → `ToolExecutor` → DBOS Step
 
 ### 💰 预算管理
 - 可选的 token/调用次数预算守卫
@@ -143,9 +143,6 @@ src/open_deep_research/
 ├── runtime/                    # SDK Runner 装配、Context Harness 与滚动压缩
 ├── public_opinion_agents/      # 四个业务角色、提示词、权限与输出合同
 ├── rag/                        # 企业知识加载、索引、向量/关键词检索与重排
-├── social_media/               # 共享领域规则与记录处理
-├── social_media_mcp.py         # 社媒 MCP Server
-├── social_media_apify_api.py   # Apify HTTP 适配器
 ├── models/                     # SDK Model 与 LangChain 单次业务模型工厂
 ├── llm/                        # 上下文窗口、错误与 provider 辅助函数
 ├── search/                     # Tavily 搜索与网页摘要
@@ -268,11 +265,12 @@ python -m open_deep_research.web.server
 启用 `PUBLIC_OPINION_API_TOKEN` 后，在页面的 **访问设置** 中填写令牌；历史列表、
 报告详情和研究 API 都使用同一认证。令牌仅在当前页面使用。
 
-## 📱 社交媒媒体 MCP Server
+## 📱 社媒采集插件
 
-```bash
-python -m open_deep_research.social_media_mcp --transport streamable-http --host 127.0.0.1 --port 8001
-```
+社媒数据由 `plugins/social-research/` 声明的 Apify 官方 MCP 提供；设置 `APIFY_TOKEN` 后，
+`public_signal` 可通过 `load_skill` 加载小红书、抖音、微博方法，并按 Actor 发现、详情、
+执行、运行查询和数据集读取的顺序取证。未配置令牌时插件保留 Skills，但社媒工具不可用。
+详见 [社媒采集指南](docs/guide/social-media-skill.md)。
 
 ## 📊 数据目录
 
@@ -284,9 +282,6 @@ data/
 │   ├── historical_cases/       #   历史案例
 │   ├── pr_playbooks/           #   PR 预案
 │   └── product_docs/           #   产品文档
-├── social_media/               # 社交媒媒体数据
-│   ├── sample_posts.jsonl      #   示例帖子
-│   └── bulk_mock_posts.jsonl   #   批量模拟数据
 └── indexes/rag/                # RAG 索引（可重建）
 ```
 
@@ -312,8 +307,8 @@ python tests/evaluate_rag_retrieval.py
 # 舆情 Agent 测试
 pytest tests/test_public_opinion_agents.py
 
-# 社交媒体测试
-pytest tests/test_social_media_skill.py
+# 插件、Skill 与 Apify MCP 装配测试
+pytest tests/test_plugins.py
 
 # 预算守卫测试
 pytest tests/test_budget.py

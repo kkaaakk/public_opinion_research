@@ -1,19 +1,11 @@
 {
   "id": "social-research",
   "name": "Social Research",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "roles": [
     "public_signal"
   ],
-  "tools": [
-    "search_posts",
-    "search_complaints",
-    "fetch_thread",
-    "fetch_comments",
-    "fetch_author_profile",
-    "get_trending_keywords",
-    "get_public_opinion_snapshot"
-  ],
+  "tools": [],
   "skills": [
     "xiaohongshu",
     "douyin",

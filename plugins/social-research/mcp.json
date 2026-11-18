@@ -1,3 +1,16 @@
 {
-  "servers": []
+  "servers": [
+    {
+      "name": "apify",
+      "transport": "streamable_http",
+      "domain": "social_media",
+      "effect": "protected",
+      "params": {
+        "url": "https://mcp.apify.com?tools=search-actors,fetch-actor-details,call-actor,get-actor-run,get-dataset-items",
+        "headers": {
+          "Authorization": "Bearer ${APIFY_TOKEN}"
+        }
+      }
+    }
+  ]
 }

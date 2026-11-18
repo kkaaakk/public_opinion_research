@@ -585,7 +585,6 @@ class SDKAgentRuntime:
                 max_tokens=self.config.research_model_max_tokens,
                 retry=ModelRetrySettings(max_retries=0),
             ),
-            tool_use_behavior={"stop_at_tool_names": ["ResearchComplete"]},
         )
         inputs = [{"role": "user", "content": task}]
         self.sdk_result = None
