@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import signal
 import time
@@ -36,12 +37,31 @@ from open_deep_research.workflow.domain_schema import (
 )
 
 
+def _configured_tracing() -> bool:
+    """Return the process-level tracing intent from the formal YAML config.
+
+    Environment variables must not override business tracing. If the formal
+    configuration is unavailable, telemetry stays disabled and research fails
+    open at the DBOS/agent layers.
+    """
+    try:
+        from open_deep_research.config_file import load_configuration
+
+        return load_configuration().tracing_enabled
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Formal config.yaml is unavailable; tracing stays disabled.",
+            exc_info=True,
+        )
+        return False
+
+
 def launch(executor_id, *, queues=None):
     assert callable(dbos_workflow.run_workflow)
     cfg = settings()
     verify_policy()
     require_matching_journals()
-    tracing = initialize_telemetry()
+    tracing = initialize_telemetry(_configured_tracing())
     DBOS(
         config={
             "name": APP,
@@ -75,6 +95,9 @@ def launch(executor_id, *, queues=None):
 
 
 def main():
+    from open_deep_research.env import load_environment
+
+    load_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--initialize-only", action="store_true")
     parser.add_argument("--migrate-domain", action="store_true")

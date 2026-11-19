@@ -372,7 +372,7 @@ def test_mcp_result_mapping_rejects_multimodal_and_marks_errors():
         )
 
 
-def test_one_failed_server_does_not_block_others(monkeypatch, tmp_path):
+def test_one_optional_failed_server_does_not_block_others(monkeypatch, tmp_path):
     script = _write_server(tmp_path)
     good = _stdio_spec(script, name="good", domain="document", effect="read")
     bad = mcp_tools.MCPServerSpec(
@@ -381,6 +381,7 @@ def test_one_failed_server_does_not_block_others(monkeypatch, tmp_path):
         effect="protected",
         transport="stdio",
         params={"command": str(tmp_path / "missing-command"), "args": []},
+        optional=True,
     )
     monkeypatch.setattr(mcp_tools, "_build_markitdown_server", lambda _config: good)
     monkeypatch.setattr(mcp_tools, "_build_feishu_server", lambda _config: bad)
@@ -407,6 +408,29 @@ def test_one_failed_server_does_not_block_others(monkeypatch, tmp_path):
         "annotated",
     }
     assert existing == {tool.name for tool in loaded}
+
+
+def test_required_failed_server_fails_the_start(monkeypatch, tmp_path):
+    bad = mcp_tools.MCPServerSpec(
+        name="bad",
+        domain="feishu",
+        effect="protected",
+        transport="stdio",
+        params={"command": str(tmp_path / "missing-command"), "args": []},
+    )
+    monkeypatch.setattr(mcp_tools, "_build_feishu_server", lambda _config: bad)
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(
+            mcp_tools.load_mcp_tools(
+                {
+                    "configurable": {
+                        "feishu_enabled": True,
+                        "feishu_app_id": "fixture",
+                    }
+                },
+                set(),
+            )
+        )
 
 
 def test_committed_step_result_skips_the_mcp_call(monkeypatch):

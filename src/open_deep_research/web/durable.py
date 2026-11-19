@@ -12,6 +12,7 @@ from dbos import error as dbos_error
 from sqlalchemy import text
 
 from open_deep_research.budget import merge_budget_usage, model_bill
+from open_deep_research.config_file import effective_config, non_sensitive_config
 from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import (
     business_span,
@@ -65,9 +66,14 @@ DOMAIN_LEDGER_VERSIONS = {VERSION, "dbos-domain-v1"}
 
 def validate_request(request):
     data = request["data"]
-    effective = Configuration.from_runnable_config(data["config"]).model_dump(
-        mode="json"
-    )
+    try:
+        effective = Configuration.from_runnable_config(data["config"]).model_dump(
+            mode="json"
+        )
+    except ValueError as exc:
+        raise RunConflict(
+            "Accepted configuration is no longer valid; drain using the original release"
+        ) from exc
     if (
         data["version"] != VERSION
         or data["sdk"] != SDK_VERSION
@@ -88,6 +94,50 @@ def external_effects(db, run_id):
         """),
         {"r": run_id},
     ).one()
+
+
+def request_fingerprint(request, configuration, session_id=None):
+    """Hash one request with its non-sensitive effective configuration digest."""
+    return digest(
+        {
+            "request": request,
+            "session_id": session_id,
+            "configuration": configuration,
+        }
+    )
+
+
+def matches_stored_request(
+    stored,
+    *,
+    request,
+    fingerprint_configuration,
+    configuration=None,
+    session_id=None,
+    config_source=None,
+):
+    """Return whether a stored admission accepts this replay.
+
+    Pre-upgrade records used the request, session and config path only. They are
+    still replayable while their frozen configuration digest matches the current
+    effective configuration; a changed YAML always requires a new key.
+    """
+    if stored.get("fingerprint") == request_fingerprint(
+        request, fingerprint_configuration, session_id
+    ):
+        return True
+    legacy = digest(
+        {
+            "request": request,
+            "session_id": session_id,
+            "configuration_source": config_source or "",
+        }
+    )
+    return (
+        configuration is not None
+        and stored.get("fingerprint") == legacy
+        and stored.get("configuration") == configuration
+    )
 
 
 class RunClient:
@@ -153,10 +203,20 @@ class RunClient:
         )
         return receipt if isinstance(receipt, dict) else {"generation": receipt or 0}
 
-    def create(self, owner, key, request, config, state, *, session_id=None):
+    def create(
+        self, owner, key, request, config, state, *, session_id=None, config_source=None
+    ):
         if not owner or len(owner) > 128 or not key or len(key) > 128:
             raise RunConflict("Owner and idempotency key are required")
-        fingerprint = digest({"request": request, "session_id": session_id})
+        # Freeze one complete, non-sensitive business snapshot before admission.
+        # Every Executor, Agent and child Workflow re-reads this snapshot and
+        # never the mutable config.yaml or ambient environment.
+        effective = effective_config(config)
+        configuration = digest(effective)
+        fingerprint_configuration = digest(non_sensitive_config(effective))
+        fingerprint = request_fingerprint(
+            request, fingerprint_configuration, session_id
+        )
         with self.engine.begin() as db:
             admission_lock(db)
             old = db.execute(
@@ -166,26 +226,24 @@ class RunClient:
                 {"o": owner, "k": key},
             ).first()
             if old:
-                if loads(old[1])["fingerprint"] != fingerprint:
-                    raise RunConflict("Idempotency key was used for another request")
+                if not matches_stored_request(
+                    loads(old[1]),
+                    request=request,
+                    fingerprint_configuration=fingerprint_configuration,
+                    configuration=configuration,
+                    session_id=session_id,
+                    config_source=config_source,
+                ):
+                    raise RunConflict(
+                        "Idempotency key was used for another request or "
+                        "configuration; use a new key"
+                    )
                 run_id = old[0]
                 created = False
             else:
                 require_matching_journals()
                 self._admit(db, owner, session_id)
-                cfg = loads(dumps(config))
-                operator_approval = Configuration.from_runnable_config(
-                    cfg
-                ).allow_plan_feedback
-                cfg.setdefault("configurable", {})["allow_plan_feedback"] = bool(
-                    cfg["configurable"].get("allow_plan_feedback") or operator_approval
-                )
-                cfg.setdefault("metadata", {})["accepted_run"] = True
-                effective = Configuration.from_runnable_config(cfg).model_dump(
-                    mode="json"
-                )
-                # Freeze the accepted report topology before any journal exists.
-                cfg["configurable"]["report_mode"] = effective["report_mode"]
+                cfg = {"configurable": effective}
                 run_id = uuid4().hex
                 session_id = session_id or uuid4().hex
                 cfg["configurable"].update(
@@ -198,7 +256,8 @@ class RunClient:
                     "fingerprint": fingerprint,
                     "config": cfg,
                     "initial": state,
-                    "configuration": digest(effective),
+                    "configuration": configuration,
+                    "configuration_source": config_source or "",
                     "version": VERSION,
                     "sdk": SDK_VERSION,
                     "runtime": SDK_RUNTIME_VERSION,
@@ -504,6 +563,8 @@ class RunClient:
             business_agent_runtime="openai_agents",
             sdk_version=SDK_VERSION,
             runtime_version=SDK_RUNTIME_VERSION,
+            phase=phase,
+            configuration_source=req["data"].get("configuration_source", ""),
         )
 
     def _public_plan(self, run_id, plan, revision_pending):

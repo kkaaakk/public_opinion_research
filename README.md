@@ -6,7 +6,8 @@
 
 ## 当前架构
 
-FastAPI（含 CLI 请求）经 RunClient 和 DBOSClient 将研究入 PostgreSQL 队列。独立 Executor 运行 DBOS 3.3.0 Workflow，四个角色通过 SDKAgentRuntime、Context Harness 和官方 DBOSRunner 0.3.0 调用 OpenAI Agents SDK 0.24.0 及业务工具。
+CLI（`por`）经 RunClient 和 DBOSClient 将研究入 PostgreSQL 队列。独立 Executor 运行 DBOS 3.3.0 Workflow，四个角色通过 SDKAgentRuntime、Context Harness 和官方 DBOSRunner 0.3.0 调用 OpenAI Agents SDK 0.24.0 及业务工具。
+可选 FastAPI 页面复用同一 Run API，但不再是运行研究的主入口。
 新研究默认使用持久 Run，浏览器刷新只重新订阅，停止操作会请求取消并等待清算。
 两个 Producer 并行汇合，经 Review/Gap 定向补查，再顺序执行 Risk → Strategy 和报告生成。
 原 LangGraph Server、业务 Graph 和手写 Agent Loop 已退役。
@@ -88,39 +89,59 @@ $env:MYPYPATH = Join-Path (Get-Location) 'src'
 
 Mypy 的既有错误基线仍会返回非零；缓存配置不改变检查规则或测试选择。配置语义可查阅官方 [pytest](https://docs.pytest.org/en/stable/reference/reference.html#confval-cache_dir)、[pytest-benchmark](https://pytest-benchmark.readthedocs.io/en/stable/usage.html)、[Ruff](https://docs.astral.sh/ruff/settings/#cache-dir) 和 [Mypy](https://mypy.readthedocs.io/en/stable/config_file.html#confval-cache_dir) 文档。
 
-### 3. 配置环境变量
-
-模型前缀、正式/可选支持范围及两条模型路径的配置语义见 [供应商契约](docs/architecture/model-providers.md)。
+### 3. 配置凭据与业务配置
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入你的 API Key
+# 编辑 .env，只填写 API Key、数据库连接和认证凭据
 ```
 
-### 4. 启动 DBOS 与 Web
+业务配置只来自 `config.yaml`；`config.smoke.yaml` 通过 `extends` 继承正式配置，
+只覆盖低成本端到端测试需要缩减的字段。`.env` 不再控制模型、RAG、插件或预算开关；
+旧的 `RESEARCH_MODEL`、`RAG_ENABLED`、`ENABLED_PLUGINS` 等变量会被忽略，可以删除。
+未知配置字段会直接报错，缺失的模型凭据和显式启用的插件依赖会在运行前失败。
 
-按 [DBOS 部署说明](docs/architecture/dbos-deployment.md) 准备 PostgreSQL 并初始化，然后在两个终端分别运行：
+`tracing_enabled` 是 Executor/Web 进程启动时的追踪意图，只由 YAML 决定；
+`POR_TRACING_ENABLED` 不再覆盖它。Run 冻结快照会记录该值，但不会重新初始化
+进程级 Tracing；正式 Run 与 smoke Run 共用一个 Executor 时共享同一追踪状态，
+需要独立关闭 smoke 追踪时应使用单独的 Executor 进程和 `config.smoke.yaml`。
+
+正式配置默认启用本地 OCR 多模态；如果机器没有 Tesseract，`por doctor` 会报
+`ERROR`，此时安装 Tesseract 或在 `config.yaml` 中显式设置
+`rag_multimodal_provider: disabled`。`config.smoke.yaml` 已关闭多模态。
+
+```powershell
+por doctor
+```
+
+`por doctor` 检查正式配置、模型凭据、检索服务、RAG 后端、插件/MCP、预算/超时以及
+PostgreSQL/DBOS 状态，并打印最终生效配置摘要。`ERROR` 时不会提交研究。
+
+### 4. 启动 DBOS Executor，然后从终端运行
+
+按 [DBOS 部署说明](docs/architecture/dbos-deployment.md) 准备 PostgreSQL 并初始化，
+启动一个 Executor（Web 服务不是必需入口）：
 
 ```powershell
 .venv/Scripts/python.exe -m open_deep_research.web.executor --executor-id workstation-1
-.venv/Scripts/python.exe -m open_deep_research.web.server
 ```
 
-访问 [研究页面](http://127.0.0.1:8000) 和 [API 文档](http://127.0.0.1:8000/docs)。
-所有新研究需要 `PUBLIC_OPINION_API_TOKEN`；页面访问设置填写该操作员令牌。
-SDK Web 路径支持现有 OpenAI/DeepSeek 适配器和本地 Tavily 工具，其他供应商/原生搜索明确拒绝，不自动降级。
-
-CLI 通过同一 Run API 创建、查询、订阅和控制任务：
+CLI 直接调用 `RunClient`，经 `DBOSClient` 入队，不经过 FastAPI：
 
 ```powershell
-.venv/Scripts/python.exe -m open_deep_research.web.cli create '品牌召回舆情' --key request-20261024-001
-.venv/Scripts/python.exe -m open_deep_research.web.cli get RUN_ID
-.venv/Scripts/python.exe -m open_deep_research.web.cli events RUN_ID --after 0
+por run "调研某品牌近期舆情"
+por status <run-id>
+por inspect <run-id>
+por approve <run-id>
+por clarify <run-id>
+por report <run-id>
+por retry <run-id>
 ```
 
-同一请求的网络重发须保持 key 和 body。安全重试还要求新的 key 与最新失败代次的 `state_version`。
-旧选择字段仅允许 `workflow_backend=python/dbos` 和 `business_agent_runtime=openai_agents` 输入别名，随后丢弃；
-`langgraph`、`legacy` 及未知值明确拒绝，环境变量同样处理。
+首次真实端到端验证使用 `por smoke "调研某品牌近期舆情"`。它固定读取
+`config.smoke.yaml`，但仍然走完整的 RunClient → DBOS → Executor → Agents SDK 链路。
+`run`/`smoke` 只接受研究主题、Run ID、审批和澄清内容等业务数据，不接受
+`--model`、`--rag`、`--mode` 等配置覆盖参数。
 
 ## 🔭 可观测性与预算
 
@@ -134,7 +155,10 @@ LangSmith 可选保留在 RAG、报告等 LangChain 单次服务调用和业务 
 
 ```
 src/open_deep_research/
-├── configuration.py            # 配置管理
+├── configuration.py            # 配置字段、类型与校验
+├── config_file.py              # config.yaml / config.smoke.yaml 加载与 Run 快照
+├── preflight.py                # 启动前检查（doctor / run / smoke）
+├── cli.py                      # por 终端入口（直达 RunClient）
 ├── state.py                    # 四个业务状态域与消息
 ├── prompts.py                  # 系统提示词
 ├── utils.py                    # 旧工具导入路径的兼容导出
@@ -158,54 +182,53 @@ src/open_deep_research/
 
 ### LLM 模型
 
-| 角色 | 默认模型 | 说明 |
-|------|---------|------|
-| Summarization | `openai:gpt-4.1-mini` | 搜索结果摘要 |
-| Research | `openai:gpt-4.1` | 搜索智能体 |
-| Compression | `openai:gpt-4.1` | 研究内容压缩 |
-| Final Report | `openai:gpt-4.1` | 最终报告生成 |
+| 角色 | `config.yaml` 默认模型 | 说明 |
+|------|------------------------|------|
+| Research / Plan / Review | `deepseek:deepseek-flash` | 四角色 Agent、Brief 与 Review |
+| Compression | `deepseek:deepseek-flash` | 研究内容压缩 |
+| Final Report | `deepseek:deepseek-flash` | 最终报告生成 |
+| Summarization / RAG rewrite / Rolling compaction | `volcengine:doubao-seed-2-0-mini-260428` | 高频辅助调用 |
+| Vision | `volcengine:doubao-seed-2-0-mini-260428` | 图片理解与 RAG 多模态 |
 
-模型引用采用 `provider:model` 格式。四角色 Agent 通过 `models.sdk.sdk_model()` 使用官方 SDK Model；当前 Web 准入支持 OpenAI/DeepSeek。规划、报告、RAG、滚动压缩等单次业务服务通过 `open_deep_research.models.create_chat_model()` 创建 LangChain `BaseChatModel`，保留 Anthropic、Google、Groq 和火山方舟等适配器。两类模型对象分别用于各自调用边界。
-
-推荐的双模型路由是：网页摘要、RAG 查询改写和滚动压缩使用 `volcengine:doubao-seed-2-0-mini-260428`；研究 Agent、研究压缩和最终报告使用 `deepseek:deepseek-flash`。Volcengine 引用既支持预置 Model ID（如 `volcengine:doubao-seed-2-0-mini-260428`），也支持自定义 endpoint ID（如 `volcengine:ep-...`），工厂只剥离 provider 前缀。火山方舟需要 `ARK_API_KEY`，可用 `ARK_BASE_URL` 覆盖默认端点；DeepSeek 需要 `DEEPSEEK_API_KEY`。真实 API 冒烟测试仅在显式设置 `RUN_LIVE_MODEL_TESTS=1` 后运行，例如 `python scripts/model_provider_smoke.py --provider volcengine --model doubao-seed-2-0-mini-260428`。
+模型引用采用 `provider:model` 格式，每类任务在 `config.yaml` 中独立配置，不再由一个
+Web 请求字段批量覆盖。四角色 Agent 通过 `models.sdk.sdk_model()` 使用官方 SDK Model，
+当前已验证的 SDK 供应商为 OpenAI、DeepSeek、Volcengine Ark 和 Groq；规划、报告、RAG、
+滚动压缩等单次业务服务通过 `create_chat_model()` 创建 LangChain `BaseChatModel`。
+`por doctor` 会区分这两条模型路径并检查凭据和适配器包，不会把“LangChain 可以构造”
+误报为“Agents SDK 已验证可调用”。
 
 ### 搜索 API
 
-当前 Web 的 SDK 研究路径使用 [Tavily](https://tavily.com/) 或关闭联网搜索。MCP 工具经领域权限装配；底层保留的 provider 原生搜索声明不代表已获当前 Web 准入，也不会在 SDK 失败后启用其他执行器。
+当前 SDK 研究路径使用 [Tavily](https://tavily.com/)。`config.yaml` 中
+`search_api: tavily` 且 `TAVILY_API_KEY` 缺失时，`por doctor` 与 `por run` 会在提交前失败。
 
 ### RAG 配置示例
 
-```python
-config = {
-    "configurable": {
-        "rag_enabled": True,
-        "retrieval_mode": "hybrid",          # web_only / rag_only / hybrid
-        "rag_knowledge_base_paths": ["./data/knowledge"],
-        "rag_top_k": 4,
-        "rag_chunk_size": 800,
-        "rag_embedding_provider": "sentence_transformers",
-        "rag_vectorstore_provider": "milvus",
-        "rag_reranker_provider": "cross_encoder",
-        "rag_multimodal_enabled": True,
-        "rag_query_rewrite_enabled": True,
-    }
-}
+RAG 的开关、模式、Embedding、VectorStore、Reranker、索引路径和多模态统一在
+`config.yaml` 的 `rag_*` 字段中配置；Python `Configuration` 只解析和校验这一份快照：
+
+```yaml
+rag_enabled: true
+retrieval_mode: hybrid          # web_only / rag_only / hybrid
+rag_knowledge_base_paths: [data/knowledge/public_opinion]
+rag_top_k: 4
+rag_embedding_provider: sentence_transformers
+rag_vectorstore_provider: milvus
+rag_reranker_provider: cross_encoder
+rag_multimodal_enabled: true
+rag_query_rewrite_enabled: true
 ```
 
 ### 预算守卫
 
-```python
-config = {
-    "configurable": {
-        "budget_enabled": True,
-        "max_model_calls": 12,
-        "max_tool_calls": 20,
-        "max_search_calls": 10,
-        "max_input_tokens": 120_000,
-        "max_output_tokens": 30_000,
-        "reserve_final_report_call": True,
-    }
-}
+```yaml
+budget_enabled: true
+max_model_calls: 120
+max_tool_calls: 120
+max_search_calls: 60
+max_input_tokens: 4000000
+max_output_tokens: 400000
+reserve_final_report_call: true
 ```
 
 ## 🖥️ RAG MCP Server
@@ -227,14 +250,17 @@ python -m open_deep_research.rag.mcp_server --transport streamable-http --host 1
 - `rag_list_sources` — 列出知识源
 - `rag_reset_cache` — 重置缓存
 
-## 🌐 Local Web UI
+## 🌐 Local Web UI（可选的次要入口）
+
+CLI 是主要运行入口。前端源码暂时保留，但 Web 请求不再覆盖 `config.yaml` 的模型、
+RAG、模式或审批开关；旧表单字段会被接受但忽略。
 
 ### 数据库
 
 研究运行只需要 PostgreSQL：DBOS journal、领域事实和报告 History 都在
 `por_domain` schema 中。部署连接、初始化与 Executor 启动见
-[部署说明](docs/architecture/dbos-deployment.md)。页面的 **Enable RAG** 与运行
-存储独立；关闭 RAG 时，Web 流程会跳过依赖本地知识库的内部知识 Agent。
+[部署说明](docs/architecture/dbos-deployment.md)。RAG 与运行存储独立；RAG 关闭时
+`internal_knowledge` 必须同时从 `enabled_business_agents` 中移除，否则启动前检查报错。
 
 ### 启动页面
 

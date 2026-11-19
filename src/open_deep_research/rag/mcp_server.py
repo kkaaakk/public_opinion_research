@@ -310,6 +310,9 @@ def _error_payload(operation: str, exc: Exception) -> dict[str, Any]:
 # 启动 RAG MCP 服务并注册其对外工具。
 def main() -> None:
     """Run the RAG MCP server."""
+    from open_deep_research.env import load_environment
+
+    load_environment()
     parser = argparse.ArgumentParser(description="Run the Open Deep Research RAG MCP server.")
     parser.add_argument(
         "--transport",

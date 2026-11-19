@@ -15,10 +15,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from dotenv import load_dotenv
+from open_deep_research.env import load_environment
 
-# Load .env before anything else — API keys live there
-load_dotenv()
+# Load .env before anything reads credentials — API keys live there.
+load_environment()
 
 from open_deep_research.observability import (  # noqa: E402, I001
     ensure_langsmith_configuration,
@@ -71,7 +71,17 @@ async def lifespan(_app: FastAPI):
         shutdown_telemetry,
     )
 
-    initialize_telemetry()
+    try:
+        from open_deep_research.config_file import load_configuration
+
+        tracing = load_configuration().tracing_enabled
+    except Exception:
+        LOGGER.warning(
+            "Formal config.yaml is unavailable; tracing stays disabled.",
+            exc_info=True,
+        )
+        tracing = False
+    initialize_telemetry(tracing)
     try:
         yield
     finally:

@@ -452,18 +452,19 @@ class SDKUsageEnrichment(TracingProcessor):
         pass
 
 
-def initialize_telemetry():
-    """Initialize once per process; no auth probe and no network on startup."""
+def initialize_telemetry(enabled: bool):
+    """Initialize process-level tracing once from the validated business intent.
+
+    Tracing is owned by the process, not by an individual Run. Callers pass the
+    value loaded from the YAML configuration; environment variables cannot
+    override it. No auth probe and no network on startup.
+    """
     global _attempted, _provider, _client, _settings, _active, _exporter
     with _lock:
         if _attempted:
             return _active
         _attempted = True
-        if os.environ.get("POR_TRACING_ENABLED", "").lower() not in {
-            "1",
-            "true",
-            "yes",
-        }:
+        if not enabled:
             return False
         provider = client = instrumentor = None
         try:

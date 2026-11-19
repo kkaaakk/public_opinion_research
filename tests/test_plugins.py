@@ -457,7 +457,7 @@ def test_load_skill_alone_does_not_satisfy_research_capability(tmp_path):
     )
 
 
-# 验证未启用或目录缺失时不会装配任何插件能力，也不影响原有流程。
+# 验证未启用插件不装配；显式启用但目录或清单缺失时启动前失败。
 def test_disabled_or_missing_plugins_contribute_nothing(tmp_path):
     _write_plugin(tmp_path, skills=[("xiaohongshu", "XHS", "Guidance.")])
 
@@ -469,10 +469,12 @@ def test_disabled_or_missing_plugins_contribute_nothing(tmp_path):
 
     missing = _config(tmp_path)
     missing["configurable"]["plugins_dir"] = str(tmp_path / "missing")
-    assert load_role_plugins(missing, "public_signal", SOCIAL_DOMAINS).plugins == ()
+    with pytest.raises(ValueError, match="plugin directory"):
+        load_role_plugins(missing, "public_signal", SOCIAL_DOMAINS)
 
     unknown = _config(tmp_path, enabled=("not-installed",))
-    assert load_role_plugins(unknown, "public_signal", SOCIAL_DOMAINS).plugins == ()
+    with pytest.raises(ValueError, match="not installed"):
+        load_role_plugins(unknown, "public_signal", SOCIAL_DOMAINS)
 
 
 # 验证不同角色只能获得清单中授权的插件。
@@ -528,26 +530,12 @@ def test_repository_social_plugin_declares_only_apify_mcp(monkeypatch):
             assert f"`{retired}`" not in skill.body
 
 
-# 验证没有 Apify Token 时保留 Skills，跳过 MCP 服务并明确记录配置缺失。
-def test_repository_plugin_without_token_skips_server_and_reports_gap(
-    monkeypatch, caplog
-):
+# 验证缺少 Apify Token 时显式启用的插件在启动前失败，而不是静默降级。
+def test_repository_plugin_without_token_fails_before_research(monkeypatch):
     monkeypatch.delenv("APIFY_TOKEN", raising=False)
 
-    role_plugins = load_role_plugins(
-        _repository_config(), "public_signal", SOCIAL_DOMAINS
-    )
-
-    assert [skill.name for skill in role_plugins.skills] == [
-        "xiaohongshu",
-        "douyin",
-        "weibo",
-    ]
-    assert role_plugins.plugins[0].servers == ()
-    assert "APIFY_TOKEN" in caplog.text
-    for skill in role_plugins.skills:
-        assert "APIFY_TOKEN" in skill.body
-        assert "Apify MCP" in skill.body
+    with pytest.raises(ValueError, match="APIFY_TOKEN"):
+        load_role_plugins(_repository_config(), "public_signal", SOCIAL_DOMAINS)
 
 
 # 验证 Agent 初始看到简介，并能通过 ToolExecutor 加载对应 Markdown。
@@ -639,9 +627,17 @@ def test_load_skill_rejects_unknown_and_path_names(tmp_path):
 
 
 # 验证 Public Signal 保留 Tavily、移除七个本地社媒工具和旧控制工具。
-def test_public_signal_catalog_keeps_tavily_and_drops_retired_tools(monkeypatch):
-    monkeypatch.delenv("APIFY_TOKEN", raising=False)
+def test_public_signal_catalog_keeps_tavily_and_drops_retired_tools(
+    monkeypatch,
+):
+    from open_deep_research.tools import plugins as plugins_module
 
+    monkeypatch.setenv("APIFY_TOKEN", "fixture-token")
+
+    async def no_network(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(plugins_module, "load_mcp_tools", no_network)
     tools = asyncio.run(
         business_agent_module._business_agent_tools(
             _repository_config(search_api="tavily", rag_enabled=False),
@@ -1027,7 +1023,11 @@ def test_failed_plugin_mcp_server_is_excluded_from_identity(tmp_path, monkeypatc
         skills=[("xiaohongshu", "XHS", "Guidance.")],
         servers=[
             _http_server("http://127.0.0.1:9000/mcp"),
-            {**_http_server("http://127.0.0.1:9001/mcp"), "name": "broken"},
+            {
+                **_http_server("http://127.0.0.1:9001/mcp"),
+                "name": "broken",
+                "optional": True,
+            },
         ],
         mcp=True,
     )
@@ -1208,8 +1208,8 @@ def test_plugin_secrets_resolve_from_environment_only(tmp_path, monkeypatch):
     )
     monkeypatch.delenv("PLUGIN_FIXTURE_TOKEN", raising=False)
 
-    without_secret = load_role_plugins(_config(tmp_path), "public_signal", SOCIAL_DOMAINS)
-    assert without_secret.plugins[0].servers == ()
+    with pytest.raises(ValueError, match="PLUGIN_FIXTURE_TOKEN"):
+        load_role_plugins(_config(tmp_path), "public_signal", SOCIAL_DOMAINS)
 
     monkeypatch.setenv("PLUGIN_FIXTURE_TOKEN", "resolved")
     with_secret = load_role_plugins(_config(tmp_path), "public_signal", SOCIAL_DOMAINS)

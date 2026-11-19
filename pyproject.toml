@@ -25,6 +25,7 @@ dependencies = [
     "tavily-python>=0.5.0",
     "pymupdf>=1.25.3",
     "python-dotenv>=1.0.1",
+    "pyyaml>=6.0.2",
     "httpx>=0.24.0",
     "langsmith>=0.3.37",
     "langchain-google-vertexai>=2.0.25",
@@ -48,14 +49,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest", "pytest-benchmark>=5.2.3", "pytest-socket>=0.7.0", "pyyaml>=6.0.2"]
+dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest", "pytest-benchmark>=5.2.3", "pytest-socket>=0.7.0"]
 notebooks = ["ipykernel>=6.29.5"]
 # Keep the install extra; FastAPI and plain Uvicorn are already base requirements.
 web = ["uvicorn[standard]>=0.34.3"]
 
 [project.scripts]
+por = "open_deep_research.cli:main"
+deep-research = "open_deep_research.cli:main"
 deep-research-web = "open_deep_research.web.server:main"
-deep-research = "open_deep_research.web.cli:main"
 deep-research-executor = "open_deep_research.web.executor:main"
 
 [build-system]

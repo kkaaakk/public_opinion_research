@@ -217,16 +217,20 @@ def load_role_plugins(
         if str(item).strip()
     }
     directory = str(configurable.plugins_dir or "").strip()
-    if not enabled or not directory:
+    if not enabled:
         return RolePlugins()
+    if not directory:
+        raise ValueError(
+            "Enabled plugins require plugins_dir in config.yaml."
+        )
     root = Path(directory).expanduser()
     if not root.is_absolute():
         root = Path.cwd() / root
     if not root.is_dir():
-        LOGGER.warning(
-            "Plugin directory %s is unavailable; continuing without plugins.", root
+        raise ValueError(
+            f"Enabled plugins {', '.join(sorted(enabled))} need a plugin directory, "
+            f"but {root} does not exist. Disable them with enabled_plugins: []."
         )
-        return RolePlugins()
 
     manifests: dict[str, Path] = {}
     for path in sorted(root.glob("*/plugin.json")):
@@ -236,10 +240,9 @@ def load_role_plugins(
         manifests[plugin_id] = path
     unknown = sorted(enabled - set(manifests))
     if unknown:
-        LOGGER.warning(
-            "Enabled plugin(s) %s are not installed under %s; continuing without them.",
-            ", ".join(unknown),
-            root,
+        raise ValueError(
+            "Enabled plugin(s) are not installed under "
+            f"{root}: {', '.join(unknown)}. Install them or disable the ids."
         )
 
     plugins: list[Plugin] = []
@@ -503,19 +506,27 @@ def _server_spec(
     missing: set[str] = set()
     resolved = _resolve_environment(params, missing)
     if missing:
-        LOGGER.warning(
-            "Plugin %s server %s needs unset environment variables %s; skipping it.",
-            plugin_id,
-            name,
-            ", ".join(sorted(missing)),
+        if entry.get("optional") is True:
+            LOGGER.warning(
+                "Optional plugin server %s from %s needs unset environment "
+                "variables %s; skipping it and recording a degraded capability.",
+                name,
+                plugin_id,
+                ", ".join(sorted(missing)),
+            )
+            return None
+        raise ValueError(
+            f"Plugin {plugin_id!r} server {name!r} requires environment variables "
+            f"{', '.join(sorted(missing))}; set them in .env or mark the server "
+            "optional: true to allow an explicit degraded start."
         )
-        return None
     return MCPServerSpec(
         name=name,
         domain=domain,
         effect=effect,
         transport=transport,
         params=resolved,
+        optional=entry.get("optional") is True,
     )
 
 

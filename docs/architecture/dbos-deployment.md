@@ -15,18 +15,25 @@ $env:DBOS_DATABASE_URL = 'postgresql+psycopg://por_execution:local-dbos-developm
 
 初始化账号需有 schema 安装权限。命令先使用 DBOS 公共 `DBOS.migrate(..., schema="por_dbos")`，再安装 `por_domain` 表和共享策略。常规数据库角色需访问两个 schema 及其表、序列和原生队列所需对象。迁移前在隔离副本验证角色授权。Compose 项目名和 `por-integration=dbos-phase4` 标签也供隔离停启夹具定位。
 
-在独立终端运行以下两个入口。每个终端配置数据库 URL，Web 另需 `PUBLIC_OPINION_API_TOKEN`（兼容 `WEB_API_TOKEN`），Executor 需所用模型、工具及 Graph/History 的可信配置。FastAPI 同时服务 Studio 和 Classic，默认端口为 8000。Langfuse/OTel 可分别在两进程启用。 [业务配置](../../README.md) · [可观测性配置](observability.md)
+在独立终端运行 Executor；CLI 是主要准入入口，Web 是可选入口。每个进程提供同一逻辑数据库的 `DBOS_DATABASE_URL`。业务设置只来自仓库根目录的 `config.yaml`（`por smoke` 使用 `config.smoke.yaml`）；`.env` 只提供凭据和部署连接。Executor 为每个 Run 读取其冻结快照，不重新读取修改后的配置文件。Langfuse/OTel 默认由 `config.yaml` 的 `tracing_enabled` 决定；它是进程级初始化，`POR_TRACING_ENABLED` 不再覆盖业务配置。正式 Run 与 smoke Run 共用一个 Executor 时共享该进程级追踪状态，逐 Run 快照不会重新初始化追踪。 [业务配置](../../README.md) · [可观测性配置](observability.md)
 
 ```powershell
 # Executor
 .venv/Scripts/python.exe -m open_deep_research.web.executor --executor-id workstation-1
-# API
+# CLI（主要入口）
+por doctor
+por run "调研某品牌近期舆情"
+# 可选 Web / API
 .venv/Scripts/python.exe -m open_deep_research.web.server
 # PostgreSQL 连接和原生目录读检查
 .venv/Scripts/python.exe -m open_deep_research.web.executor --health
 ```
 
-`/api/health` 可检查 Web 入口，Executor `--health` 只检查数据库及原生目录可读。进程存活由运行环境监督。Web 的 SDK 准入支持 OpenAI/DeepSeek 模型和 Tavily 搜索。旧输入别名 `workflow_backend=python/dbos` 和 `business_agent_runtime=openai_agents` 校验后丢弃，退役值（包括环境配置）会被拒绝。启用令牌后 History 遵循现有 owner 过滤；无归属的旧归档保留原策略。
+`/api/health` 可检查 Web 入口，Executor `--health` 只检查数据库及原生目录可读。进程存活由运行环境监督。
+`por doctor` 复用同一套启动前检查，覆盖配置、模型凭据、检索、RAG、插件/MCP、预算/超时和
+PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，业务设置同样来自 `config.yaml`。
+旧输入别名 `workflow_backend=python/dbos` 和 `business_agent_runtime=openai_agents` 校验后丢弃，
+退役值（包括环境配置）会被拒绝。启用令牌后 History 遵循现有 owner 过滤；无归属的旧归档保留原策略。
 
 ## Executor、队列和并发
 

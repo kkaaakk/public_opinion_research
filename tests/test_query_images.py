@@ -435,17 +435,23 @@ def test_user_and_rag_images_use_independent_prompts(
     assert calls[1].args[0][0].content[0]["text"] == configurable.rag_vision_prompt
 
 
-def test_query_image_prompt_can_be_configured_from_environment(
+def test_query_image_prompts_come_from_configuration_not_environment(
     monkeypatch, vision_runtime
 ):
     monkeypatch.setenv(
         "RAG_QUERY_IMAGE_PROMPT", "Describe the uploaded image in detail."
     )
     monkeypatch.setenv("RAG_VISION_PROMPT", "Extract searchable knowledge.")
-    configurable = Configuration.from_runnable_config({})
+    configurable = Configuration(
+        rag_query_image_prompt="Configured query image prompt.",
+        rag_vision_prompt="Configured RAG vision prompt.",
+    )
 
     asyncio.run(
-        intake.enrich_query_images({"messages": [_image_message(_data_url())]}, {})
+        intake.enrich_query_images(
+            {"messages": [_image_message(_data_url())]},
+            {"configurable": configurable.model_dump()},
+        )
     )
     vision_runtime[0].invoke.assert_called_once()
     assert (
@@ -454,7 +460,7 @@ def test_query_image_prompt_can_be_configured_from_environment(
     )
     assert (
         build_rag_pipeline_config(configurable).vision_prompt
-        == "Extract searchable knowledge."
+        == "Configured RAG vision prompt."
     )
 
 

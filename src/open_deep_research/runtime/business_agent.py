@@ -175,6 +175,7 @@ async def _business_agent_tools(
 ) -> list[Any]:
     spec = spec or get_public_opinion_agent_spec(role)
     allowed_domains = spec.allowed_domains
+    configurable = Configuration.from_runnable_config(config)
     all_tools = await get_all_tools(config)
 
     # Social platform collection is contributed by the plugin's Apify MCP
@@ -208,7 +209,26 @@ async def _business_agent_tools(
         len(filtered_tools),
         rejected_tools,
     )
+    _verify_enabled_tools(configurable, role, allowed_domains, filtered_tools)
     return filtered_tools
+
+
+# 校验实际装配结果是否满足显式启用的配置，而不是静默缺少工具。
+def _verify_enabled_tools(
+    configurable: Configuration,
+    role: str,
+    allowed_domains: frozenset[str],
+    tools: list[Any],
+) -> None:
+    from open_deep_research.tools.registry import rag_requested
+
+    names = {tool_name(tool) for tool in tools}
+    if "rag" in allowed_domains and rag_requested(configurable) and "rag_search" not in names:
+        raise ValueError(
+            f"Role {role!r} requires rag_search because rag_enabled=true with "
+            f"retrieval_mode={configurable.retrieval_mode.value}, but the RAG "
+            "tool is unavailable."
+        )
 
 
 # 压缩研究记录并统计用量，预算不足时保留原始笔记以预留最终报告调用。

@@ -13,6 +13,7 @@ import os
 import socket
 import tempfile
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
@@ -52,7 +53,9 @@ from sqlalchemy.engine import make_url
 from test_python_workflow_sdk import install_sdk
 from test_sdk_runtime import TOKENS
 
+from open_deep_research import config_file
 from open_deep_research.budget import capture_budget_usage
+from open_deep_research.configuration import Configuration
 from open_deep_research.runtime import business_agent
 from open_deep_research.web import history, runs, server
 from open_deep_research.web.durable import close_run_client
@@ -91,22 +94,34 @@ def main():
                 raise RuntimeError("Controlled revision provider failure")
 
         _, cfg, _, _, _, _ = install_sdk(patch, Path(directory), on_revision=revise)
-        cfg["configurable"].update(allow_clarification=False)
         archive = history.HistoryStore(domain_engine())
         patch.setattr(history, "get_history_store", lambda: archive)
         patch.setattr(server, "get_history_store", lambda: archive)
         patch.setattr(server, "WEB_API_TOKEN", "studio-browser-test-only")
 
-        def admitted(body):
-            config = deepcopy(cfg)
-            config["configurable"].update(
-                allow_plan_feedback=body.get("require_approval", False),
-                allow_clarification=body.get("allow_clarification", True),
-                organization_context=body["topic"],
-            )
-            return config
+        # Browser scenarios come from the submitted topic and the two dialog
+        # switches. Return a validated Configuration instead of the retired
+        # request-level configuration override.
+        current_request = ContextVar("studio_browser_request", default={})
 
-        patch.setattr(runs, "accepted_config", admitted)
+        def browser_configuration(_path=None):
+            body = current_request.get()
+            values = deepcopy(cfg)
+            values["configurable"].update(
+                allow_plan_feedback=bool(body.get("require_approval", False)),
+                allow_clarification=bool(body.get("allow_clarification", True)),
+                organization_context=str(body.get("topic") or ""),
+            )
+            return Configuration.from_runnable_config(values)
+
+        original_create_run = runs.create_run
+
+        def create_run(body, raw):
+            token = current_request.set(body)
+            try:
+                return original_create_run(body, raw)
+            finally:
+                current_request.reset(token)
 
         @asynccontextmanager
         async def model(*_args, **kwargs):
@@ -174,6 +189,10 @@ def main():
         DBOS.migrate(os.environ["DBOS_DATABASE_URL"], schema="por_dbos")
         initialize_domain()
         launch("studio-browser-" + uuid4().hex)
+        # Install request-scoped configuration after the process-level tracing
+        # decision so the browser fixture cannot change production behavior.
+        patch.setattr(runs, "create_run", create_run)
+        patch.setattr(config_file, "load_configuration", browser_configuration)
         try:
             uvicorn.run(
                 server.app, host="127.0.0.1", port=args.port, log_level="warning"

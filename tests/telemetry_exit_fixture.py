@@ -12,7 +12,7 @@ from open_deep_research.observability.telemetry import (
 )
 
 assert os.environ["LANGFUSE_BASE_URL"].startswith("http://127.0.0.1:")
-assert initialize_telemetry()
+assert initialize_telemetry(True)
 with business_span("exit_probe", run_id="exit-probe"):
     pass
 if sys.argv[1] == "unhandled":

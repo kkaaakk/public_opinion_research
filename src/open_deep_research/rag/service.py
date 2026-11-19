@@ -10,6 +10,7 @@
 
 import hashlib
 import json
+import os
 import threading
 from collections.abc import Mapping
 from pathlib import Path
@@ -508,6 +509,8 @@ def build_rag_pipeline_config(
         # Configuration normalizes an explicitly empty path list to None, while
         # the pipeline keeps the historical empty-list meaning for this field.
         payload["knowledge_base_paths"] = []
+    if not payload.get("milvus_token"):
+        payload["milvus_token"] = os.environ.get("RAG_MILVUS_TOKEN") or None
 
     return RAGPipelineConfig(**payload)
 

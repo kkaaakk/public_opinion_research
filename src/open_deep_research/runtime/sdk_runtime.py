@@ -330,9 +330,7 @@ class _BusinessAgentHarness(SDKContextHarness):
                 + history_text[-15_000:]
             )
         with business_span("rolling_compaction", estimated_tokens_before=before):
-            model_name = (
-                self.config.rolling_compaction_model or self.config.compression_model
-            )
+            model_name = self.config.rolling_compaction_model
             task_context = json.dumps(head, ensure_ascii=False, default=str)
             previous = self.rolling_summary
             try:

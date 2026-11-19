@@ -501,7 +501,6 @@ def worker(args):
         LANGSMITH_TRACING="false",
         LANGCHAIN_TRACING_V2="false",
         OPENAI_AGENTS_DISABLE_TRACING="1",
-        POR_TRACING_ENABLED="true" if traced else "false",
         POR_TRACE_SAMPLE_RATE="1",
         POR_TRACE_TIMEOUT_SECONDS="2",
         POR_TRACE_SHUTDOWN_SECONDS="3",
@@ -817,6 +816,10 @@ def worker(args):
                 yield model
 
         patch.setattr(business_agent, "sdk_model", http_model)
+        # The benchmark owns its process-level tracing policy explicitly.
+        patch.setattr(
+            "open_deep_research.web.executor._configured_tracing", lambda: traced
+        )
         launch("benchmark-" + uuid4().hex)
         assert telemetry.telemetry_enabled() == traced
         if telemetry.telemetry_enabled():

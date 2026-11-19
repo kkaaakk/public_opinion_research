@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, List, Literal, Optional
 
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from open_deep_research.config_values import without_retired_execution_selectors
 
@@ -67,7 +67,9 @@ DEFAULT_PUBLIC_OPINION_AGENTS = [
     "response_strategy",
 ]
 # 首方插件只提供研究指导与可选 MCP 声明，不新增执行器或持久化状态。
-DEFAULT_PLUGINS = ["social-research"]
+# Binding plugins is an explicit business-config choice (config.yaml), so the
+# schema default stays empty instead of silently requiring APIFY credentials.
+DEFAULT_PLUGINS: List[str] = []
 DEFAULT_PLUGINS_DIR = str(Path(__file__).resolve().parents[2] / "plugins")
 PUBLIC_OPINION_AGENT_ALIASES = {
     "news_intelligence": "public_signal",
@@ -95,6 +97,8 @@ LEGACY_RAG_MILVUS_URI = ".rag_index/milvus.db"
 # 描述旧版单 MCP 服务的连接、认证及工具筛选配置。
 class MCPConfig(BaseModel):
     """Configuration for Model Context Protocol (MCP) servers."""
+
+    model_config = ConfigDict(extra="forbid")
     
     url: Optional[str] = Field(
         default=None,
@@ -115,6 +119,8 @@ class MCPConfig(BaseModel):
 # 集中声明研究系统的配置字段、默认值、校验规则与运行时读取方式。
 class Configuration(BaseModel):
     """Main configuration class for the Deep Research agent."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
     
     # 通用配置：研究并发、结构化输出重试与需求澄清开关。
     max_structured_output_retries: int = Field(
@@ -291,6 +297,16 @@ class Configuration(BaseModel):
         },
     )
     # 预算管理：模型、工具、搜索和令牌限额，以及预警与上下文压力阈值。
+    tracing_enabled: bool = Field(
+        default=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "boolean",
+                "default": True,
+                "description": "Process-level Langfuse/OTel tracing for Executor and Web startup. Run snapshots record this value but cannot reinitialize tracing.",
+            }
+        },
+    )
     budget_enabled: bool = Field(
         default=False,
         metadata={
@@ -1223,6 +1239,66 @@ class Configuration(BaseModel):
             raise ValueError("context_capacity_tokens must be greater than 0 when set.")
         if self.max_research_rounds <= 0:
             raise ValueError("max_research_rounds must be greater than 0.")
+        if self.max_react_tool_calls <= 0:
+            raise ValueError("max_react_tool_calls must be greater than 0.")
+        if self.max_structured_output_retries < 1:
+            raise ValueError("max_structured_output_retries must be at least 1.")
+        if self.max_content_length <= 0:
+            raise ValueError("max_content_length must be greater than 0.")
+        if self.rag_enabled and self.retrieval_mode == RetrievalMode.WEB_ONLY:
+            raise ValueError(
+                "retrieval_mode must be rag_only or hybrid when rag_enabled is true."
+            )
+        if not self.rag_enabled and self.retrieval_mode != RetrievalMode.WEB_ONLY:
+            raise ValueError(
+                "rag_enabled must be true when retrieval_mode is rag_only or hybrid."
+            )
+        if self.rag_top_k <= 0 or self.rag_rerank_top_n <= 0:
+            raise ValueError("rag_top_k and rag_rerank_top_n must be greater than 0.")
+        if self.rag_embedding_provider.strip().lower() not in {
+            "sentence_transformers",
+            "sentence-transformers",
+            "st",
+            "semantic",
+            "hash",
+        }:
+            raise ValueError(
+                "rag_embedding_provider must be sentence_transformers or hash."
+            )
+        if self.rag_vectorstore_provider.strip().lower() not in {
+            "milvus",
+            "faiss",
+            "chroma",
+            "memory",
+        }:
+            raise ValueError(
+                "rag_vectorstore_provider must be milvus, faiss, chroma, or memory."
+            )
+        if self.rag_reranker_provider.strip().lower() not in {
+            "none",
+            "disabled",
+            "simple",
+            "cross_encoder",
+            "cross-encoder",
+            "bge",
+            "bge-reranker",
+        }:
+            raise ValueError(
+                "rag_reranker_provider must be cross_encoder, bge-reranker, simple, or none."
+            )
+        for field_name in (
+            "research_model",
+            "compression_model",
+            "final_report_model",
+            "summarization_model",
+            "rolling_compaction_model",
+        ):
+            if not str(getattr(self, field_name)).strip():
+                raise ValueError(f"{field_name} must not be empty.")
+        if self.rag_query_rewrite_enabled and not self.rag_query_rewrite_model.strip():
+            raise ValueError(
+                "rag_query_rewrite_model must not be empty when query rewrite is enabled."
+            )
         if self.rag_chunk_size <= 0:
             raise ValueError("rag_chunk_size must be greater than 0.")
         if self.rag_chunk_overlap < 0:
@@ -1310,52 +1386,40 @@ class Configuration(BaseModel):
         return self
 
 
-    # 从环境变量和 RunnableConfig 组装配置，按实现中的覆盖顺序解析字段。
+    # 从受信任的 RunnableConfig 组装配置；业务字段只读取冻结快照。
     @classmethod
     def from_runnable_config(
         cls, config: Optional[RunnableConfig] = None
     ) -> "Configuration":
-        """Create a Configuration instance from a RunnableConfig."""
-        configurable = without_retired_execution_selectors(config.get("configurable", {}) if config else {})
-        without_retired_execution_selectors({
-            name: os.environ[name.upper()]
-            for name in ("workflow_backend", "business_agent_runtime")
-            if name.upper() in os.environ
-        })
-        field_names = list(cls.model_fields.keys())
-        values: dict[str, Any] = {
-            field_name: os.environ.get(field_name.upper(), configurable.get(field_name))
-            for field_name in field_names
-        }
-        if config and (config.get("metadata") or {}).get("accepted_run") is True:
-            # The durable Web boundary has already validated these request
-            # choices. Ambient defaults must not bypass required approval,
-            # re-enable planning after approval or silently select another model.
-            # Credentials, service locations and resource/budget policy remain
-            # operator-controlled. The legacy parsing order is unchanged.
-            for field_name in (
-                "allow_plan_feedback",
-                "allow_clarification",
-                "report_mode",
-                "research_model",
-                "compression_model",
-                "final_report_model",
-                "summarization_model",
-                "search_api",
-                "organization_context",
-                "rag_enabled",
-                "retrieval_mode",
-                "enabled_business_agents",
-            ):
-                if field_name in configurable:
-                    values[field_name] = configurable[field_name]
-        return cls(**{k: v for k, v in values.items() if v is not None})
+        """Create a Configuration instance from one trusted RunnableConfig.
 
-    # 声明 Pydantic 配置行为，控制额外字段等模型解析选项。
-    class Config:
-        """Pydantic configuration."""
-        
-        arbitrary_types_allowed = True
+        Business settings come only from ``configurable``. Environment variables
+        no longer override models, RAG, budgets or feature switches; ``.env`` is
+        reserved for credentials and deployment connections. Retired execution
+        selectors still fail closed in both inputs and the process environment.
+        Unknown configuration fields are rejected by ``extra="forbid"``.
+        """
+        configurable = without_retired_execution_selectors(
+            config.get("configurable", {}) if config else {}
+        )
+        # Validate retired selector names in the process environment without
+        # letting any valid environment value become business configuration.
+        without_retired_execution_selectors(
+            {
+                name: os.environ[name.upper()]
+                for name in (
+                    "workflow_backend",
+                    "business_agent_runtime",
+                )
+                if name.upper() in os.environ
+            }
+        )
+        values = {
+            field_name: configurable[field_name]
+            for field_name in cls.model_fields
+            if field_name in configurable
+        }
+        return cls(**values)
 
 
 # 兼容历史 RAG 数据目录，并对旧路径给出迁移提示。

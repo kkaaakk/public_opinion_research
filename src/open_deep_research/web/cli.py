@@ -11,6 +11,9 @@ import httpx
 
 def main(argv=None):
     """Send one authenticated command; execution remains owned by DBOS."""
+    from open_deep_research.env import load_environment
+
+    load_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--url", default=os.environ.get("RESEARCH_API_URL", "http://127.0.0.1:8000")

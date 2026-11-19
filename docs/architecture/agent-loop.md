@@ -6,8 +6,9 @@
 
 ```mermaid
 flowchart LR
-    U["Studio / Classic / deep-research CLI"] --> API["FastAPI · web/runs.py"]
-    API --> RC["RunClient · web/durable.py"]
+    CLI["por CLI · cli.py"] --> RC["RunClient · web/durable.py"]
+    UI["可选 Studio / Classic"] --> API["FastAPI · web/runs.py"]
+    API --> RC
     RC --> Client["DBOSClient"]
     RC --> Domain[("PostgreSQL · por_domain")]
     Client --> PG[("PostgreSQL · por_dbos<br/>Queue / Journal / Events / Stream")]
@@ -45,7 +46,7 @@ flowchart LR
 
 | 层 | 代码入口与职责 |
 | --- | --- |
-| API / RunClient | `web/runs.py:create_run` 验证令牌、Idempotency-Key、Session 格式与参数。`web/durable.py:RunClient` 按 owner 检查 Session、请求指纹、容量及未结算效果，用 `DBOSClient` 接受请求并提交取消、审批、澄清与重试授权。CLI 是 HTTP 客户端。 |
+| CLI / API / RunClient | `cli.py` 加载并校验 `config.yaml`，经 `RunClient.create` 冻结快照并原子入队；`status`/`inspect`/`approve`/`clarify`/`report`/`retry` 直接控制同一持久 Run，不经过 FastAPI。可选 `web/runs.py:create_run` 仍校验令牌、Idempotency-Key 与 Session，但业务设置同样来自冻结配置。`web/durable.py:RunClient` 按 owner 检查 Session、请求指纹、容量及未结算效果，用 `DBOSClient` 接受请求并提交取消、审批、澄清与重试授权。 |
 | DBOS | `web/executor.py:launch` 注册队列并启动监听。`workflow/dbos_workflow.py` 定义 Workflow 和 Step。DBOS 用同一 PostgreSQL 中的 journal 决定恢复位置，管理 Workflow 状态、消息、Event、Stream 及 rewind。 |
 | Agent Runtime / Harness | `runtime/business_agent.py:run_business_agent` 按 AgentSpec 装配任务和工具，经 `SDKAgentRuntime.run` 进入 `SDKContextHarness.run`。Runtime 把 SDK 声明绑定到 `ToolExecutor`，后者负责准入、预算、`por.agent_tool`、去重和恢复。Harness 管理 hooks、工具记录、滚动摘要和输入窗口；生产 Workflow 内调用官方 `DBOSRunner.run`。Runner 持久化模型响应并约束工具进入顺序。Harness 用 `por.agent_context` 和 `por.agent_settlement` 恢复上下文，并接收 `por.agent_tool` 恢复后的工具记录。 |
 | 业务可靠性 | `budget.py` 负责共享配额、最终报告预留及 `model_attempts` 收据。`workflow/execution.py` 结合取消意图和原生 Executor 所有权保护外部效果，`operations` 只记录需要保护的工具。History 使用稳定业务键。 |

@@ -14,7 +14,9 @@ still owns the durable call Step.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -92,6 +94,7 @@ def _check_node_version() -> str | None:
             "DBHub requires Node.js >= 22.5.0 (found %s). DBHub will be disabled.",
             version_str,
         )
+        return None
     return version_str
 
 
@@ -167,6 +170,7 @@ class MCPServerSpec:
     effect: ToolEffect
     transport: Literal["stdio", "streamable_http"]
     params: dict[str, Any]
+    optional: bool = False
 
     # 创建未连接的 SDK MCP 客户端；发现和每次调用各自使用独立实例。
     def create(self) -> MCPServer:
@@ -229,20 +233,24 @@ async def _build_legacy_server(
 
 
 # 校验 Node.js 和数据库连接参数后构造 DBHub 服务，失败仅影响该服务。
-def _build_dbhub_server(configurable: Configuration) -> MCPServerSpec | None:
-    """Build the Bytebase DBHub connection spec.
+def _build_dbhub_server(configurable: Configuration) -> MCPServerSpec:
+    """Build the Bytebase DBHub connection spec or fail explicitly.
 
-    All checks (Node.js version, DSN validity, …) live inside this function
-    so that a failure here blocks **only** DBHub, not other MCP servers.
+    An explicitly enabled server must not disappear because a dependency is
+    missing; the operator either installs it or disables the feature.
     """
     node_version = _check_node_version()
     if node_version is None:
-        return None  # warning already logged
+        raise ValueError(
+            "dbhub_enabled requires Node.js >= 22.5.0 on PATH."
+        )
 
-    dsn = (configurable.dbhub_dsn or "").strip()
+    dsn = (
+        (configurable.dbhub_dsn or "").strip()
+        or (os.environ.get("DBHUB_DSN") or "").strip()
+    )
     if not dsn:
-        logger.warning("DBHub enabled but DSN is empty — DBHub will be disabled.")
-        return None
+        raise ValueError("dbhub_enabled requires DBHUB_DSN in .env.")
 
     logger.info("DBHub: configuring with masked DSN (%s)", _mask_dsn(dsn))
 
@@ -278,6 +286,15 @@ def _build_dbhub_server(configurable: Configuration) -> MCPServerSpec | None:
 # 构造通过标准输入输出启动 MarkItDown 文档转换服务的配置。
 def _build_markitdown_server(configurable: Configuration) -> MCPServerSpec:
     """Microsoft official ``markitdown-mcp`` server (stdio)."""
+    if not shutil.which("uv"):
+        raise ValueError("markitdown_enabled requires the `uv` executable on PATH.")
+    if shutil.which("markitdown-mcp") is None:
+        try:
+            import markitdown_mcp  # noqa: F401
+        except ImportError as exc:
+            raise ValueError(
+                "markitdown_enabled requires the markitdown-mcp package."
+            ) from exc
     return MCPServerSpec(
         name="markitdown",
         domain="document",
@@ -288,13 +305,17 @@ def _build_markitdown_server(configurable: Configuration) -> MCPServerSpec:
 
 
 # 构造飞书/Lark MCP 连接，并应用工具预设白名单。
-def _build_feishu_server(configurable: Configuration) -> MCPServerSpec | None:
+def _build_feishu_server(configurable: Configuration) -> MCPServerSpec:
     """Feishu / Lark official MCP with tool-preset whitelist."""
     app_id = (configurable.feishu_app_id or "").strip()
-    app_secret = (configurable.feishu_app_secret or "").strip()
+    app_secret = (
+        (configurable.feishu_app_secret or "").strip()
+        or (os.environ.get("FEISHU_APP_SECRET") or "").strip()
+    )
     if not app_id or not app_secret:
-        logger.warning("Feishu MCP enabled but app_id / app_secret missing.")
-        return None
+        raise ValueError(
+            "feishu_enabled requires feishu_app_id and FEISHU_APP_SECRET in .env."
+        )
 
     preset = (configurable.feishu_mcp_preset or "preset.light").strip()
     args: list[str] = [
@@ -412,36 +433,16 @@ async def load_mcp_tools(
             servers.append(legacy)
 
         # 2) Bytebase DBHub
-        if configurable.dbhub_enabled and configurable.dbhub_dsn:
-            try:
-                dbhub = _build_dbhub_server(configurable)
-                if dbhub:
-                    servers.append(dbhub)
-            except Exception:
-                logger.warning(
-                    "Failed to build DBHub config — DBHub disabled.", exc_info=True
-                )
+        if configurable.dbhub_enabled:
+            servers.append(_build_dbhub_server(configurable))
 
         # 3) Microsoft MarkItDown
         if configurable.markitdown_enabled:
-            try:
-                servers.append(_build_markitdown_server(configurable))
-            except Exception:
-                logger.warning(
-                    "Failed to build MarkItDown config — MarkItDown disabled.",
-                    exc_info=True,
-                )
+            servers.append(_build_markitdown_server(configurable))
 
         # 4) Feishu / Lark
-        if configurable.feishu_enabled and configurable.feishu_app_id:
-            try:
-                feishu = _build_feishu_server(configurable)
-                if feishu:
-                    servers.append(feishu)
-            except Exception:
-                logger.warning(
-                    "Failed to build Feishu config — Feishu disabled.", exc_info=True
-                )
+        if configurable.feishu_enabled:
+            servers.append(_build_feishu_server(configurable))
 
     # 5) Plugin-declared servers keep their trusted local domain/effect policy.
     servers.extend(extra_servers or [])
@@ -461,8 +462,11 @@ async def load_mcp_tools(
                 spec, existing_tool_names, allowed_tool_names=allowed
             )
         except Exception:
+            if not spec.optional:
+                raise
             logger.warning(
-                "MCP server '%s' failed to load — other servers will continue.",
+                "Optional MCP server '%s' failed to load — continuing with a "
+                "recorded degraded capability.",
                 spec.name,
                 exc_info=True,
             )
