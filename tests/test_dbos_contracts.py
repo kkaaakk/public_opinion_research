@@ -586,8 +586,14 @@ def test_api_contract_create_auth_cancel_and_sse(
     monkeypatch.setattr(business_agent, "sdk_model", api_model)
     monkeypatch.setattr(runs, "get_run_client", lambda: case.client)
     monkeypatch.setattr(server, "WEB_API_TOKEN", "test-db-os-token")
-    # Inference is already installed; accepted choices use the official Web schema.
-    monkeypatch.setattr(runs, "accepted_config", lambda body: case.cfg)
+    # Inference is already installed; the Web entry freezes the isolated test config.
+    from open_deep_research import config_file
+    from open_deep_research.configuration import Configuration
+
+    configuration = Configuration.from_runnable_config(case.cfg)
+    monkeypatch.setattr(
+        config_file, "load_configuration", lambda _path=None: configuration
+    )
     with TestClient(server.app) as http:
         body = dict(
             topic="brand recall",

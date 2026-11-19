@@ -248,6 +248,11 @@ sha256(canonical JSON {
 测试夹具同步移除把 `POR_TRACING_ENABLED` 当作初始化开关的旧用法；
 `evaluation/observability/run_benchmark.py` 显式 patch 进程级策略，避免环境变量路径。
 
+`tests/studio_browser_server.py` 与 `tests/test_dbos_contracts.py` 不再替换已删除的
+`web/runs.py:accepted_config`；浏览器夹具通过 `config_file.load_configuration` 返回
+按请求 topic、审批和澄清开关构造的、经 `Configuration` 校验的隔离配置，生产 Web
+仍走 `load_configuration → frozen_config → RunClient`。
+
 ### 10.4 验证结果
 
 ```text
