@@ -625,7 +625,9 @@ def test_api_shutdown_flushes_telemetry_even_when_run_client_close_fails(monkeyp
         calls.append("run")
         raise RuntimeError("storage-close-failed")
 
-    monkeypatch.setattr(telemetry, "initialize_telemetry", lambda: False)
+    monkeypatch.setattr(
+        telemetry, "initialize_telemetry", lambda enabled=None: False
+    )
     monkeypatch.setattr(
         telemetry, "shutdown_telemetry", lambda: calls.append("telemetry")
     )

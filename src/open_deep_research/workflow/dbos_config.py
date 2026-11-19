@@ -51,6 +51,9 @@ class ExecutionSettings:
 
     @classmethod
     def environment(cls):
+        from open_deep_research.env import load_environment
+
+        load_environment()
         return cls(
             os.environ.get("DBOS_DATABASE_URL", ""),
             int(os.environ.get("RUN_MAX_ACTIVE", "4")),

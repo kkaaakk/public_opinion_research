@@ -26,9 +26,18 @@ RAG_SEARCH_DESCRIPTION = (
 )
 
 
+class RAGRetrievalError(RuntimeError):
+    """Expose a required local retrieval failure to the durable workflow."""
+
+
 # 根据运行配置执行本地 RAG 检索，仅返回带来源引用的上下文。
 async def _rag_search(query: str, config: RunnableConfig = None) -> str:
-    """Search local enterprise knowledge, returning cited context only."""
+    """Search local enterprise knowledge, returning cited context only.
+
+    Disabled or empty knowledge configurations return guidance text. A failure
+    to build the index or retrieve from it raises instead of pretending the
+    search returned no evidence.
+    """
     configurable = Configuration.from_runnable_config(config)
     if not configurable.rag_enabled:
         return "Local RAG retrieval is disabled in configuration."
@@ -55,7 +64,10 @@ async def _rag_search(query: str, config: RunnableConfig = None) -> str:
         )
         return answer_ready_context.context
     except Exception as exc:
-        return f"Local RAG search failed: {exc}"
+        raise RAGRetrievalError(
+            f"Local RAG search failed ({type(exc).__name__}); "
+            "the knowledge index or retrieval backend is unavailable."
+        ) from exc
 
 
 # 运行配置须在受保护操作登记后读取，故由 Executor 在校验通过后调用。

@@ -13,10 +13,6 @@ from langchain_core.messages import HumanMessage
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
-from open_deep_research.configuration import (
-    DEFAULT_PUBLIC_OPINION_AGENTS,
-    Configuration,
-)
 from open_deep_research.web.durable import get_run_client
 from open_deep_research.web.run_data import (
     IDEMPOTENCY_KEY_PATTERN,
@@ -66,38 +62,20 @@ def _key(raw: Request) -> str:
     return key
 
 
-def accepted_config(body: dict) -> dict:
-    """Build only admitted business settings; URLs, credentials and owners are trusted."""
-    mode = {
-        "fast": {"max_react_tool_calls": 2, "max_content_length": 8000},
-        "normal": {"max_react_tool_calls": 4, "max_content_length": 20000},
-        "deep": {},
-    }[body["mode"]]
-    return {
-        "configurable": dict(
-            research_model=body["model"],
-            compression_model=body["model"],
-            final_report_model=body["model"],
-            summarization_model=body["model"],
-            search_api=body["search_api"],
-            allow_clarification=body.get("allow_clarification", True),
-            allow_plan_feedback=body.get("require_approval", False),
-            business_scenario="public_opinion_risk",
-            organization_context=body["org_context"] or None,
-            rag_enabled=body["rag_enabled"],
-            retrieval_mode="hybrid" if body["rag_enabled"] else "web_only",
-            enabled_business_agents=[
-                role
-                for role in DEFAULT_PUBLIC_OPINION_AGENTS
-                if body["rag_enabled"] or role != "internal_knowledge"
-            ],
-            **mode,
-        )
-    }
-
-
 def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
-    """Validate a durable create, then atomically persist the queue delivery."""
+    """Validate a durable create, then atomically persist the queue delivery.
+
+    The Web request is a legacy secondary entry point. Business settings come
+    only from ``config.yaml``; body fields such as ``model`` or ``rag_enabled``
+    are accepted for old clients but never override the frozen configuration.
+    """
+    from open_deep_research.config_file import (
+        DEFAULT_CONFIG_FILE,
+        ConfigFileError,
+        frozen_config,
+        load_configuration,
+        request_payload,
+    )
     from open_deep_research.web.server import ResearchRequest
 
     owner = trusted_owner(raw)
@@ -121,34 +99,30 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
         request = ResearchRequest.model_validate(body)
     except ValidationError:
         raise HTTPException(400, "Invalid research request.") from None
-    # The SDK provider adapter currently supports these Web model families.
-    if (
-        not request.model.startswith(("openai:", "deepseek:"))
-        or request.search_api != "tavily"
-    ):
-        raise HTTPException(
-            400, "This SDK Web path requires a supported model and local Tavily tools."
-        )
     session_id = body.get("research_session_id")
     if session_id is not None and not re.fullmatch(r"[a-f0-9]{32}", str(session_id)):
         raise HTTPException(400, "Invalid research Session.")
-    data = request.model_dump()
-    config = accepted_config(data)
     try:
-        Configuration.from_runnable_config(config)
-    except ValueError:
+        configuration = load_configuration(DEFAULT_CONFIG_FILE)
+    except (ConfigFileError, ValueError):
         raise HTTPException(
             503,
             "Research configuration is unavailable; migrate retired runtime settings to DBOS/SDK.",
         ) from None
+    data = request_payload(
+        request.topic,
+        configuration,
+        org_context=request.org_context or None,
+    )
     return _call(
         _store().create,
         owner,
         key,
         data,
-        config,
+        frozen_config(configuration),
         {"messages": [HumanMessage(content=request.topic)]},
         session_id=session_id,
+        config_source=str(DEFAULT_CONFIG_FILE),
     )
 
 

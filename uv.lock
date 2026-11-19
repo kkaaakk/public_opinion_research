@@ -3417,6 +3417,7 @@ dependencies = [
     { name = "pymupdf" },
     { name = "pytesseract" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "sentence-transformers" },
     { name = "sqlalchemy", version = "2.0.55", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "sqlalchemy", version = "2.1.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -3430,7 +3431,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-benchmark" },
     { name = "pytest-socket" },
-    { name = "pyyaml" },
     { name = "ruff" },
 ]
 notebooks = [
@@ -3479,7 +3479,7 @@ requires-dist = [
     { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=5.2.3" },
     { name = "pytest-socket", marker = "extra == 'dev'", specifier = ">=0.7.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.2" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.1" },
     { name = "sentence-transformers", specifier = ">=3.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },

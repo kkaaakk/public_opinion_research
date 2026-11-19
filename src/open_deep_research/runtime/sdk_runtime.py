@@ -330,9 +330,7 @@ class _BusinessAgentHarness(SDKContextHarness):
                 + history_text[-15_000:]
             )
         with business_span("rolling_compaction", estimated_tokens_before=before):
-            model_name = (
-                self.config.rolling_compaction_model or self.config.compression_model
-            )
+            model_name = self.config.rolling_compaction_model
             task_context = json.dumps(head, ensure_ascii=False, default=str)
             previous = self.rolling_summary
             try:
@@ -615,7 +613,9 @@ class SDKAgentRuntime:
                         self.agent,
                         inputs,
                         run_config=RunConfig(
-                            tracing_disabled=not telemetry_enabled(),
+                            tracing_disabled=not (
+                                telemetry_enabled() and self.config.tracing_enabled
+                            ),
                             trace_include_sensitive_data=False,
                         ),
                         max_turns=max(1, self.config.max_react_tool_calls),

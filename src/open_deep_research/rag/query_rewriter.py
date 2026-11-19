@@ -72,7 +72,9 @@ def rewrite_query_with_model(
                 component="rag_query_rewrite",
             )
         except Exception as exc:
-            LOGGER.warning("RAG query rewrite failed; using original query: %s", exc)
+            LOGGER.warning(
+                "RAG query rewrite failed; using original query (degraded): %s", exc
+            )
             return query
 
         rewritten_query = clean_rewritten_query(_response_text(response))

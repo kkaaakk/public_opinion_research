@@ -28,6 +28,12 @@
 
 ## 配置所有权
 
+业务模型只在 `config.yaml` 中选择（`research_model`、`compression_model`、
+`final_report_model`、`summarization_model`、`rolling_compaction_model`、
+`rag_query_rewrite_model`、`rag_vision_model` 等）。`.env` 只提供第 6 列所列凭据
+和 endpoint；`RESEARCH_MODEL` 等旧环境变量不再覆盖配置。`por doctor` 分别检查
+SDK Model 路径和 LangChain 单次服务路径，缺凭据或适配器包时在提交前报错。
+
 `models/providers.py` 是原有解析器的后端无关归属；两条路径共用 `parse_model_ref`、
 `resolve_api_key` 和 `resolve_base_url`。既有 `models` / `models.factory` 导入继续可用。
 仅导入 Resolver 或 SDK Model 不会装载 Classic、ChatOpenAI 或 ChatDeepSeek 后端。

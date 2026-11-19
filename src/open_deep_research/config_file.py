@@ -1,0 +1,211 @@
+"""Load the single business configuration file and freeze it for a Run.
+
+``config.yaml`` is the only business configuration source. ``config.smoke.yaml``
+extends it and overrides a bounded set of fields for low-cost end-to-end checks.
+Credentials and deployment connections stay in ``.env`` and are never copied
+into a Run snapshot.
+"""
+
+from __future__ import annotations
+
+import os
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, Mapping
+
+import yaml
+from pydantic import ValidationError
+
+from open_deep_research.config_values import without_retired_execution_selectors
+from open_deep_research.configuration import Configuration
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG_FILE = PROJECT_ROOT / "config.yaml"
+SMOKE_CONFIG_FILE = PROJECT_ROOT / "config.smoke.yaml"
+
+# Credential-shaped fields must be supplied through the process environment so
+# they never enter the persisted Run snapshot or DBOS Workflow input.
+SENSITIVE_CONFIG_FIELDS = frozenset(
+    {
+        "dbhub_dsn",
+        "feishu_app_secret",
+        "rag_milvus_token",
+    }
+)
+
+
+class ConfigFileError(ValueError):
+    """Report an invalid configuration file without echoing secret values."""
+
+
+def load_configuration(path: str | Path | None = None) -> Configuration:
+    """Load one YAML configuration file, resolving a single ``extends`` chain."""
+    without_retired_execution_selectors(
+        {
+            name: os.environ[name.upper()]
+            for name in ("workflow_backend", "business_agent_runtime")
+            if name.upper() in os.environ
+        }
+    )
+    config_path = Path(path) if path is not None else DEFAULT_CONFIG_FILE
+    data = _load_mapping(config_path, stack=())
+    try:
+        return Configuration(**data)
+    except ValidationError as exc:
+        raise ConfigFileError(_format_validation_error(config_path, exc)) from None
+
+
+def frozen_config(configuration: Configuration) -> dict[str, Any]:
+    """Build the non-sensitive Run snapshot that Executors and Agents reuse."""
+    values = configuration.model_dump(mode="json")
+    for field in SENSITIVE_CONFIG_FIELDS:
+        values.pop(field, None)
+    return {"configurable": values}
+
+
+def request_payload(
+    topic: str,
+    configuration: Configuration,
+    *,
+    org_context: str | None = None,
+) -> dict[str, Any]:
+    """Describe the effective business settings for one Run and its archive."""
+    return {
+        "topic": topic,
+        "model": configuration.research_model,
+        "search_api": configuration.search_api.value,
+        "mode": "normal",
+        "org_context": org_context
+        if org_context is not None
+        else (configuration.organization_context or ""),
+        "rag_enabled": configuration.rag_enabled,
+        "require_approval": configuration.allow_plan_feedback,
+        "allow_clarification": configuration.allow_clarification,
+    }
+
+
+def config_summary(configuration: Configuration) -> dict[str, Any]:
+    """Return the effective, non-sensitive settings printed by ``por doctor``."""
+    return {
+        "research_model": configuration.research_model,
+        "compression_model": configuration.compression_model,
+        "final_report_model": configuration.final_report_model,
+        "summarization_model": configuration.summarization_model,
+        "rolling_compaction_model": configuration.rolling_compaction_model,
+        "rag_query_rewrite_model": configuration.rag_query_rewrite_model,
+        "planner_model": configuration.planner_model or configuration.research_model,
+        "section_writer_model": configuration.section_writer_model
+        or configuration.final_report_model,
+        "rag_vision_model": configuration.rag_vision_model,
+        "enabled_business_agents": list(configuration.enabled_business_agents or []),
+        "enabled_plugins": list(configuration.enabled_plugins or []),
+        "max_research_rounds": configuration.max_research_rounds,
+        "max_react_tool_calls": configuration.max_react_tool_calls,
+        "search_api": configuration.search_api.value,
+        "retrieval_mode": configuration.retrieval_mode.value,
+        "rag_enabled": configuration.rag_enabled,
+        "allow_clarification": configuration.allow_clarification,
+        "allow_plan_feedback": configuration.allow_plan_feedback,
+        "report_mode": configuration.report_mode,
+        "tracing_enabled": configuration.tracing_enabled,
+        "budget_enabled": configuration.budget_enabled,
+        "max_model_calls": configuration.max_model_calls,
+        "max_tool_calls": configuration.max_tool_calls,
+        "max_search_calls": configuration.max_search_calls,
+        "max_input_tokens": configuration.max_input_tokens,
+        "max_output_tokens": configuration.max_output_tokens,
+        "workflow_step_timeout_seconds": configuration.workflow_step_timeout_seconds,
+    }
+
+
+def _load_mapping(path: Path, *, stack: tuple[Path, ...]) -> dict[str, Any]:
+    resolved = path.expanduser().resolve()
+    if resolved in stack:
+        raise ConfigFileError(f"Configuration inheritance cycle at {resolved}.")
+    if not resolved.is_file():
+        raise ConfigFileError(f"Configuration file not found: {resolved}")
+    try:
+        raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ConfigFileError(
+            f"Configuration file is not valid YAML: {resolved}: {exc}"
+        ) from None
+    if not isinstance(raw, Mapping):
+        raise ConfigFileError(
+            f"Configuration file must contain a YAML mapping: {resolved}"
+        )
+    data = dict(raw)
+    parent = data.pop("extends", None)
+    if parent is None:
+        return _resolve_local_paths(data, resolved.parent)
+    if not isinstance(parent, str) or not parent.strip():
+        raise ConfigFileError(
+            f"'extends' must be a relative file path in {resolved}."
+        )
+    base_path = (resolved.parent / parent).resolve()
+    base = _load_mapping(base_path, stack=(*stack, resolved))
+    return _resolve_local_paths(_merge(base, data), resolved.parent)
+
+
+def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _merge(dict(merged[key]), dict(value))
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _resolve_local_paths(data: dict[str, Any], base_dir: Path) -> dict[str, Any]:
+    """Resolve local paths against the config file so cwd cannot change meaning."""
+    resolved = dict(data)
+    plugins_dir = resolved.get("plugins_dir")
+    if isinstance(plugins_dir, str) and plugins_dir.strip():
+        resolved["plugins_dir"] = _local_path(plugins_dir, base_dir)
+    knowledge_paths = resolved.get("rag_knowledge_base_paths")
+    if isinstance(knowledge_paths, list):
+        resolved["rag_knowledge_base_paths"] = [
+            _local_path(item, base_dir)
+            if isinstance(item, str) and item.strip() and "://" not in item
+            else item
+            for item in knowledge_paths
+        ]
+    for field in ("rag_vectorstore_path", "rag_milvus_uri"):
+        value = resolved.get(field)
+        if (
+            isinstance(value, str)
+            and value.strip()
+            and "://" not in value
+            and not Path(value).is_absolute()
+        ):
+            resolved[field] = _local_path(value, base_dir)
+    return resolved
+
+
+def _local_path(value: str, base_dir: Path) -> str:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    return str(path.resolve())
+
+
+def _format_validation_error(path: Path, exc: ValidationError) -> str:
+    details = []
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error.get("loc", ())) or "<root>"
+        details.append(f"{location}: {error.get('msg', 'invalid value')}")
+    return f"Invalid configuration in {path}:\n  " + "\n  ".join(details)
+
+
+__all__ = [
+    "ConfigFileError",
+    "DEFAULT_CONFIG_FILE",
+    "PROJECT_ROOT",
+    "SENSITIVE_CONFIG_FIELDS",
+    "SMOKE_CONFIG_FILE",
+    "config_summary",
+    "frozen_config",
+    "load_configuration",
+    "request_payload",
+]

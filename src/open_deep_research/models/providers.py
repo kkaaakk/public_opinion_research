@@ -90,6 +90,12 @@ def _configurable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
 
 
 # 按供应商从运行时配置或环境变量解析 API 凭据。
+def credential_env_name(provider: str) -> str | None:
+    """Return the environment variable that supplies this provider's key."""
+    normalized = _PROVIDER_ALIASES.get(str(provider).strip().lower(), str(provider).strip().lower())
+    return _CREDENTIAL_ENV_BY_PROVIDER.get(normalized)
+
+
 def resolve_api_key(
     model_ref: str | ModelRef,
     config: Mapping[str, Any] | None = None,

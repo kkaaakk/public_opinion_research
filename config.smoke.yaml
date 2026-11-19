@@ -1,0 +1,43 @@
+# Low-cost end-to-end test configuration.
+#
+# It inherits every field from config.yaml and changes only what is needed for a
+# first real run. The execution chain is unchanged: RunClient -> DBOSClient ->
+# PostgreSQL/DBOS Queue -> Executor -> POR Workflow -> Agents SDK.
+#
+# This file must never become the production configuration, and changes here
+# cannot leak into `por run`, which always loads config.yaml.
+
+extends: config.yaml
+
+# One bounded research round; no gap follow-up or Brief approval.
+max_research_rounds: 1
+max_react_tool_calls: 2
+max_content_length: 8000
+max_structured_output_retries: 2
+workflow_step_timeout_seconds: 900
+allow_clarification: false
+allow_plan_feedback: false
+
+# Smaller hard ceilings while keeping the final-report reservation.
+tracing_enabled: false
+budget_enabled: true
+max_model_calls: 24
+max_tool_calls: 16
+max_search_calls: 8
+max_input_tokens: 800000
+max_output_tokens: 80000
+budget_warning_ratio: 0.8
+reserve_final_report_call: true
+
+# Web-only smoke research: no local index build, OCR, vision or plugin MCP.
+rag_enabled: false
+retrieval_mode: web_only
+rag_multimodal_enabled: false
+rag_vision_enabled: false
+rag_query_image_enabled: false
+rag_query_rewrite_enabled: false
+enabled_business_agents:
+  - public_signal
+  - risk_assessment
+  - response_strategy
+enabled_plugins: []

@@ -65,9 +65,14 @@ DOMAIN_LEDGER_VERSIONS = {VERSION, "dbos-domain-v1"}
 
 def validate_request(request):
     data = request["data"]
-    effective = Configuration.from_runnable_config(data["config"]).model_dump(
-        mode="json"
-    )
+    try:
+        effective = Configuration.from_runnable_config(data["config"]).model_dump(
+            mode="json"
+        )
+    except ValueError as exc:
+        raise RunConflict(
+            "Accepted configuration is no longer valid; drain using the original release"
+        ) from exc
     if (
         data["version"] != VERSION
         or data["sdk"] != SDK_VERSION
@@ -153,10 +158,18 @@ class RunClient:
         )
         return receipt if isinstance(receipt, dict) else {"generation": receipt or 0}
 
-    def create(self, owner, key, request, config, state, *, session_id=None):
+    def create(
+        self, owner, key, request, config, state, *, session_id=None, config_source=None
+    ):
         if not owner or len(owner) > 128 or not key or len(key) > 128:
             raise RunConflict("Owner and idempotency key are required")
-        fingerprint = digest({"request": request, "session_id": session_id})
+        fingerprint = digest(
+            {
+                "request": request,
+                "session_id": session_id,
+                "configuration_source": config_source or "",
+            }
+        )
         with self.engine.begin() as db:
             admission_lock(db)
             old = db.execute(
@@ -173,19 +186,13 @@ class RunClient:
             else:
                 require_matching_journals()
                 self._admit(db, owner, session_id)
-                cfg = loads(dumps(config))
-                operator_approval = Configuration.from_runnable_config(
-                    cfg
-                ).allow_plan_feedback
-                cfg.setdefault("configurable", {})["allow_plan_feedback"] = bool(
-                    cfg["configurable"].get("allow_plan_feedback") or operator_approval
-                )
-                cfg.setdefault("metadata", {})["accepted_run"] = True
-                effective = Configuration.from_runnable_config(cfg).model_dump(
+                # Freeze one complete, non-sensitive business snapshot. Every
+                # Executor, Agent and child Workflow re-reads this snapshot and
+                # never the mutable config.yaml or ambient environment.
+                effective = Configuration.from_runnable_config(config).model_dump(
                     mode="json"
                 )
-                # Freeze the accepted report topology before any journal exists.
-                cfg["configurable"]["report_mode"] = effective["report_mode"]
+                cfg = {"configurable": effective}
                 run_id = uuid4().hex
                 session_id = session_id or uuid4().hex
                 cfg["configurable"].update(
@@ -199,6 +206,7 @@ class RunClient:
                     "config": cfg,
                     "initial": state,
                     "configuration": digest(effective),
+                    "configuration_source": config_source or "",
                     "version": VERSION,
                     "sdk": SDK_VERSION,
                     "runtime": SDK_RUNTIME_VERSION,
@@ -504,6 +512,8 @@ class RunClient:
             business_agent_runtime="openai_agents",
             sdk_version=SDK_VERSION,
             runtime_version=SDK_RUNTIME_VERSION,
+            phase=phase,
+            configuration_source=req["data"].get("configuration_source", ""),
         )
 
     def _public_plan(self, run_id, plan, revision_pending):

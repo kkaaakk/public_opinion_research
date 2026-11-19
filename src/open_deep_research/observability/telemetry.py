@@ -452,18 +452,23 @@ class SDKUsageEnrichment(TracingProcessor):
         pass
 
 
-def initialize_telemetry():
+def initialize_telemetry(enabled: bool | None = None):
     """Initialize once per process; no auth probe and no network on startup."""
     global _attempted, _provider, _client, _settings, _active, _exporter
     with _lock:
         if _attempted:
             return _active
         _attempted = True
-        if os.environ.get("POR_TRACING_ENABLED", "").lower() not in {
-            "1",
-            "true",
-            "yes",
-        }:
+        if enabled is None:
+            enabled = os.environ.get("POR_TRACING_ENABLED", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+        elif (override := os.environ.get("POR_TRACING_ENABLED", "")).strip():
+            # A deployment override may turn the config default off (or on).
+            enabled = override.lower() in {"1", "true", "yes"}
+        if not enabled:
             return False
         provider = client = instrumentor = None
         try:
