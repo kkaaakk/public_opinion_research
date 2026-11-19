@@ -25,7 +25,6 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 dotenv.load_dotenv = _disabled_load_dotenv
 os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
-os.environ["POR_TRACING_ENABLED"] = "false"
 os.environ.setdefault("LANGSMITH_PROJECT", "public-opinion-research")
 
 # Native execution fixtures are lazy; integration selection controls service use.

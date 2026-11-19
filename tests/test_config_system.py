@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -14,13 +15,26 @@ from open_deep_research.config_file import (
     SMOKE_CONFIG_FILE,
     ConfigFileError,
     config_summary,
+    effective_config,
     frozen_config,
     load_configuration,
+    non_sensitive_config,
     request_payload,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.preflight import ERROR, READY, PreflightReport, run_preflight
-from open_deep_research.web.durable import validate_request
+from open_deep_research.preflight import (
+    ERROR,
+    READY,
+    PreflightReport,
+    _check_observability,
+    run_preflight,
+)
+from open_deep_research.web.durable import (
+    matches_stored_request,
+    request_fingerprint,
+    validate_request,
+)
+from open_deep_research.web.run_data import digest
 from open_deep_research.workflow.dbos_config import VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,9 +102,9 @@ def test_frozen_snapshot_excludes_credentials_and_is_environment_stable(
 
     monkeypatch.setenv("RESEARCH_MODEL", "openai:gpt-4.1")
     monkeypatch.setenv("RAG_ENABLED", "false")
-    effective = Configuration.from_runnable_config(snapshot).model_dump(mode="json")
-    from open_deep_research.web.run_data import digest
-
+    effective = effective_config(snapshot)
+    raw = Configuration.from_runnable_config(snapshot).model_dump(mode="json")
+    assert effective == raw
     request = {
         "data": {
             "version": VERSION,
@@ -123,6 +137,165 @@ def test_request_payload_records_effective_settings():
     assert payload["rag_enabled"] is True
     assert payload["require_approval"] is True
     assert payload["allow_clarification"] is True
+
+
+def test_tracing_intent_comes_from_each_yaml_configuration(monkeypatch):
+    monkeypatch.setenv("POR_TRACING_ENABLED", "false")
+    formal = load_configuration(DEFAULT_CONFIG_FILE)
+    assert formal.tracing_enabled is True
+    assert config_summary(formal)["tracing_scope"] == "process"
+
+    monkeypatch.setenv("POR_TRACING_ENABLED", "true")
+    smoke = load_configuration(SMOKE_CONFIG_FILE)
+    assert smoke.tracing_enabled is False
+
+
+def test_preflight_tracing_follows_yaml_not_environment(monkeypatch):
+    monkeypatch.setenv("POR_TRACING_ENABLED", "true")
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    smoke = load_configuration(SMOKE_CONFIG_FILE)
+    report = PreflightReport(config_path=SMOKE_CONFIG_FILE, configuration=smoke)
+    _check_observability(report, smoke)
+    assert any("explicitly disabled" in check.detail for check in report.checks)
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("POR_TRACING_ENABLED", "false")
+    formal = load_configuration(DEFAULT_CONFIG_FILE)
+    report = PreflightReport(config_path=DEFAULT_CONFIG_FILE, configuration=formal)
+    _check_observability(report, formal)
+    assert any("process startup" in check.detail for check in report.checks)
+
+
+def test_executor_tracing_policy_reads_yaml_and_fails_closed(monkeypatch):
+    from open_deep_research.web import executor
+
+    monkeypatch.setenv("POR_TRACING_ENABLED", "false")
+    assert executor._configured_tracing() is True
+
+    import open_deep_research.config_file as config_file
+
+    def unavailable(*_args, **_kwargs):
+        raise ConfigFileError("unavailable")
+
+    monkeypatch.setattr(config_file, "load_configuration", unavailable)
+    monkeypatch.setenv("POR_TRACING_ENABLED", "true")
+    assert executor._configured_tracing() is False
+
+
+def _effective_digest(configuration: Configuration) -> str:
+    return digest(effective_config(frozen_config(configuration)))
+
+
+def _fingerprint_digest(configuration: Configuration) -> str:
+    return digest(non_sensitive_config(effective_config(frozen_config(configuration))))
+
+
+def test_request_fingerprint_changes_with_effective_configuration():
+    base = load_configuration(DEFAULT_CONFIG_FILE)
+    changed = base.model_copy(
+        update={"max_research_rounds": base.max_research_rounds + 1}
+    )
+    request = request_payload("brand risk", base)
+    base_digest = _fingerprint_digest(base)
+    changed_digest = _fingerprint_digest(changed)
+
+    assert request_fingerprint(request, base_digest) == request_fingerprint(
+        request, base_digest
+    )
+    assert request_fingerprint(request, base_digest) != request_fingerprint(
+        request, changed_digest
+    )
+
+
+def test_stored_request_replay_requires_same_request_and_configuration():
+    base = load_configuration(DEFAULT_CONFIG_FILE)
+    changed = base.model_copy(
+        update={"max_research_rounds": base.max_research_rounds + 1}
+    )
+    request = request_payload("brand risk", base)
+    fingerprint_configuration = _fingerprint_digest(base)
+    stored = {
+        "fingerprint": request_fingerprint(request, fingerprint_configuration),
+        "configuration": _effective_digest(base),
+    }
+
+    assert matches_stored_request(
+        stored,
+        request=request,
+        fingerprint_configuration=fingerprint_configuration,
+        configuration=_effective_digest(base),
+    )
+    assert not matches_stored_request(
+        stored,
+        request=request,
+        fingerprint_configuration=_fingerprint_digest(changed),
+        configuration=_effective_digest(changed),
+    )
+    assert not matches_stored_request(
+        stored,
+        request={**request, "topic": "another topic"},
+        fingerprint_configuration=fingerprint_configuration,
+        configuration=_effective_digest(base),
+    )
+
+
+def test_legacy_admission_replays_only_while_configuration_is_unchanged():
+    base = load_configuration(DEFAULT_CONFIG_FILE)
+    changed = base.model_copy(
+        update={"max_research_rounds": base.max_research_rounds + 1}
+    )
+    request = request_payload("brand risk", base)
+    configuration = _effective_digest(base)
+    source = str(DEFAULT_CONFIG_FILE)
+    legacy = {
+        "fingerprint": digest(
+            {
+                "request": request,
+                "session_id": None,
+                "configuration_source": source,
+            }
+        ),
+        "configuration": configuration,
+    }
+
+    assert matches_stored_request(
+        legacy,
+        request=request,
+        fingerprint_configuration=_fingerprint_digest(base),
+        configuration=configuration,
+        config_source=source,
+    )
+    assert not matches_stored_request(
+        legacy,
+        request=request,
+        fingerprint_configuration=_fingerprint_digest(changed),
+        configuration=_effective_digest(changed),
+        config_source=source,
+    )
+
+
+def test_fingerprint_input_excludes_credentials():
+    base = load_configuration(DEFAULT_CONFIG_FILE)
+    snapshot = frozen_config(base)
+    with_secrets = {
+        "configurable": {
+            **snapshot["configurable"],
+            "dbhub_dsn": "postgresql://user:secret@host/db",
+            "feishu_app_secret": "secret",
+            "rag_milvus_token": "secret-token",
+        }
+    }
+    effective = non_sensitive_config(effective_config(with_secrets))
+    for field in SENSITIVE_CONFIG_FIELDS:
+        assert field not in effective
+    assert effective == non_sensitive_config(effective_config(snapshot))
+    assert request_fingerprint(
+        request_payload("brand", base), digest(effective)
+    ) == request_fingerprint(
+        request_payload("brand", base), _fingerprint_digest(base)
+    )
 
 
 def test_rag_pipeline_config_has_no_parallel_defaults():
@@ -276,6 +449,26 @@ def test_cli_smoke_reads_smoke_config(monkeypatch, ready_preflight):
     assert seen and seen[0].name == "config.smoke.yaml"
     assert client.created[0][3]["configurable"]["rag_enabled"] is False
     assert client.created[0][3]["configurable"]["max_model_calls"] == 24
+
+
+def test_cli_run_and_smoke_do_not_modify_global_configuration(
+    monkeypatch, ready_preflight
+):
+    client = FakeClient()
+    monkeypatch.setattr(cli, "_client", lambda: client)
+    names = ("RESEARCH_MODEL", "RAG_ENABLED", "TRACING_ENABLED", "POR_TRACING_ENABLED")
+    before = {name: os.environ.get(name) for name in names}
+    defaults = Configuration().model_dump(mode="json")
+    formal = DEFAULT_CONFIG_FILE.read_bytes()
+    smoke = SMOKE_CONFIG_FILE.read_bytes()
+
+    assert cli.main(["run", "brand risk"]) == 0
+    assert cli.main(["smoke", "brand risk"]) == 0
+
+    assert {name: os.environ.get(name) for name in names} == before
+    assert Configuration().model_dump(mode="json") == defaults
+    assert DEFAULT_CONFIG_FILE.read_bytes() == formal
+    assert SMOKE_CONFIG_FILE.read_bytes() == smoke
 
 
 def test_cli_approve_clarify_report_and_retry(monkeypatch, tmp_path, capsys):

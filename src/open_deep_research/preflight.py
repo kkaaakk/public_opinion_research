@@ -599,28 +599,38 @@ def _check_conflicts(report: PreflightReport, configuration: Configuration) -> N
 def _check_observability(
     report: PreflightReport, configuration: Configuration
 ) -> None:
+    # Tracing is initialized once per process from this YAML value. Environment
+    # variables and Run snapshots cannot switch it on or off.
     tracing = configuration.tracing_enabled
-    override = os.environ.get("POR_TRACING_ENABLED", "").strip()
-    if override:
-        tracing = override.lower() in {"1", "true", "yes"}
     keys = bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
     if tracing and not keys:
         report.add(
             WARNING,
             "observability",
             "tracing_enabled is true but Langfuse keys are missing; "
-            "telemetry stays disabled.",
+            "process-level telemetry stays disabled.",
         )
     elif keys and not tracing:
         report.add(
             WARNING,
             "observability",
-            "Langfuse keys are present but tracing_enabled is false.",
+            "Langfuse keys are present but tracing_enabled is false; "
+            "the YAML value controls the process, not the environment.",
         )
     elif tracing:
-        report.add(READY, "observability", "Langfuse tracing is enabled.")
+        report.add(
+            READY,
+            "observability",
+            "Langfuse tracing is enabled at process startup from config.yaml; "
+            "per-Run settings cannot reinitialize it.",
+        )
     else:
-        report.add(READY, "observability", "Tracing is explicitly disabled.")
+        report.add(
+            READY,
+            "observability",
+            "Tracing is explicitly disabled in this YAML; a shared Executor "
+            "keeps its own startup tracing state.",
+        )
 
 
 def _check_database(report: PreflightReport) -> None:

@@ -195,7 +195,6 @@ def exit_process(receiver, mode, ready=None):
         PYTHON_DOTENV_DISABLED="1",
         LANGSMITH_TRACING="false",
         OPENAI_AGENTS_DISABLE_TRACING="1",
-        POR_TRACING_ENABLED="true",
         LANGFUSE_BASE_URL=receiver.url,
         LANGFUSE_PUBLIC_KEY="pk-lf-exit-test",
         LANGFUSE_SECRET_KEY="exit-fixture-only",

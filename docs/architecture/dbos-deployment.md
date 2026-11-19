@@ -15,7 +15,7 @@ $env:DBOS_DATABASE_URL = 'postgresql+psycopg://por_execution:local-dbos-developm
 
 初始化账号需有 schema 安装权限。命令先使用 DBOS 公共 `DBOS.migrate(..., schema="por_dbos")`，再安装 `por_domain` 表和共享策略。常规数据库角色需访问两个 schema 及其表、序列和原生队列所需对象。迁移前在隔离副本验证角色授权。Compose 项目名和 `por-integration=dbos-phase4` 标签也供隔离停启夹具定位。
 
-在独立终端运行 Executor；CLI 是主要准入入口，Web 是可选入口。每个进程提供同一逻辑数据库的 `DBOS_DATABASE_URL`。业务设置只来自仓库根目录的 `config.yaml`（`por smoke` 使用 `config.smoke.yaml`）；`.env` 只提供凭据和部署连接。Executor 为每个 Run 读取其冻结快照，不重新读取修改后的配置文件。Langfuse/OTel 默认由 `config.yaml` 的 `tracing_enabled` 决定，`POR_TRACING_ENABLED` 仅作为进程级显式覆盖。 [业务配置](../../README.md) · [可观测性配置](observability.md)
+在独立终端运行 Executor；CLI 是主要准入入口，Web 是可选入口。每个进程提供同一逻辑数据库的 `DBOS_DATABASE_URL`。业务设置只来自仓库根目录的 `config.yaml`（`por smoke` 使用 `config.smoke.yaml`）；`.env` 只提供凭据和部署连接。Executor 为每个 Run 读取其冻结快照，不重新读取修改后的配置文件。Langfuse/OTel 默认由 `config.yaml` 的 `tracing_enabled` 决定；它是进程级初始化，`POR_TRACING_ENABLED` 不再覆盖业务配置。正式 Run 与 smoke Run 共用一个 Executor 时共享该进程级追踪状态，逐 Run 快照不会重新初始化追踪。 [业务配置](../../README.md) · [可观测性配置](observability.md)
 
 ```powershell
 # Executor

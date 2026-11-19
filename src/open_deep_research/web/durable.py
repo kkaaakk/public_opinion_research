@@ -12,6 +12,7 @@ from dbos import error as dbos_error
 from sqlalchemy import text
 
 from open_deep_research.budget import merge_budget_usage, model_bill
+from open_deep_research.config_file import effective_config, non_sensitive_config
 from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import (
     business_span,
@@ -95,6 +96,50 @@ def external_effects(db, run_id):
     ).one()
 
 
+def request_fingerprint(request, configuration, session_id=None):
+    """Hash one request with its non-sensitive effective configuration digest."""
+    return digest(
+        {
+            "request": request,
+            "session_id": session_id,
+            "configuration": configuration,
+        }
+    )
+
+
+def matches_stored_request(
+    stored,
+    *,
+    request,
+    fingerprint_configuration,
+    configuration=None,
+    session_id=None,
+    config_source=None,
+):
+    """Return whether a stored admission accepts this replay.
+
+    Pre-upgrade records used the request, session and config path only. They are
+    still replayable while their frozen configuration digest matches the current
+    effective configuration; a changed YAML always requires a new key.
+    """
+    if stored.get("fingerprint") == request_fingerprint(
+        request, fingerprint_configuration, session_id
+    ):
+        return True
+    legacy = digest(
+        {
+            "request": request,
+            "session_id": session_id,
+            "configuration_source": config_source or "",
+        }
+    )
+    return (
+        configuration is not None
+        and stored.get("fingerprint") == legacy
+        and stored.get("configuration") == configuration
+    )
+
+
 class RunClient:
     """Own request admission and user commands over the native DBOS Run."""
 
@@ -163,12 +208,14 @@ class RunClient:
     ):
         if not owner or len(owner) > 128 or not key or len(key) > 128:
             raise RunConflict("Owner and idempotency key are required")
-        fingerprint = digest(
-            {
-                "request": request,
-                "session_id": session_id,
-                "configuration_source": config_source or "",
-            }
+        # Freeze one complete, non-sensitive business snapshot before admission.
+        # Every Executor, Agent and child Workflow re-reads this snapshot and
+        # never the mutable config.yaml or ambient environment.
+        effective = effective_config(config)
+        configuration = digest(effective)
+        fingerprint_configuration = digest(non_sensitive_config(effective))
+        fingerprint = request_fingerprint(
+            request, fingerprint_configuration, session_id
         )
         with self.engine.begin() as db:
             admission_lock(db)
@@ -179,19 +226,23 @@ class RunClient:
                 {"o": owner, "k": key},
             ).first()
             if old:
-                if loads(old[1])["fingerprint"] != fingerprint:
-                    raise RunConflict("Idempotency key was used for another request")
+                if not matches_stored_request(
+                    loads(old[1]),
+                    request=request,
+                    fingerprint_configuration=fingerprint_configuration,
+                    configuration=configuration,
+                    session_id=session_id,
+                    config_source=config_source,
+                ):
+                    raise RunConflict(
+                        "Idempotency key was used for another request or "
+                        "configuration; use a new key"
+                    )
                 run_id = old[0]
                 created = False
             else:
                 require_matching_journals()
                 self._admit(db, owner, session_id)
-                # Freeze one complete, non-sensitive business snapshot. Every
-                # Executor, Agent and child Workflow re-reads this snapshot and
-                # never the mutable config.yaml or ambient environment.
-                effective = Configuration.from_runnable_config(config).model_dump(
-                    mode="json"
-                )
                 cfg = {"configurable": effective}
                 run_id = uuid4().hex
                 session_id = session_id or uuid4().hex
@@ -205,7 +256,7 @@ class RunClient:
                     "fingerprint": fingerprint,
                     "config": cfg,
                     "initial": state,
-                    "configuration": digest(effective),
+                    "configuration": configuration,
                     "configuration_source": config_source or "",
                     "version": VERSION,
                     "sdk": SDK_VERSION,

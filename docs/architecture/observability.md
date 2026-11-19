@@ -110,12 +110,20 @@ Install the root lock: `uv sync --extra dev --locked --python 3.11`.
 
 | Operator environment variable | Default / behavior |
 | --- | --- |
-| `POR_TRACING_ENABLED` | `false`; `true`, `1`, `yes` enable initialization |
 | `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com`; HTTP(S) base URL without credentials/query/fragment |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Both required, from the intended Langfuse project |
 | `POR_TRACE_SAMPLE_RATE` | `1.0`, finite `[0,1]`; parent-based trace sampling |
 | `POR_TRACE_TIMEOUT_SECONDS` | `2`, positive and at most 30; OTLP request timeout |
 | `POR_TRACE_SHUTDOWN_SECONDS` | `3`, positive and at most 30; entire shutdown deadline |
+
+`config.yaml` (or `config.smoke.yaml` for a dedicated smoke process) owns the
+business tracing intent through `tracing_enabled`. The Executor and Web process
+read it once at startup; `POR_TRACING_ENABLED` is not consulted, so an
+environment value cannot silently override the YAML. A Run snapshot records the
+same value for audit, but it does not reinitialize or switch process-level
+tracing. When formal and smoke Runs share one Executor, that process traces both
+or neither; use a separate Executor with `config.smoke.yaml` to keep smoke
+traffic untraced.
 
 Supply these to **API and Executor** through their service environment/secret
 manager, never Run Configuration, prompts, fingerprints or Git. For Cloud use
@@ -208,9 +216,10 @@ OTLP requests honor the timeout. Shutdown drains DBOS, then waits at most
 batches may be lost. Native polling Steps can generate substantial telemetry
 for long Runs; sample according to SLOs. Trace absence never proves missing work.
 
-Rollback with `POR_TRACING_ENABLED=false` and restart API/Executor on the same
-compatible release. No trace database cleanup or Run migration is needed.
-Preserve DBOS journals, operation receipts and PostgreSQL domain data.
+Rollback by setting `tracing_enabled: false` in `config.yaml` and restarting
+API/Executor on the same compatible release. No trace database cleanup or Run
+migration is needed. Preserve DBOS journals, operation receipts and PostgreSQL
+domain data.
 
 Keep `LANGSMITH_TRACING=false` for default metadata-only Langfuse operation.
 Explicitly enabling both does not double the budget, but LangSmith retains its

@@ -101,6 +101,11 @@ cp .env.example .env
 旧的 `RESEARCH_MODEL`、`RAG_ENABLED`、`ENABLED_PLUGINS` 等变量会被忽略，可以删除。
 未知配置字段会直接报错，缺失的模型凭据和显式启用的插件依赖会在运行前失败。
 
+`tracing_enabled` 是 Executor/Web 进程启动时的追踪意图，只由 YAML 决定；
+`POR_TRACING_ENABLED` 不再覆盖它。Run 冻结快照会记录该值，但不会重新初始化
+进程级 Tracing；正式 Run 与 smoke Run 共用一个 Executor 时共享同一追踪状态，
+需要独立关闭 smoke 追踪时应使用单独的 Executor 进程和 `config.smoke.yaml`。
+
 正式配置默认启用本地 OCR 多模态；如果机器没有 Tesseract，`por doctor` 会报
 `ERROR`，此时安装 Tesseract 或在 `config.yaml` 中显式设置
 `rag_multimodal_provider: disabled`。`config.smoke.yaml` 已关闭多模态。

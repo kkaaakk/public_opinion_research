@@ -77,11 +77,53 @@ def kinds(spans, kind):
 def test_disabled_is_noop_and_does_not_initialize(monkeypatch):
     monkeypatch.setattr(telemetry, "_attempted", False)
     monkeypatch.setattr(telemetry, "_active", False)
-    monkeypatch.setenv("POR_TRACING_ENABLED", "false")
-    assert not telemetry.initialize_telemetry()
+    # An environment value cannot enable tracing when the YAML intent is false.
+    monkeypatch.setenv("POR_TRACING_ENABLED", "true")
+    assert not telemetry.initialize_telemetry(False)
     with telemetry.business_span("disabled") as span:
         assert span is None
     assert telemetry.enqueue_context() == {}
+
+
+def test_environment_cannot_disable_explicit_process_tracing(monkeypatch):
+    from uuid import uuid4
+
+    from agents import set_trace_processors, set_tracing_disabled
+    from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http import trace_exporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    memory = InMemorySpanExporter()
+    current = {"provider": trace.ProxyTracerProvider()}
+    monkeypatch.setattr(trace, "get_tracer_provider", lambda: current["provider"])
+    monkeypatch.setattr(
+        trace, "set_tracer_provider", lambda p: current.update(provider=p)
+    )
+    monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", lambda **kw: memory)
+    monkeypatch.setenv("POR_TRACING_ENABLED", "false")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test-" + uuid4().hex)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://127.0.0.1:1")
+    for key, value in {
+        "_attempted": False,
+        "_active": False,
+        "_provider": None,
+        "_client": None,
+        "_settings": None,
+        "_exporter": None,
+    }.items():
+        monkeypatch.setattr(telemetry, key, value)
+    try:
+        assert telemetry.initialize_telemetry(True)
+        assert telemetry.telemetry_enabled()
+    finally:
+        OpenAIAgentsInstrumentor().uninstrument()
+        set_trace_processors([])
+        set_tracing_disabled(True)
+        telemetry.shutdown_telemetry()
 
 
 @pytest.mark.parametrize(
@@ -101,7 +143,7 @@ def test_invalid_configuration_fails_open(monkeypatch, field, value):
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
     monkeypatch.setenv(field, value)
-    assert not telemetry.initialize_telemetry()
+    assert not telemetry.initialize_telemetry(True)
     assert not telemetry.telemetry_enabled()
 
 
@@ -109,7 +151,7 @@ def test_one_initialization_and_no_default_openai_exporter(trace_capture):
     from agents.tracing import get_trace_provider
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        assert all(pool.map(lambda _: telemetry.initialize_telemetry(), range(32)))
+        assert all(pool.map(lambda _: telemetry.initialize_telemetry(True), range(32)))
     assert telemetry._provider is trace_capture.provider
     processors = get_trace_provider()._multi_processor._processors
     assert [type(p).__name__ for p in processors] == [
@@ -154,7 +196,7 @@ def test_initializer_disables_pipeline_if_global_provider_registration_loses_rac
     }.items():
         monkeypatch.setattr(telemetry, key, value)
     try:
-        assert not telemetry.initialize_telemetry()
+        assert not telemetry.initialize_telemetry(True)
         assert not telemetry.telemetry_enabled()
         assert trace.get_tracer_provider() is foreign
     finally:
@@ -505,7 +547,7 @@ def test_initialization_failure_does_not_leak_or_change_business(monkeypatch, ca
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
     monkeypatch.setattr(trace, "get_tracer_provider", trace.ProxyTracerProvider)
     monkeypatch.setattr(langfuse, "Langfuse", fail)
-    assert not telemetry.initialize_telemetry()
+    assert not telemetry.initialize_telemetry(True)
     with telemetry.business_span("business") as span:
         assert span is None
     assert "secret-initialization-text" not in caplog.text

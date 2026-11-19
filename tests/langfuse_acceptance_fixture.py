@@ -45,7 +45,6 @@ def main():
         LANGSMITH_TRACING="false",
         LANGCHAIN_TRACING_V2="false",
         OPENAI_AGENTS_DISABLE_TRACING="1",
-        POR_TRACING_ENABLED="true",
         POR_TRACE_SAMPLE_RATE="1",
         LANGFUSE_BASE_URL=args.base_url,
         LANGFUSE_FLUSH_INTERVAL="0.1",

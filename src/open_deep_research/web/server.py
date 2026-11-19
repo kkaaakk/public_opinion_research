@@ -77,10 +77,10 @@ async def lifespan(_app: FastAPI):
         tracing = load_configuration().tracing_enabled
     except Exception:
         LOGGER.warning(
-            "Formal config.yaml is unavailable; using POR_TRACING_ENABLED.",
+            "Formal config.yaml is unavailable; tracing stays disabled.",
             exc_info=True,
         )
-        tracing = None
+        tracing = False
     initialize_telemetry(tracing)
     try:
         yield

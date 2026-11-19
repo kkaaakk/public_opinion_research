@@ -613,9 +613,7 @@ class SDKAgentRuntime:
                         self.agent,
                         inputs,
                         run_config=RunConfig(
-                            tracing_disabled=not (
-                                telemetry_enabled() and self.config.tracing_enabled
-                            ),
+                            tracing_disabled=not telemetry_enabled(),
                             trace_include_sensitive_data=False,
                         ),
                         max_turns=max(1, self.config.max_react_tool_calls),

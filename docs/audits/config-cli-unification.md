@@ -56,7 +56,8 @@ config.smoke.yaml     继承 config.yaml，只覆盖低成本测试字段
 - 预算保护：120 次模型调用、120 次工具调用、60 次搜索、400 万输入/40 万输出 token，
   保留最终报告调用
 - 每阶段 1800 秒超时（短于 DBOS `RUN_TIMEOUT_SECONDS=3600`）
-- Langfuse/OTel 默认开启（`tracing_enabled: true`；缺少密钥时预检 WARNING 并安全关闭）
+- Langfuse/OTel 进程级追踪由 `tracing_enabled: true` 决定；缺少密钥时预检 WARNING
+  并安全关闭。环境变量和 Run 快照都不能覆盖该进程级设置。
 
 非核心 MCP（DBHub、飞书、MarkItDown）默认关闭，只有显式开启才检查依赖和凭据。
 
@@ -70,7 +71,8 @@ config.smoke.yaml     继承 config.yaml，只覆盖低成本测试字段
 - `social-research` 插件关闭
 - `internal_knowledge` 角色关闭（与 RAG 关闭保持一致）
 - 预算收紧为 24 次模型调用、16 次工具调用、8 次搜索
-- 追踪关闭
+- 追踪关闭（仅当 `config.smoke.yaml` 作为独立进程的启动配置时生效；与正式 Run
+  共用一个 Executor 时不会逐 Run 关闭）
 
 仍使用真实的 `RunClient → DBOSClient → PostgreSQL/DBOS Queue → Executor → POR Workflow
 → Agents SDK`，没有模拟工作流。
@@ -120,7 +122,7 @@ Executor 存活在 DBOS 3.3 中没有公开 API，因此以 WARNING 提示先启
 ## 7. 自动化测试结果
 
 ```text
-pytest: 894 passed, 2 skipped, 187 deselected
+pytest: 903 passed, 2 skipped, 187 deselected
 Ruff (E,F,I; E501 ignored): All checks passed
 compileall src/open_deep_research: passed
 scripts/phase5_import_smoke.py: 30 production imports passed
@@ -130,12 +132,12 @@ scripts/phase5_import_smoke.py: 30 production imports passed
 
 - `tests/test_config_system.py`：正式/测试配置加载、全字段覆盖、未知字段拒绝、
   环境不覆盖、快照排除敏感字段、摘要稳定性、模型路由、RAG 映射、预检、CLI 全命令、
-  RAG 失败暴露
+  RAG 失败暴露、进程级 Tracing 规则、请求指纹与旧记录重放边界
 - `tests/test_web_research.py`：Web 请求不再覆盖正式配置
 - `tests/test_plugins.py`：插件/必需 MCP 依赖缺失前失败、可选服务显式降级
 - `tests/test_mcp_sdk_tools.py`：必需服务失败中止、可选服务不阻塞其他服务
 - `tests/test_query_images.py`：视觉提示只来自配置，不受环境变量影响
-- `tests/test_telemetry.py`：配置驱动的追踪开关
+- `tests/test_telemetry.py`：进程级追踪只跟随显式传入的 YAML 意图，环境变量不能覆盖
 
 ## 8. 真实端到端运行结果
 
@@ -152,8 +154,10 @@ scripts/phase5_import_smoke.py: 30 production imports passed
 
 ## 9. 仍然存在的配置和运行风险
 
-- **旧 Run 的摘要兼容性**：此前保存的是部分配置，摘要可能受旧环境变量影响。新 Run
-  使用完整快照；旧 journal 应按既有版本策略在原发行版排空，不应跨本改动恢复。
+- **旧 Run 的摘要与幂等兼容性**：新请求指纹包含有效业务配置摘要。PR #55 之前的
+  admission 记录只有在旧指纹（request + session + 配置路径）仍匹配、且其冻结
+  `configuration` 摘要等于当前有效配置时才可重放；配置已变化时必须使用新 Key。
+  旧 Run 的查询、审批、澄清和恢复不使用请求指纹；跨发行版恢复仍按既有版本策略。
 - **模型/OCR 首次下载**：SentenceTransformers 与 BGE reranker 首次使用可能下载模型；
   预检只给 WARNING，未预先下载。
 - **OCR 强制依赖**：正式配置启用 OCR 时缺少 Tesseract 会阻止启动；机器没有 OCR 能力时
@@ -169,3 +173,104 @@ scripts/phase5_import_smoke.py: 30 production imports passed
 - **Open Agent Platform 配置密钥**：`GET_API_KEYS_FROM_CONFIG=true` 的
   `configurable.apiKeys` 不再进入 Run 快照（它属于敏感值）。本地/CLI 部署应使用
   `.env`；OAP 需要单独的密钥注入机制，不能依赖 Run 快照。
+
+## 10. 收尾修复：Tracing 来源与幂等指纹
+
+### 10.1 Tracing 由进程级 YAML 决定
+
+根因：`initialize_telemetry()` 在显式参数之外再次读取 `POR_TRACING_ENABLED`，预检又独立
+应用该环境覆盖；SDK Run 内还用快照的 `tracing_enabled` 做二次开关，使“业务意图”、
+“进程初始化”和“逐 Run 发射”混在一起。正式 Executor 与 smoke Run 共用一个进程时，
+无法安全地逐 Run 重新初始化 Langfuse/OTel。
+
+最终语义：
+
+- `config.yaml` / `config.smoke.yaml` 的 `tracing_enabled` 是唯一业务来源。
+- `initialize_telemetry(enabled: bool)` 只接受调用方从已验证 YAML 得到的布尔值，不再
+  读取 `POR_TRACING_ENABLED`；环境变量不能静默覆盖业务设置。
+- Executor 和 Web 启动时各初始化一次；缺密钥或初始化失败仍只记录 WARNING，研究继续。
+- Run 冻结快照保留 `tracing_enabled` 供审计和 `por inspect` 查看，但不会重新初始化或
+  切换进程级 Tracing；SDK 发射只跟随进程是否已启用。
+- 正式 Run 与 smoke Run 共用一个 Executor 时共享追踪状态；要关闭 smoke 追踪，应使用
+  独立 Executor 进程并以 `config.smoke.yaml` 启动。
+- `por doctor`、`config_summary()`（`tracing_scope: process`）和部署文档反映上述行为。
+
+修改文件：`observability/telemetry.py`、`web/executor.py`、`web/server.py`、
+`preflight.py`、`runtime/sdk_runtime.py`、`configuration.py`、`config_file.py`、`cli.py`。
+
+### 10.2 幂等指纹包含有效配置
+
+根因：旧指纹只包含 `request`、`session_id` 和配置文件路径；YAML 内容变化但路径不变时，
+同一 Idempotency-Key 会被误判为相同请求。
+
+最终组成：
+
+```text
+sha256(canonical JSON {
+  "request": <topic/model/search_api/mode/...>,
+  "session_id": <session or null>,
+  "configuration": sha256(canonical JSON <validated non-sensitive effective config>)
+})
+```
+
+- 配置摘要来自 `Configuration.from_runnable_config()` 校验后的完整有效配置，再移除
+  `dbhub_dsn`、`feishu_app_secret`、`rag_milvus_token`；API Key 不属于业务配置字段。
+- 同 Key + 同请求 + 同有效配置：返回原 Run。
+- 同 Key + 同请求 + 不同有效配置：`RunConflict`，提示使用新 Key。
+- 同 Key + 不同请求：继续拒绝。
+- 旧记录兼容：旧指纹（request + session + 配置路径）仍匹配、且其冻结 `configuration`
+  摘要等于当前有效配置时允许重放；配置变化必须使用新 Key。旧 Run 的查询、审批、澄清、
+  重试和 DBOS 恢复不读取请求指纹。
+- `configuration_source` 仍持久化用于展示，但不再单独决定请求身份。
+
+修改文件：`config_file.py`、`web/durable.py`；`RunClient.create`、Web 准入和 CLI 的调用
+形态及 DBOS 入队事务未改变。
+
+### 10.3 新增离线覆盖
+
+`tests/test_config_system.py` 新增：
+
+- 正式/ smoke YAML 的 `tracing_enabled` 与 `tracing_scope` 规则，环境变量不能改变。
+- 预检 observability 结论只跟随 YAML，不跟随 `POR_TRACING_ENABLED`。
+- 不同有效配置产生不同请求指纹；相同请求与配置指纹稳定。
+- 配置变化后复用旧 Key 的 admission 判定为拒绝。
+- 旧指纹记录仅在冻结配置摘要未变时可重放。
+- 敏感字段不进入指纹输入。
+- CLI `run` / `smoke` 不修改配置文件、进程业务变量或 `Configuration()` 默认值。
+- 新有效快照仍通过 `validate_request` 的既有 DBOS 准入合同。
+
+`tests/test_telemetry.py` 新增/调整：
+
+- `initialize_telemetry(False)` 不受 `POR_TRACING_ENABLED=true` 影响。
+- 显式 `initialize_telemetry(True)` 不受 `POR_TRACING_ENABLED=false` 影响。
+- 现有禁用、失败、并发初始化、隐私和投递测试改为显式传入进程意图。
+
+测试夹具同步移除把 `POR_TRACING_ENABLED` 当作初始化开关的旧用法；
+`evaluation/observability/run_benchmark.py` 显式 patch 进程级策略，避免环境变量路径。
+
+### 10.4 验证结果
+
+```text
+pytest: 903 passed, 2 skipped, 187 deselected
+Ruff (E,F,I; E501 ignored): All checks passed
+compileall src/open_deep_research: passed
+scripts/phase5_import_smoke.py: 30 production imports passed
+```
+
+未执行：真实 PostgreSQL/DBOS 恢复、DBOS Executor 启动、真实模型 API、Tavily/Apify
+外部服务、Langfuse 实际投递和真实端到端研究。`tests/test_dbos_contracts.py` 等
+`integration` 合同测试按项目 `addopts` 被取消选择，本次没有为它们启动数据库。
+
+### 10.5 剩余风险
+
+- **没有逐 Run 追踪隔离**：正式与 smoke Run 共用一个 Executor 时，smoke Run 也按进程级
+  配置发射追踪；需要隔离时使用独立 Executor 进程和 `config.smoke.yaml`。
+- **旧 admission 重放边界**：旧记录只有在旧指纹仍匹配且冻结 `configuration` 摘要等于
+  当前有效配置时才可重放；更早发行版保存的部分配置摘要可能不同，此时同一旧 Key 会
+  要求新 Key。旧 Run 的查询、审批、澄清、重试和 DBOS 恢复不受影响，跨发行版恢复仍按
+  既有版本边界处理。
+- **配置路径不再决定身份**：`configuration_source` 仅作展示，相同有效配置从不同路径
+  提交会返回原 Run。
+- **Langfuse 投递未重测**：真实 Langfuse 投递、队列丢弃和 SIGKILL 尾部丢失仍由既有
+  遥测审计覆盖，本次未重新执行。
+

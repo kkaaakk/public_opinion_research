@@ -52,6 +52,7 @@ from test_sdk_context import _payload
 from test_sdk_runtime import TOKENS, _tool
 
 from open_deep_research import budget
+from open_deep_research.observability.telemetry import telemetry_enabled
 from open_deep_research.runtime import business_agent, tool_executor
 from open_deep_research.tools import register_tool
 from open_deep_research.web import history
@@ -507,7 +508,7 @@ def install(directory, scenario):
         yield ScriptedModel(
             [ModelStep.respond(reply) for _ in range(10)],
             default_usage=TOKENS,
-            emit_traces=os.environ.get("POR_TRACING_ENABLED", "").lower() == "true",
+            emit_traces=telemetry_enabled(),
         )
 
     async def tools(config, role, spec):

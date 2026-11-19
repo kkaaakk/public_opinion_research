@@ -303,7 +303,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": True,
-                "description": "Default Langfuse/OTel tracing state for Executor and Web processes.",
+                "description": "Process-level Langfuse/OTel tracing for Executor and Web startup. Run snapshots record this value but cannot reinitialize tracing.",
             }
         },
     )

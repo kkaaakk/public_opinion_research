@@ -41,8 +41,10 @@ enabled_plugins:
   - social-research
 
 # ---------------------------------------------------------------------------
-# Budget and final-report reservation
+# Budget, process tracing and final-report reservation
 # ---------------------------------------------------------------------------
+# Process-level Langfuse/OTel intent for Executor/Web startup. A Run snapshot
+# records it but cannot reinitialize or override process tracing.
 tracing_enabled: true
 budget_enabled: true
 max_model_calls: 120

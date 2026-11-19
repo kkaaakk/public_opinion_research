@@ -57,10 +57,24 @@ def load_configuration(path: str | Path | None = None) -> Configuration:
 
 def frozen_config(configuration: Configuration) -> dict[str, Any]:
     """Build the non-sensitive Run snapshot that Executors and Agents reuse."""
-    values = configuration.model_dump(mode="json")
+    return {"configurable": _without_sensitive(configuration.model_dump(mode="json"))}
+
+
+def effective_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize one trusted Run snapshot into its effective settings."""
+    return Configuration.from_runnable_config(config).model_dump(mode="json")
+
+
+def non_sensitive_config(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop credential-shaped fields from an already-normalized snapshot."""
+    return _without_sensitive(values)
+
+
+def _without_sensitive(values: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = dict(values)
     for field in SENSITIVE_CONFIG_FIELDS:
-        values.pop(field, None)
-    return {"configurable": values}
+        cleaned.pop(field, None)
+    return cleaned
 
 
 def request_payload(
@@ -108,6 +122,7 @@ def config_summary(configuration: Configuration) -> dict[str, Any]:
         "allow_plan_feedback": configuration.allow_plan_feedback,
         "report_mode": configuration.report_mode,
         "tracing_enabled": configuration.tracing_enabled,
+        "tracing_scope": "process",
         "budget_enabled": configuration.budget_enabled,
         "max_model_calls": configuration.max_model_calls,
         "max_tool_calls": configuration.max_tool_calls,
@@ -205,7 +220,9 @@ __all__ = [
     "SENSITIVE_CONFIG_FIELDS",
     "SMOKE_CONFIG_FILE",
     "config_summary",
+    "effective_config",
     "frozen_config",
     "load_configuration",
+    "non_sensitive_config",
     "request_payload",
 ]

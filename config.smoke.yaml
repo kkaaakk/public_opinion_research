@@ -19,6 +19,8 @@ allow_clarification: false
 allow_plan_feedback: false
 
 # Smaller hard ceilings while keeping the final-report reservation.
+# Process-level tracing only applies when this file starts its own Executor;
+# a shared Executor keeps the formal config.yaml tracing state.
 tracing_enabled: false
 budget_enabled: true
 max_model_calls: 24

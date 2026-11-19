@@ -75,7 +75,6 @@ def trace_capture(monkeypatch, request):
         trace, "set_tracer_provider", lambda p: current.update(provider=p)
     )
     monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", lambda **kw: memory)
-    monkeypatch.setenv("POR_TRACING_ENABLED", "true")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test-" + uuid4().hex)
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "test-only-secret")
     monkeypatch.setenv("LANGFUSE_BASE_URL", "http://127.0.0.1:1")
@@ -89,7 +88,7 @@ def trace_capture(monkeypatch, request):
         "_exporter": None,
     }.items():
         monkeypatch.setattr(telemetry, key, value)
-    assert telemetry.initialize_telemetry()
+    assert telemetry.initialize_telemetry(True)
     provider = telemetry._provider
 
     def spans():

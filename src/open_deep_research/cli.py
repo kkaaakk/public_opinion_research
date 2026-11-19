@@ -484,6 +484,7 @@ def _print_report(report: PreflightReport) -> None:
             "budget_enabled",
             "max_model_calls",
             "tracing_enabled",
+            "tracing_scope",
             "workflow_step_timeout_seconds",
         ):
             print(f"  {name}: {settings[name]}")
