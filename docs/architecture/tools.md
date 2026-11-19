@@ -5,7 +5,7 @@
 | 项目     | 内容                                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------------------------- |
 | 阅读目标 | 理解 Public Opinion 业务 Agent 可调用工具如何注册、筛选、执行和失败兜底。                                    |
-| 关键代码 | `src/open_deep_research/tools/registry.py`、`src/open_deep_research/tools/rag_tool.py`、`src/open_deep_research/runtime/business_agent.py`、`src/open_deep_research/runtime/tool_executor.py` |
+| 关键代码 | `src/open_deep_research/tools/__init__.py`、`src/open_deep_research/tools/manager.py`、`src/open_deep_research/tools/registry.py`、`src/open_deep_research/tools/rag_tool.py`、`src/open_deep_research/runtime/tool_executor.py` |
 | 上游文档 | [Agent Loop 模块说明](agent-loop.md)                                                                                       |
 | 下游文档 | [RAG 模块说明](rag.md)、[RAG 检索测试记录](../evaluation/rag-retrieval-test-records.md)                                    |
 
@@ -13,7 +13,9 @@
 
 ## 1. 模块定位
 
-`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。四个业务角色通过 `_business_agent_tools` 按允许的领域筛选。普通 Python 工具用官方 `@function_tool` 声明：名称、描述、JSON Schema、参数校验和默认值都由 SDK 生成，工具体只把通过校验的参数交给 `ToolExecutor`。MCP 工具由官方 `MCPServerStdio` / `MCPServerStreamableHttp` 与 `MCPUtil.to_function_tool()` 生成同等声明。`tools/__init__.py:register_tool` 只附加 domain、effect 与取消排空策略，不重建声明。
+`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。`tools/manager.py:ToolManager` 是四个业务角色唯一的装配入口：`discover()` 收集本地工具、全局 MCP 与插件工具并按角色领域筛选；`bind()` 把筛选结果交给该 Run 的 `ToolExecutor`。`runtime/business_agent.py:_business_agent_tools` 只是 `ToolManager.discover()` 的入口，`por.role_tools` 仍在 Executor 创建前持久化并校验目录。
+
+普通 Python 工具用 `tools/__init__.py:business_tool` 声明：它调用官方 `@function_tool` 生成名称、描述、JSON Schema、参数校验和默认值，并自动把业务函数交给 `ToolExecutor.execute`，业务函数不再显式编排执行器。`register_tool` 仍可为已有声明只附加 domain、effect 与取消排空策略。MCP 工具由官方 `MCPServerStdio` / `MCPServerStreamableHttp` 与 `MCPUtil.to_function_tool()` 生成同等声明，并进入同一执行层。
 
 `utils.py` 和 RAG 公共入口继续提供已有的 Tavily、RAG LangChain 导出，供直接调用这些工具的客户端使用。
 
@@ -196,7 +198,7 @@ class MCPConfig(BaseModel):
 
 业务角色调用链：
 
-1. [`_business_agent_tools`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/runtime/business_agent.py#L194) 根据配置装配工具，再按角色的 `allowed_domains` 过滤，未知或未分类领域默认拒绝。
+1. [`_business_agent_tools`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/runtime/business_agent.py#L194) 委托 `ToolManager.discover()` 根据配置装配工具，再按角色的 `allowed_domains` 过滤，未知或未分类领域默认拒绝。
 2. [`_role_tool_prompt`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/runtime/business_agent.py#L173) 把过滤后的同一工具列表传给 `build_dynamic_tool_prompt`，补充角色领域及实际工具名称白名单。
 3. [`PublicOpinionAgentSpec.format_system_prompt`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/public_opinion_agents/base.py#L28) 将生成的 `retrieval_tool_prompt` 注入角色系统提示词。
 
@@ -209,5 +211,5 @@ class MCPConfig(BaseModel):
 ## 9. 扩展新工具
 
 1. 在对应业务模块实现工具函数。第一个参数声明为 SDK 的 `ToolContext`，其余参数用 Python 类型和默认值生成模型可见 Schema。
-2. 用官方 `@function_tool(...)` 装饰器声明工具，再用 `register_tool(..., domain=..., effect=...)` 附加业务元数据。工具体调用 `ToolExecutor.execute` 执行实际业务函数；同步业务函数由 Executor 放入线程，并在 `drain_on_cancel=True` 时等待线程与回执完成。
-3. 将声明加入 Registry 对应的装配分支。角色领域白名单决定可见范围。
+2. 用 `@business_tool(domain=..., effect=...)` 声明工具。它复用官方 `@function_tool` 生成的 Schema、校验和默认值，并自动在 SDK 校验之后调用 `ToolExecutor.execute`；业务函数只实现业务逻辑。同步业务函数由 Executor 放入线程，并自动启用取消等待。需要运行配置的业务函数在函数体内通过 `context.context.tool_executor.tool_config(context)` 读取，此时受保护操作已经登记。
+3. 将声明加入本地工具集合；`ToolManager` 按角色领域白名单筛选并绑定，无需新增第二个注册表或执行器。

@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from agents import Agent, FunctionTool, Model, ModelSettings, RunConfig
+from agents import Agent, Model, ModelSettings, RunConfig
 from agents.exceptions import MaxTurnsExceeded
 from agents.retry import ModelRetrySettings
 from agents.run import ModelInputData
@@ -41,7 +41,6 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import get_model_token_limit
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
-from open_deep_research.mcp.domain_filter import get_tool_domain
 from open_deep_research.observability.telemetry import (
     annotate,
     business_span,
@@ -50,7 +49,8 @@ from open_deep_research.observability.telemetry import (
 from open_deep_research.runtime.compaction import summarize_history
 from open_deep_research.runtime.sdk_context import SDKContextHarness
 from open_deep_research.runtime.tool_executor import ToolExecutor, tool_usage
-from open_deep_research.tools import BusinessTool, tool_result_text
+from open_deep_research.tools import tool_result_text
+from open_deep_research.tools.manager import ToolManager
 from open_deep_research.workflow.dbos_config import native_client, settings
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
@@ -464,17 +464,6 @@ class SDKAgentRuntime:
         """Return cumulative business usage for admission, without submitting it."""
         return self.run_budget.projected()
 
-    def _register_tool(
-        self, tool: BusinessTool, executor: ToolExecutor
-    ) -> FunctionTool:
-        if get_tool_domain(tool) not in self.spec.allowed_domains:
-            raise ValueError(
-                f"Tool {tool.name!r} is outside {self.role}'s allowed domains."
-            )
-        return executor.bind(
-            tool.sdk_tool, drain_on_cancel=tool.drain_on_cancel
-        )
-
     def _report_messages(self, task: str) -> list[Any]:
         messages: list[Any] = [HumanMessage(content=task)]
         output_ids: set[str] = set()
@@ -553,16 +542,8 @@ class SDKAgentRuntime:
             budget=self.run_budget,
             model_factory=self.model_factory,
         )
-        tools: dict[str, BusinessTool] = {}
-        for tool in self.tools:
-            if not isinstance(tool, BusinessTool):
-                raise TypeError(
-                    "SDK business runtime requires BusinessTool declarations; "
-                    "hosted/native search is not verified."
-                )
-            if tool.name in tools:
-                raise ValueError(f"Duplicate business tool name: {tool.name}")
-            tools[tool.name] = tool
+        manager = ToolManager(self.role, self.spec, self.runtime_config)
+        tools = manager.index(self.tools)
         executor = ToolExecutor(
             self.role,
             self.spec.allowed_domains,
@@ -577,7 +558,7 @@ class SDKAgentRuntime:
             name=self.spec.display_name,
             instructions=self.system_prompt,
             model=MeteredModel(self.model) if scope else self.model,
-            tools=[self._register_tool(tool, executor) for tool in tools.values()],
+            tools=manager.bind(tools.values(), executor),
             output_type=None,
             model_settings=ModelSettings(
                 max_tokens=self.config.research_model_max_tokens,

@@ -33,14 +33,10 @@ from open_deep_research.runtime.sdk_runtime import AgentRuntimeResult, SDKAgentR
 from open_deep_research.state import DeepResearchState, ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.tools import BusinessTool
-from open_deep_research.tools.plugins import (
-    LOAD_SKILL_TOOL,
-    build_skill_prompt,
-    load_plugin_tools,
-)
+from open_deep_research.tools.manager import ToolManager
+from open_deep_research.tools.plugins import LOAD_SKILL_TOOL, build_skill_prompt
 from open_deep_research.tools.registry import (
     build_dynamic_tool_prompt,
-    get_all_tools,
     has_external_research_tool,
     tool_effect,
 )
@@ -167,68 +163,14 @@ def _role_tool_prompt(configurable: Configuration, spec: Any, tools: list[Any]) 
     )
 
 
-# 装配工具后按角色领域严格过滤。
+# 按角色领域装配本次运行可见的工具；DBOS Step 负责其持久化与恢复校验。
 async def _business_agent_tools(
     config: RunnableConfig,
     role: str,
     spec: Any | None = None,
 ) -> list[Any]:
     spec = spec or get_public_opinion_agent_spec(role)
-    allowed_domains = spec.allowed_domains
-    configurable = Configuration.from_runnable_config(config)
-    all_tools = await get_all_tools(config)
-
-    # Social platform collection is contributed by the plugin's Apify MCP
-    # server, so this role only receives social tools its plugin authorizes.
-    # Plugins otherwise contribute a role-authorized load_skill declaration;
-    # declared local tools stay in the existing registry.
-    local_tool_names = {tool_name(tool) for tool in all_tools}
-    plugin_tools, _role_plugins = await load_plugin_tools(
-        config,
-        role=role,
-        allowed_domains=allowed_domains,
-        local_tool_names=local_tool_names,
-        existing_tool_names=set(local_tool_names),
-    )
-    all_tools.extend(plugin_tools)
-
-    filtered_tools = []
-    rejected_tools = []
-    for tool in all_tools:
-        domain = get_tool_domain(tool)
-        if domain in allowed_domains:
-            filtered_tools.append(tool)
-        else:
-            rejected_tools.append((tool_name(tool), domain or "unclassified"))
-    LOGGER.debug(
-        "Public-opinion agent %s: allowed_domains=%s tools_before=%d "
-        "tools_after=%d rejected=%s",
-        role,
-        sorted(allowed_domains),
-        len(all_tools),
-        len(filtered_tools),
-        rejected_tools,
-    )
-    _verify_enabled_tools(configurable, role, allowed_domains, filtered_tools)
-    return filtered_tools
-
-
-# 校验实际装配结果是否满足显式启用的配置，而不是静默缺少工具。
-def _verify_enabled_tools(
-    configurable: Configuration,
-    role: str,
-    allowed_domains: frozenset[str],
-    tools: list[Any],
-) -> None:
-    from open_deep_research.tools.registry import rag_requested
-
-    names = {tool_name(tool) for tool in tools}
-    if "rag" in allowed_domains and rag_requested(configurable) and "rag_search" not in names:
-        raise ValueError(
-            f"Role {role!r} requires rag_search because rag_enabled=true with "
-            f"retrieval_mode={configurable.retrieval_mode.value}, but the RAG "
-            "tool is unavailable."
-        )
+    return await ToolManager(role, spec, config).discover()
 
 
 # 压缩研究记录并统计用量，预算不足时保留原始笔记以预留最终报告调用。
