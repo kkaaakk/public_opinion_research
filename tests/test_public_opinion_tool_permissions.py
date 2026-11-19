@@ -8,6 +8,7 @@ import pytest
 import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.mcp.domain_filter import get_tool_domain
 from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
+from open_deep_research.tools import manager as tool_manager_module
 from open_deep_research.tools.registry import get_all_tools
 
 
@@ -47,9 +48,9 @@ def _patch_tool_source(monkeypatch, tools) -> None:
     async def fake_load_plugin_tools(*_args, **_kwargs):
         return [], None
 
-    monkeypatch.setattr(business_agent_module, "get_all_tools", fake_get_all_tools)
+    monkeypatch.setattr(tool_manager_module, "get_all_tools", fake_get_all_tools)
     monkeypatch.setattr(
-        business_agent_module, "load_plugin_tools", fake_load_plugin_tools
+        tool_manager_module, "load_plugin_tools", fake_load_plugin_tools
     )
 
 

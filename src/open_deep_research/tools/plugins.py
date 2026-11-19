@@ -19,14 +19,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from agents import function_tool
 from agents.tool_context import ToolContext
 from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.domain_filter import get_domain
 from open_deep_research.mcp.tools import MCPServerSpec, load_mcp_tools
-from open_deep_research.tools import BusinessTool, register_tool
+from open_deep_research.tools import BusinessTool, business_tool
 
 LOGGER = logging.getLogger(__name__)
 
@@ -363,20 +362,15 @@ def build_load_skill_tool(
         f"Skill manifest: {role_plugins.fingerprint}."
     )
 
-    async def read(skill_name: str) -> str:
+    async def load_skill(context: ToolContext, skill_name: str) -> str:
         return _skill_payload(skills, role, skill_name)
 
-    @function_tool(
+    return business_tool(
+        domain="core",
+        effect="read",
         name_override=LOAD_SKILL_TOOL,
         description_override=description,
-        use_docstring_info=False,
-        strict_mode=False,
-        failure_error_function=None,
-    )
-    async def load_skill(context: ToolContext, skill_name: str) -> str:
-        return await context.context.tool_executor.execute(context, read, skill_name)
-
-    return register_tool(load_skill, domain="core", effect="read")
+    )(load_skill)
 
 
 # 校验名称后返回已加载的 Skill 内容，杜绝路径访问与未授权读取。
