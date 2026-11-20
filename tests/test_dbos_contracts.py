@@ -28,6 +28,29 @@ from open_deep_research.workflow.dbos_config import domain_engine, native_client
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("native_case", ["admission"], indirect=True)
+def test_parallel_producers_wait_for_the_shared_token_bill(native_case):
+    """Two formal producers must not reject each other's in-flight bill."""
+    case = native_case
+    case.cfg["configurable"].update(
+        max_input_tokens=1_000_000,
+        max_output_tokens=100_000,
+    )
+    run = case.create()
+    result = case.wait(run, timeout=60)
+
+    assert result["status"] == "completed"
+    windows = case.runtimes[0].model_windows
+    roles = {role for role, _start, _end in windows}
+    assert roles == {"public_signal", "internal_knowledge"}
+    # Each producer completed both bounded model turns instead of being
+    # stopped by the other producer's unconfirmed bill.
+    assert len(windows) == 4
+    intervals = sorted((start, end) for _role, start, end in windows)
+    for (_start, end), (next_start, _next_end) in zip(intervals, intervals[1:]):
+        assert next_start >= end
+
+
 @pytest.mark.parametrize("native_case", ["cancel"], indirect=True)
 def test_studio_cancel_records_failed_model_and_agent_after_cancel_intent(native_case):
     case = native_case

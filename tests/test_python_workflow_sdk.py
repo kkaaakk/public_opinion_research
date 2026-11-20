@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sys
+import time
 from collections import Counter
 from contextlib import asynccontextmanager
 
@@ -116,6 +117,7 @@ def install_sdk(
     second_entered = set()
     second_barrier = asyncio.Event()
     blocked = asyncio.Event()
+    model_windows = []
     original_state = initial()
 
     class WorkflowServices(Services):
@@ -190,6 +192,14 @@ def install_sdk(
     class RecordingRuntime(SDKAgentRuntime):
         async def run(self, task):
             runtimes.append(self)
+            self.model_windows = model_windows
+            if mode == "admission" and self.role in ROLES[:2]:
+                # Release both producers together, then let admission serialize
+                # their physical model calls.
+                entered.add(self.role)
+                if len(entered) == 2:
+                    barrier.set()
+                await asyncio.wait_for(barrier.wait(), 3)
             return await super().run(task)
 
     @asynccontextmanager
@@ -205,10 +215,15 @@ def install_sdk(
             text = json.dumps(call.input)
             assert f"private-{role}" not in text
             if role in ROLES[:2]:
-                entered.add(role)
-                if len(entered) == 2:
-                    barrier.set()
-                await asyncio.wait_for(barrier.wait(), 3)
+                if mode == "admission":
+                    started = time.monotonic()
+                    await asyncio.sleep(0.2)
+                    model_windows.append((role, started, time.monotonic()))
+                else:
+                    entered.add(role)
+                    if len(entered) == 2:
+                        barrier.set()
+                    await asyncio.wait_for(barrier.wait(), 3)
                 tool_name = (
                     "web_search"
                     if role == "public_signal"
@@ -228,6 +243,10 @@ def install_sdk(
             role = current["role"]
             text = json.dumps(call.input)
             assert "research_raw_search" in text or "Synthetic internal brand recall evidence" in text
+            if mode == "admission" and role in ROLES[:2]:
+                started = time.monotonic()
+                await asyncio.sleep(0.2)
+                model_windows.append((role, started, time.monotonic()))
             if mode == "double_error":
                 second_entered.add(role)
                 if len(second_entered) == 2:

@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Annotated, Any, List, Literal
 
@@ -28,8 +29,173 @@ TAVILY_SEARCH_DESCRIPTION = (
     "Useful for when you need to answer questions about current events."
 )
 
+# Tool-output safety bounds. These are deliberately not user-tunable: a larger
+# value would let one search result bypass the Agent context protection.
+MAX_WEB_SOURCE_OUTPUT_CHARS = 6_000
+MAX_WEB_SEARCH_OUTPUT_CHARS = 24_000
+MAX_SOURCE_TITLE_CHARS = 200
+MAX_SOURCE_URL_CHARS = 800
+MAX_DEGRADED_EXCERPT_CHARS = 1_500
+# Bound one tool call's fan-out. Normal research uses one to three queries and
+# one query returns at most five results, so these limits retain enough evidence
+# while preventing an unbounded number of sequential summarization calls.
+MAX_SEARCH_QUERIES_PER_CALL = 4
+MAX_SUMMARIZED_PAGES_PER_CALL = 8
+MAX_SUMMARIZATION_SECONDS_PER_CALL = 240.0
+MAX_OMITTED_SOURCE_LIST = 5
+OMITTED_TITLE_CHARS = 80
+OMITTED_URL_CHARS = 240
+SOURCE_TRUNCATION_NOTE = (
+    "\n[TRUNCATED: source content exceeded the per-source output limit.]"
+)
+OUTPUT_TRUNCATION_NOTE = "\n[TRUNCATED: web_search output exceeded its total limit.]"
+DEGRADED_SUMMARY_PREFIX = (
+    "[SUMMARY UNAVAILABLE: webpage summarization {reason}; the excerpt below is "
+    "retrieved source text, not a model summary.]"
+)
 
-# 并发检索多条查询，对带原文的结果生成摘要并汇总来源。
+
+# 按字符边界裁剪文本，并报告是否发生截断。
+def _clip_text(text: str, limit: int) -> tuple[str, bool]:
+    """Clip text to a character bound and report whether it was truncated."""
+    if limit <= 0:
+        return "", bool(text)
+    if len(text) <= limit:
+        return text, False
+    return text[:limit].rstrip(), True
+
+
+# 摘要失败时只保留受限的 Tavily 片段或网页摘录，绝不回填完整原文。
+def _bounded_fallback(
+    fallback_content: str | None,
+    max_chars: int,
+    *,
+    reason: str,
+) -> str:
+    """Return a clearly marked, bounded source excerpt for a failed summary."""
+    text = (fallback_content or "").strip()
+    prefix = DEGRADED_SUMMARY_PREFIX.format(reason=reason)
+    if not text:
+        return prefix + "\n(no source excerpt available)"
+    excerpt, truncated = _clip_text(text, max(1, max_chars))
+    if truncated:
+        excerpt += "\n[EXCERPT TRUNCATED]"
+    return prefix + "\n" + excerpt
+
+
+# 预算拒绝、执行控制异常、取消和存储故障不得被当作普通摘要失败吞掉。
+def _is_execution_control_failure(error: BaseException) -> bool:
+    """Return whether any error in the causal chain must propagate.
+
+    ``ainvoke_model_with_budget`` can wrap a lower-level failure in
+    ``ModelInvocationError``. Inspect the existing ``error_chain`` instead of
+    classifying only the outer exception, so wrapped database, execution-control
+    and cancellation failures are never degraded into a webpage excerpt.
+    """
+    from dbos import error as dbos_error
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from open_deep_research.budget import ModelBudgetExceeded
+    from open_deep_research.workflow.execution import (
+        ExecutionControlError,
+        error_chain,
+        is_cancellation,
+    )
+
+    for cause in error_chain(error):
+        if isinstance(
+            cause,
+            (
+                ModelBudgetExceeded,
+                ExecutionControlError,
+                SQLAlchemyError,
+                dbos_error.DBOSBaseException,
+                dbos_error.DBOSException,
+            ),
+        ):
+            return True
+        if is_cancellation(cause):
+            return True
+    return False
+
+
+# 为每条来源分配均等输出额度，避免长网页挤掉后续来源。
+def _format_search_results(
+    results: dict[str, dict[str, Any]],
+    *,
+    omitted: list[tuple[str, dict[str, Any]]] | None = None,
+    coverage_notes: list[str] | None = None,
+) -> str:
+    """Format summarized sources and coverage notes under one total output bound."""
+    omitted = list(omitted or [])
+    notes = list(coverage_notes or [])
+    if omitted:
+        notes.append(
+            f"{len(omitted)} additional unique results were not summarized; "
+            "their source URLs and titles remain available for a follow-up search."
+        )
+        for url, result in omitted[:MAX_OMITTED_SOURCE_LIST]:
+            title, _ = _clip_text(
+                str(result.get("title") or ""), OMITTED_TITLE_CHARS
+            )
+            url_text, _ = _clip_text(str(url), OMITTED_URL_CHARS)
+            notes.append(f"- {title} | {url_text}")
+        if len(omitted) > MAX_OMITTED_SOURCE_LIST:
+            notes.append(
+                f"- ... {len(omitted) - MAX_OMITTED_SOURCE_LIST} more unique results omitted."
+            )
+
+    note_text = (
+        "\n\n--- SOURCE COVERAGE NOTE ---\n" + "\n".join(notes) if notes else ""
+    )
+    prefix = "Search results: \n\n"
+    if not results:
+        if note_text:
+            return (prefix + note_text).strip()
+        return "No valid search results found. Please try different search queries or use a different search API."
+
+    entries = list(results.items())
+    # Equal shares keep a long first source from consuming the entire bound.
+    available = MAX_WEB_SEARCH_OUTPUT_CHARS - len(prefix) - len(note_text)
+    per_block = max(1, available // len(entries))
+    blocks: list[str] = []
+    for index, (url, result) in enumerate(entries):
+        head = f"\n\n--- SOURCE {index + 1}: "
+        middle = " ---\nURL: "
+        tail = "\n\nSUMMARY:\n"
+        divider = "\n\n" + "-" * 80 + "\n"
+        variable = max(0, per_block - len(head) - len(middle) - len(tail) - len(divider))
+        title_budget = min(MAX_SOURCE_TITLE_CHARS, max(1, variable // 4))
+        url_budget = min(MAX_SOURCE_URL_CHARS, max(1, variable - title_budget))
+        content_budget = min(
+            MAX_WEB_SOURCE_OUTPUT_CHARS,
+            max(
+                0,
+                variable
+                - title_budget
+                - url_budget
+                - len(SOURCE_TRUNCATION_NOTE),
+            ),
+        )
+        title, _ = _clip_text(str(result.get("title") or ""), title_budget)
+        url_text, _ = _clip_text(str(url), url_budget)
+        content, truncated = _clip_text(
+            str(result.get("content") or ""), content_budget
+        )
+        if truncated:
+            content += SOURCE_TRUNCATION_NOTE
+        blocks.append(head + title + middle + url_text + tail + content + divider)
+
+    output = prefix + "".join(blocks) + note_text
+    if len(output) > MAX_WEB_SEARCH_OUTPUT_CHARS:
+        # Defensive bound for pathological source counts. The per-source shares
+        # normally keep the joined output within the configured total.
+        keep = MAX_WEB_SEARCH_OUTPUT_CHARS - len(OUTPUT_TRUNCATION_NOTE)
+        output = output[:keep].rstrip() + OUTPUT_TRUNCATION_NOTE
+    return output
+
+
+# 顺序检索多条查询，对带原文的结果逐篇生成摘要并汇总来源。
 async def _tavily_search(
     queries: List[str],
     max_results: Annotated[int, InjectedToolArg] = 5,
@@ -49,16 +215,27 @@ async def _tavily_search(
     Returns:
         Formatted string containing summarized search results
     """
-    # Step 1: Execute search queries asynchronously
+    # Step 1: Bound the per-call query fan-out before any Tavily request.
+    all_queries = [str(query) for query in (queries or [])]
+    bounded_queries = all_queries[:MAX_SEARCH_QUERIES_PER_CALL]
+    omitted_query_count = len(all_queries) - len(bounded_queries)
+    coverage_notes: list[str] = []
+    if omitted_query_count:
+        coverage_notes.append(
+            f"Query coverage limited: {omitted_query_count} additional queries were "
+            f"not executed (max {MAX_SEARCH_QUERIES_PER_CALL} queries per call)."
+        )
+
+    # Step 2: Execute the bounded search queries asynchronously
     search_results = await tavily_search_async(
-        queries,
+        bounded_queries,
         max_results=max_results,
         topic=topic,
         include_raw_content=True,
         config=config,
     )
 
-    # Step 2: Deduplicate results by URL to avoid processing the same content multiple times
+    # Step 3: Deduplicate results by URL to avoid processing the same content multiple times
     unique_results = {}
     for response in search_results:
         for result in response["results"]:
@@ -66,7 +243,7 @@ async def _tavily_search(
             if url not in unique_results:
                 unique_results[url] = {**result, "query": response["query"]}
 
-    # Step 3: Set up the summarization model with configuration
+    # Step 4: Set up the summarization model with configuration
     configurable = Configuration.from_runnable_config(config)
 
     # Character limit to stay within model token limits (configurable)
@@ -84,49 +261,62 @@ async def _tavily_search(
         max_attempts=configurable.max_structured_output_retries,
     )
 
-    # Step 4: Create summarization tasks (skip empty content)
-    # 对无需摘要的内容直接返回原值，使并发任务使用统一接口。
-    async def noop():
-        """No-op function for results without raw content."""
-        return None
-
-    summarization_tasks = [
-        noop()
-        if not result.get("raw_content")
-        else summarize_webpage(
-            summarization_model,
-            result["raw_content"][:max_char_to_include],
-            model_name=configurable.summarization_model,
-        )
-        for result in unique_results.values()
-    ]
-
-    # Step 5: Execute all summarization tasks in parallel
-    summaries = await asyncio.gather(*summarization_tasks)
-
-    # Step 6: Combine results with their summaries
-    summarized_results = {
-        url: {
-            "title": result["title"],
-            "content": result["content"] if summary is None else summary,
+    # Step 5: Summarize one page at a time under page and elapsed-time bounds.
+    # A single in-flight model bill keeps the shared token budget consistent and
+    # avoids a burst of DB pool users.
+    summarized_results: dict[str, dict[str, Any]] = {}
+    omitted_results: list[tuple[str, dict[str, Any]]] = []
+    summarized_count = 0
+    page_limit_hit = False
+    time_limit_hit = False
+    deadline = time.monotonic() + MAX_SUMMARIZATION_SECONDS_PER_CALL
+    for url, result in unique_results.items():
+        if not result.get("raw_content"):
+            summarized_results[url] = {
+                "title": result.get("title") or "",
+                "content": result.get("content") or "",
+            }
+            continue
+        if summarized_count >= MAX_SUMMARIZED_PAGES_PER_CALL:
+            page_limit_hit = True
+            omitted_results.append((url, result))
+            continue
+        if time.monotonic() >= deadline:
+            time_limit_hit = True
+            omitted_results.append((url, result))
+            continue
+        summarized_results[url] = {
+            "title": result.get("title") or "",
+            "content": await summarize_webpage(
+                summarization_model,
+                str(result["raw_content"])[:max_char_to_include],
+                model_name=configurable.summarization_model,
+                fallback_content=str(
+                    result.get("content") or result["raw_content"] or ""
+                ),
+            ),
         }
-        for url, result, summary in zip(
-            unique_results.keys(), unique_results.values(), summaries
-        )
-    }
+        summarized_count += 1
 
-    # Step 7: Format the final output
-    if not summarized_results:
-        return "No valid search results found. Please try different search queries or use a different search API."
+    if omitted_results:
+        reasons = []
+        if page_limit_hit:
+            reasons.append(
+                f"per-call limit of {MAX_SUMMARIZED_PAGES_PER_CALL} summarized pages"
+            )
+        if time_limit_hit:
+            reasons.append(
+                f"{MAX_SUMMARIZATION_SECONDS_PER_CALL:g}s summarization budget"
+            )
+        if reasons:
+            coverage_notes.append("Coverage limit reason: " + " and ".join(reasons) + ".")
 
-    formatted_output = "Search results: \n\n"
-    for i, (url, result) in enumerate(summarized_results.items()):
-        formatted_output += f"\n\n--- SOURCE {i + 1}: {result['title']} ---\n"
-        formatted_output += f"URL: {url}\n\n"
-        formatted_output += f"SUMMARY:\n{result['content']}\n\n"
-        formatted_output += "\n\n" + "-" * 80 + "\n"
-
-    return formatted_output
+    # Step 6: Format the final output under explicit per-source and total caps
+    return _format_search_results(
+        summarized_results,
+        omitted=omitted_results,
+        coverage_notes=coverage_notes,
+    )
 
 
 # 保留 Tavily 原始结果，跳过逐网页摘要，供研究图生产流程使用。
@@ -251,12 +441,14 @@ async def tavily_search_async(
     return search_results
 
 
-# 在超时保护下调用摘要模型处理网页，异常时按现有逻辑回退。
+# 在超时保护下调用摘要模型处理网页；普通失败降级为有界摘录，控制类异常继续传播。
 async def summarize_webpage(
     model: BaseChatModel,
     webpage_content: str,
     *,
     model_name: str | None = None,
+    fallback_content: str | None = None,
+    max_excerpt_chars: int = MAX_DEGRADED_EXCERPT_CHARS,
 ) -> str:
     """Summarize webpage content using AI model with timeout protection.
 
@@ -264,9 +456,13 @@ async def summarize_webpage(
         model: The chat model configured for summarization
         webpage_content: Raw webpage content to be summarized
         model_name: Optional model name for LangSmith correlation metadata
+        fallback_content: Short Tavily snippet (preferred) or raw page text
+        max_excerpt_chars: Bound for the degraded excerpt returned on failure
 
     Returns:
-        Formatted summary with key excerpts, or original content if summarization fails
+        Formatted model summary, or a clearly marked bounded excerpt when the
+        provider call fails for an ordinary reason. Budget, execution-control,
+        cancellation and storage failures are never swallowed.
     """
     try:
         # Create prompt with current date context
@@ -296,17 +492,30 @@ async def summarize_webpage(
         return formatted_summary
 
     except asyncio.TimeoutError:
-        # Timeout during summarization - return original content
+        # A timed-out page degrades to a bounded excerpt; it is never retried
+        # with the full raw page as if it were a successful summary.
         logging.warning(
-            "Summarization timed out after 60 seconds, returning original content"
+            "Webpage summarization timed out; using a bounded source excerpt."
         )
-        return webpage_content
-    except Exception as e:
-        # Other errors during summarization - log and return original content
+        return _bounded_fallback(
+            fallback_content,
+            max_excerpt_chars,
+            reason="timed out",
+        )
+    except Exception as exc:
+        if _is_execution_control_failure(exc):
+            raise
+        # Do not put provider messages, stack traces or request parameters into
+        # the model context; only the exception type reaches the log.
         logging.warning(
-            f"Summarization failed with error: {str(e)}, returning original content"
+            "Webpage summarization failed (%s); using a bounded source excerpt.",
+            type(exc).__name__,
         )
-        return webpage_content
+        return _bounded_fallback(
+            fallback_content,
+            max_excerpt_chars,
+            reason="failed",
+        )
 
 
 ##########################

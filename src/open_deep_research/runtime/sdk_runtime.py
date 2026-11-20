@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -39,7 +40,7 @@ from open_deep_research.budget import (
     physical_model_usage,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.llm.context import get_model_token_limit
+from open_deep_research.llm.context import resolve_context_capacity
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
 from open_deep_research.observability.telemetry import (
     annotate,
@@ -59,6 +60,8 @@ from open_deep_research.workflow.execution import (
 )
 
 SDK_RUNTIME_VERSION = "sdk-vertical-v1"
+
+LOGGER = logging.getLogger(__name__)
 
 CompressionCallback = Callable[
     [list[Any], str, str, dict[str, Any]],
@@ -198,6 +201,8 @@ class _BusinessAgentHarness(SDKContextHarness):
         self.items: list[Any] = []
         self._compacted_turns: set[int] = set()
         self.rolling_summary = ""
+        self.estimated_input_tokens = 0
+        self.context_diagnostics: dict[str, Any] = {}
 
     def _extra_snapshot(self) -> dict[str, Any]:
         return {
@@ -289,12 +294,8 @@ class _BusinessAgentHarness(SDKContextHarness):
         current = self._with_summary(
             head, active, self.rolling_summary, data.instructions
         )
-        capacity = (
-            self.config.context_capacity_tokens
-            or get_model_token_limit(self.config.research_model)
-            # Unknown deployment aliases still get a bounded application
-            # window. This is not a claim about the provider's context limit.
-            or 32_768
+        capacity = resolve_context_capacity(
+            self.config.research_model, self.config.context_capacity_tokens
         )
         before = self._estimate(current, agent)
         self.estimated_input_tokens = before
@@ -309,10 +310,25 @@ class _BusinessAgentHarness(SDKContextHarness):
             for turn, unit in active[:-recent]
             if self.can_compact_unit(unit)
         ]
+        # Metrics only: never log prompts, page text, tool output or credentials.
+        diagnostics = {
+            "estimated_input_tokens": before,
+            "context_capacity_tokens": capacity,
+            "compaction_threshold_ratio": self.config.context_compaction_threshold_ratio,
+            "recent_raw_steps": recent,
+            "eligible_compaction_units": len(eligible),
+        }
+        self.context_diagnostics = diagnostics
         if not eligible:
+            LOGGER.warning(
+                "SDK context capacity exceeded: %s",
+                json.dumps(diagnostics, sort_keys=True),
+            )
+            annotate(**diagnostics)
             raise SDKContextLimitExceeded(
                 "Current task, rolling summary or recent native steps exceed "
-                "context capacity; they cannot be safely discarded."
+                "context capacity; they cannot be safely discarded; diagnostics="
+                + json.dumps(diagnostics, sort_keys=True)
             )
         removed = {turn for turn, _ in eligible}
         kept = [(turn, unit) for turn, unit in active if turn not in removed]
@@ -368,13 +384,31 @@ class _BusinessAgentHarness(SDKContextHarness):
                     stage="rolling_compact",
                     status="failed",
                     error_type=type(exc).__name__,
+                    **diagnostics,
                 )
                 if isinstance(exc, asyncio.CancelledError):
                     raise
+                LOGGER.warning(
+                    "SDK rolling compaction failed safely: %s",
+                    json.dumps(diagnostics, sort_keys=True),
+                )
+                # Keep the bounded reason fixed; never copy arbitrary provider
+                # messages or prompt content into the archived failure.
+                detail = (
+                    "candidate cannot fit or did not reduce the protected request"
+                    if isinstance(exc, ValueError)
+                    else type(exc).__name__
+                )
                 raise SDKContextLimitExceeded(
-                    f"Rolling compaction failed safely: {type(exc).__name__}: {exc}; original history retained."
+                    "Rolling compaction failed safely: "
+                    f"{detail}; original history retained; diagnostics="
+                    + json.dumps(diagnostics, sort_keys=True)
                 ) from exc
-            annotate(estimated_tokens_after=after, removed_turns=len(removed))
+            annotate(
+                estimated_tokens_after=after,
+                removed_turns=len(removed),
+                **diagnostics,
+            )
             self.estimated_input_tokens = after
             self._compacted_turns.update(removed)
             self.rolling_summary = summary

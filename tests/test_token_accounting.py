@@ -410,14 +410,19 @@ def test_nested_retry_exhaustion_keeps_attempts_in_tool_capture():
     async def exercise() -> tuple[str, dict]:
         token = start_budget_capture()
         try:
-            # summarize_webpage catches the failure and returns the raw page text.
-            result = await summarize_webpage(model, "page text")
+            # summarize_webpage catches the ordinary failure and returns a
+            # clearly marked, bounded excerpt instead of the full page.
+            result = await summarize_webpage(
+                model, "page text", fallback_content="page text", max_excerpt_chars=64
+            )
         finally:
             return result, stop_budget_capture(token)
 
     result, captured = asyncio.run(exercise())
 
-    assert result == "page text"
+    assert result.startswith("[SUMMARY UNAVAILABLE:")
+    assert "page text" in result
+    assert result != "page text"
     assert captured["model_calls"] == 2
     assert captured["input_tokens"] == 0
     assert captured["output_tokens"] == 0

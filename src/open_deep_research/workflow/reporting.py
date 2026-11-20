@@ -29,7 +29,10 @@ from open_deep_research.budget import (
     truncate_text_to_token_budget,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.llm.context import get_model_token_limit
+from open_deep_research.llm.context import (
+    get_model_token_limit,
+    resolve_context_capacity,
+)
 from open_deep_research.llm.errors import is_token_limit_exceeded
 from open_deep_research.prompts import (
     final_section_writer_instructions,
@@ -548,9 +551,8 @@ async def _fallback_report_generation(
         }
 
     messages_text = get_buffer_string(state.get("messages", []))
-    context_window = (
-        configurable.context_capacity_tokens
-        or get_model_token_limit(configurable.final_report_model)
+    context_window = resolve_context_capacity(
+        configurable.final_report_model, configurable.context_capacity_tokens
     )
     output_reserve = int(configurable.final_report_model_max_tokens or 0)
     reserved_prompt_budget = estimate_text_tokens(
@@ -779,10 +781,8 @@ async def generate_final_report(state: DeepResearchState, config: RunnableConfig
         + business_context(cfg)
         + "\n\nEvidence:\n"
     )
-    capacity = (
-        cfg.context_capacity_tokens
-        or get_model_token_limit(cfg.final_report_model)
-        or 32768
+    capacity = resolve_context_capacity(
+        cfg.final_report_model, cfg.context_capacity_tokens
     )
     available = capacity - output - estimate_text_tokens(base) - 512
     input_remaining = remaining_input_tokens(cfg, usage)

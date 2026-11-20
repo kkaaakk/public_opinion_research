@@ -541,3 +541,49 @@ def test_required_rag_failure_is_exposed_to_the_workflow(monkeypatch):
                 {"configurable": configuration.model_dump(mode="json")},
             )
         )
+
+
+def test_cli_inspect_counts_only_succeeded_tools_as_success():
+    events = [
+        {
+            "type": "sdk_event",
+            "event": "tool_result",
+            "name": "web_search",
+            "status": "succeeded",
+        },
+        {
+            "type": "sdk_event",
+            "event": "tool_result",
+            "name": "web_search",
+            "status": "failed",
+            "stage": "public_signal_agent",
+            "error_type": "ValueError",
+        },
+        {
+            "type": "sdk_event",
+            "event": "tool_result",
+            "name": "rag_search",
+            "status": "cancelled",
+        },
+        {
+            "type": "sdk_event",
+            "event": "tool_result",
+            "name": "rag_search",
+            "status": "unobserved",
+        },
+        {"type": "sdk_event", "event": "model_completed"},
+        {"type": "run_status", "status": "running"},
+    ]
+
+    model_calls, calls, failures, failed_events = cli._observation_counts(events)
+
+    assert model_calls == 1
+    assert calls == {"web_search": 2, "rag_search": 2}
+    assert failures == {"web_search": 1, "rag_search": 2}
+    assert failed_events == [
+        {
+            "event": "tool_result",
+            "stage": "public_signal_agent",
+            "error_type": "ValueError",
+        }
+    ]

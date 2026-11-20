@@ -18,7 +18,10 @@ max_react_tool_calls: 10
 workflow_step_timeout_seconds: 1800
 max_research_rounds: 2
 context_compaction_threshold_ratio: 0.75
-context_capacity_tokens: null
+# deepseek:deepseek-flash is DeepSeek-V4.1-Flash with a 1,048,576-token provider
+# window. This smaller application window is the safe working budget; it is not
+# a provider claim. Unknown model aliases still fall back to 32,768 tokens.
+context_capacity_tokens: 131072
 recent_raw_steps: 3
 
 # ---------------------------------------------------------------------------
