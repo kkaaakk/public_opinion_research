@@ -10,6 +10,11 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.llm.context import (
+    UNKNOWN_MODEL_CONTEXT_CAPACITY,
+    get_model_token_limit,
+    resolve_context_capacity,
+)
 from open_deep_research.runtime import sdk_runtime
 from open_deep_research.runtime.compaction import (
     RollingCompactOutput,
@@ -247,3 +252,60 @@ def test_history_without_complete_units_raises_instead_of_dropping():
 
 def test_rolling_output_model_is_the_only_compaction_schema():
     assert RollingCompactOutput.model_fields.keys() == {"rolling_summary"}
+
+
+def test_deepseek_flash_uses_the_verified_provider_context_window():
+    # DeepSeek-V4.1-Flash (served as deepseek-flash) documents a 1M window.
+    assert get_model_token_limit("deepseek:deepseek-flash") == 1_048_576
+    assert resolve_context_capacity("deepseek:deepseek-flash") == 1_048_576
+
+
+def test_explicit_application_window_overrides_the_provider_table():
+    assert (
+        resolve_context_capacity("deepseek:deepseek-flash", 131_072)
+        == 131_072
+    )
+
+
+def test_unknown_model_keeps_the_conservative_application_window():
+    assert UNKNOWN_MODEL_CONTEXT_CAPACITY == 32_768
+    assert resolve_context_capacity("unknown:future-model") == 32_768
+
+
+def test_context_limit_diagnostics_contain_only_bounded_metrics():
+    harness = _harness()
+    harness.config = Configuration(
+        research_model="openai:fixture",
+        context_capacity_tokens=200,
+        recent_raw_steps=1,
+    )
+    data = ModelInputData(
+        input=[
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "private analysis " * 1000},
+        ],
+        instructions="",
+    )
+    agent = SimpleNamespace(tools=[])
+
+    with pytest.raises(SDKContextLimitExceeded) as caught:
+        asyncio.run(harness._compact_history(data, agent))
+
+    diagnostics = harness.context_diagnostics
+    assert set(diagnostics) == {
+        "estimated_input_tokens",
+        "context_capacity_tokens",
+        "compaction_threshold_ratio",
+        "recent_raw_steps",
+        "eligible_compaction_units",
+    }
+    assert diagnostics["estimated_input_tokens"] > 0
+    assert diagnostics["context_capacity_tokens"] == 200
+    assert diagnostics["compaction_threshold_ratio"] == 0.75
+    assert diagnostics["recent_raw_steps"] == 1
+    assert diagnostics["eligible_compaction_units"] == 0
+
+    message = str(caught.value)
+    for key in diagnostics:
+        assert key in message
+    assert "private analysis" not in message

@@ -46,8 +46,18 @@ MODEL_TOKEN_LIMITS = {
     "anthropic.claude-opus-4-1-20250805-v1:0": 200000,
     "deepseek:deepseek-chat": 131072,
     "deepseek:deepseek-reasoner": 131072,
-    "deepseek:deepseek-v4-flash": 131072,
+    # DeepSeek-V4.1-Flash (served as deepseek-flash): 1M provider window.
+    # config.yaml keeps a smaller application-safe window via
+    # context_capacity_tokens; this table records the provider limit only.
+    "deepseek:deepseek-flash": 1048576,
+    # Legacy alias served by DeepSeek-V4.1-Flash (same 1M provider window).
+    "deepseek:deepseek-v4-flash": 1048576,
 }
+
+# Unknown deployment aliases still get a bounded application window. This is
+# not a claim about the provider's context limit.
+UNKNOWN_MODEL_CONTEXT_CAPACITY = 32_768
+
 
 # 按模型标识查找上下文令牌上限；未知模型返回 None。
 def get_model_token_limit(model_string):
@@ -66,6 +76,19 @@ def get_model_token_limit(model_string):
 
     # Model not found in lookup table
     return None
+
+
+# 按显式应用窗口、已知供应商窗口、未知模型保守上限的顺序解析上下文容量。
+def resolve_context_capacity(model_string, configured=None):
+    """Return the application context window for one model reference.
+
+    An explicit ``context_capacity_tokens`` is the application's safe working
+    window and takes precedence over the provider's maximum. Unknown models
+    keep the existing conservative bound instead of receiving a large window.
+    """
+    if configured:
+        return int(configured)
+    return get_model_token_limit(model_string) or UNKNOWN_MODEL_CONTEXT_CAPACITY
 
 # 移除最后一条 AI 消息及其后的历史，以缩减超限请求的上下文。
 def remove_up_to_last_ai_message(messages: list[MessageLikeRepresentation]) -> list[MessageLikeRepresentation]:

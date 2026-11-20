@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -59,6 +60,15 @@ class ModelBudgetExceeded(RuntimeError):
     """Reject a nested model attempt before its provider request starts."""
 
 
+# Cross-Agent admission uses the existing request row lock for one atomic
+# check-and-insert. A blocked call closes that transaction before sleeping, so
+# it holds neither a pool connection nor the row lock while another Agent's
+# provider request settles. This is a conservative sequential admission policy,
+# not a distributed quota reservation.
+MODEL_BILL_WAIT_SECONDS = 300.0
+MODEL_BILL_POLL_SECONDS = 0.5
+
+
 def require_physical_model_budget(config, baseline, actual, *, reserve_report):
     """Check paid attempts, including prior failures and outstanding receipts."""
     total = merge_budget_usage(baseline, actual)
@@ -94,45 +104,89 @@ def model_bill(db, run_id):
     )
 
 
-def start_model_attempt(scope, workflow_id, executor_id, call_id):
+def start_model_attempt(
+    scope, workflow_id, executor_id, call_id, *, wait_seconds=None
+):
+    """Admit one physical model attempt after any in-flight token bill settles.
+
+    ``require_live_effect`` locks the request row, so the pending check and the
+    receipt insert are atomic across Executors. A blocked caller exits that
+    transaction before sleeping; waiting never holds a database transaction or
+    connection. Cancellation, replacement Executors and approval expiry are
+    re-read on every poll. A bill that never settles becomes a controlled
+    ``ModelBudgetExceeded`` timeout instead of being treated as zero cost.
+    """
     from open_deep_research.web.run_data import db_time
     from open_deep_research.workflow.dbos_config import domain_engine
     from open_deep_research.workflow.execution import require_live_effect, unconfirmed
 
-    with domain_engine().begin() as db:
-        require_live_effect(db, scope.run_id, workflow_id, executor_id)
-        keys = {"r": scope.run_id, "id": call_id}
-        if db.scalar(
-            text("SELECT 1 FROM por_domain.model_attempts WHERE run_id=:r AND id=:id"),
-            keys,
-        ):
-            raise unconfirmed("Model attempt already exists without its native result")
-        if scope.expires_at is not None and db_time(db) >= scope.expires_at:
-            raise ModelInvocationError("BriefApprovalExpired")
-        if scope.config.budget_enabled:
-            actual, pending, complete = model_bill(db, scope.run_id)
-            # With token ceilings, an in-flight bill has no provider token
-            # count yet. Do not spend that capacity on another parallel call.
-            token_limit = (
-                scope.config.max_input_tokens is not None
-                or scope.config.max_output_tokens is not None
-            )
-            if token_limit and (pending or not complete):
-                raise ModelBudgetExceeded(
-                    "Token budget is held by an unconfirmed model bill"
+    if wait_seconds is None:
+        wait_seconds = MODEL_BILL_WAIT_SECONDS
+    deadline = time.monotonic() + max(0.0, float(wait_seconds))
+
+    while True:
+        with domain_engine().begin() as db:
+            require_live_effect(db, scope.run_id, workflow_id, executor_id)
+            keys = {"r": scope.run_id, "id": call_id}
+            if db.scalar(
+                text(
+                    "SELECT 1 FROM por_domain.model_attempts WHERE run_id=:r AND id=:id"
+                ),
+                keys,
+            ):
+                raise unconfirmed(
+                    "Model attempt already exists without its native result"
                 )
-            require_physical_model_budget(
-                scope.config,
-                scope.initial_usage,
-                actual,
-                reserve_report=scope.reserve_report,
+            if scope.expires_at is not None and db_time(db) >= scope.expires_at:
+                raise ModelInvocationError("BriefApprovalExpired")
+            if scope.config.budget_enabled:
+                actual, pending, complete = model_bill(db, scope.run_id)
+                # With token ceilings, an in-flight bill has no provider token
+                # count yet. Wait for its settlement instead of rejecting a
+                # normal parallel Agent call as a budget failure. A finalized
+                # bill with missing usage can never settle, so it remains a
+                # fail-closed rejection rather than a 300-second wait.
+                token_limit = (
+                    scope.config.max_input_tokens is not None
+                    or scope.config.max_output_tokens is not None
+                )
+                if token_limit and not complete and not pending:
+                    raise ModelBudgetExceeded(
+                        "Token budget is held by an unconfirmed model bill"
+                    )
+                if not (token_limit and pending):
+                    require_physical_model_budget(
+                        scope.config,
+                        scope.initial_usage,
+                        actual,
+                        reserve_report=scope.reserve_report,
+                    )
+                    db.execute(
+                        text(
+                            "INSERT INTO por_domain.model_attempts(run_id,id,stage_id) "
+                            "VALUES (:r,:id,:stage)"
+                        ),
+                        dict(keys, stage=scope.stage_id),
+                    )
+                    return
+            else:
+                db.execute(
+                    text(
+                        "INSERT INTO por_domain.model_attempts(run_id,id,stage_id) "
+                        "VALUES (:r,:id,:stage)"
+                    ),
+                    dict(keys, stage=scope.stage_id),
+                )
+                return
+
+        # The transaction above is closed before sleeping. A blocked caller
+        # holds neither a pool connection nor the request row lock. Check the
+        # deadline first, so an explicit zero-wait admission fails immediately.
+        if time.monotonic() >= deadline:
+            raise ModelBudgetExceeded(
+                "Model admission timed out waiting for an unsettled token bill"
             )
-        db.execute(
-            text(
-                "INSERT INTO por_domain.model_attempts(run_id,id,stage_id) VALUES (:r,:id,:stage)"
-            ),
-            dict(keys, stage=scope.stage_id),
-        )
+        time.sleep(MODEL_BILL_POLL_SECONDS)
 
 
 def finish_model_attempt(run_id, call_id, usage):

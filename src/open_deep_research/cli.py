@@ -223,16 +223,8 @@ def _status(args) -> int:
     return 0
 
 
-def _inspect(args) -> int:
-    from open_deep_research.web.observations import execution_view
-    from open_deep_research.web.run_data import read_request
-
-    client = _client()
-    run = client.get(args.run_id, OWNER)
-    request = read_request(args.run_id, OWNER)
-    configuration = Configuration.from_runnable_config(request["data"]["config"])
-    execution = execution_view(client, args.run_id, OWNER, "", 0, 100)
-    events = client.read_events(args.run_id, OWNER, 0, 500)
+def _observation_counts(events):
+    """Count model and tool observations using the Harness tool-status contract."""
     tool_calls: dict[str, int] = {}
     tool_failures: dict[str, int] = {}
     model_calls = 0
@@ -246,7 +238,9 @@ def _inspect(args) -> int:
         elif kind == "tool_result":
             name = str(event.get("name") or "tool")
             tool_calls[name] = tool_calls.get(name, 0) + 1
-            if event.get("status") != "returned":
+            # The Harness records ``succeeded`` for a completed tool. ``returned``
+            # is the separate external-effect receipt state, not the tool status.
+            if event.get("status") != "succeeded":
                 tool_failures[name] = tool_failures.get(name, 0) + 1
         if event.get("status") == "failed":
             failed_events.append(
@@ -256,6 +250,20 @@ def _inspect(args) -> int:
                     "error_type": event.get("error_type"),
                 }
             )
+    return model_calls, tool_calls, tool_failures, failed_events
+
+
+def _inspect(args) -> int:
+    from open_deep_research.web.observations import execution_view
+    from open_deep_research.web.run_data import read_request
+
+    client = _client()
+    run = client.get(args.run_id, OWNER)
+    request = read_request(args.run_id, OWNER)
+    configuration = Configuration.from_runnable_config(request["data"]["config"])
+    execution = execution_view(client, args.run_id, OWNER, "", 0, 100)
+    events = client.read_events(args.run_id, OWNER, 0, 500)
+    model_calls, tool_calls, tool_failures, failed_events = _observation_counts(events)
     failed_workflows = [
         {
             "workflow_id": item["workflow_id"],
