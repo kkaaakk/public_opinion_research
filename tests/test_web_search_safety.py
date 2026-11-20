@@ -2,6 +2,7 @@
 """Offline regressions for the Tavily summary and tool-output safety contract."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from dbos import error as dbos_error
@@ -232,3 +233,107 @@ def test_format_search_results_caps_each_source_and_the_total():
         assert f"Source {index}" in output
     # Every source still carries some evidence text after its header.
     assert output.count("SUMMARY:\nz") == 3
+
+
+def test_web_search_limits_queries_per_call(monkeypatch):
+    seen = {}
+
+    async def fake_search(queries, **_kwargs):
+        seen["queries"] = list(queries)
+        return [
+            {
+                "query": query,
+                "results": [
+                    {
+                        "url": f"https://example.test/{index}",
+                        "title": f"Title {index}",
+                        "content": f"snippet {index}",
+                        "raw_content": f"raw {index}",
+                    }
+                ],
+            }
+            for index, query in enumerate(queries)
+        ]
+
+    async def fake_summarize(_model, content, **_kwargs):
+        return f"summary {content}"
+
+    monkeypatch.setattr(tavily, "tavily_search_async", fake_search)
+    _install_summary_stubs(monkeypatch)
+    monkeypatch.setattr(tavily, "summarize_webpage", fake_summarize)
+
+    output = asyncio.run(
+        tavily._tavily_search([f"query-{index}" for index in range(7)], config=_config())
+    )
+
+    assert seen["queries"] == ["query-0", "query-1", "query-2", "query-3"]
+    assert "Query coverage limited: 3 additional queries" in output
+
+
+def test_web_search_limits_summarized_pages(monkeypatch):
+    results = [
+        {
+            "url": f"https://example.test/page-{index}",
+            "title": f"Page {index}",
+            "content": f"snippet {index}",
+            "raw_content": f"raw page {index}",
+        }
+        for index in range(12)
+    ]
+    summarized = []
+
+    async def fake_search(*_args, **_kwargs):
+        return [{"query": "q", "results": results}]
+
+    async def fake_summarize(_model, content, **_kwargs):
+        summarized.append(content)
+        return f"summary of {content}"
+
+    monkeypatch.setattr(tavily, "tavily_search_async", fake_search)
+    _install_summary_stubs(monkeypatch)
+    monkeypatch.setattr(tavily, "summarize_webpage", fake_summarize)
+
+    output = asyncio.run(tavily._tavily_search(["q"], config=_config()))
+
+    assert len(summarized) == tavily.MAX_SUMMARIZED_PAGES_PER_CALL
+    assert "additional unique results were not summarized" in output
+    assert "per-call limit of 8 summarized pages" in output
+    assert len(output) <= tavily.MAX_WEB_SEARCH_OUTPUT_CHARS
+    for index in range(12):
+        assert f"https://example.test/page-{index}" in output
+        assert f"Page {index}" in output
+
+
+def test_web_search_stops_summarizing_after_the_time_budget(monkeypatch):
+    results = [
+        {
+            "url": f"https://example.test/timed-{index}",
+            "title": f"Timed {index}",
+            "content": f"snippet {index}",
+            "raw_content": f"raw timed {index}",
+        }
+        for index in range(6)
+    ]
+    summarized = []
+    clock = {"now": 0.0}
+
+    async def fake_search(*_args, **_kwargs):
+        return [{"query": "q", "results": results}]
+
+    async def fake_summarize(_model, content, **_kwargs):
+        summarized.append(content)
+        clock["now"] += 100.0
+        return f"summary of {content}"
+
+    monkeypatch.setattr(tavily, "tavily_search_async", fake_search)
+    monkeypatch.setattr(
+        tavily, "time", SimpleNamespace(monotonic=lambda: clock["now"])
+    )
+    _install_summary_stubs(monkeypatch)
+    monkeypatch.setattr(tavily, "summarize_webpage", fake_summarize)
+
+    output = asyncio.run(tavily._tavily_search(["q"], config=_config()))
+
+    assert len(summarized) == 3
+    assert "Coverage limit reason: 240s summarization budget" in output
+    assert len(output) <= tavily.MAX_WEB_SEARCH_OUTPUT_CHARS

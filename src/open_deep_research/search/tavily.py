@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Annotated, Any, List, Literal
 
@@ -35,6 +36,15 @@ MAX_WEB_SEARCH_OUTPUT_CHARS = 24_000
 MAX_SOURCE_TITLE_CHARS = 200
 MAX_SOURCE_URL_CHARS = 800
 MAX_DEGRADED_EXCERPT_CHARS = 1_500
+# Bound one tool call's fan-out. Normal research uses one to three queries and
+# one query returns at most five results, so these limits retain enough evidence
+# while preventing an unbounded number of sequential summarization calls.
+MAX_SEARCH_QUERIES_PER_CALL = 4
+MAX_SUMMARIZED_PAGES_PER_CALL = 8
+MAX_SUMMARIZATION_SECONDS_PER_CALL = 240.0
+MAX_OMITTED_SOURCE_LIST = 5
+OMITTED_TITLE_CHARS = 80
+OMITTED_URL_CHARS = 240
 SOURCE_TRUNCATION_NOTE = (
     "\n[TRUNCATED: source content exceeded the per-source output limit.]"
 )
@@ -75,30 +85,79 @@ def _bounded_fallback(
 
 # 预算拒绝、执行控制异常、取消和存储故障不得被当作普通摘要失败吞掉。
 def _is_execution_control_failure(error: BaseException) -> bool:
-    """Return whether an error must propagate instead of degrading locally."""
+    """Return whether any error in the causal chain must propagate.
+
+    ``ainvoke_model_with_budget`` can wrap a lower-level failure in
+    ``ModelInvocationError``. Inspect the existing ``error_chain`` instead of
+    classifying only the outer exception, so wrapped database, execution-control
+    and cancellation failures are never degraded into a webpage excerpt.
+    """
+    from dbos import error as dbos_error
     from sqlalchemy.exc import SQLAlchemyError
 
     from open_deep_research.budget import ModelBudgetExceeded
     from open_deep_research.workflow.execution import (
         ExecutionControlError,
+        error_chain,
         is_cancellation,
     )
 
-    return isinstance(
-        error, (ModelBudgetExceeded, ExecutionControlError, SQLAlchemyError)
-    ) or is_cancellation(error)
+    for cause in error_chain(error):
+        if isinstance(
+            cause,
+            (
+                ModelBudgetExceeded,
+                ExecutionControlError,
+                SQLAlchemyError,
+                dbos_error.DBOSBaseException,
+                dbos_error.DBOSException,
+            ),
+        ):
+            return True
+        if is_cancellation(cause):
+            return True
+    return False
 
 
 # 为每条来源分配均等输出额度，避免长网页挤掉后续来源。
-def _format_search_results(results: dict[str, dict[str, Any]]) -> str:
-    """Format summarized sources under one total output bound."""
+def _format_search_results(
+    results: dict[str, dict[str, Any]],
+    *,
+    omitted: list[tuple[str, dict[str, Any]]] | None = None,
+    coverage_notes: list[str] | None = None,
+) -> str:
+    """Format summarized sources and coverage notes under one total output bound."""
+    omitted = list(omitted or [])
+    notes = list(coverage_notes or [])
+    if omitted:
+        notes.append(
+            f"{len(omitted)} additional unique results were not summarized; "
+            "their source URLs and titles remain available for a follow-up search."
+        )
+        for url, result in omitted[:MAX_OMITTED_SOURCE_LIST]:
+            title, _ = _clip_text(
+                str(result.get("title") or ""), OMITTED_TITLE_CHARS
+            )
+            url_text, _ = _clip_text(str(url), OMITTED_URL_CHARS)
+            notes.append(f"- {title} | {url_text}")
+        if len(omitted) > MAX_OMITTED_SOURCE_LIST:
+            notes.append(
+                f"- ... {len(omitted) - MAX_OMITTED_SOURCE_LIST} more unique results omitted."
+            )
+
+    note_text = (
+        "\n\n--- SOURCE COVERAGE NOTE ---\n" + "\n".join(notes) if notes else ""
+    )
+    prefix = "Search results: \n\n"
     if not results:
+        if note_text:
+            return (prefix + note_text).strip()
         return "No valid search results found. Please try different search queries or use a different search API."
 
-    prefix = "Search results: \n\n"
     entries = list(results.items())
     # Equal shares keep a long first source from consuming the entire bound.
-    per_block = max(1, (MAX_WEB_SEARCH_OUTPUT_CHARS - len(prefix)) // len(entries))
+    available = MAX_WEB_SEARCH_OUTPUT_CHARS - len(prefix) - len(note_text)
+    per_block = max(1, available // len(entries))
     blocks: list[str] = []
     for index, (url, result) in enumerate(entries):
         head = f"\n\n--- SOURCE {index + 1}: "
@@ -127,7 +186,7 @@ def _format_search_results(results: dict[str, dict[str, Any]]) -> str:
             content += SOURCE_TRUNCATION_NOTE
         blocks.append(head + title + middle + url_text + tail + content + divider)
 
-    output = prefix + "".join(blocks)
+    output = prefix + "".join(blocks) + note_text
     if len(output) > MAX_WEB_SEARCH_OUTPUT_CHARS:
         # Defensive bound for pathological source counts. The per-source shares
         # normally keep the joined output within the configured total.
@@ -156,16 +215,27 @@ async def _tavily_search(
     Returns:
         Formatted string containing summarized search results
     """
-    # Step 1: Execute search queries asynchronously
+    # Step 1: Bound the per-call query fan-out before any Tavily request.
+    all_queries = [str(query) for query in (queries or [])]
+    bounded_queries = all_queries[:MAX_SEARCH_QUERIES_PER_CALL]
+    omitted_query_count = len(all_queries) - len(bounded_queries)
+    coverage_notes: list[str] = []
+    if omitted_query_count:
+        coverage_notes.append(
+            f"Query coverage limited: {omitted_query_count} additional queries were "
+            f"not executed (max {MAX_SEARCH_QUERIES_PER_CALL} queries per call)."
+        )
+
+    # Step 2: Execute the bounded search queries asynchronously
     search_results = await tavily_search_async(
-        queries,
+        bounded_queries,
         max_results=max_results,
         topic=topic,
         include_raw_content=True,
         config=config,
     )
 
-    # Step 2: Deduplicate results by URL to avoid processing the same content multiple times
+    # Step 3: Deduplicate results by URL to avoid processing the same content multiple times
     unique_results = {}
     for response in search_results:
         for result in response["results"]:
@@ -173,7 +243,7 @@ async def _tavily_search(
             if url not in unique_results:
                 unique_results[url] = {**result, "query": response["query"]}
 
-    # Step 3: Set up the summarization model with configuration
+    # Step 4: Set up the summarization model with configuration
     configurable = Configuration.from_runnable_config(config)
 
     # Character limit to stay within model token limits (configurable)
@@ -191,37 +261,62 @@ async def _tavily_search(
         max_attempts=configurable.max_structured_output_retries,
     )
 
-    # Step 4: Summarize one page at a time. A single in-flight model bill keeps
-    # the shared token budget consistent and avoids a burst of DB pool users.
-    summaries = []
-    for result in unique_results.values():
+    # Step 5: Summarize one page at a time under page and elapsed-time bounds.
+    # A single in-flight model bill keeps the shared token budget consistent and
+    # avoids a burst of DB pool users.
+    summarized_results: dict[str, dict[str, Any]] = {}
+    omitted_results: list[tuple[str, dict[str, Any]]] = []
+    summarized_count = 0
+    page_limit_hit = False
+    time_limit_hit = False
+    deadline = time.monotonic() + MAX_SUMMARIZATION_SECONDS_PER_CALL
+    for url, result in unique_results.items():
         if not result.get("raw_content"):
-            summaries.append(None)
+            summarized_results[url] = {
+                "title": result.get("title") or "",
+                "content": result.get("content") or "",
+            }
             continue
-        summaries.append(
-            await summarize_webpage(
+        if summarized_count >= MAX_SUMMARIZED_PAGES_PER_CALL:
+            page_limit_hit = True
+            omitted_results.append((url, result))
+            continue
+        if time.monotonic() >= deadline:
+            time_limit_hit = True
+            omitted_results.append((url, result))
+            continue
+        summarized_results[url] = {
+            "title": result.get("title") or "",
+            "content": await summarize_webpage(
                 summarization_model,
                 str(result["raw_content"])[:max_char_to_include],
                 model_name=configurable.summarization_model,
                 fallback_content=str(
                     result.get("content") or result["raw_content"] or ""
                 ),
-            )
-        )
-
-    # Step 5: Combine results with their summaries
-    summarized_results = {
-        url: {
-            "title": result["title"],
-            "content": result["content"] if summary is None else summary,
+            ),
         }
-        for url, result, summary in zip(
-            unique_results.keys(), unique_results.values(), summaries
-        )
-    }
+        summarized_count += 1
+
+    if omitted_results:
+        reasons = []
+        if page_limit_hit:
+            reasons.append(
+                f"per-call limit of {MAX_SUMMARIZED_PAGES_PER_CALL} summarized pages"
+            )
+        if time_limit_hit:
+            reasons.append(
+                f"{MAX_SUMMARIZATION_SECONDS_PER_CALL:g}s summarization budget"
+            )
+        if reasons:
+            coverage_notes.append("Coverage limit reason: " + " and ".join(reasons) + ".")
 
     # Step 6: Format the final output under explicit per-source and total caps
-    return _format_search_results(summarized_results)
+    return _format_search_results(
+        summarized_results,
+        omitted=omitted_results,
+        coverage_notes=coverage_notes,
+    )
 
 
 # 保留 Tavily 原始结果，跳过逐网页摘要，供研究图生产流程使用。
