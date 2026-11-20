@@ -44,6 +44,7 @@ def result(role, round_=1, **updates):
         role=role,
         round=round_,
         report="new-" + role,
+        evidence_collected=True,
         budget_delta={"model_calls": 2, "input_tokens": 11, "tool_calls": 1},
         **updates,
     )
@@ -136,6 +137,23 @@ def test_followups_update_only_assigned_role_and_deduplicate_tasks(replace):
             + ("\n\n--- Additional role research report ---\n" + expected) * 2
         )
     assert state["agents"][ROLES[0]]["report"] == expected
+
+
+def test_followup_without_usable_evidence_is_not_completed():
+    """A degraded or placeholder follow-up keeps its gap dispatchable."""
+    state = initial()
+    state["workflow"]["completed_tasks"] = [task(ROLES[0], "earlier")]
+    value = result(ROLES[0], 2).model_copy(update={"evidence_collected": False})
+    packet = packets(state, (ROLES[0],), 2)
+
+    assemble_research_results(state, {ROLES[0]: value}, packet)
+
+    assert state["workflow"]["round"] == 2
+    assert [item.task_id for item in state["workflow"]["completed_tasks"]] == [
+        "earlier"
+    ]
+    assert "new-" + ROLES[0] in state["agents"][ROLES[0]]["report"]
+    assert state["runtime"]["budget"]["tool_calls"] == 1
 
 
 def test_budget_is_additive_even_if_payload_contains_override_words():

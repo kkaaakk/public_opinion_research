@@ -76,6 +76,7 @@ class AgentRuntimeResult:
     report: str
     budget: dict[str, Any] = field(default_factory=dict)
     replace_report: bool = False
+    evidence_collected: bool = False
 
 
 class SDKContextLimitExceeded(RuntimeError):
@@ -498,6 +499,21 @@ class SDKAgentRuntime:
         """Return cumulative business usage for admission, without submitting it."""
         return self.run_budget.projected()
 
+    def _evidence_collected(self) -> bool:
+        """Return whether this invocation produced usable new evidence.
+
+        A non-empty report alone is insufficient: degraded reports (budget or
+        compression fallbacks) and invocations whose tool calls all failed are
+        not new evidence. Review still decides whether a gap is resolved.
+        """
+        return bool(
+            not self.budget_usage.get("degradation_reasons")
+            and any(
+                record.status == "succeeded"
+                for record in self.harness.results.values()
+            )
+        )
+
     def _report_messages(self, task: str) -> list[Any]:
         messages: list[Any] = [HumanMessage(content=task)]
         output_ids: set[str] = set()
@@ -654,6 +670,7 @@ class SDKAgentRuntime:
             # usage here so none of those costs are merged twice.
             self.budget_usage = merge_budget_usage(self.run_budget.delta, nested)
             result.budget = self.budget_usage
+            result.evidence_collected = self._evidence_collected()
             return result
         except BaseException as exc:
             self.budget_usage = merge_budget_usage(

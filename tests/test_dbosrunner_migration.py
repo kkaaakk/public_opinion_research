@@ -284,6 +284,8 @@ def test_fresh_schema_contains_only_request_control_and_effect_billing_tables(
             "policy",
             "operations",
             "model_attempts",
+            "tool_calls",
+            "history",
         }
         for table, forbidden in {
             "operations": {"unit", "usage", "admission_permit"},

@@ -129,12 +129,14 @@ def assemble_research_results(
         tasks = coerce_research_tasks(
             packet.get("workflow", {}).get("pending_tasks", [])
         )
+        # Only usable evidence completes follow-up tasks. A degraded placeholder
+        # must not filter the same gap out of the next Review's dispatch.
         workflow = workflow_reducer(
             workflow,
             {
                 "round": result.round,
                 "completed_tasks": [t for t in tasks if t.target_role == role]
-                if result.round > 1
+                if result.round > 1 and result.evidence_collected
                 else [],
             },
         )

@@ -394,7 +394,12 @@ def test_role_result_round_trip_has_no_private_memory_or_summary():
     )
     result = asyncio.run(runtime.run("follow-up assignment"))
     assert "Research mode: followup" in result.report
-    assert set(result.__dict__) == {"report", "budget", "replace_report"}
+    assert set(result.__dict__) == {
+        "report",
+        "budget",
+        "replace_report",
+        "evidence_collected",
+    }
 
 
 def test_business_harness_snapshot_round_trip():

@@ -48,7 +48,6 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import Field
 from sqlalchemy.exc import SQLAlchemyError
 from test_python_workflow_sdk import install_sdk
-from test_sdk_context import _payload
 from test_sdk_runtime import TOKENS, _tool
 
 from open_deep_research import budget
@@ -211,6 +210,7 @@ def install(directory, scenario):
     old_announce = engine._announce_stage
     old_finish_operation = tool_executor.finish_operation
     old_finish_model_attempt = budget.finish_model_attempt
+    old_admit_tool_call = tool_executor.admit_tool_call
     lost_receipt_producers = Barrier(2)
 
     def gate(name):
@@ -377,11 +377,18 @@ def install(directory, scenario):
                 ) from None
             raise
 
+    def admit_tool_call(*args):
+        admitted = old_admit_tool_call(*args)
+        if scenario == "tool-admitted" and admitted:
+            gate(scenario)
+        return admitted
+
     patch.setattr(engine, "_publish_stage", publish)
     patch.setattr(engine, "_announce_stage", announce)
     patch.setattr(engine, "publish_failure", failure)
     patch.setattr(tool_executor, "finish_operation", finish_tool)
     patch.setattr(budget, "finish_model_attempt", finish_model)
+    patch.setattr(tool_executor, "admit_tool_call", admit_tool_call)
 
     from open_deep_research.runtime.sdk_context import SDKContextHarness
 
@@ -531,7 +538,7 @@ def install(directory, scenario):
                     "INSERT INTO effects VALUES (?,?) ON CONFLICT DO NOTHING",
                     (op, role),
                 )
-            return _payload(role)
+            return f"Official brand recall evidence for {role}."
 
         if legacy_catalog:
 
