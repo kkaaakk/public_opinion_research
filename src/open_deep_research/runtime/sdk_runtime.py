@@ -34,7 +34,7 @@ from open_deep_research.budget import (
     diff_budget_usage,
     end_model_call,
     estimate_text_tokens,
-    is_over_budget,
+    is_over_model_budget,
     merge_budget_usage,
     model_budget_admission,
     physical_model_usage,
@@ -227,14 +227,14 @@ class _BusinessAgentHarness(SDKContextHarness):
         filtered = await super().filter_model_input(data)
         if not can_spend_model_call(
             self.config, self._filter_budget(), reserve_final_report_call=True
-        ) or is_over_budget(self.config, self._filter_budget()):
+        ) or is_over_model_budget(self.config, self._filter_budget()):
             raise _ReasoningStopped(
                 "Business budget stopped SDK reasoning before another request."
             )
         filtered = await self._compact_history(filtered, data.agent)
         if not can_spend_model_call(
             self.config, self._filter_budget(), reserve_final_report_call=True
-        ) or is_over_budget(self.config, self._filter_budget()):
+        ) or is_over_model_budget(self.config, self._filter_budget()):
             raise _ReasoningStopped(
                 "Rolling compaction used the remaining reasoning allowance."
             )

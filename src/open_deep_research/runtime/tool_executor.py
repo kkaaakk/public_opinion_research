@@ -30,7 +30,6 @@ from open_deep_research.budget import (
     budget_from_tool_calls,
     budget_usage_with_reason,
     can_spend_tool_call,
-    is_over_budget,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.domain_filter import get_tool_domain
@@ -279,9 +278,9 @@ class ToolExecutor:
         """Reserve before validation against the Run-wide tool/search ceiling."""
         increment = self._increment(name)
         projected = self.budget.projected()
-        if is_over_budget(self.config, projected) or not can_spend_tool_call(
-            self.config, projected, increment
-        ):
+        # Tool admission only enforces tool/search quotas; model call and token
+        # budgets are checked by model admission and must not reject a tool call.
+        if not can_spend_tool_call(self.config, projected, increment):
             reason = f"Budget guard skipped {name}: tool or search budget exhausted."
             self.budget.add(budget_usage_with_reason(reason))
             raise _ToolRejected(reason)
