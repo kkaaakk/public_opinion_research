@@ -461,58 +461,41 @@ def test_keyword_reranker_uses_structured_metadata_context():
 
 
 # 验证改写器清理包装文本且保留原问题语义输入。
-def test_query_rewriter_cleans_model_output_and_preserves_prompt():
+def test_query_rewriter_cleans_model_output_and_preserves_prompt(monkeypatch):
+    from sdk_model_support import install_inference
+
     from open_deep_research.rag.query_rewriter import rewrite_query_with_model
 
-    captured = {}
+    opened = []
+    requests = []
 
-    # 提供可记录配置或返回固定消息的模型替身。
-    class FakeModel:
-        # 保存改写提示消息并返回带常见前缀的测试输出。
-        def invoke(self, messages, config=None):
-            captured["messages"] = messages
-            return types.SimpleNamespace(
-                content="Rewritten query: Milvus vector index path"
-            )
+    def reply(request):
+        requests.append(request)
+        return "Rewritten query: Milvus vector index path"
 
-    # 记录改写模型配置并返回固定响应替身。
-    def fake_model_factory(**kwargs):
-        captured["kwargs"] = kwargs
-        return FakeModel()
-
+    install_inference(monkeypatch, reply, open_model=lambda *args: opened.append(args))
     rewritten_query = rewrite_query_with_model(
-        "where is it?",
-        model_name="fake:model",
-        max_tokens=64,
-        api_key="test-key",
-        model_factory=fake_model_factory,
+        "where is it?", model_name="openai:rewrite", max_tokens=64, api_key="test-key",
     )
-
     assert rewritten_query == "Milvus vector index path"
-    assert captured["kwargs"]["model"] == "fake:model"
-    assert captured["kwargs"]["max_tokens"] == 64
-    assert captured["kwargs"]["api_key"] == "test-key"
-    assert "where is it?" in captured["messages"][0].content
+    assert opened == [("openai:rewrite", None, "test-key")]
+    assert requests[0].max_tokens == 64
+    assert "where is it?" in requests[0].prompt
 
 
 # 验证改写失败后继续使用原查询。
-def test_query_rewriter_falls_back_to_original_query_on_failure():
+def test_query_rewriter_falls_back_to_original_query_on_failure(monkeypatch):
+    from sdk_model_support import install_inference
+
     from open_deep_research.rag.query_rewriter import rewrite_query_with_model
 
-    # 模拟模型构造失败，验证查询改写回退。
-    def failing_model_factory(**kwargs):
+    def fail(*_args):
         raise RuntimeError("model unavailable")
 
-    assert (
-        rewrite_query_with_model(
-            "original query",
-            model_name="fake:model",
-            max_tokens=64,
-            api_key=None,
-            model_factory=failing_model_factory,
-        )
-        == "original query"
-    )
+    install_inference(monkeypatch, lambda request: pytest.fail("unexpected inference"), open_model=fail)
+    assert rewrite_query_with_model(
+        "original query", model_name="openai:rewrite", max_tokens=64, api_key=None,
+    ) == "original query"
 
 
 # 验证交叉编码器候选文本包含结构化元数据。

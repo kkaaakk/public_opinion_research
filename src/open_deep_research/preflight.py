@@ -27,6 +27,9 @@ from open_deep_research.models.providers import (
     ModelConfigurationError,
     credential_env_name,
     parse_model_ref,
+    require_sdk_provider,
+    resolve_base_url,
+    sdk_api_for,
 )
 from open_deep_research.tools.registry import rag_requested
 
@@ -35,16 +38,6 @@ WARNING = "WARNING"
 READY = "READY"
 _LEVEL_ORDER = {READY: 0, WARNING: 1, ERROR: 2}
 
-_SDK_PROVIDERS = frozenset({"openai", "deepseek", "volcengine", "groq"})
-_LANGCHAIN_MODULES = {
-    "anthropic": "langchain_anthropic",
-    "google_genai": "langchain_google_genai",
-    "google_vertexai": "langchain_google_vertexai",
-    "bedrock": "langchain_aws",
-    "cohere": "langchain_cohere",
-    "mistralai": "langchain_mistralai",
-    "ollama": "langchain_ollama",
-}
 _INDEXABLE_SUFFIXES = frozenset(
     {
         ".md",
@@ -150,33 +143,24 @@ def run_preflight(
 def _check_models(report: PreflightReport, configuration: Configuration) -> None:
     """Validate model references, credentials and the execution interface."""
     routes = {
-        "research_model": (configuration.research_model, "sdk"),
-        "compression_model": (configuration.compression_model, "langchain"),
-        "final_report_model": (configuration.final_report_model, "langchain"),
-        "summarization_model": (configuration.summarization_model, "langchain"),
-        "rolling_compaction_model": (
-            configuration.rolling_compaction_model,
-            "langchain",
-        ),
-        "planner_model": (
-            configuration.planner_model or configuration.research_model,
-            "langchain",
-        ),
-        "section_writer_model": (
-            configuration.section_writer_model or configuration.final_report_model,
-            "langchain",
-        ),
+        "research_model": configuration.research_model,
+        "compression_model": configuration.compression_model,
+        "final_report_model": configuration.final_report_model,
+        "summarization_model": configuration.summarization_model,
+        "rolling_compaction_model": configuration.rolling_compaction_model,
+        "planner_model": configuration.planner_model or configuration.research_model,
+        "section_writer_model": configuration.section_writer_model or configuration.final_report_model,
     }
     if configuration.rag_vision_enabled or configuration.rag_query_image_enabled:
-        routes["rag_vision_model"] = (configuration.rag_vision_model, "langchain")
+        routes["rag_vision_model"] = configuration.rag_vision_model
     if configuration.rag_query_rewrite_enabled and rag_requested(configuration):
-        routes["rag_query_rewrite_model"] = (
-            configuration.rag_query_rewrite_model,
-            "langchain",
-        )
-    for field_name, (model_ref, interface) in routes.items():
+        routes["rag_query_rewrite_model"] = configuration.rag_query_rewrite_model
+    for field_name, model_ref in routes.items():
         try:
             ref = parse_model_ref(model_ref)
+            require_sdk_provider(ref)
+            resolve_base_url(ref)
+            sdk_api_for(ref, None)
         except ModelConfigurationError as exc:
             report.add(ERROR, f"model:{field_name}", str(exc))
             continue
@@ -186,20 +170,6 @@ def _check_models(report: PreflightReport, configuration: Configuration) -> None
                 ERROR,
                 f"model:{field_name}",
                 f"{model_ref} requires {credential} in .env.",
-            )
-        if interface == "sdk" and ref.provider not in _SDK_PROVIDERS:
-            report.add(
-                ERROR,
-                "model:research_model",
-                f"Agents SDK has no verified adapter for {ref.provider!r}; "
-                f"use one of {', '.join(sorted(_SDK_PROVIDERS))}.",
-            )
-        module = _LANGCHAIN_MODULES.get(ref.provider)
-        if module and importlib.util.find_spec(module) is None:
-            report.add(
-                ERROR,
-                f"model:{field_name}",
-                f"{model_ref} requires the {module!r} package.",
             )
     if not report.errors:
         report.add(
@@ -220,7 +190,7 @@ def _credential_ref(ref) -> str | None:
     if os.getenv("GET_API_KEYS_FROM_CONFIG", "false").lower() == "true":
         return None
     env_name = credential_env_name(ref.provider)
-    if not env_name:
+    if not env_name or ref.provider == "ollama":
         return None
     if os.getenv(env_name):
         return None

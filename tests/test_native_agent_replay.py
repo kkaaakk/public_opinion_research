@@ -9,6 +9,7 @@ from agents.testing import ModelStep, ScriptedModel, assistant_message, function
 from dbos import DBOS, DBOSClient, SetWorkflowID
 from test_sdk_runtime import TOKENS, _runtime, _tool
 
+from open_deep_research.llm import generation
 from open_deep_research.runtime import sdk_runtime
 from open_deep_research.web.run_data import RunJSON
 from open_deep_research.workflow.execution import StageContext, stage_context
@@ -31,7 +32,7 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monke
         if kind == "tool_result":
             assert call_id == payload["tool_call_id"]
 
-    monkeypatch.setattr(sdk_runtime, "begin_model_call", begin)
+    monkeypatch.setattr(generation, "begin_model_call", begin)
     monkeypatch.setattr(StageContext, "observe", observe)
     monkeypatch.setattr(
         sdk_runtime, "settings", lambda: SimpleNamespace(session_path=None)

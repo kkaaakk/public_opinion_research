@@ -2,7 +2,6 @@
 
 import asyncio
 from copy import deepcopy
-from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
@@ -539,13 +538,9 @@ def test_parallel_section_failure_drains_sibling_and_keeps_all_attempts(monkeypa
         entered = asyncio.Event()
         cleaned = []
 
-        class Writer:
-            def with_config(self, config):
-                return self
-
-        async def invoke(model, messages, **kwargs):
+        async def invoke(model_name, prompt, *args, **kwargs):
             capture_budget_usage({"model_calls": 1, "input_tokens": 3})
-            if messages[0].content == "slow":
+            if prompt == "slow":
                 entered.set()
                 try:
                     await asyncio.Event().wait()
@@ -554,8 +549,7 @@ def test_parallel_section_failure_drains_sibling_and_keeps_all_attempts(monkeypa
             await entered.wait()
             raise RuntimeError("section failed after request")
 
-        monkeypatch.setattr(reporting.shared, "configurable_model", Writer())
-        monkeypatch.setattr(reporting, "ainvoke_model_with_budget", invoke)
+        monkeypatch.setattr(reporting, "generate_text", invoke)
         with pytest.raises(RuntimeError) as caught:
             await reporting._write_sections_parallel(
                 [
@@ -563,7 +557,7 @@ def test_parallel_section_failure_drains_sibling_and_keeps_all_attempts(monkeypa
                     Section(name="fail", description=""),
                 ],
                 model_name="fixture:writer",
-                model_config={},
+                config={},
                 prompt_for=lambda s: s.name,
                 log_label="fixture",
                 failure_reason_for=lambda s: s.name,
@@ -586,21 +580,15 @@ def test_failed_planner_preserves_its_nested_capture(monkeypatch):
         async def decision(state, config):
             return intake.IntakeDecision(goto="plan_report_sections")
 
-        async def invoke(model, messages, **kwargs):
+        async def invoke(model_name, prompt, *args, **kwargs):
             calls.append("planner")
             capture_budget_usage({"model_calls": 1, "input_tokens": 9})
             raise RuntimeError("planner failed")
 
-        monkeypatch.setattr(
-            intake.shared,
-            "configurable_model",
-            SimpleNamespace(with_config=lambda _: object()),
-        )
         monkeypatch.setattr(intake, "enrich_query_images", enrich)
         monkeypatch.setattr(intake, "clarification_step", decision)
         monkeypatch.setattr(intake, "research_brief_step", decision)
-        monkeypatch.setattr(intake, "structured_output_chain", lambda *a, **k: object())
-        monkeypatch.setattr(intake, "ainvoke_model_with_budget", invoke)
+        monkeypatch.setattr(intake, "generate_structured", invoke)
         with pytest.raises(WorkflowExecutionError) as caught:
             await PythonWorkflow().ainvoke(initial(), config())
         assert calls == ["planner"]
@@ -620,12 +608,7 @@ def test_final_report_error_keeps_legacy_contract_and_fails_python(
             capture_budget_usage({"model_calls": 1, "input_tokens": 2})
             raise RuntimeError("context length exceeded")
 
-        monkeypatch.setattr(
-            reporting.shared,
-            "configurable_model",
-            SimpleNamespace(with_config=lambda _: object()),
-        )
-        monkeypatch.setattr(reporting, "ainvoke_model_with_budget", invoke)
+        monkeypatch.setattr(reporting, "generate_text", invoke)
         monkeypatch.setattr(reporting, "is_token_limit_exceeded", lambda *a: True)
         monkeypatch.setattr(
             reporting,

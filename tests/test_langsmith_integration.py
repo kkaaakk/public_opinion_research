@@ -15,12 +15,11 @@ import contextlib
 from typing import Any
 
 import pytest
-from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
+from sdk_model_support import Reply, install_sequence
 
 import open_deep_research.observability.langsmith as langsmith_module
-from open_deep_research.budget import ainvoke_model_with_budget
+from open_deep_research.llm.generation import generate_text
 from open_deep_research.observability.langsmith import (
     DEFAULT_PROJECT,
     WORKFLOW_NAME,
@@ -376,20 +375,7 @@ def test_rag_query_rewrite_records_bounded_lengths(monkeypatch):
 
     journal: list[dict[str, Any]] = []
 
-    # 提供可记录配置或返回固定消息的模型替身。
-    class FakeModel:
-        # 返回固定查询改写消息，供改写结果和追踪检查。
-        def invoke(self, payload, config=None):
-            from langchain_core.messages import AIMessage
-
-            return AIMessage(
-                content="battery warranty complaints",
-                usage_metadata={
-                    "input_tokens": 4,
-                    "output_tokens": 3,
-                    "total_tokens": 7,
-                },
-            )
+    install_sequence(monkeypatch, Reply("battery warranty complaints", 4, 3))
 
     with _enabled_langsmith(monkeypatch, journal):
         rewritten = query_rewriter.rewrite_query_with_model(
@@ -397,7 +383,6 @@ def test_rag_query_rewrite_records_bounded_lengths(monkeypatch):
             model_name="openai:fixture",
             max_tokens=64,
             api_key=None,
-            model_factory=lambda **_kwargs: FakeModel(),
         )
 
     assert rewritten == "battery warranty complaints"
@@ -490,6 +475,8 @@ def test_graph_metadata_propagates_to_children(monkeypatch):
         metadata={"tool_domain": "database", "mcp_server": "dbhub"},
     )
 
+    install_sequence(monkeypatch, "hi")
+
     async def run():
         cfg = {
             "metadata": {
@@ -497,8 +484,7 @@ def test_graph_metadata_propagates_to_children(monkeypatch):
                 "logical_run_id": "workflow_meta",
             }
         }
-        model = GenericFakeChatModel(messages=iter(["hi"]))
-        await model.ainvoke([HumanMessage(content="x")], config=cfg)
+        await generate_text("openai:fixture", "x", config=cfg)
         await tool.ainvoke({"query": "x"}, config=cfg)
 
     asyncio.run(run())
@@ -513,31 +499,14 @@ def test_graph_metadata_propagates_to_children(monkeypatch):
 # 验证追踪开关不影响预算和令牌统计。
 def test_token_accounting_is_identical_with_tracing_enabled(monkeypatch):
     journal: list[dict[str, Any]] = []
-    usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
-    message = _usage_message("done", usage)
+    install_sequence(monkeypatch, Reply("done", 10, 5))
 
     with _enabled_langsmith(monkeypatch, journal):
         _response, delta = asyncio.run(
-            ainvoke_model_with_budget(
-                GenericFakeChatModel(messages=iter([message])),
-                [HumanMessage(content="hi")],
-                model_name="openai:fixture",
-                component="token_regression",
-            )
+            generate_text("openai:fixture", "hi", component="token_regression")
         )
 
     assert delta["model_calls"] == 1
     assert delta["input_tokens"] == 10
     assert delta["output_tokens"] == 5
     assert delta["total_tokens"] == 15
-
-
-# 构造带官方用量元数据的响应消息。
-def _usage_message(content: str, usage: dict[str, int]):
-    from langchain_core.messages import AIMessage
-
-    return AIMessage(
-        content=content,
-        usage_metadata=usage,
-        response_metadata={"model_name": "generic-fake"},
-    )

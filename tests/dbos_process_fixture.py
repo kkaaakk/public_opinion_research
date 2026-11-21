@@ -99,77 +99,34 @@ def install(directory, scenario):
     store = history.HistoryStore(domain_engine())
     patch.setattr(history, "get_history_store", lambda: store)
     if scenario == "plan-error":
-        from langchain_core.runnables import RunnableLambda
+        from sdk_model_support import Reply, install_inference
 
-        from open_deep_research.workflow import shared
-        from open_deep_research.workflow.brief import PlanDecision
+        def planning_fault(request):
+            if request.schema_name != "PlanDecision":
+                return None
+            with sqlite3.connect(directory / "external.db") as db:
+                db.execute("CREATE TABLE IF NOT EXISTS service_models(id INTEGER PRIMARY KEY)")
+                attempt = db.execute("INSERT INTO service_models DEFAULT VALUES").lastrowid
+            if attempt == 1:
+                return Reply("partial brief", status="content_filter")
+            return None
 
-        service = shared.configurable_model
-
-        class PlanningFault:
-            def with_config(self, cfg):
-                return self
-
-            async def ainvoke(self, *args, **kwargs):
-                return await service.ainvoke(*args, **kwargs)
-
-            def with_structured_output(self, schema, include_raw=False):
-                raw = service.with_structured_output(schema, include_raw)
-
-                async def call(messages, config=None):
-                    response = await raw.ainvoke(messages, config)
-                    if schema is PlanDecision:
-                        with sqlite3.connect(directory / "external.db") as db:
-                            db.execute(
-                                "CREATE TABLE IF NOT EXISTS service_models(id INTEGER PRIMARY KEY)"
-                            )
-                            attempt = db.execute(
-                                "INSERT INTO service_models DEFAULT VALUES"
-                            ).lastrowid
-                        if attempt == 1:
-                            raise RuntimeError(
-                                "Synthetic transient provider failure after usage"
-                            )
-                    return response
-
-                return RunnableLambda(call)
-
-        patch.setattr(shared, "configurable_model", PlanningFault())
+        install_inference(patch, planning_fault)
     if scenario == "gap-checkpoint":
-        from langchain_core.runnables import RunnableLambda
+        from sdk_model_support import install_inference
         from test_python_workflow import gap
 
         from open_deep_research.state import ResearchReview
-        from open_deep_research.workflow import shared
 
-        original = shared.configurable_model
+        def gaps(request):
+            if request.schema_name == "ResearchReview":
+                done = "Current research round: 2" in request.prompt
+                return ResearchReview(
+                    research_complete=done,
+                    next_tasks=[] if done else [gap("date"), gap("approval", "internal_knowledge")],
+                )
 
-        class GapServices:
-            def with_config(self, cfg):
-                return self
-
-            def with_structured_output(self, schema, include_raw=False):
-                chain = original.with_structured_output(schema, include_raw)
-                if schema is not ResearchReview:
-                    return chain
-
-                async def reply(messages, config=None):
-                    value = await chain.ainvoke(messages, config)
-                    done = "Current research round: 2" in str(messages[0].content)
-                    value["parsed"] = ResearchReview(
-                        research_complete=done,
-                        next_tasks=[]
-                        if done
-                        else [gap("date"), gap("approval", "internal_knowledge")],
-                    )
-                    return value
-
-                return RunnableLambda(reply)
-
-            async def ainvoke(self, *args, **kwargs):
-                return await original.ainvoke(*args, **kwargs)
-
-        patch.setattr(shared, "configurable_model", GapServices())
+        install_inference(patch, gaps)
     if (
         scenario.startswith("legacy-")
         and not (directory / (scenario + ".release")).exists()
@@ -398,21 +355,15 @@ def install(directory, scenario):
     original_settle = SDKContextHarness._settle_on_exit
 
     if scenario in {"runner-batch", "batch-error-cache"}:
-        from langchain_core.language_models.fake_chat_models import (
-            FakeMessagesListChatModel,
-        )
+        from sdk_model_support import install_inference
 
-        original_generate = FakeMessagesListChatModel._generate
-
-        def witnessed_generate(self, *args, **kwargs):
+        def witnessed_generate(request):
             with sqlite3.connect(directory / "external.db", timeout=10) as db:
-                db.execute(
-                    "CREATE TABLE IF NOT EXISTS lc_models(id INTEGER PRIMARY KEY)"
-                )
+                db.execute("CREATE TABLE IF NOT EXISTS lc_models(id INTEGER PRIMARY KEY)")
                 db.execute("INSERT INTO lc_models DEFAULT VALUES")
-            return original_generate(self, *args, **kwargs)
+            return None
 
-        patch.setattr(FakeMessagesListChatModel, "_generate", witnessed_generate)
+        install_inference(patch, witnessed_generate)
 
     async def settle(self, reason):
         if (

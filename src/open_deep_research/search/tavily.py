@@ -10,15 +10,12 @@ from datetime import datetime
 from typing import Annotated, Any, List, Literal
 
 from agents.tool_context import ToolContext
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolArg, tool
 from tavily import AsyncTavilyClient
 
-from open_deep_research.budget import ainvoke_model_with_budget, structured_output_chain
 from open_deep_research.configuration import Configuration
-from open_deep_research.models import create_chat_model
+from open_deep_research.llm.generation import generate_structured
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import Summary
 from open_deep_research.time_utils import get_today_str
@@ -213,18 +210,6 @@ async def _tavily_search(
     # Character limit to stay within model token limits (configurable)
     max_char_to_include = configurable.max_content_length
 
-    # Initialize summarization model with retry logic
-    summarization_model = structured_output_chain(
-        create_chat_model(
-            model=configurable.summarization_model,
-            max_tokens=configurable.summarization_model_max_tokens,
-            config=config,
-            tags=["langsmith:nostream"],
-        ),
-        Summary,
-        max_attempts=configurable.max_structured_output_retries,
-    )
-
     # Step 5: Summarize one page at a time under page and elapsed-time bounds.
     # A single in-flight model bill keeps the shared token budget consistent and
     # avoids a burst of DB pool users.
@@ -252,9 +237,11 @@ async def _tavily_search(
         summarized_results[url] = {
             "title": result.get("title") or "",
             "content": await summarize_webpage(
-                summarization_model,
+                configurable.summarization_model,
                 str(result["raw_content"])[:max_char_to_include],
-                model_name=configurable.summarization_model,
+                config=config,
+                max_tokens=configurable.summarization_model_max_tokens,
+                max_attempts=configurable.max_structured_output_retries,
                 fallback_content=str(
                     result.get("content") or result["raw_content"] or ""
                 ),
@@ -407,19 +394,23 @@ async def tavily_search_async(
 
 # 在超时保护下调用摘要模型处理网页；普通失败降级为有界摘录，控制类异常继续传播。
 async def summarize_webpage(
-    model: BaseChatModel,
+    model_name: str,
     webpage_content: str,
     *,
-    model_name: str | None = None,
+    config: RunnableConfig = None,
+    max_tokens: int | None = None,
+    max_attempts: int = 1,
     fallback_content: str | None = None,
     max_excerpt_chars: int = MAX_DEGRADED_EXCERPT_CHARS,
 ) -> str:
     """Summarize webpage content using AI model with timeout protection.
 
     Args:
-        model: The chat model configured for summarization
+        model_name: The logical model reference configured for summarization
         webpage_content: Raw webpage content to be summarized
-        model_name: Optional model name for LangSmith correlation metadata
+        config: Runtime provider configuration
+        max_tokens: Per-request output cap
+        max_attempts: Bound for invalid structured outputs
         fallback_content: Short Tavily snippet (preferred) or raw page text
         max_excerpt_chars: Bound for the degraded excerpt returned on failure
 
@@ -435,18 +426,18 @@ async def summarize_webpage(
         )
 
         # Execute summarization with timeout to prevent hanging
-        response, _budget = await asyncio.wait_for(
-            ainvoke_model_with_budget(
-                model,
-                [HumanMessage(content=prompt_content)],
-                model_name=model_name,
-                structured_output=True,
+        summary, _budget = await asyncio.wait_for(
+            generate_structured(
+                model_name,
+                prompt_content,
+                Summary,
+                config=config,
+                max_tokens=max_tokens,
+                max_attempts=max_attempts,
                 component="webpage_summarization",
             ),
             timeout=60.0,  # 60 second timeout for summarization
         )
-        summary = response["parsed"]
-
         # Format the summary with structured sections
         formatted_summary = (
             f"<summary>\n{summary.summary}\n</summary>\n\n"

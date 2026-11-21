@@ -22,7 +22,7 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `por-vertical-v1`. Pending `dbos-events-v1` and earlier
+Application version is `por-sdk-models-v1`. Drain `por-vertical-v1` with its matching release before cutover. Pending `dbos-events-v1` and earlier
 journals must drain with their matching release before cutover. Native Stream offsets
 drive SSE resume. The single writer records one delivery Event per published
 prefix. Finalizer reads native results and the effect ledger before publishing
@@ -46,8 +46,9 @@ State carries only `messages`, `workflow`, `agents` (role reports), `report` and
 turn window invocation-local; DBOS Steps persist them without a second history.
 
 The SDK owns all four business Agent loops. Planning, intake, review, report and
-rolling compaction model calls remain bounded single-purpose LangChain business
-services. They do not execute an Agent/tool loop. RAG retains separate ownership.
+rolling compaction call the same SDK Model directly through bounded DBOS Steps.
+Only the four business Agents execute a Runner loop. RAG retains separate ownership
+of indexing and retrieval and uses the shared SDK path for inference.
 Unknown model aliases use a 32,768-token
 application window unless explicitly configured; this is not a provider claim.
 DBOSRunner owns SDK model checkpoints; explicit tool and bounded Context Steps
@@ -66,8 +67,8 @@ before changing runtime boundaries. Read [the Phase 0 results](docs/audits/opena
 for tested SDK interfaces, tool coverage and remaining limitations.
 Read [the Phase 1 results](docs/audits/openai-agents-phase1.md) for Runtime
 selection, budget compatibility and explicit unsupported SDK paths. SDK input
-uses native dictionaries and official Models; LangChain tool/report/Graph
-services remain behind the business boundary. Read the Phase 2 audit before
+uses native dictionaries and official Models. LangChain Core message, tool and
+text-splitting utilities remain behind the business boundary. Read the Phase 2 audit before
 changing batch staging, context scoping or native history compaction.
 Do not add another agent loop or
 silently fall back to legacy after an SDK failure.

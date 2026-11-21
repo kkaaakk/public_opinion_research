@@ -75,36 +75,23 @@ def test_finished_receipt_retries_control_only(
 
 def test_failed_generations_keep_the_final_report_reservation(native_case, monkeypatch):
     from dbos_support import retry_observed_failure
-    from langchain_core.language_models.fake_chat_models import (
-        FakeMessagesListChatModel,
-    )
-    from langchain_core.messages import AIMessage, HumanMessage
+    from sdk_model_support import install_inference
 
-    from open_deep_research.budget import ainvoke_model_with_budget
+    from open_deep_research.llm.generation import generate_text
     from open_deep_research.workflow import dbos_workflow as engine
 
     case = native_case
     calls = []
-    raw = FakeMessagesListChatModel(
-        responses=[
-            AIMessage(
-                content="invalid brief",
-                usage_metadata={
-                    "input_tokens": 7,
-                    "output_tokens": 3,
-                    "total_tokens": 10,
-                },
-            )
-        ]
-    )
 
-    class Inference:
-        async def ainvoke(self, payload, config=None):
+    def infer(request):
+        if request.model_ref == "openai:invalid-plan":
             calls.append(1)
-            return await raw.ainvoke(payload, config)
+            return "invalid brief"
+
+    install_inference(monkeypatch, infer)
 
     async def invalid_plan(state, config):
-        await ainvoke_model_with_budget(Inference(), [HumanMessage(content="brief")])
+        await generate_text("openai:invalid-plan", "brief")
         raise ValueError("Controlled invalid brief response")
 
     monkeypatch.setattr(engine.intake, "plan_research", invalid_plan)
@@ -132,17 +119,15 @@ def test_failed_generations_keep_the_final_report_reservation(native_case, monke
     assert final["usage"]["model_calls"] == 9 and len(calls) == 2
 
 
-def test_parallel_models_share_run_limit_and_final_report_reservation(native_case):
+def test_parallel_models_share_run_limit_and_final_report_reservation(native_case, monkeypatch):
     import asyncio
     from uuid import uuid4
 
     from dbos import DBOS
-    from langchain_core.language_models.fake_chat_models import (
-        FakeMessagesListChatModel,
-    )
-    from langchain_core.messages import AIMessage, HumanMessage
+    from sdk_model_support import install_inference
 
     from open_deep_research.configuration import Configuration
+    from open_deep_research.llm.generation import generate_text
 
     case = native_case
     case.cfg["configurable"].update(max_model_calls=10, reserve_final_report_call=True)
@@ -151,6 +136,13 @@ def test_parallel_models_share_run_limit_and_final_report_reservation(native_cas
     assert paused["usage"]["model_calls"] == 8
     barrier = threading.Barrier(2)
     invoked = []
+
+    def infer(request):
+        if request.model_ref == "openai:shared-budget":
+            invoked.append(execution.stage_context.get().reserve_report)
+            return "provider response"
+
+    install_inference(monkeypatch, infer)
 
     @DBOS.workflow(name=f"por.test.shared_budget.{uuid4().hex}")
     async def inference(reserve):
@@ -168,26 +160,7 @@ def test_parallel_models_share_run_limit_and_final_report_reservation(native_cas
             if reserve:
                 await asyncio.to_thread(barrier.wait, 10)
 
-            class Model(FakeMessagesListChatModel):
-                async def ainvoke(self, *args, **kwargs):
-                    invoked.append(reserve)
-                    return await super().ainvoke(*args, **kwargs)
-
-            model = Model(
-                responses=[
-                    AIMessage(
-                        content="provider response",
-                        usage_metadata={
-                            "input_tokens": 7,
-                            "output_tokens": 3,
-                            "total_tokens": 10,
-                        },
-                    )
-                ]
-            )
-            await budget.ainvoke_model_with_budget(
-                model, [HumanMessage(content="request")]
-            )
+            await generate_text("openai:shared-budget", "request")
             return True
         except budget.ModelBudgetExceeded:
             return False

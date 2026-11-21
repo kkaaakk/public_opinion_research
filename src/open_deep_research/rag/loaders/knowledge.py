@@ -21,15 +21,14 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from langchain_core.messages import HumanMessage
-
-from open_deep_research.budget import invoke_model_with_budget
-from open_deep_research.models import create_chat_model as init_chat_model
+from open_deep_research.budget import ModelBudgetExceeded
+from open_deep_research.llm.generation import generate_text_sync
 from open_deep_research.rag.code_languages import (
     CODE_EXTENSION_LANGUAGE_MAP,
     language_for_extension,
 )
 from open_deep_research.rag.types import RAGDocument
+from open_deep_research.workflow.execution import is_execution_control_failure
 
 LOGGER = logging.getLogger(__name__)
 SUPPORTED_TEXT_EXTENSIONS = {".txt", ".md", ".json", ".pdf"}
@@ -103,6 +102,8 @@ def load_documents_from_paths(
                     )
                 )
             except Exception as exc:  # pragma: no cover - defensive logging path
+                if is_execution_control_failure(exc) and not isinstance(exc, ModelBudgetExceeded):
+                    raise
                 LOGGER.warning(
                     "Failed to load RAG document %s: %s", candidate_path, exc
                 )
@@ -566,6 +567,8 @@ def route_image_for_rag(
     try:
         classification = normalize_image_classification_label(classify())
     except Exception as exc:  # pragma: no cover - defensive fallback
+        if is_execution_control_failure(exc) and not isinstance(exc, ModelBudgetExceeded):
+            raise
         LOGGER.warning("Failed to classify image route with Vision: %s", exc)
         classification = "uncertain"
 
@@ -625,6 +628,8 @@ def _extract_text_for_image_route(
             if vision_text:
                 metadata["vision_provider"] = "llm"
         except Exception as exc:
+            if is_execution_control_failure(exc) and not isinstance(exc, ModelBudgetExceeded):
+                raise
             LOGGER.warning("Failed Vision extraction for routed RAG image: %s", exc)
             metadata["vision_error"] = str(exc)
 
@@ -926,42 +931,19 @@ def _invoke_vision_model(
 ) -> str:
     encoded_image = base64.b64encode(image_bytes).decode("ascii")
     image_url = f"data:{mime_type};base64,{encoded_image}"
-    vision_model = init_chat_model(
-        model=model,
+    response, _budget = generate_text_sync(
+        model,
+        [{
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": prompt},
+                {"type": "input_image", "image_url": image_url, "detail": "auto"},
+            ],
+        }],
         max_tokens=max_tokens,
-        tags=["langsmith:nostream"],
-    )
-    response, _budget = invoke_model_with_budget(
-        vision_model,
-        [
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ]
-            )
-        ],
-        model_name=model,
         component="rag_vision",
     )
-    return _message_content_to_text(response.content).strip()
-
-
-# 将模型字符串或内容块响应整理为纯文本。
-def _message_content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if text:
-                    parts.append(str(text))
-        return "\n".join(parts)
-    return str(content or "")
+    return response.strip()
 
 
 # 根据图片类型生成多模态请求需要的 MIME 类型。

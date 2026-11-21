@@ -10,11 +10,9 @@ from contextlib import asynccontextmanager
 import pytest
 from agents.exceptions import ModelBehaviorError
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
 from openai.types.responses import ResponseReasoningItem
 from reference_workflow import PythonWorkflow, WorkflowExecutionError
+from sdk_model_support import Reply, install_inference
 from test_python_workflow import ROLES, config, initial
 from test_sdk_runtime import TOKENS, _tool
 
@@ -28,58 +26,7 @@ from open_deep_research.state import (
     ResearchReview,
     Sections,
 )
-from open_deep_research.workflow import shared
 from open_deep_research.workflow.brief import BriefRevision, PlanDecision, PlanQuestion
-
-
-class Services:
-    """Replace inference only, emitting real LangChain callbacks and usage."""
-
-    def __init__(self):
-        self.calls = Counter()
-        self.prompts = []
-        self.raw = FakeMessagesListChatModel(
-            responses=[
-                AIMessage(
-                    content="service output",
-                    response_metadata={"model_name": "fixture-service"},
-                    usage_metadata={
-                        "input_tokens": 7,
-                        "output_tokens": 3,
-                        "total_tokens": 10,
-                    },
-                )
-            ]
-        )
-
-    def with_config(self, config):
-        return self
-
-    async def ainvoke(self, messages, config=None):
-        text = str(messages[0].content)
-        self.prompts.append(text)
-        self.calls["report"] += 1
-        raw = await self.raw.ainvoke(messages, config)
-        return raw.model_copy(
-            update={"content": "FINAL brand recall report, sourced and reviewed"}
-        )
-
-    def with_structured_output(self, schema, include_raw=False):
-        async def respond(messages, config=None):
-            self.calls[schema.__name__] += 1
-            text = str(messages[0].content)
-            self.prompts.append(text)
-            raw = await self.raw.ainvoke(messages, config)
-            if schema is RollingCompactOutput:
-                parsed = RollingCompactOutput(
-                    rolling_summary="Older verified research history summarized."
-                )
-            else:
-                raise AssertionError(f"Unexpected structured schema: {schema}")
-            return {"raw": raw, "parsed": parsed, "parsing_error": None}
-
-        return RunnableLambda(respond)
-
 
 CLARIFICATION_QUESTIONS = (
     PlanQuestion(id="brand", text="Which brand?", kind="text", options=[]),
@@ -108,7 +55,6 @@ def install_sdk(
     on_revision=None,
 ):
     """Replace inference and external tools; keep actual Agent/Runner services."""
-    services = Services()
     runtimes = []
     models = []
     calls = Counter()
@@ -120,74 +66,53 @@ def install_sdk(
     model_windows = []
     original_state = initial()
 
-    class WorkflowServices(Services):
-        def with_structured_output(self, schema, include_raw=False):
-            if schema is BriefRevision:
-
-                async def reply(messages, config=None):
-                    raw = await self.raw.ainvoke(messages, config)
-                    assert messages[0].type == "system" and messages[-1].type == "human"
-                    data = json.loads(messages[-1].content)
-                    parsed = (
-                        await on_revision(data) if on_revision is not None else None
-                    )
-                    if parsed is None:
-                        parsed = BriefRevision(
-                            brief_md=data["current_brief"] + "\n\n" + data["feedback"]
-                        )
-                    return {"raw": raw, "parsed": parsed, "parsing_error": None}
-
-                return RunnableLambda(reply)
-            values = {
-                PlanDecision: PlanDecision(
-                    action="ready",
-                    questions=[],
-                    brief_md="# Brand recall research\n\n## Objective\nEstablish reliable recall facts.\n\n## Scope\nBrand, last 30 days, geography unspecified.\n\n## Core questions\nWhat happened and which sources support it?\n\n## Constraints\nDistinguish allegations from facts; cite sources.\n\n## Completion criteria\nAnswer the question or explain missing evidence; match risk and strategy.",
-                ),
-                ClarifyWithUser: ClarifyWithUser(
-                    need_clarification=mode == "clarify",
-                    question="Which brand?",
-                    verification="Scope confirmed",
-                ),
-                ResearchQuestion: ResearchQuestion(
-                    research_brief="Investigate brand recall evidence"
-                ),
-                Sections: Sections(sections=original_state["report"]["sections"]),
-                ResearchReview: ResearchReview(research_complete=True),
-            }
-            if schema not in values:
-                return super().with_structured_output(schema, include_raw)
-
-            async def reply(messages, config=None):
-                raw = await self.raw.ainvoke(messages, config)
-                parsed = values[schema]
-                if schema is PlanDecision:
-                    prompt = messages[0].content
-                    if on_plan is not None:
-                        on_plan(prompt)
-                    completed = prompt.count("\nUser response: ")
-                    target = {
-                        "clarify": 1,
-                        "clarify-2": 2,
-                        "clarify-3": 3,
-                    }.get(mode, 0)
-                    if "browser-clarify" in prompt:
-                        target = 2 if "browser-clarify-multi" in prompt else 1
-                    if mode == "clarify-over-limit" or (
-                        completed < target and "Clarification allowed: True." in prompt
-                    ):
-                        parsed = PlanDecision(
-                            action="ask_user",
-                            questions=[
-                                CLARIFICATION_QUESTIONS[
-                                    min(completed, len(CLARIFICATION_QUESTIONS) - 1)
-                                ]
-                            ],
-                            brief_md="",
-                        )
-                return {"raw": raw, "parsed": parsed, "parsing_error": None}
-
-            return RunnableLambda(reply)
+    async def respond(request):
+        schema = request.schema_name
+        if request.model_ref == "openai:fixture-review-attempt":
+            return Reply("controlled failed review", 2, 0)
+        if schema is None:
+            return "FINAL brand recall report, sourced and reviewed"
+        if schema == "RollingCompactOutput":
+            return RollingCompactOutput(
+                rolling_summary="Older verified research history summarized."
+            )
+        if schema == "BriefRevision":
+            assert request.messages[0]["role"] == "system"
+            assert request.messages[-1]["role"] == "user"
+            data = json.loads(request.messages[-1]["content"])
+            parsed = await on_revision(data) if on_revision is not None else None
+            return parsed if parsed is not None else BriefRevision(
+                brief_md=data["current_brief"] + "\n\n" + data["feedback"]
+            )
+        if schema == "PlanDecision":
+            prompt = request.prompt
+            if on_plan is not None:
+                on_plan(prompt)
+            completed = prompt.count("\nUser response: ")
+            target = {"clarify": 1, "clarify-2": 2, "clarify-3": 3}.get(mode, 0)
+            if "browser-clarify" in prompt:
+                target = 2 if "browser-clarify-multi" in prompt else 1
+            if mode == "clarify-over-limit" or (
+                completed < target and "Clarification allowed: True." in prompt
+            ):
+                return PlanDecision(
+                    action="ask_user",
+                    questions=[CLARIFICATION_QUESTIONS[min(completed, len(CLARIFICATION_QUESTIONS) - 1)]],
+                    brief_md="",
+                )
+            return PlanDecision(
+                action="ready",
+                questions=[],
+                brief_md="# Brand recall research\n\n## Objective\nEstablish reliable recall facts.\n\n## Scope\nBrand, last 30 days, geography unspecified.\n\n## Core questions\nWhat happened and which sources support it?\n\n## Constraints\nDistinguish allegations from facts; cite sources.\n\n## Completion criteria\nAnswer the question or explain missing evidence; match risk and strategy.",
+            )
+        return {
+            "ClarifyWithUser": ClarifyWithUser(
+                need_clarification=mode == "clarify", question="Which brand?", verification="Scope confirmed",
+            ),
+            "ResearchQuestion": ResearchQuestion(research_brief="Investigate brand recall evidence"),
+            "Sections": Sections(sections=original_state["report"]["sections"]),
+            "ResearchReview": ResearchReview(research_complete=True),
+        }[schema]
 
     class RecordingRuntime(SDKAgentRuntime):
         async def run(self, task):
@@ -204,7 +129,6 @@ def install_sdk(
 
     @asynccontextmanager
     async def model_context(*args, **kwargs):
-        assert kwargs["max_retries"] == 0
         current = {}
 
         async def first(call):
@@ -332,12 +256,11 @@ def install_sdk(
     monkeypatch.setattr(business_agent, "SDKAgentRuntime", RecordingRuntime)
     monkeypatch.setattr(business_agent, "sdk_model", model_context)
     monkeypatch.setattr(business_agent, "_business_agent_tools", tools)
-    monkeypatch.setattr(business_agent, "_CONFIGURABLE_MODEL", services)
-    monkeypatch.setattr(shared, "configurable_model", WorkflowServices())
+    install_inference(monkeypatch, respond)
     cfg = config(
         recent_raw_steps=0,
         allow_clarification=True,
-        research_model="fixture:review",
+        research_model="openai:fixture-review",
         max_structured_output_retries=1,
         budget_enabled=True,
         max_model_calls=100,

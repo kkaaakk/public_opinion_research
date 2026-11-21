@@ -79,15 +79,13 @@ class Gates(RunHooks):
 @DBOS.workflow(name="poc.producer")
 async def producer():
     if window == "budget":
+        import pytest
         from agents.testing import ScriptedModel
-        from langchain_core.language_models.fake_chat_models import (
-            FakeMessagesListChatModel,
-        )
-        from langchain_core.messages import AIMessage
+        from sdk_model_support import Reply, install_inference
         from test_sdk_runtime import _runtime
 
-        from open_deep_research.budget import ainvoke_model_with_budget
         from open_deep_research.configuration import Configuration
+        from open_deep_research.llm.generation import generate_text
         from open_deep_research.runtime.sdk_context import SDKContextHarness
 
         original = SDKContextHarness.filter_model_input
@@ -96,23 +94,11 @@ async def producer():
             result = await original(self, data)
             for _ in range(2):
                 witness("context-model")
-                await ainvoke_model_with_budget(
-                    FakeMessagesListChatModel(
-                        responses=[
-                            AIMessage(
-                                content="context",
-                                usage_metadata={
-                                    "input_tokens": 1,
-                                    "output_tokens": 1,
-                                    "total_tokens": 2,
-                                },
-                            )
-                        ]
-                    ),
-                    [],
-                )
+                await generate_text("openai:fixture", "context")
             return result
 
+        patch = pytest.MonkeyPatch()
+        install_inference(patch, lambda request: Reply("context", 1, 1))
         SDKContextHarness.filter_model_input = context_calls
         try:
             runtime = _runtime(
@@ -132,6 +118,7 @@ async def producer():
             }
         finally:
             SDKContextHarness.filter_model_input = original
+            patch.undo()
     result = await DBOSRunner.run(
         Agent(name="producer", model=Producer(), tools=[read]),
         "research",

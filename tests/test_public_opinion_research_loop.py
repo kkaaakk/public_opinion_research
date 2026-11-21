@@ -3,12 +3,11 @@
 
 import asyncio
 
-from langchain_core.runnables import RunnableLambda
 from reference_workflow import PythonWorkflow
+from sdk_model_support import install_sequence
 
 import open_deep_research.runtime.business_agent as business_agent_module
 import open_deep_research.workflow.research as workflow_research
-import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.state import ResearchReview, ResearchTask, agents_reducer
 from open_deep_research.workflow import reporting
 
@@ -25,7 +24,7 @@ def _config(*, max_research_rounds: int = 2) -> dict:
                 "response_strategy",
             ],
             "max_research_rounds": max_research_rounds,
-            "research_model": "fixture:model",
+            "research_model": "openai:fixture-model",
         }
     }
 
@@ -41,34 +40,6 @@ def _task(task_id: str, role: str) -> ResearchTask:
         reason=f"{task_id} could change the risk judgment",
         priority="high",
     )
-
-
-# 按预设顺序返回证据复核结果的模型替身。
-class _ReviewModel:
-    """Minimal structured-output model fixture used by the review node."""
-
-    # 保存预设复核响应及调用状态。
-    def __init__(self, reviews: list[ResearchReview]) -> None:
-        self.reviews = iter(reviews)
-        self.calls = 0
-
-    # 提供与真实结构化模型一致的测试调用入口。
-    def with_structured_output(self, _schema, include_raw=False):
-        return RunnableLambda(self._structured_call)
-
-    # 兼容模型重试链式配置。
-    def with_retry(self, **_kwargs):
-        return self
-
-    # 兼容运行配置绑定并返回可调用替身。
-    def with_config(self, _config):
-        return self
-
-    # 按脚本返回下一条复核结论。
-    async def _structured_call(self, _messages, config=None):
-        self.calls += 1
-        parsed = next(self.reviews)
-        return {"raw": None, "parsed": parsed, "parsing_error": None}
 
 
 # 创建记录角色执行次数和轮次的智能体替身。
@@ -124,9 +95,8 @@ def _invoke_with_fixtures(
     max_rounds: int = 2,
 ):
     """Invoke the compiled subgraph with deterministic review and agent fixtures."""
-    reviewer = _ReviewModel(reviews)
+    reviewer = install_sequence(monkeypatch, *reviews)
     calls: list[tuple[str, str, list[str]]] = []
-    monkeypatch.setattr(workflow_shared, "configurable_model", reviewer)
     monkeypatch.setattr(
         workflow_research,
         "run_business_agent",
@@ -156,7 +126,7 @@ def test_sufficient_initial_research_goes_directly_to_risk(monkeypatch) -> None:
         [ResearchReview(research_complete=True, confirmed_findings=["enough"])],
     )
 
-    assert reviewer.calls == 1
+    assert len(reviewer) == 1
     assert {(role, mode) for role, mode, _ in calls} == {
         ("public_signal", "initial"),
         ("internal_knowledge", "initial"),
@@ -178,7 +148,7 @@ def test_public_only_followup_returns_to_review_and_merges_reports(monkeypatch) 
         ],
     )
 
-    assert reviewer.calls == 2
+    assert len(reviewer) == 2
     assert [(role, mode) for role, mode, _ in calls].count(
         ("public_signal", "followup")
     ) == 1
@@ -207,7 +177,7 @@ def test_internal_only_followup_uses_internal_agent(monkeypatch) -> None:
         ],
     )
 
-    assert reviewer.calls == 2
+    assert len(reviewer) == 2
     assert not [call for call in calls if call[:2] == ("public_signal", "followup")]
     assert [call for call in calls if call[:2] == ("internal_knowledge", "followup")]
 
@@ -228,7 +198,7 @@ def test_both_followups_are_joined_before_the_next_review(monkeypatch) -> None:
         ],
     )
 
-    assert reviewer.calls == 2
+    assert len(reviewer) == 2
     assert {
         (role, mode)
         for role, mode, _ in calls
@@ -296,7 +266,7 @@ def test_completed_task_and_max_round_prevent_another_loop(monkeypatch) -> None:
         [ResearchReview(research_complete=False, next_tasks=[task])],
         max_rounds=1,
     )
-    assert reviewer.calls == 1
+    assert len(reviewer) == 1
     assert not [call for call in calls if call[1] == "followup"]
 
 

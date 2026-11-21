@@ -2,9 +2,9 @@
 """Tests for public-opinion business-agent encapsulation."""
 
 import asyncio
-from types import SimpleNamespace
 
-import open_deep_research.workflow.shared as workflow_shared
+from sdk_model_support import install_sequence
+
 from open_deep_research.configuration import Configuration
 from open_deep_research.public_opinion_agents import (
     PUBLIC_OPINION_AGENT_ORDER,
@@ -102,20 +102,7 @@ def test_agents_reducer_keeps_reports_by_role() -> None:
 def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     """Formal role reports, rather than compact memory, reach the writer prompt."""
 
-    captured_prompts: list[str] = []
-
-    # 记录输入提示或消息，并返回固定报告以检查证据传递。
-    class CapturingModel:
-        # 接收运行配置并返回测试模型，兼容真实调用链。
-        def with_config(self, _config):
-            return self
-
-        # 记录模型实际输入，并返回预设章节或报告消息。
-        async def ainvoke(self, messages, config=None):
-            captured_prompts.append(str(messages[0].content))
-            return SimpleNamespace(content="section output")
-
-    monkeypatch.setattr(workflow_shared, "configurable_model", CapturingModel())
+    requests = install_sequence(monkeypatch, "section output")
     full_report = "A" * 2_000 + "\nTAIL_EVIDENCE_MUST_REACH_SECTION_WRITER"
     state = {
         "report": {
@@ -139,14 +126,14 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
             state,
             {
                 "configurable": {
-                    "section_writer_model": "fixture:model",
+                    "section_writer_model": "openai:fixture-model",
                                 }
             },
         )
     )
 
-    assert captured_prompts
-    assert "TAIL_EVIDENCE_MUST_REACH_SECTION_WRITER" in captured_prompts[0]
+    assert requests
+    assert "TAIL_EVIDENCE_MUST_REACH_SECTION_WRITER" in requests[0].prompt
 
 def test_role_reports_override_previous_run() -> None:
     """A new research phase replaces prior formal reports instead of merging them."""

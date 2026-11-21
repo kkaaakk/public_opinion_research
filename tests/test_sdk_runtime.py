@@ -126,9 +126,6 @@ def _runtime(
         tools=tools if tools is not None else [_tool(role)],
         initial_budget=initial_budget or {},
         compress_report=compress or _compress,
-        model_factory=lambda model_name, max_tokens: pytest.fail(
-            "Unexpected nested model call"
-        ),
     )
 
 
@@ -409,7 +406,7 @@ def test_business_harness_snapshot_round_trip():
         research_round=1,
         config=Configuration(research_model="openai:fixture"),
         budget=_RunBudget(initial={}),
-        model_factory=lambda *_: pytest.fail("Unexpected nested model call"),
+        runtime_config={},
     )
     harness.model_calls = 3
     harness.rolling_summary = "older work summarized"

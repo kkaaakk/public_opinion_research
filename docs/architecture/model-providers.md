@@ -1,63 +1,48 @@
-# 模型供应商与配置契约
+# 模型供应商与 SDK 调用
 
-本项目保留 LangChain 的有界模型服务。四角色 Agent 使用官方 Agents SDK；供应商
-构造能力与模型本身的工具、视觉、结构化输出能力分别验证，不承诺所有模型具有相同功能。
+四角色 Agent 由 DBOSRunner 驱动。Plan、Brief、Clarification、Review、章节规划、
+报告、角色压缩、滚动压缩、网页摘要、RAG 改写与图片识别直接调用 SDK Model。
+`models/sdk.py` 的 `sdk_model()` 为两条路径构造模型。`providers.py` 负责解析
+`provider:model`、凭据和可信地址。预置模型、方舟 `ep-*` 和模型 ID 里的冒号原样保留。
 
-| 引用前缀 | LangChain 有界服务 | 原生 SDK Resolver | 凭据/范围 |
-| --- | --- | --- | --- |
-| `openai` | 正式构造合同 | Responses 默认，可显式 Chat Completions | `OPENAI_API_KEY` |
-| `volcengine` | 正式 Ark 适配、function calling 结构化输出 | Chat Completions | `ARK_API_KEY`；保留预置 ID 和 `ep-*` |
-| `deepseek` | 正式构造合同；Flash 保留 thinking 特殊处理 | Chat Completions | `DEEPSEEK_API_KEY` |
-| `groq` | 正式构造合同 | Chat Completions | `GROQ_API_KEY` |
-| `anthropic` | 正式构造合同 | 明确拒绝 | `ANTHROPIC_API_KEY` |
-| `google_genai`、兼容别名 `google` | 正式构造合同，Google GenAI 后端 | 明确拒绝 | `GOOGLE_API_KEY`，环境模式也保留 `GEMINI_API_KEY` |
-| `google_vertexai` | 正式构造合同，实际 ChatVertexAI | 明确拒绝 | 原生 `project` / `location` / ADC 或 `credentials`，不复用开发者 API key |
-| `bedrock` | 正式构造合同，实际 ChatBedrock | 明确拒绝 | AWS 原生区域和凭据链；不转换成 OpenAI 参数 |
-| `ollama` | 正式构造合同；保留 Classic 到 Community 的兼容回退 | 明确拒绝 | 本地 `base_url`；不承诺旧 Community 后端支持 tool binding |
-| `mistralai`、兼容别名 `mistral` | 可选扩展，当前根锁未安装，服务端未验证 | 明确拒绝 | 需另行提供 `langchain-mistralai`；`MISTRAL_API_KEY` |
-| `cohere` | 可选扩展，当前根锁未安装，服务端未验证 | 明确拒绝 | 需另行提供 `langchain-cohere`；`COHERE_API_KEY` |
+| 模型前缀 | SDK 协议与结构化输出 | 凭据和地址 |
+| --- | --- | --- |
+| `openai` | 默认 Responses，发送 SDK 生成的 JSON Schema。Chat 网关可配置 `OPENAI_MODEL_API=chat_completions` | `OPENAI_API_KEY`，`OPENAI_BASE_URL` 或旧别名 `OPENAI_API_BASE` |
+| `deepseek` | Chat JSON Mode。Flash、V4 和 Reasoner 系列仅在结构化任务关闭 thinking，文本和 Agent 使用原有模型行为 | `DEEPSEEK_API_KEY`，`DEEPSEEK_API_BASE` 默认 `https://api.deepseek.com` |
+| `volcengine` | Chat 函数形式承载结构化结果，应用只读取参数。独立生成发送 `max_completion_tokens`，延续原单次服务的回答加思维链上限。多轮 Agent 继续使用配置的 Chat `max_tokens` | `ARK_API_KEY`，`ARK_BASE_URL` 默认 `https://ark.cn-beijing.volces.com/api/v3` |
+| `groq` | Chat JSON Mode，依赖模型的 JSON Mode 能力 | `GROQ_API_KEY`，`GROQ_API_BASE` 默认 `https://api.groq.com/openai/v1` |
+| `anthropic` | Claude 官方 OpenAI 兼容 Chat。旧 Claude 结构化通过函数返回。显式开启手动 thinking 的离线评估脚本使用 JSON 提示和本地校验 | `ANTHROPIC_API_KEY`，可设 `ANTHROPIC_BASE_URL` |
+| `google_genai` / `google` | Gemini Developer API 的 OpenAI 兼容 Chat，发送 SDK JSON Schema | `GOOGLE_API_KEY`，环境模式兼容 `GEMINI_API_KEY`，可设 `GOOGLE_BASE_URL` |
+| `ollama` | 本地 OpenAI 兼容 Chat，取决于安装版本和模型的结构化能力 | `OLLAMA_HOST` 默认 `http://localhost:11434/v1`，云端可设 `OLLAMA_API_KEY` |
+| `mistralai` / `mistral` | Mistral Chat JSON Mode | `MISTRAL_API_KEY`，可设 `MISTRAL_BASE_URL` |
+| `cohere` | Cohere OpenAI 兼容 Chat，依赖所选模型的 JSON Schema 支持 | `COHERE_API_KEY`，可设 `COHERE_BASE_URL` |
 
-“正式构造合同”指根依赖提供实现、真实构造及离线回归受测试约束；不表示本轮执行过
-真实付费推理、通过云端配额验收或验证了所有模型功能。可选扩展保留已有安装者的分派，
-缺包时抛出带安装指引的 `ModelConfigurationError`，不会返回假的可用模型。
-未列出的前缀在请求前拒绝；SDK 不会因失败回退到 LangChain。
+Vertex AI 原生 ADC（`google_vertexai`）和 Bedrock 原生 AWS 凭据（`bedrock`）
+在预检及模型工厂明确拒绝。仓库的正式和 Smoke 配置使用 DeepSeek 与方舟。
+如已有可用的兼容网关，可使用 `openai:模型ID`、网关 URL 和网关凭据，并按网关协议选择
+`OPENAI_MODEL_API`。Claude 使用工作区范围的 API Key。兼容端点的工具、视觉、结构化能力
+取决于实际模型及端点版本。
 
-`google` 原先没有可达的 Classic 路由；现在根据已有 `GOOGLE_API_KEY` 语义映射为
-`google_genai`。Vertex 使用显式 `google_vertexai`，避免开发者 API 与 ADC 混淆。
-`mistral` 归一为 Classic 实际识别的 `mistralai`。模型 ID 中额外的冒号保持原样。
+显式凭据优先。`GET_API_KEYS_FROM_CONFIG=true` 时使用可信 `configurable.apiKeys`，
+否则读取供应商环境变量。地址优先级为显式 `base_url`、可信运行配置、环境变量和默认值。
+Run 快照不存储调用凭据。
 
-## 配置所有权
+## 结果与恢复
 
-业务模型只在 `config.yaml` 中选择（`research_model`、`compression_model`、
-`final_report_model`、`summarization_model`、`rolling_compaction_model`、
-`rag_query_rewrite_model`、`rag_vision_model` 等）。`.env` 只提供第 6 列所列凭据
-和 endpoint；`RESEARCH_MODEL` 等旧环境变量不再覆盖配置。`por doctor` 分别检查
-SDK Model 路径和 LangChain 单次服务路径，缺凭据或适配器包时在提交前报错。
+独立任务用 `AgentOutputSchema` 生成 Schema 并做完整 Pydantic 校验。字段默认值、
+Plan 的决策校验及 Review 的补研字段由现有模型定义。对已返回的无效 JSON、空输出、
+预期函数参数缺失或截断，有重试配置的结构化任务才发起下一次请求。拒绝、控制错误
+和传输失败向调用方报告。SDK HTTP 自动重试关闭。报告输入上下文超限仍按原业务逻辑处理。
 
-`models/providers.py` 是原有解析器的后端无关归属；两条路径共用 `parse_model_ref`、
-`resolve_api_key` 和 `resolve_base_url`。既有 `models` / `models.factory` 导入继续可用。
-仅导入 Resolver 或 SDK Model 不会装载 Classic、ChatOpenAI 或 ChatDeepSeek 后端。
+SDK 0.24.0 会省略部分终止状态。共享 HTTPX 响应钩子保留 Chat `finish_reason`
+及 Responses `status` / `incomplete_details`。模型返回不完整、拒绝、空白或缺少
+正常完成信号时，报告不会发布该结果。SDK 在转换前拒绝响应时，钩子保留供应商已报的用量。
+成功结果和用量由 DBOS Step 记录，原生恢复直接复用该记录。
 
-- 显式 `api_key` 优先。`GET_API_KEYS_FROM_CONFIG=true` 时从
-  `configurable.apiKeys` 读取；否则使用对应环境变量。SDK 支持的 key 型供应商缺少
-  所选来源的凭据时，两条路径都拒绝，不以环境密钥填补空配置。
-- LangChain 既有 `openai_api_key` / `openai_api_base`、Groq 的
-  `groq_api_key` / `groq_api_base` 在工厂边界归一为显式参数；标准 `api_key` /
-  `base_url` 同时存在时优先。这些原生字段别名不会被环境或默认地址覆盖。
-- OpenAI-compatible 地址按显式 `base_url` → 可信配置 → 环境 → 默认值解析。
-  Ark 支持 `ARK_BASE_URL` / `ark_base_url`；DeepSeek 用 `DEEPSEEK_API_BASE`，
-  Groq 用 `GROQ_API_BASE`。OpenAI 用 `OPENAI_BASE_URL` 并保留 `OPENAI_API_BASE`。
-- Ark 默认 `https://ark.cn-beijing.volces.com/api/v3`，DeepSeek 默认
-  `https://api.deepseek.com`，Groq 默认 `https://api.groq.com/openai/v1`；OpenAI
-  未指定地址时由官方客户端采用默认值。这些协议共用绝对 HTTP(S) URL 校验。
-- Anthropic、Google、Vertex、Bedrock、Ollama 保留其原生 endpoint/凭据差异。
-  不把 Vertex host 或 AWS endpoint 强行套入 OpenAI URL 策略。
-- Intake、Review、Report、Graph/压缩服务及 Tavily 将完整可信 provider 配置交给工厂，
-  避免先解析一次 key、再遗漏 endpoint。SDK ModelSettings 仍归 Agent/RunConfig，
-  LangChain 请求参数仍归实际模型；不引入通用 ModelService。
+## 验收范围
 
-当前根依赖与锁保持原样，包括 Vertex 和 Community。Vertex 可选化需要单独证明
-默认安装与 extra 安装均可复现、导入契约兼容、锁的实际差分及平台矩阵，不能把旧锁
-静态闭包估算作为本轮已节省的依赖。
+Mock 覆盖 OpenAI Responses、DeepSeek JSON Mode、方舟函数结构与长度字段、Groq
+JSON Mode，以及兼容端点的配置。真实验收需验证配置的模型、方舟 preset 与 `ep-*` 的
+能力、DeepSeek JSON 输出稳定性和视觉支持。此轮未运行真实 API。
 
-回归与测量见 [接缝精简审计](../audits/langchain-seam-simplification.md)。
+[Agents SDK 模型文档](https://openai.github.io/openai-agents-python/models/) · [DeepSeek Chat](https://api-docs.deepseek.com/api/create-chat-completion/) · [方舟上下文管理](https://docs.volcengine.com/docs/ark/context-management?lang=zh) · [Groq 结构化输出](https://console.groq.com/docs/structured-outputs) · [Claude 兼容接口](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk) · [Gemini 兼容接口](https://aistudio.google.com/docs/openai)

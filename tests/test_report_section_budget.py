@@ -3,9 +3,7 @@
 import asyncio
 
 import pytest
-from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
+from sdk_model_support import install_inference
 
 from open_deep_research.budget import (
     can_spend_model_call,
@@ -14,16 +12,12 @@ from open_deep_research.budget import (
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.state import Section, Sections, report_reducer, runtime_reducer
-from open_deep_research.workflow import intake, reporting, shared
+from open_deep_research.workflow import intake, reporting
 
 
 @pytest.fixture
 def fake_model(monkeypatch):
-    model = GenericFakeChatModel(
-        messages=iter(AIMessage(content="written section") for _ in range(30))
-    )
-    monkeypatch.setattr(shared, "configurable_model", model)
-    return model
+    install_inference(monkeypatch, lambda request: "written section")
 
 
 def _sections(research_count=5):
@@ -54,9 +48,9 @@ def _state(sections, used_calls=0):
 def _config(**overrides):
     return {
         "configurable": {
-            "planner_model": "fixture:model",
-            "section_writer_model": "fixture:model",
-            "final_report_model": "fixture:model",
+            "planner_model": "openai:fixture-model",
+            "section_writer_model": "openai:fixture-model",
+            "final_report_model": "openai:fixture-model",
             "allow_plan_feedback": False,
             "budget_enabled": True,
             "max_model_calls": 10,
@@ -67,13 +61,12 @@ def _config(**overrides):
 
 
 def _stub_plan(monkeypatch, sections):
-    # Keep real chat-model callbacks so the planner's call is counted.
-    monkeypatch.setattr(
-        intake,
-        "structured_output_chain",
-        lambda model, schema, **kwargs: model
-        | RunnableLambda(lambda response: {"parsed": Sections(sections=sections)}),
-    )
+    def respond(request):
+        if request.schema_name == "Sections":
+            return Sections(sections=sections)
+        return None
+
+    install_inference(monkeypatch, respond)
 
 
 @pytest.mark.parametrize("research_count", [3, 5, 7])
@@ -254,7 +247,15 @@ def test_reporting_uses_post_research_usage_and_preserves_final_call(
         )
         assert final_result["runtime"]["budget"]["model_calls"] == 1
         assert usage["model_calls"] == 12
-        assert state["report"]["sections"] == sections
+        actual = state["report"]["sections"]
+        # The plan's identity survives serialization and section writing.
+        for field in ("name", "description", "research", "agent_role"):
+            assert [getattr(section, field) for section in actual] == [
+                getattr(section, field) for section in sections
+            ]
+        assert [section.status for section in actual] == [
+            "done" if section.research else "pending" for section in sections
+        ]
         assert final_result["report"]["final"]
 
     asyncio.run(run_stages())

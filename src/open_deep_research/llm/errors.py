@@ -27,29 +27,16 @@ def is_token_limit_exceeded(exception: Exception, model_name: str = None) -> boo
         return exception.context_limit
     error_str = str(exception).lower()
 
-    # Step 1: Determine provider from model name if available
-    provider = None
-    if model_name:
-        model_str = str(model_name).lower()
-        if model_str.startswith("openai:"):
-            provider = "openai"
-        elif model_str.startswith("anthropic:"):
-            provider = "anthropic"
-        elif model_str.startswith("gemini:") or model_str.startswith("google:"):
-            provider = "gemini"
-
-    # Step 2: Check provider-specific token limit patterns
-    if provider == "openai":
-        return _check_openai_token_limit(exception, error_str)
-    elif provider == "anthropic":
+    # Compatible endpoints now raise OpenAI SDK errors for every provider.
+    if _check_openai_token_limit(exception, error_str):
+        return True
+    provider = str(model_name or "").lower().partition(":")[0]
+    if provider == "anthropic":
         return _check_anthropic_token_limit(exception, error_str)
-    elif provider == "gemini":
+    if provider in {"gemini", "google", "google_genai"}:
         return _check_gemini_token_limit(exception, error_str)
-
-    # Step 3: If provider unknown, check all providers
-    return (
-        _check_openai_token_limit(exception, error_str)
-        or _check_anthropic_token_limit(exception, error_str)
+    return provider != "openai" and (
+        _check_anthropic_token_limit(exception, error_str)
         or _check_gemini_token_limit(exception, error_str)
     )
 
@@ -72,22 +59,20 @@ def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
 
     if is_openai_exception and is_request_error:
         # Look for token-related keywords in error message
-        token_keywords = ["token", "context", "length", "maximum context", "reduce"]
+        token_keywords = (
+            "context length",
+            "context window",
+            "context limit",
+            "prompt is too long",
+            "input token count exceeds",
+            "input token limit",
+            "maximum input length",
+        )
         if any(keyword in error_str for keyword in token_keywords):
             return True
 
     # Check for specific OpenAI error codes
-    if hasattr(exception, "code") and hasattr(exception, "type"):
-        error_code = getattr(exception, "code", "")
-        error_type = getattr(exception, "type", "")
-
-        if (
-            error_code == "context_length_exceeded"
-            or error_type == "invalid_request_error"
-        ):
-            return True
-
-    return False
+    return getattr(exception, "code", None) == "context_length_exceeded"
 
 
 # 识别 Anthropic 返回的输入过长和令牌上限错误。

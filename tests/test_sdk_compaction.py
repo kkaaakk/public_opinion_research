@@ -6,8 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from agents.run import ModelInputData
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
+from sdk_model_support import Reply, install_sequence
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import (
@@ -27,32 +26,7 @@ from open_deep_research.runtime.sdk_runtime import (
 )
 
 
-class _StructuredModel:
-    """Return one structured summary and record the compaction prompt."""
-
-    def __init__(self, summary="MERGED SUMMARY"):
-        self.summary = summary
-        self.prompts = []
-
-    def with_structured_output(self, schema, include_raw=False):
-        async def respond(messages):
-            self.prompts.append(str(messages[0].content))
-            return {
-                "raw": AIMessage(
-                    content="",
-                    usage_metadata={
-                        "input_tokens": 5,
-                        "output_tokens": 3,
-                        "total_tokens": 8,
-                    },
-                ),
-                "parsed": schema(rolling_summary=self.summary),
-            }
-
-        return RunnableLambda(respond)
-
-
-def _harness(*, model_factory=None, capacity=None, recent=1):
+def _harness(*, capacity=None, recent=1):
     config = Configuration(
         research_model="openai:fixture",
         context_capacity_tokens=capacity,
@@ -64,7 +38,7 @@ def _harness(*, model_factory=None, capacity=None, recent=1):
         research_round=1,
         config=config,
         budget=_RunBudget(initial={}),
-        model_factory=model_factory or (lambda *_: pytest.fail("unexpected model")),
+        runtime_config={},
     )
 
 
@@ -98,34 +72,34 @@ def _input(unit_count=3, payload_size=400):
     return harness, ModelInputData(input=items, instructions="system prompt")
 
 
-def test_summarize_history_merges_previous_summary_and_keeps_task():
-    model = _StructuredModel()
+def test_summarize_history_merges_previous_summary_and_keeps_task(monkeypatch):
+    requests = install_sequence(monkeypatch, Reply({"rolling_summary": "MERGED SUMMARY"}, 5, 3))
     summary, _budget = asyncio.run(
         summarize_history(
             "older tool steps",
             previous_summary="PREVIOUS",
             task_context="CURRENT TASK",
-            model=model,
-            model_name="fixture:summary",
+            model_name="openai:fixture-summary",
         )
     )
     assert summary == "MERGED SUMMARY"
-    prompt = model.prompts[0]
+    assert _budget["total_tokens"] == 8
+    prompt = requests[0].prompt
     assert "PREVIOUS" in prompt
     assert "CURRENT TASK" in prompt
     assert "older tool steps" in prompt
     assert "Research Graph" not in prompt
 
 
-def test_summarize_history_rejects_empty_summary():
+def test_summarize_history_rejects_empty_summary(monkeypatch):
+    install_sequence(monkeypatch, {"rolling_summary": "  "})
     with pytest.raises(ValueError, match="empty summary"):
         asyncio.run(
             summarize_history(
                 "steps",
                 previous_summary="",
                 task_context="task",
-                model=_StructuredModel(summary="  "),
-                model_name="fixture:summary",
+                model_name="openai:fixture-summary",
             )
         )
 
@@ -141,13 +115,11 @@ def test_compaction_is_skipped_below_the_threshold():
 
 def test_compaction_summarizes_older_turns_and_keeps_recent_raw(monkeypatch):
     harness, data = _input()
-    model = _StructuredModel("older research summarized")
     harness.config = Configuration(
         research_model="openai:fixture",
         context_capacity_tokens=4000,
         recent_raw_steps=1,
     )
-    harness.model_factory = lambda *_: model
 
     async def summarize(*_args, **_kwargs):
         return "older research summarized", {}
@@ -172,7 +144,6 @@ def test_compaction_preserves_call_and_output_pairing(monkeypatch):
         context_capacity_tokens=4000,
         recent_raw_steps=1,
     )
-    harness.model_factory = lambda *_: _StructuredModel()
 
     async def summarize(*_args, **_kwargs):
         return "summary", {}
@@ -198,7 +169,6 @@ def test_compaction_failure_keeps_original_history_and_raises(monkeypatch):
         context_capacity_tokens=4000,
         recent_raw_steps=1,
     )
-    harness.model_factory = lambda *_: _StructuredModel()
 
     async def summarize(*_args, **_kwargs):
         raise RuntimeError("provider unavailable")
@@ -220,7 +190,6 @@ def test_compaction_rejects_summary_that_is_not_smaller(monkeypatch):
         recent_raw_steps=1,
     )
     huge = "x" * 4000
-    harness.model_factory = lambda *_: _StructuredModel(huge)
 
     async def summarize(*_args, **_kwargs):
         return huge, {}

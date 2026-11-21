@@ -41,8 +41,9 @@ def inventory(root):
                 target = ast.unparse(node.func)
                 if target.endswith(
                     (
-                        "ainvoke_model_with_budget",
-                        "invoke_model_with_budget",
+                        "generate_text",
+                        "generate_structured",
+                        "generate_text_sync",
                         "Runner.run",
                         "runner.run",
                         ".get_response",

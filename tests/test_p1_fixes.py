@@ -5,46 +5,21 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import ValidationError
+from sdk_model_support import Reply, install_sequence
 from starlette.requests import Request
 
 import open_deep_research.runtime.business_agent as business_agent_module
-import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.configuration import Configuration
 from open_deep_research.state import Section
 from open_deep_research.workflow import reporting
-
-
-# 提供可控制令牌用量的聊天模型替身。
-class UsageModel(BaseChatModel):
-    """Real LangChain chat model so budget callbacks fire like production."""
-
-    content: str = "written"
-    usage_metadata_payload: dict | None = None
-
-    # 返回测试模型类型标识。
-    @property
-    def _llm_type(self) -> str:
-        return "usage-fixture"
-
-    # 生成测试响应并附加配置的官方用量元数据。
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        message = AIMessage(
-            content=self.content,
-            response_metadata={"model_name": "usage-fixture"},
-            usage_metadata=self.usage_metadata_payload,
-        )
-        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 # 构造章节写作所需的隔离配置。
 def _writer_config() -> dict:
     return {
         "configurable": {
-            "section_writer_model": "fixture:model",
+            "section_writer_model": "openai:writer-fixture",
         }
     }
 
@@ -61,15 +36,7 @@ def _section_state(section: Section) -> dict:
 # 验证研究章节与最终章节写作均记录响应令牌。
 def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> None:
     """Both parallel writer stages merge model calls and token usage."""
-    model = UsageModel(
-        content="written",
-        usage_metadata_payload={
-            "input_tokens": 11,
-            "output_tokens": 7,
-            "total_tokens": 18,
-        },
-    )
-    monkeypatch.setattr(workflow_shared, "configurable_model", model)
+    install_sequence(monkeypatch, Reply("written", 11, 7), Reply("written", 11, 7))
 
     research_result = asyncio.run(
         reporting.section_writer(
@@ -122,8 +89,7 @@ def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> 
 # 验证缺少令牌元数据时仍记录真实模型调用次数。
 def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
     """Providers without usage metadata are counted without fabricated tokens."""
-    model = UsageModel(content="written")
-    monkeypatch.setattr(workflow_shared, "configurable_model", model)
+    install_sequence(monkeypatch, Reply("written", 0, 0))
 
     result = asyncio.run(
         reporting.section_writer(
@@ -149,17 +115,10 @@ def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
 def test_unknown_compression_error_is_not_swallowed(monkeypatch) -> None:
     """Research compression re-raises programming errors instead of degrading."""
 
-    # 在调用阶段抛出预设错误，供压缩异常路径测试。
-    class FailingModel:
-        # 接收运行配置并返回测试模型，兼容真实调用链。
-        def with_config(self, _config):
-            return self
+    async def fail(*args, **kwargs):
+        raise NameError("test compression bug")
 
-        # 在模型调用阶段抛出预设异常，验证异常传播与降级规则。
-        async def ainvoke(self, _messages, config=None):
-            raise NameError("test compression bug")
-
-    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", FailingModel())
+    monkeypatch.setattr(business_agent_module, "generate_text", fail)
 
     with pytest.raises(NameError, match="test compression bug"):
         asyncio.run(
@@ -178,17 +137,7 @@ def test_unknown_compression_error_is_not_swallowed(monkeypatch) -> None:
 def test_token_limit_compression_error_keeps_graceful_degradation(monkeypatch) -> None:
     """Expected token-limit failures retain the existing bounded retry behavior."""
 
-    # 在调用阶段抛出预设错误，供压缩异常路径测试。
-    class FailingModel:
-        # 接收运行配置并返回测试模型，兼容真实调用链。
-        def with_config(self, _config):
-            return self
-
-        # 在模型调用阶段抛出预设异常，验证异常传播与降级规则。
-        async def ainvoke(self, _messages, config=None):
-            raise RuntimeError("context length exceeded")
-
-    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", FailingModel())
+    install_sequence(monkeypatch, *(RuntimeError("context length exceeded") for _ in range(3)))
     monkeypatch.setattr(
         business_agent_module,
         "is_token_limit_exceeded",

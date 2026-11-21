@@ -23,59 +23,27 @@ def test_native_runner_profile(native_case, monkeypatch):
     mode = os.environ.get("PROFILE_REPORT_MODE", "synthesis")
     c.cfg["configurable"]["report_mode"] = mode
     chapter_delay = float(os.environ.get("PROFILE_CHAPTER_DELAY", "0"))
-    from langchain_core.language_models.fake_chat_models import (
-        FakeMessagesListChatModel,
-    )
+    from sdk_model_support import install_inference
 
-    raw_generate = FakeMessagesListChatModel._generate
-    lc_calls = 0
-    lc_lock = threading.Lock()
+    from open_deep_research.state import Section, Sections
 
-    def counted_generate(self, messages, *args, **kwargs):
-        nonlocal lc_calls
-        with lc_lock:
-            lc_calls += 1
-        if chapter_delay and "PROFILE_CHAPTER_" in str(messages):
-            time.sleep(chapter_delay)
-        return raw_generate(self, messages, *args, **kwargs)
+    bounded_calls = 0
+    model_lock = threading.Lock()
 
-    monkeypatch.setattr(FakeMessagesListChatModel, "_generate", counted_generate)
-    if mode == "sections":
-        from langchain_core.runnables import RunnableLambda
+    async def respond(request):
+        nonlocal bounded_calls
+        with model_lock:
+            bounded_calls += 1
+        if chapter_delay and "PROFILE_CHAPTER_" in request.prompt:
+            await asyncio.sleep(chapter_delay)
+        if mode == "sections" and request.schema_name == "Sections":
+            return Sections(sections=[
+                Section(name=f"PROFILE_CHAPTER_{i}", description="Evidence and risk", research=True)
+                for i in range(3)
+            ])
+        return None
 
-        from open_deep_research.state import Section, Sections
-        from open_deep_research.workflow import shared
-
-        service = shared.configurable_model
-
-        class ThreeChapters:
-            def with_config(self, config):
-                return self
-
-            async def ainvoke(self, *args, **kwargs):
-                return await service.ainvoke(*args, **kwargs)
-
-            def with_structured_output(self, schema, include_raw=False):
-                raw = service.with_structured_output(schema, include_raw)
-
-                async def respond(messages, config=None):
-                    result = await raw.ainvoke(messages, config)
-                    if schema is Sections:
-                        result["parsed"] = Sections(
-                            sections=[
-                                Section(
-                                    name=f"PROFILE_CHAPTER_{i}",
-                                    description="Evidence and risk",
-                                    research=True,
-                                )
-                                for i in range(3)
-                            ]
-                        )
-                    return result
-
-                return RunnableLambda(respond)
-
-        monkeypatch.setattr(shared, "configurable_model", ThreeChapters())
+    install_inference(monkeypatch, respond)
     delay = float(os.environ.get("PROFILE_PROVIDER_DELAY", "0"))
     if delay:
         from agents.testing import ScriptedModel
@@ -138,10 +106,10 @@ def test_native_runner_profile(native_case, monkeypatch):
     results = []
     for concurrency in (1, 2):
         before = statistics_row()
-        model_count, tool_count, lc_before = (
+        model_count, tool_count, bounded_before = (
             sum(len(m.calls) for m in c.models),
             sum(c.calls.values()),
-            lc_calls,
+            bounded_calls,
         )
         since = str(int(time.time()))
         start = time.perf_counter()
@@ -173,7 +141,7 @@ def test_native_runner_profile(native_case, monkeypatch):
             p50=statistics.median(times),
             p95=statistics.quantiles(times, n=20, method="inclusive")[18],
             actual_sdk_calls=sum(len(m.calls) for m in c.models) - model_count,
-            actual_lc_calls=lc_calls - lc_before,
+            actual_bounded_model_calls=bounded_calls - bounded_before,
             actual_tool_calls=sum(c.calls.values()) - tool_count,
             pg={key: after[key] - before[key] for key in before},
             samples=samples,

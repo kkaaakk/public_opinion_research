@@ -20,6 +20,8 @@ class RetiredEngineGuard(importlib.abc.MetaPathFinder):
             (
                 "open_deep_research.runtime.agent_runtime",
                 "open_deep_research.workflow.graph",
+                "open_deep_research.workflow.shared",
+                "open_deep_research.models.factory",
             )
         ):
             raise AssertionError("Retired engine import: " + fullname)
@@ -50,6 +52,7 @@ def main():
         "budget",
         "models",
         "models.sdk",
+        "llm.generation",
         "runtime",
         "runtime.business_agent",
         "runtime.sdk_runtime",

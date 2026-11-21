@@ -3,15 +3,21 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
+from agents import TResponseInputItem
 from dbos import DBOS
-from langchain_core.messages import HumanMessage, SystemMessage, filter_messages
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    ToolMessage,
+    filter_messages,
+)
 from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.budget import (
-    ainvoke_model_with_budget,
     budget_usage_with_reason,
     can_spend_model_call,
     merge_budget_usage,
@@ -21,8 +27,8 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import remove_up_to_last_ai_message
 from open_deep_research.llm.errors import is_token_limit_exceeded
+from open_deep_research.llm.generation import generate_text
 from open_deep_research.mcp.domain_filter import get_tool_domain
-from open_deep_research.models import configurable_chat_model
 from open_deep_research.models.sdk import sdk_model
 from open_deep_research.prompts import (
     compress_research_simple_human_message,
@@ -54,7 +60,6 @@ from open_deep_research.workflow.state_utils import (
 )
 
 LOGGER = logging.getLogger(__name__)
-_CONFIGURABLE_MODEL = configurable_chat_model()
 _PRODUCER_ROLES = frozenset({"public_signal", "internal_knowledge"})
 
 _UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
@@ -202,14 +207,6 @@ async def _compress_research(
             ),
         )
 
-    model = _CONFIGURABLE_MODEL.with_config(
-        {
-            "model": configurable.compression_model,
-            "max_tokens": configurable.compression_model_max_tokens,
-            "provider_config": config,
-            "tags": ["langsmith:nostream"],
-        }
-    )
     researcher_messages = [
         *messages,
         HumanMessage(content=compress_research_simple_human_message),
@@ -223,17 +220,34 @@ async def _compress_research(
         failure: BaseException | None = None
         try:
             try:
-                response, _response_budget = await ainvoke_model_with_budget(
-                    model,
-                    [
-                        SystemMessage(
-                            content=compress_research_system_prompt.format(
-                                date=get_today_str(config)
-                            )
-                        ),
-                        *researcher_messages,
-                    ],
-                    model_name=configurable.compression_model,
+                prompt: list[TResponseInputItem] = [{
+                    "role": "system",
+                    "content": compress_research_system_prompt.format(date=get_today_str(config)),
+                }]
+                for message in researcher_messages:
+                    if isinstance(message, ToolMessage):
+                        prompt.append({
+                            "type": "function_call_output",
+                            "call_id": message.tool_call_id,
+                            "output": message.text,
+                        })
+                    elif isinstance(message, AIMessage):
+                        if message.text or not message.tool_calls:
+                            prompt.append({"role": "assistant", "content": message.text})
+                        prompt.extend({
+                            "type": "function_call",
+                            "call_id": call["id"],
+                            "name": call["name"],
+                            "arguments": json.dumps(call["args"], ensure_ascii=False),
+                        } for call in message.tool_calls)
+                    else:
+                        prompt.append({"role": "user", "content": message.text})
+                response, _ = await generate_text(
+                    configurable.compression_model,
+                    prompt,
+                    config=config,
+                    max_tokens=configurable.compression_model_max_tokens,
+                    component="role_report_compression",
                 )
             except Exception as exc:
                 if not is_token_limit_exceeded(exc, configurable.compression_model):
@@ -260,7 +274,7 @@ async def _compress_research(
             )
         )
         return (
-            str(response.content),
+            response,
             [raw_notes],
             attempt_budget,
         )
@@ -391,17 +405,6 @@ async def run_business_agent(
             "(search_api=tavily)."
         )
 
-    # 按本次调用配置创建角色实际可用的模型，并允许压缩服务复用同一配置。
-    def model_factory(model_name: str, max_tokens: int | None) -> Any:
-        nested_model_config: dict[str, Any] = {
-            "model": model_name,
-            "provider_config": config,
-            "tags": ["langsmith:nostream"],
-        }
-        if max_tokens is not None:
-            nested_model_config["max_tokens"] = max_tokens
-        return _CONFIGURABLE_MODEL.with_config(nested_model_config)
-
     system_prompt = spec.format_system_prompt(
         retrieval_tool_prompt=_role_tool_prompt(configurable, spec, tools),
         mcp_prompt=configurable.mcp_prompt or "",
@@ -441,12 +444,9 @@ async def run_business_agent(
         tools=tools,
         initial_budget=runtime_state(state).get("budget", {}),
         compress_report=compress_report,
-        model_factory=model_factory,
     )
     # One SDK start is one provider attempt. Errors never select another engine.
-    async with sdk_model(
-        configurable.research_model, config=config, max_retries=0
-    ) as model:
+    async with sdk_model(configurable.research_model, config=config) as model:
         result = await SDKAgentRuntime(model=model, **runtime_args).run(assignment)
     if role in {"public_signal", "internal_knowledge"}:
         return ResearchRoleResult(

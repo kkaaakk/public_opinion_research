@@ -203,7 +203,6 @@ def _allowed_span(span):
         "dbos-tracer",
         __name__,
         "openinference.instrumentation.openai_agents",
-        "openinference.instrumentation.langchain",
     }
 
 
@@ -398,7 +397,9 @@ class SDKUsageEnrichment(TracingProcessor):
                 return  # SDK zero defaults do not prove provider token usage.
             values = {}
             harness = _harness.get()
-            model = getattr(getattr(harness, "_agent", None), "model", None)
+            model = getattr(span.span_data, "model", None) or getattr(
+                getattr(harness, "_agent", None), "model", None
+            )
             for _ in range(4):
                 if isinstance(model, str):
                     break
@@ -528,9 +529,6 @@ def initialize_telemetry(enabled: bool):
                 hide_prompts=True,
                 hide_retrieval_documents=True,
             )
-            from .langchain import configure_model_tracing
-
-            configure_model_tracing(provider, privacy)
             instrumentor.instrument(
                 tracer_provider=provider,
                 exclusive_processor=False,

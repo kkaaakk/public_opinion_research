@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
 from open_deep_research.configuration import Configuration
@@ -51,35 +51,31 @@ def _context(messages, **overrides):
 
 @pytest.fixture
 def vision_runtime(monkeypatch):
-    model = Mock()
-    model.invoke.return_value = AIMessage(content=RECOGNIZED_TEXT)
-    factory = Mock(return_value=model)
-    monkeypatch.setattr(knowledge, "init_chat_model", factory)
+    generate = Mock(return_value=(RECOGNIZED_TEXT, {}))
+    monkeypatch.setattr(knowledge, "generate_text_sync", generate)
     # Restore compatibility-hook assignments along with their test patches.
     for module in (knowledge, loaders, query_images, query_image_loader):
         monkeypatch.setattr(
             module, "extract_image_bytes_vision_text", extract_image_bytes_vision_text
         )
-    return model, factory
+    return generate
 
 
 @pytest.mark.parametrize("entrypoint", [query_images, query_image_loader, loaders])
 def test_valid_image_uses_one_shared_vision_content_call(entrypoint, vision_runtime):
-    model, factory = vision_runtime
+    generate = vision_runtime
     context = entrypoint.build_query_image_context(
         [_image_message(_data_url())], **VISION_SETTINGS
     )
 
-    factory.assert_called_once_with(
-        model=VISION_SETTINGS["vision_model"],
-        max_tokens=123,
-        tags=["langsmith:nostream"],
-    )
-    model.invoke.assert_called_once()
-    content = model.invoke.call_args.args[0][0].content
+    generate.assert_called_once()
+    assert generate.call_args.args[0] == VISION_SETTINGS["vision_model"]
+    assert generate.call_args.kwargs["max_tokens"] == 123
+    assert generate.call_args.kwargs["component"] == "rag_vision"
+    content = generate.call_args.args[1][0]["content"]
     assert content == [
-        {"type": "text", "text": VISION_SETTINGS["vision_prompt"]},
-        {"type": "image_url", "image_url": {"url": _data_url()}},
+        {"type": "input_text", "text": VISION_SETTINGS["vision_prompt"]},
+        {"type": "input_image", "image_url": _data_url(), "detail": "auto"},
     ]
     assert RECOGNIZED_TEXT in context
     assert "User image 1\nSource: image/png" in context
@@ -111,36 +107,35 @@ def test_user_images_never_use_features_ocr_or_classification(
         monkeypatch.setattr(knowledge, name, function)
 
     assert RECOGNIZED_TEXT in _context([_image_message(_data_url())])
-    vision_runtime[0].invoke.assert_called_once()
+    vision_runtime.assert_called_once()
     for function in forbidden.values():
         function.assert_not_called()
 
 
 @pytest.mark.parametrize("max_images", [0, 1, 2])
 def test_multiple_images_respect_call_limit(max_images, vision_runtime):
-    model, _ = vision_runtime
+    generate = vision_runtime
     context = _context([_image_message(*[_data_url()] * 4)], max_images=max_images)
 
-    assert model.invoke.call_count == max_images
+    assert generate.call_count == max_images
     assert context.count("User image ") == max_images
 
 
 @pytest.mark.parametrize(
-    "result", [AIMessage(content="  "), RuntimeError("unavailable")]
+    "result", [("  ", {}), RuntimeError("unavailable")]
 )
 def test_empty_and_failed_recognition_still_count_toward_limit(result, vision_runtime):
-    model, _ = vision_runtime
-    model.invoke.side_effect = [result, AIMessage(content="Must not be requested")]
+    generate = vision_runtime
+    generate.side_effect = [result, ("Must not be requested", {})]
 
     assert _context([_image_message(_data_url(), _data_url())], max_images=1) == ""
-    model.invoke.assert_called_once()
+    generate.assert_called_once()
 
 
 def test_oversized_image_is_skipped_before_vision(vision_runtime):
-    model, factory = vision_runtime
+    generate = vision_runtime
     assert _context([_image_message(_data_url())], max_bytes=len(PNG_BYTES) - 1) == ""
-    factory.assert_not_called()
-    model.invoke.assert_not_called()
+    generate.assert_not_called()
 
 
 def test_oversized_file_is_not_read(monkeypatch, tmp_path, vision_runtime):
@@ -151,15 +146,15 @@ def test_oversized_file_is_not_read(monkeypatch, tmp_path, vision_runtime):
 
     assert _context([{"content": [{"path": str(path)}]}], max_bytes=1) == ""
     read_bytes.assert_not_called()
-    vision_runtime[1].assert_not_called()
+    vision_runtime.assert_not_called()
 
 
 def test_invalid_image_does_not_consume_valid_image_limit(vision_runtime):
-    model, _ = vision_runtime
+    generate = vision_runtime
     messages = [_image_message(_data_url(PNG_BYTES * 2), _data_url())]
 
     assert RECOGNIZED_TEXT in _context(messages, max_images=1, max_bytes=len(PNG_BYTES))
-    model.invoke.assert_called_once()
+    generate.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -175,7 +170,7 @@ def test_invalid_image_does_not_consume_valid_image_limit(vision_runtime):
 )
 def test_invalid_references_skip_safely(image_ref, vision_runtime):
     assert _context([_image_message(image_ref)]) == ""
-    vision_runtime[1].assert_not_called()
+    vision_runtime.assert_not_called()
 
 
 @pytest.mark.parametrize("input_format", ["image_url", "input_image", "base64", "text"])
@@ -199,7 +194,7 @@ def test_existing_message_image_formats(input_format, vision_runtime):
 
     assert RECOGNIZED_TEXT in _context([{"role": "user", "content": content}])
     sent_url = (
-        vision_runtime[0].invoke.call_args.args[0][0].content[1]["image_url"]["url"]
+        vision_runtime.call_args.args[1][0]["content"][1]["image_url"]
     )
     assert sent_url == data_url
 
@@ -222,7 +217,7 @@ def test_local_image_mime_type_is_preserved(
 
     assert RECOGNIZED_TEXT in _context([{"content": [{"image_path": str(path)}]}])
     sent_url = (
-        vision_runtime[0].invoke.call_args.args[0][0].content[1]["image_url"]["url"]
+        vision_runtime.call_args.args[1][0]["content"][1]["image_url"]
     )
     assert sent_url == _data_url(mime_type=mime_type)
 
@@ -237,7 +232,7 @@ def test_local_image_text_and_file_uri(input_format, tmp_path, vision_runtime):
         message = _image_message(path.as_uri())
 
     assert RECOGNIZED_TEXT in _context([message])
-    vision_runtime[0].invoke.assert_called_once()
+    vision_runtime.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -245,24 +240,24 @@ def test_local_image_text_and_file_uri(input_format, tmp_path, vision_runtime):
 )
 def test_no_images_do_not_call_vision(messages, vision_runtime):
     assert asyncio.run(intake.enrich_query_images({"messages": messages}, {})) == {}
-    vision_runtime[1].assert_not_called()
+    vision_runtime.assert_not_called()
 
 
 def test_vision_failure_keeps_workflow_running_and_processes_remaining_images(
     vision_runtime,
 ):
-    model, _ = vision_runtime
+    generate = vision_runtime
     state = {"messages": [_image_message(_data_url(), _data_url())]}
-    model.invoke.side_effect = [
+    generate.side_effect = [
         RuntimeError("Vision unavailable"),
-        AIMessage(content=RECOGNIZED_TEXT),
+        (RECOGNIZED_TEXT, {}),
     ]
 
     result = asyncio.run(intake.enrich_query_images(state, {}))
     assert RECOGNIZED_TEXT in result["messages"][0].content
-    assert model.invoke.call_count == 2
+    assert generate.call_count == 2
 
-    model.invoke.side_effect = RuntimeError("Vision unavailable")
+    generate.side_effect = RuntimeError("Vision unavailable")
     result = asyncio.run(intake.enrich_query_images(state, {}))
     assert result == {}
     command = asyncio.run(
@@ -278,7 +273,7 @@ def test_query_image_switch_disables_recognition(vision_runtime):
     config = {"configurable": {"rag_query_image_enabled": False}}
 
     assert asyncio.run(intake.enrich_query_images(state, config)) == {}
-    vision_runtime[1].assert_not_called()
+    vision_runtime.assert_not_called()
 
 
 def test_context_reaches_clarification_and_brief_without_rag_enabled(
@@ -297,29 +292,11 @@ def test_context_reaches_clarification_and_brief_without_rag_enabled(
             "allow_clarification": True,
         }
     }
-    monkeypatch.setattr(intake.shared, "configurable_model", Mock())
-    monkeypatch.setattr(intake, "structured_output_chain", Mock())
-    invoke = AsyncMock(
-        side_effect=[
-            (
-                {
-                    "parsed": SimpleNamespace(
-                        need_clarification=False, verification="Clear"
-                    )
-                },
-                {},
-            ),
-            (
-                {
-                    "parsed": SimpleNamespace(
-                        research_brief="Research delivery complaints"
-                    )
-                },
-                {},
-            ),
-        ]
-    )
-    monkeypatch.setattr(intake, "ainvoke_model_with_budget", invoke)
+    invoke = AsyncMock(side_effect=[
+        (SimpleNamespace(need_clarification=False, verification="Clear"), {}),
+        (SimpleNamespace(research_brief="Research delivery complaints"), {}),
+    ])
+    monkeypatch.setattr(intake, "generate_structured", invoke)
     original_messages = [_image_message(_data_url())]
     original_messages[0].id = "user-image-input"
 
@@ -340,15 +317,12 @@ def test_context_reaches_clarification_and_brief_without_rag_enabled(
     assert brief.update["workflow"]["brief"] == "Research delivery complaints"
     assert invoke.await_count == 2
     for call in invoke.await_args_list:
-        assert RECOGNIZED_TEXT in call.args[1][0].content
-    vision_runtime[0].invoke.assert_called_once()
-    vision_runtime[1].assert_called_once_with(
-        model=VISION_SETTINGS["vision_model"],
-        max_tokens=123,
-        tags=["langsmith:nostream"],
-    )
+        assert RECOGNIZED_TEXT in call.args[1]
+    vision_runtime.assert_called_once()
+    assert vision_runtime.call_args.args[0] == VISION_SETTINGS["vision_model"]
+    assert vision_runtime.call_args.kwargs["max_tokens"] == 123
     assert (
-        vision_runtime[0].invoke.call_args.args[0][0].content[0]["text"]
+        vision_runtime.call_args.args[1][0]["content"][0]["text"]
         == VISION_SETTINGS["vision_prompt"]
     )
 
@@ -429,10 +403,10 @@ def test_user_and_rag_images_use_independent_prompts(
     )
     assert rag_text == RECOGNIZED_TEXT
     assert metadata["image_route"] == "vision"
-    calls = vision_runtime[0].invoke.call_args_list
+    calls = vision_runtime.call_args_list
     assert len(calls) == 2
-    assert calls[0].args[0][0].content[0]["text"] == configurable.rag_query_image_prompt
-    assert calls[1].args[0][0].content[0]["text"] == configurable.rag_vision_prompt
+    assert calls[0].args[1][0]["content"][0]["text"] == configurable.rag_query_image_prompt
+    assert calls[1].args[1][0]["content"][0]["text"] == configurable.rag_vision_prompt
 
 
 def test_query_image_prompts_come_from_configuration_not_environment(
@@ -453,9 +427,9 @@ def test_query_image_prompts_come_from_configuration_not_environment(
             {"configurable": configurable.model_dump()},
         )
     )
-    vision_runtime[0].invoke.assert_called_once()
+    vision_runtime.assert_called_once()
     assert (
-        vision_runtime[0].invoke.call_args.args[0][0].content[0]["text"]
+        vision_runtime.call_args.args[1][0]["content"][0]["text"]
         == configurable.rag_query_image_prompt
     )
     assert (

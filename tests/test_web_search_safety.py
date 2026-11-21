@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from dbos import error as dbos_error
-from langchain_core.language_models.chat_models import BaseChatModel
+from sdk_model_support import install_sequence
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.budget import ModelBudgetExceeded
@@ -36,17 +36,6 @@ def _search_response(*urls):
     ]
 
 
-def _install_summary_stubs(monkeypatch):
-    monkeypatch.setattr(
-        tavily, "create_chat_model", lambda **_kwargs: object()
-    )
-    monkeypatch.setattr(
-        tavily,
-        "structured_output_chain",
-        lambda model, _schema, **_kwargs: model,
-    )
-
-
 def test_web_search_summarizes_pages_strictly_in_sequence(monkeypatch):
     async def fake_search(*_args, **_kwargs):
         return _search_response(
@@ -56,7 +45,6 @@ def test_web_search_summarizes_pages_strictly_in_sequence(monkeypatch):
         )
 
     monkeypatch.setattr(tavily, "tavily_search_async", fake_search)
-    _install_summary_stubs(monkeypatch)
     active = 0
     max_active = 0
     timeline = []
@@ -99,18 +87,15 @@ def test_next_summary_starts_only_after_the_previous_settles(monkeypatch):
         return _search_response("https://example.test/one", "https://example.test/two")
 
     monkeypatch.setattr(tavily, "tavily_search_async", fake_search)
-    _install_summary_stubs(monkeypatch)
     events = []
 
-    async def fake_budget_invoke(_model, payload, **_kwargs):
-        events.append(("begin", payload[0].content))
+    async def fake_budget_invoke(_model, prompt, _schema, **_kwargs):
+        events.append(("begin", prompt))
         await asyncio.sleep(0)
-        events.append(("settle", payload[0].content))
-        return {
-            "parsed": Summary(summary="model summary", key_excerpts="excerpt")
-        }, {}
+        events.append(("settle", prompt))
+        return Summary(summary="model summary", key_excerpts="excerpt"), {}
 
-    monkeypatch.setattr(tavily, "ainvoke_model_with_budget", fake_budget_invoke)
+    monkeypatch.setattr(tavily, "generate_structured", fake_budget_invoke)
 
     output = asyncio.run(tavily._tavily_search(["brand risk"], config=_config()))
 
@@ -120,20 +105,11 @@ def test_next_summary_starts_only_after_the_previous_settles(monkeypatch):
 
 
 def test_failed_summary_returns_a_bounded_marked_excerpt(monkeypatch):
-    class FailingChat(BaseChatModel):
-        @property
-        def _llm_type(self):
-            return "failing"
-
-        def bind_tools(self, _tools, **_kwargs):
-            return self
-
-        def _generate(self, *_args, **_kwargs):
-            raise ValueError("provider secret sk-should-not-leak")
+    install_sequence(monkeypatch, ValueError("provider secret sk-should-not-leak"))
 
     result = asyncio.run(
         tavily.summarize_webpage(
-            FailingChat(),
+            "openai:fixture",
             "RAW PAGE CONTENT " * 1000,
             fallback_content="short Tavily snippet",
             max_excerpt_chars=80,
@@ -152,11 +128,11 @@ def test_failed_summary_bounds_raw_fallback_without_hiding_the_failure(monkeypat
     async def failing_budget_invoke(*_args, **_kwargs):
         raise ValueError("provider failure")
 
-    monkeypatch.setattr(tavily, "ainvoke_model_with_budget", failing_budget_invoke)
+    monkeypatch.setattr(tavily, "generate_structured", failing_budget_invoke)
 
     result = asyncio.run(
         tavily.summarize_webpage(
-            object(),
+            "openai:fixture",
             "W" * 50_000,
             fallback_content="q" * 50_000,
             max_excerpt_chars=120,
@@ -183,10 +159,10 @@ def test_control_failures_are_not_silently_degraded(monkeypatch, error):
     async def failing_budget_invoke(*_args, **_kwargs):
         raise error
 
-    monkeypatch.setattr(tavily, "ainvoke_model_with_budget", failing_budget_invoke)
+    monkeypatch.setattr(tavily, "generate_structured", failing_budget_invoke)
 
     with pytest.raises(type(error)):
-        asyncio.run(tavily.summarize_webpage(object(), "page text"))
+        asyncio.run(tavily.summarize_webpage("openai:fixture", "page text"))
 
 
 def test_web_search_output_is_bounded_and_keeps_every_source(monkeypatch):
@@ -199,7 +175,6 @@ def test_web_search_output_is_bounded_and_keeps_every_source(monkeypatch):
         return "long summary text " * 5000
 
     monkeypatch.setattr(tavily, "tavily_search_async", fake_search)
-    _install_summary_stubs(monkeypatch)
     monkeypatch.setattr(tavily, "summarize_webpage", huge_summary)
 
     output = asyncio.run(tavily._tavily_search(["brand risk"], config=_config()))
@@ -259,7 +234,6 @@ def test_web_search_limits_queries_per_call(monkeypatch):
         return f"summary {content}"
 
     monkeypatch.setattr(tavily, "tavily_search_async", fake_search)
-    _install_summary_stubs(monkeypatch)
     monkeypatch.setattr(tavily, "summarize_webpage", fake_summarize)
 
     output = asyncio.run(
@@ -290,7 +264,6 @@ def test_web_search_limits_summarized_pages(monkeypatch):
         return f"summary of {content}"
 
     monkeypatch.setattr(tavily, "tavily_search_async", fake_search)
-    _install_summary_stubs(monkeypatch)
     monkeypatch.setattr(tavily, "summarize_webpage", fake_summarize)
 
     output = asyncio.run(tavily._tavily_search(["q"], config=_config()))
@@ -329,7 +302,6 @@ def test_web_search_stops_summarizing_after_the_time_budget(monkeypatch):
     monkeypatch.setattr(
         tavily, "time", SimpleNamespace(monotonic=lambda: clock["now"])
     )
-    _install_summary_stubs(monkeypatch)
     monkeypatch.setattr(tavily, "summarize_webpage", fake_summarize)
 
     output = asyncio.run(tavily._tavily_search(["q"], config=_config()))

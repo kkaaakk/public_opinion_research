@@ -55,6 +55,7 @@ async def _rag_search(query: str, config: RunnableConfig = None) -> str:
             api_key=api_key_for_model(
                 configurable.rag_query_rewrite_model, config or {}
             ),
+            config=config,
         )
         answer_ready_context = await asyncio.to_thread(
             pipeline.query,

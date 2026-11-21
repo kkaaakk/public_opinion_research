@@ -72,9 +72,9 @@ def main():
     from agents import OpenAIResponsesModel
     from dbos import DBOS
     from dbos_support import NativeCase
-    from langchain_core.runnables import RunnableLambda
     from openai import AsyncOpenAI
     from opentelemetry import trace
+    from sdk_model_support import install_inference
     from sqlalchemy import create_engine, text
     from sqlalchemy.engine import make_url
     from test_python_workflow import gap
@@ -88,7 +88,6 @@ def main():
     from open_deep_research.state import ResearchReview
     from open_deep_research.web.durable import close_run_client
     from open_deep_research.web.executor import launch
-    from open_deep_research.workflow import shared
     from open_deep_research.workflow.dbos_config import settings
 
     url = make_url(os.environ["TEST_DBOS_DATABASE_URL"])
@@ -187,36 +186,15 @@ def main():
                 )
 
         patch.setattr(business_agent, "sdk_model", model_context)
-        original = shared.configurable_model
+        def gaps(request):
+            if request.schema_name == "ResearchReview":
+                done = not args.gap or "Current research round: 2" in request.prompt
+                return ResearchReview(
+                    research_complete=done,
+                    next_tasks=[] if done else [gap("date"), gap("approval", "internal_knowledge")],
+                )
 
-        class GapServices:
-            def with_config(self, *a, **k):
-                return self
-
-            def with_structured_output(self, schema, include_raw=False):
-                chain = original.with_structured_output(schema, include_raw)
-                if schema is not ResearchReview:
-                    return chain
-
-                async def reply(messages, config=None):
-                    result = await chain.ainvoke(messages, config)
-                    done = not args.gap or "Current research round: 2" in str(
-                        messages[0].content
-                    )
-                    result["parsed"] = ResearchReview(
-                        research_complete=done,
-                        next_tasks=[]
-                        if done
-                        else [gap("date"), gap("approval", "internal_knowledge")],
-                    )
-                    return result
-
-                return RunnableLambda(reply)
-
-            async def ainvoke(self, *a, **k):
-                return await original.ainvoke(*a, **k)
-
-        patch.setattr(shared, "configurable_model", GapServices())
+        install_inference(patch, gaps)
         launch("pr32-acceptance-" + uuid4().hex)
         assert telemetry_enabled()
         run = case.create()

@@ -182,7 +182,7 @@ def configuration(directory):
     return config(
         recent_raw_steps=0,
         allow_clarification=True,
-        research_model="fixture:review",
+        research_model="openai:fixture-review",
         max_structured_output_retries=1,
         budget_enabled=True,
         max_model_calls=100,

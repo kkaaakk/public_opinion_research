@@ -20,11 +20,9 @@ from agents.run import ModelInputData
 from dbos import DBOS
 from dbos import error as dbos_error
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.budget import (
     ModelBudgetExceeded,
-    begin_model_call,
     budget_capture,
     budget_from_sdk_usage,
     budget_usage_with_reason,
@@ -32,16 +30,15 @@ from open_deep_research.budget import (
     capture_budget_usage,
     context_pressure_ratio,
     diff_budget_usage,
-    end_model_call,
     estimate_text_tokens,
     is_over_model_budget,
     merge_budget_usage,
     model_budget_admission,
-    physical_model_usage,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import resolve_context_capacity
-from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
+from open_deep_research.llm.errors import ModelInvocationError
+from open_deep_research.llm.generation import ModelOutputError, metered_model_response
 from open_deep_research.observability.telemetry import (
     annotate,
     business_span,
@@ -54,7 +51,6 @@ from open_deep_research.tools import tool_result_text
 from open_deep_research.tools.manager import ToolManager
 from open_deep_research.workflow.dbos_config import native_client, settings
 from open_deep_research.workflow.execution import (
-    ExecutionControlError,
     owned_io,
     stage_context,
 )
@@ -96,33 +92,15 @@ class MeteredModel(Model):
 
     async def get_response(self, *args, **kwargs):
         try:
-            identity = await begin_model_call()
+            response, _, _ = await metered_model_response(
+                self.model_name, lambda identity: self._response(identity, *args, **kwargs)
+            )
         except ModelBudgetExceeded as exc:
             raise _ReasoningStopped(str(exc)) from exc
-        except SQLAlchemyError as exc:
-            raise ExecutionControlError("Model admission storage unavailable") from exc
-        try:
-            response = await self._response(identity, *args, **kwargs)
-        except BaseException as exc:
-            usage = {"model_calls": 1}
-            await end_model_call(identity, physical_model_usage(usage, failed=True))
-            if isinstance(exc, Exception) and not isinstance(
-                exc,
-                (
-                    dbos_error.DBOSWorkflowCancelledError,
-                    ExecutionControlError,
-                    ModelBudgetExceeded,
-                ),
-            ):
-                raise ModelInvocationError(
-                    type(exc).__name__,
-                    context_limit=is_token_limit_exceeded(exc, self.model_name),
-                    budget_usage=usage,
-                ) from exc
-            raise
-        usage = budget_from_sdk_usage(response.usage)
-        usage["model_calls"] = 1
-        await end_model_call(identity, physical_model_usage(usage))
+        except ModelOutputError as exc:
+            raise ModelInvocationError(
+                type(exc).__name__, budget_usage=exc.budget_usage
+            ) from exc
         return response
 
     async def _response(self, identity, *args, **kwargs):
@@ -191,14 +169,14 @@ class _BusinessAgentHarness(SDKContextHarness):
         research_round: int,
         config: Configuration,
         budget: _RunBudget,
-        model_factory: Callable[[str, int | None], Any],
+        runtime_config: Mapping[str, Any],
     ) -> None:
         super().__init__(
             role=role, task_id=task_id, research_round=research_round
         )
         self.config = config
         self.run_budget = budget
-        self.model_factory = model_factory
+        self.runtime_config = runtime_config
         self.items: list[Any] = []
         self._compacted_turns: set[int] = set()
         self.rolling_summary = ""
@@ -355,10 +333,9 @@ class _BusinessAgentHarness(SDKContextHarness):
                     history_text,
                     previous_summary=previous,
                     task_context=task_context,
-                    model=self.model_factory(
-                        model_name, self.config.rolling_compaction_model_max_tokens
-                    ),
                     model_name=model_name,
+                    config=self.runtime_config,
+                    max_tokens=self.config.rolling_compaction_model_max_tokens,
                     max_retries=self.config.max_structured_output_retries,
                 )
                 if (
@@ -458,7 +435,6 @@ class SDKAgentRuntime:
         tools: list[Any],
         initial_budget: Mapping[str, Any],
         compress_report: CompressionCallback,
-        model_factory: Callable[[str, int | None], Any],
     ) -> None:
         """Bind one AgentSpec to its SDK model, tools and compaction service."""
         self.role = role
@@ -472,7 +448,6 @@ class SDKAgentRuntime:
         self.tools = tools
         self.initial_budget = dict(initial_budget or {})
         self.compress_report = compress_report
-        self.model_factory = model_factory
 
     async def _finish(
         self, task: str, messages: list[Any], budget_update: dict[str, Any]
@@ -590,7 +565,7 @@ class SDKAgentRuntime:
             research_round=self.research_round,
             config=self.config,
             budget=self.run_budget,
-            model_factory=self.model_factory,
+            runtime_config=self.runtime_config,
         )
         manager = ToolManager(self.role, self.spec, self.runtime_config)
         tools = manager.index(self.tools)
