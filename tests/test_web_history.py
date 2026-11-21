@@ -95,7 +95,7 @@ def test_archive_failure_keeps_the_report_available(native_case, monkeypatch):
     archived = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert archived["report"] == result["report"]
     assert archived["usage"] == result["usage"]
-    assert len(case.models) == before == 4
+    assert len(case.models) == before == 2
 
 
 # 验证配置令牌后所有历史接口都执行授权。
@@ -222,7 +222,7 @@ def test_no_final_report_still_creates_an_incomplete_history_record(
     assert result["retry_safe"] is True
     assert not record["report"]
     assert len(record["role_reports"]) == 4
-    assert len(case.models) == 4
+    assert len(case.models) == 2
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
     assert record["usage"] == {
         k: result["usage"][k]
@@ -264,29 +264,70 @@ def test_cancelled_run_still_creates_a_history_record(native_case):
     )
 
 
-# 验证 DBOS 子 Workflow 失败时已完成阶段的报告仍可查询。
 @pytest.mark.integration
-def test_real_dbos_nested_failure_retains_finished_stage(native_case, monkeypatch):
-    from open_deep_research.workflow import research
+@pytest.mark.parametrize("failed_role", ["risk_assessment", "response_strategy"])
+def test_analysis_provider_failure_preserves_usage_and_completed_history(
+    native_case, monkeypatch, failed_role
+):
+    from dbos_support import stage_observations
+    from sdk_model_support import install_inference
+    from sqlalchemy import text
+
+    from open_deep_research.prompts import (
+        response_strategy_prompt,
+        risk_assessment_prompt,
+    )
+    from open_deep_research.web.run_data import loads
+    from open_deep_research.workflow.dbos_config import domain_engine
 
     case = native_case
+    calls = []
 
-    async def fail(*args, **kwargs):
-        raise RuntimeError("Later strategy failure")
+    def fail(request):
+        if request.prompt == risk_assessment_prompt:
+            role = "risk_assessment"
+        elif request.prompt == response_strategy_prompt:
+            role = "response_strategy"
+        else:
+            return None
+        calls.append(role)
+        if role == failed_role:
+            raise RuntimeError("Synthetic analysis provider failure")
 
-    monkeypatch.setattr(research, "response_strategy_agent", fail)
-    result = case.wait(case.create(), lambda r: r["archive_status"] == "saved")
+    install_inference(monkeypatch, fail)
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
     record = case.history.get(result["history_id"], owner="alice")
     assert record["status"] == result["status"] == "failed"
     assert result["settlement"] == "settled"
+    assert result["error"]["kind"] == "model_error"
+    assert result["current_step"] == result["error"]["step"] == failed_role + "_agent"
     assert result["retry_safe"] is False
-    assert {s["role"] for s in record["role_reports"]} == {
-        "public_signal",
-        "internal_knowledge",
-        "risk_assessment",
-    }
+    assert not record["report"]
+    expected = {"public_signal", "internal_knowledge"}
+    if failed_role == "response_strategy":
+        expected.add("risk_assessment")
+    assert {s["role"] for s in record["role_reports"]} == expected
+    assert calls == (["risk_assessment", "response_strategy"] if failed_role == "response_strategy" else ["risk_assessment"])
+    stage = next(
+        unit for unit in stage_observations(run["run_id"])
+        if unit["name"] == failed_role + "_agent"
+    )
+    assert stage["usage"]["model_calls"] == 1
+    with domain_engine().connect() as connection:
+        receipt = loads(
+            connection.execute(
+                text(
+                    "SELECT usage FROM por_domain.model_attempts "
+                    "WHERE run_id=:run AND stage_id=:stage"
+                ),
+                {"run": run["run_id"], "stage": stage["id"]},
+            ).scalar_one()
+        )
+    assert receipt["model_calls"] == 1 and receipt["usage_complete"] is False
+    assert result["usage"]["usage_complete"] is False
     assert record["usage"] == {
         k: result["usage"][k]
-        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
+        for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens", "usage_complete")
     }
-    assert len(case.models) == 3
+    assert len(case.models) == 2

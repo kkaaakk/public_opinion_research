@@ -100,7 +100,7 @@ def test_clarification_same_run_releases_quota_and_resumes(
     done = c.wait(
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
     )
-    assert done["status"] == "completed" and len(c.models) == 4
+    assert done["status"] == "completed" and len(c.models) == 2
     assert (
         done["plan"]["locked"] and "plan_report_sections" not in done["completed_steps"]
     )
@@ -108,8 +108,17 @@ def test_clarification_same_run_releases_quota_and_resumes(
     assert done["completed_steps"].count("generate_final_report") == 1
     assert not {"section_writer", "write_final_sections"} & set(done["completed_steps"])
     assert c.calls == {"public_signal": 1, "internal_knowledge": 1}
-    for runtime in c.runtimes:
-        assert runtime.workspace.scope.run_id == run["run_id"]
+    roles = c.client.client.list_workflows(
+        workflow_id_prefix=run["run_id"] + ":",
+        name="por.role",
+        load_input=False,
+        load_output=False,
+    )
+    assert {child.workflow_id for child in roles} == {
+        run["run_id"] + ":public_signal:1",
+        run["run_id"] + ":internal_knowledge:1",
+    }
+    assert all(child.parent_workflow_id == run["run_id"] + ":research" for child in roles)
 
 
 def waiting_for_round(case, run, number):
@@ -280,7 +289,7 @@ def test_edit_rejects_old_approval_and_execution_uses_frozen_brief(native_case):
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
     )
     assert done["plan"]["version"] == version and done["plan"]["locked"]
-    assert done["status"] == "completed" and len(c.models) == 4
+    assert done["status"] == "completed" and len(c.models) == 2
     assert not c.revision_requests
     # Initial user item is protected by SDK history compaction, and present once.
     for runtime in c.runtimes:
@@ -696,7 +705,7 @@ def test_single_synthesis_failure_retries_without_repeating_roles(
         and r["archive_status"] == "saved"
         and r["events_complete"],
     )
-    assert len(c.models) == 4 and failed["retry_safe"]
+    assert len(c.models) == 2 and failed["retry_safe"]
     retry_observed_failure(c, run, "synthesis-retry", failed)
     done = c.wait(
         run,
@@ -706,7 +715,7 @@ def test_single_synthesis_failure_retries_without_repeating_roles(
     )
     assert (
         len(attempts) == 2
-        and len(c.models) == 4
+        and len(c.models) == 2
         and c.calls == {"public_signal": 1, "internal_knowledge": 1}
     )
     assert done["plan"]["version"] == failed["plan"]["version"]
@@ -766,7 +775,7 @@ def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeyp
         if (
             event["type"] == "sdk_event"
             and event.get("event") == "agent_completed"
-            and event.get("role") == "response_strategy"
+            and event.get("role") == "public_signal"
         ):
             # The native message has committed. Hold its Stream append while
             # the independent research result and History write both finish.
@@ -800,5 +809,9 @@ def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeyp
         for e in events
         if e["type"] == "sdk_event" and e.get("event") == "agent_completed"
     ]
-    assert len(ends) == 4 and len({e["invocation_id"] for e in ends}) == 4
-    assert events[-1]["type"] == "done" and len(c.models) == 4
+    assert len(ends) == 2 and {e["role"] for e in ends} == {
+        "public_signal",
+        "internal_knowledge",
+    }
+    assert len({e["invocation_id"] for e in ends}) == 2
+    assert events[-1]["type"] == "done" and len(c.models) == 2

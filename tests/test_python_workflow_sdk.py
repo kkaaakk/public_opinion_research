@@ -1,4 +1,4 @@
-"""Exercise the full public-opinion workflow through the real offline SDK loop."""
+"""Exercise SDK research agents and bounded model calls offline."""
 
 import asyncio
 import json
@@ -17,6 +17,7 @@ from test_python_workflow import ROLES, config, initial
 from test_sdk_runtime import TOKENS, _tool
 
 from open_deep_research.budget import budget_capture
+from open_deep_research.prompts import response_strategy_prompt, risk_assessment_prompt
 from open_deep_research.runtime import business_agent
 from open_deep_research.runtime.compaction import RollingCompactOutput
 from open_deep_research.runtime.sdk_runtime import SDKAgentRuntime
@@ -71,6 +72,10 @@ def install_sdk(
         if request.model_ref == "openai:fixture-review-attempt":
             return Reply("controlled failed review", 2, 0)
         if schema is None:
+            if request.prompt == risk_assessment_prompt:
+                return "risk_assessment analysis"
+            if request.prompt == response_strategy_prompt:
+                return "response_strategy analysis"
             return "FINAL brand recall report, sourced and reviewed"
         if schema == "RollingCompactOutput":
             return RollingCompactOutput(
@@ -118,7 +123,8 @@ def install_sdk(
         async def run(self, task):
             runtimes.append(self)
             self.model_windows = model_windows
-            if mode == "admission" and self.role in ROLES[:2]:
+            assert self.role in ROLES[:2]
+            if mode == "admission":
                 # Release both producers together, then let admission serialize
                 # their physical model calls.
                 entered.add(self.role)
@@ -135,42 +141,38 @@ def install_sdk(
             role = call.system_instructions.split("<Role>\n", 1)[1].split(
                 "\n</Role>", 1
             )[0]
+            assert role in ROLES[:2]
             current["role"] = role
             text = json.dumps(call.input)
             assert f"private-{role}" not in text
-            if role in ROLES[:2]:
-                if mode == "admission":
-                    started = time.monotonic()
-                    await asyncio.sleep(0.2)
-                    model_windows.append((role, started, time.monotonic()))
-                else:
-                    entered.add(role)
-                    if len(entered) == 2:
-                        barrier.set()
-                    await asyncio.wait_for(barrier.wait(), 3)
-                tool_name = (
-                    "web_search"
-                    if role == "public_signal"
-                    else "knowledge__lookup"
-                    if local_tool
-                    else "rag_search"
-                )
-                pending = [
-                    function_call(tool_name, {"query": role}, call_id=f"lookup-{role}")
-                ]
-                if mode == "tool_budget_multi":
-                    pending.append(
-                        function_call(
-                            tool_name,
-                            {"query": role + "-second"},
-                            call_id=f"lookup-{role}-2",
-                        )
+            if mode == "admission":
+                started = time.monotonic()
+                await asyncio.sleep(0.2)
+                model_windows.append((role, started, time.monotonic()))
+            else:
+                entered.add(role)
+                if len(entered) == 2:
+                    barrier.set()
+                await asyncio.wait_for(barrier.wait(), 3)
+            tool_name = (
+                "web_search"
+                if role == "public_signal"
+                else "knowledge__lookup"
+                if local_tool
+                else "rag_search"
+            )
+            pending = [
+                function_call(tool_name, {"query": role}, call_id=f"lookup-{role}")
+            ]
+            if mode == "tool_budget_multi":
+                pending.append(
+                    function_call(
+                        tool_name,
+                        {"query": role + "-second"},
+                        call_id=f"lookup-{role}-2",
                     )
-                return pending
-            assert "Upstream research context" in text
-            if role == "response_strategy":
-                assert "## risk_assessment" in text
-            return [assistant_message(f"{role} analysis")]
+                )
+            return pending
 
         async def second(call):
             role = current["role"]
@@ -179,7 +181,7 @@ def install_sdk(
                 # A budget-rejected sibling returns failure text, not evidence.
                 return [assistant_message("producer analysis complete")]
             assert "research_raw_search" in text or "Synthetic internal brand recall evidence" in text
-            if mode == "admission" and role in ROLES[:2]:
+            if mode == "admission":
                 started = time.monotonic()
                 await asyncio.sleep(0.2)
                 model_windows.append((role, started, time.monotonic()))
@@ -231,8 +233,7 @@ def install_sdk(
         yield model
 
     async def tools(config, role, spec):
-        if role not in ROLES[:2]:
-            return []
+        assert role in ROLES[:2]
 
         async def search(query, limit=3):
             calls[role] += 1
@@ -287,7 +288,11 @@ def test_real_full_intake_runner_report_and_natural_completion(monkeypatch, tmp_
         assert "FINAL brand recall report" in result["report"]["final"]
         assert result["workflow"]["brief"] == "Investigate brand recall evidence"
         assert result["messages"][1].content == "Scope confirmed"
-        assert len(runtimes) == len(models) == 4
+        assert len(runtimes) == len(models) == 2
+        assert {rt.role for rt in runtimes} == set(ROLES[:2])
+        assert set(result["agents"]) == set(ROLES)
+        for role in ROLES[2:]:
+            assert result["agents"][role]["report"] == f"{role} analysis"
         assert all(rt.harness.last_settlement.succeeded for rt in runtimes)
         assert calls == {"public_signal": 1, "internal_knowledge": 1}
         assert result["runtime"]["budget"]["model_calls"] == 7 + usage["model_calls"]
@@ -424,10 +429,12 @@ def test_sdk_budget_stop_degrades_explicitly_without_extra_agent_calls(
 
         monkeypatch.setattr(business_agent, "_business_agent_tools", tools)
         result = await PythonWorkflow().ainvoke(state, cfg, start_at="research")
-        assert len(runtimes) == 4
+        assert len(runtimes) == 2
         assert all(not model.calls for model in models)
         assert not calls
         assert result["runtime"]["budget"]["degradation_reasons"]
+        for role in ROLES[2:]:
+            assert "research model budget was exhausted" in result["agents"][role]["report"]
         assert result["report"]["final"]
 
     asyncio.run(run())

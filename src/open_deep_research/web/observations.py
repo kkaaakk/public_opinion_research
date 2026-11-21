@@ -11,6 +11,7 @@ from open_deep_research.web.run_data import (
     role_deliverables,
     stage_budget,
 )
+from open_deep_research.workflow.python_state import ANALYSIS_ROLES
 
 
 def execution_view(store, run_id, owner, workflow_id, offset, limit, workflow_offset=0):
@@ -82,7 +83,7 @@ def stage_errors(client, run_id):
     failed = client.list_workflows(
         workflow_id_prefix=run_id + ":",
         status="ERROR",
-        name=["por.plan", "por.review", "por.role", "por.report"],
+        name=["por.plan", "por.research", "por.review", "por.role", "por.report"],
         load_input=False,
         load_output=False,
     )
@@ -98,6 +99,8 @@ def stage_errors(client, run_id):
 def stage_results(client, run_id):
     """Extract public deliverables and progress from the workflows that own them."""
     completed, roles, active = [], [], []
+    outputs = []
+    other_stages = []
     usage = {}
     for workflow in client.list_workflows(
         workflow_id_prefix=run_id + ":",
@@ -112,14 +115,41 @@ def stage_results(client, run_id):
             active.append((workflow.updated_at or 0, step))
         if workflow.status != "SUCCESS" or not workflow.output:
             continue
-        result = workflow.output
+        outputs.append((workflow.workflow_id, step, workflow.output))
+
+    for workflow in client.list_workflows(
+        workflow_id_prefix=run_id + ":",
+        name=["por.plan", "por.research", "por.report"],
+        load_input=False,
+        load_output=False,
+    ):
+        if workflow.name == "por.research":
+            for role in ANALYSIS_ROLES:
+                result = client.get_event(workflow.workflow_id, f"analysis:{role}", 0)
+                if result is None:
+                    continue
+                step = role + "_agent"
+                if result.get("running"):
+                    if workflow.status == "PENDING":
+                        active.append((workflow.updated_at or 0, step))
+                else:
+                    outputs.append((f"{run_id}:{role}", step, result))
+            continue
+        if workflow.status == "PENDING":
+            active.append(
+                (workflow.updated_at or 0, workflow.name.removeprefix("por."))
+            )
+        stages = client.get_event(workflow.workflow_id, "completed_stages", 0) or {}
+        other_stages.extend(stages.items())
+
+    for stage_id, step, result in outputs:
         if not result.get("observation", {}).get("skipped"):
             completed.append(step)
         roles.extend(
             dict(
                 role=role,
                 content=content,
-                stage_id=workflow.workflow_id,
+                stage_id=stage_id,
                 completed_at="",
             )
             for role, content in role_deliverables(result).items()
@@ -134,21 +164,10 @@ def stage_results(client, run_id):
                 if key in budget
             },
         )
+    for step, notes in other_stages:
+        completed.append(step)
+        usage = merge_budget_usage(usage, notes)
 
-    for workflow in client.list_workflows(
-        workflow_id_prefix=run_id + ":",
-        name=["por.plan", "por.report"],
-        load_input=False,
-        load_output=False,
-    ):
-        if workflow.status == "PENDING":
-            active.append(
-                (workflow.updated_at or 0, workflow.name.removeprefix("por."))
-            )
-        stages = client.get_event(workflow.workflow_id, "completed_stages", 0) or {}
-        for step, notes in stages.items():
-            completed.append(step)
-            usage = merge_budget_usage(usage, notes)
     return {
         "completed_steps": completed,
         "current_step": max(active, default=(0, ""))[1],

@@ -74,7 +74,7 @@ def test_archive_outage_keeps_report_and_retries_without_sdk_replay(
             assert unavailable.status_code == 503
             assert "local-dbos-test-only" not in unavailable.text
         before = len(case.models)
-        assert before == 4
+        assert before == 2
         store.available = True
         saved = case.wait(run, lambda r: r["archive_status"] == "saved", timeout=90)
         record = store.get(saved["history_id"], owner="operator")
@@ -296,9 +296,9 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
         if scenario not in {"lost-receipt", "returned-without-step"}:
             assert result["status"] == "completed", result["error"]
             assert result["report"]
-            assert result["usage"]["model_calls"] == 26
+            assert result["usage"]["model_calls"] == 18
             if scenario.startswith("legacy-"):
-                assert effect_count(directory, "models") == 6
+                assert effect_count(directory, "models") == 4
                 roles = client.client.list_workflows(
                     workflow_ids=list(committed_usage),
                     load_input=False,
@@ -393,7 +393,7 @@ def test_approval_process_restart_uses_committed_plan(pg_database, tmp_path):
         )
         result = client.get(run["run_id"], "alice")
         assert result["plan"] == dict(plan, locked=True)
-        assert result["usage"]["model_calls"] == 26
+        assert result["usage"]["model_calls"] == 18
         assert set(units_before) <= {u["id"] for u in stage_observations(run["run_id"])}
         assert effect_count(directory) == 2
     finally:
@@ -705,6 +705,73 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
     finally:
         for child in (process, restart):
             if child:
+                kill_owned(child)
+
+
+def test_restart_reuses_both_committed_analysis_model_steps(pg_database, tmp_path):
+    client = RunClient()
+    scenario = "analysis-checkpoint"
+    executor = scenario + "-" + uuid4().hex
+    process = start(tmp_path, executor, scenario)
+    restart = None
+    try:
+        ready = tmp_path / "executor-ready"
+        wait(ready.exists, process, tmp_path)
+        run, _ = client.create(
+            "alice",
+            scenario,
+            {"topic": "brand recall"},
+            configuration(tmp_path),
+            initial(),
+        )
+        run_id = run["run_id"]
+        wait((tmp_path / scenario).exists, process, tmp_path)
+
+        def analysis_steps():
+            return [
+                step
+                for step in client.client.list_workflow_steps(run_id + ":research")
+                if step["function_name"] == "por.llm"
+            ]
+
+        committed = analysis_steps()
+        assert len(committed) == 2 and all(step["output"] for step in committed)
+        analysis_calls = tmp_path / "analysis-calls"
+        expected = ["risk_assessment", "response_strategy"]
+        assert analysis_calls.read_text(encoding="utf-8").splitlines() == expected
+        running = client.get(run_id, "alice")
+        assert running["current_step"] == "response_strategy_agent"
+        assert {role["role"] for role in running["role_reports"]} == {
+            "public_signal",
+            "internal_knowledge",
+            "risk_assessment",
+        }
+        kill_owned(process)
+        (tmp_path / (scenario + ".release")).touch()
+        ready.unlink()
+        restart = start(tmp_path, executor, scenario)
+        wait(
+            lambda: client.get(run_id, "alice")["archive_status"] == "saved",
+            restart,
+            tmp_path,
+            timeout=90,
+        )
+
+        result = client.get(run_id, "alice")
+        assert result["status"] == "completed", result["error"]
+        assert result["usage"]["model_calls"] == running["usage"]["model_calls"] + 1
+        assert result["usage"]["total_tokens"] == running["usage"]["total_tokens"] + 10
+        assert analysis_steps() == committed
+        assert analysis_calls.read_text(encoding="utf-8").splitlines() == expected
+        assert effect_count(tmp_path) == 2
+        assert {role["role"] for role in result["role_reports"]} == {
+            "public_signal",
+            "internal_knowledge",
+            *expected,
+        }
+    finally:
+        for child in (process, restart):
+            if child is not None:
                 kill_owned(child)
 
 

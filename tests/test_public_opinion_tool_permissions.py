@@ -106,32 +106,21 @@ def test_internal_knowledge_gets_only_core_and_rag(monkeypatch) -> None:
     assert _names(filtered) == {"load_skill", "rag_search"}
 
 
-# 验证策略角色不获得 MCP 写入工具。
-def test_response_strategy_does_not_get_mcp_write_tools(monkeypatch) -> None:
-    """Response Strategy keeps Feishu, database, document, and external tools out."""
-    tools = [
-        FixtureTool("load_skill", "core"),
-        FixtureTool("rag_search", "rag"),
-        FixtureTool("feishu_send", "feishu"),
-        FixtureTool("dbhub_query", "database"),
-        FixtureTool("markitdown_convert", "document"),
-        FixtureTool("legacy_mcp_tool", "external_mcp"),
-        FixtureTool("social_search", "social_media"),
-    ]
-    _patch_tool_source(monkeypatch, tools)
+@pytest.mark.parametrize("role", ["risk_assessment", "response_strategy"])
+def test_analysis_roles_have_no_agent_or_tool_assembly(monkeypatch, role) -> None:
+    def unexpected(*args, **kwargs):
+        pytest.fail("An analysis role reached agent tool discovery")
 
-    filtered = asyncio.run(
-        business_agent_module._business_agent_tools(_config(), "response_strategy")
-    )
-
-    assert _names(filtered) == {"load_skill", "rag_search"}
-
+    monkeypatch.setattr(tool_manager_module.ToolManager, "discover", unexpected)
+    with pytest.raises(KeyError, match="Unsupported public-opinion agent role"):
+        asyncio.run(business_agent_module._business_agent_tools(_config(), role))
+    with pytest.raises(KeyError, match="Unsupported public-opinion agent role"):
+        asyncio.run(
+            business_agent_module.run_business_agent(role=role, state={}, config=_config())
+        )
 
 # 验证所有角色都拒绝未知领域。
-@pytest.mark.parametrize(
-    "role",
-    ["public_signal", "internal_knowledge", "risk_assessment", "response_strategy"],
-)
+@pytest.mark.parametrize("role", PUBLIC_OPINION_AGENT_SPECS)
 def test_unknown_domain_is_denied_for_every_business_agent(
     monkeypatch, role: str
 ) -> None:
@@ -162,7 +151,7 @@ def test_unlabeled_tool_is_denied_by_default(monkeypatch) -> None:
     )
 
     filtered = asyncio.run(
-        business_agent_module._business_agent_tools(_config(), "response_strategy")
+        business_agent_module._business_agent_tools(_config(), "internal_knowledge")
     )
 
     assert _names(filtered) == {"load_skill"}
@@ -200,12 +189,6 @@ def test_agent_domain_allowlists_are_explicit() -> None:
     assert PUBLIC_OPINION_AGENT_SPECS[
         "internal_knowledge"
     ].allowed_domains == frozenset({"core", "rag"})
-    assert PUBLIC_OPINION_AGENT_SPECS["risk_assessment"].allowed_domains == frozenset(
-        {"core", "web_search", "rag", "social_media"}
-    )
-    assert PUBLIC_OPINION_AGENT_SPECS["response_strategy"].allowed_domains == frozenset(
-        {"core", "rag"}
-    )
 
 
 # 验证共享加载器给已知内置工具附加正确领域，且不再注入旧控制工具。

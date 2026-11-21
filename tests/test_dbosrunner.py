@@ -224,9 +224,9 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
             assert effect_count(tmp_path, "lc_models") == lc_before
         else:
             assert result["status"] == "completed", result["error"]
-            assert result["usage"]["model_calls"] == 26
+            assert result["usage"]["model_calls"] == 18
             assert result["usage"]["tool_calls"] == 2
-            assert effect_count(tmp_path, "models") == 6
+            assert effect_count(tmp_path, "models") == 4
             assert result["report"]
             assert len(result["role_reports"]) == 4
             assert {
@@ -305,9 +305,9 @@ def test_committed_failed_model_attempt_is_replayed_without_rebilling(
         result = client.get(run["run_id"], "alice")
         if scenario == "plan-error":
             assert result["status"] == "completed", result["error"]
-            assert result["usage"]["model_calls"] == 27
+            assert result["usage"]["model_calls"] == 19
             assert effect_count(tmp_path, "service_models") == 2
-            assert effect_count(tmp_path, "models") == 6
+            assert effect_count(tmp_path, "models") == 4
         else:
             assert result["status"] == "failed", result["error"]
             unit = next(
@@ -389,7 +389,7 @@ def test_finalizer_crash_after_leaf_rewind_keeps_original_grant_live(
         )
         result = client.get(run["run_id"], "alice")
         assert result["generation"] == 1 and not result["retry_requested"]
-        assert result["usage"]["model_calls"] == 27
+        assert result["usage"]["model_calls"] == 19
         assert effect_count(tmp_path, "reviews") == 3
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == 2
         receipt = client.client.get_event(

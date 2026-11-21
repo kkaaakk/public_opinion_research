@@ -86,21 +86,44 @@ test('actual FastAPI → DBOS → SDK: approval, trace, replay, refresh, report 
     return Number.parseFloat(getComputedStyle(label).fontSize) * scale;
   });
   expect(readability).toBeGreaterThanOrEqual(12);
+  const runResponse = await page.request.get(`/api/runs/${id}`, {
+    headers: { Authorization: 'Bearer studio-browser-test-only' },
+  });
+  expect(runResponse.ok()).toBeTruthy();
+  const snapshot: {
+    role_reports: { role: string; content: string }[];
+    event_cursor: number;
+  } = await runResponse.json();
+  expect(snapshot.role_reports.map(({ role }) => role).sort()).toEqual([
+    'internal_knowledge',
+    'public_signal',
+    'response_strategy',
+    'risk_assessment',
+  ]);
+  expect(snapshot.role_reports).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ role: 'risk_assessment', content: 'risk_assessment analysis' }),
+      expect.objectContaining({ role: 'response_strategy', content: 'response_strategy analysis' }),
+    ]),
+  );
   await page.getByRole('tab', { name: 'SDK 追踪', exact: true }).click();
-  await expect(page.locator('.span-row')).toHaveCount(8); // six actual SDK calls + two tools
+  await expect(page.locator('.span-row')).toHaveCount(6); // four Runner model calls and two tools
   await page.locator('.span-row').first().click();
   await expect(page.locator('.selected-detail')).toContainText('invocation_id');
   await page.screenshot({ path: '../.tmp/studio-sdk-desktop.png', fullPage: true });
   await page.getByRole('tab', { name: 'DBOS', exact: true }).click();
-  await expect(page.locator('.native-workflow')).not.toHaveCount(0);
+  await expect(page.locator('.native-workflow').filter({ hasText: 'por.role' })).toHaveCount(2);
   await expect(page.locator('.native-steps')).toContainText(id);
+  await page.locator('.native-workflow').filter({ hasText: 'por.research' }).click();
+  await expect(page.locator('.native-steps').getByText('por.llm', { exact: true })).toHaveCount(2);
   await page.getByRole('tab', { name: '报告', exact: true }).click();
   await expect(page.locator('.report-panel .markdown')).toContainText('FINAL brand recall report');
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Markdown 导出' }).click();
   expect((await download).suggestedFilename()).toBe('final.md');
   const cursor = Number(await page.getByLabel('回放游标').getAttribute('max'));
-  expect(cursor).toBeGreaterThan(80);
+  expect(cursor).toBeGreaterThan(0);
+  expect(cursor).toBe(snapshot.event_cursor);
   await page.getByLabel('回放游标').fill('0');
   await page.getByRole('tab', { name: '工作流', exact: true }).click();
   await expect(page.locator('.state-completed')).toHaveCount(0);

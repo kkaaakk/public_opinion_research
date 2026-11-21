@@ -61,7 +61,8 @@ from open_deep_research.workflow.python_state import copy_state
 
 NATIVE_TERMINAL = {"SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED"}
 HUMAN_PHASES = {"awaiting_approval", "awaiting_clarification"}
-DOMAIN_LEDGER_VERSIONS = {VERSION, "dbos-domain-v1"}
+NATIVE_RESULT_VERSIONS = {VERSION, "por-sdk-models-v1"}
+DOMAIN_LEDGER_VERSIONS = NATIVE_RESULT_VERSIONS | {"dbos-domain-v1"}
 
 
 def validate_request(request):
@@ -310,7 +311,7 @@ class RunClient:
     def _unconfirmed_stage(self, workflow):
         if workflow is None or workflow.status == "SUCCESS":
             return False
-        if workflow.app_version != VERSION:
+        if workflow.app_version not in NATIVE_RESULT_VERSIONS:
             old = self.client.get_event(
                 workflow.workflow_id + ":events", "projection", 0
             )
@@ -375,7 +376,7 @@ class RunClient:
         version = data["version"]
         terminal = native.status in NATIVE_TERMINAL
         old = {}
-        if version != VERSION:
+        if version not in NATIVE_RESULT_VERSIONS:
             old = self.client.get_event(run_id + ":events", "projection", 0) or {}
         with self.engine.connect() as db:
             generation = retry_generation(db, run_id)
@@ -399,7 +400,7 @@ class RunClient:
         applied = self._retry_receipt(run_id) if generation else {"generation": 0}
         errors = (
             stage_errors(self.client, run_id)
-            if version == VERSION and terminal
+            if version in NATIVE_RESULT_VERSIONS and terminal
             else [old["error"]]
             if old.get("error")
             else []
@@ -439,7 +440,7 @@ class RunClient:
 
         view = (
             stage_results(self.client, run_id)
-            if version == VERSION
+            if version in NATIVE_RESULT_VERSIONS
             else self._old_results(run_id, old, native)
         )
         usage = merge_budget_usage(
@@ -480,7 +481,7 @@ class RunClient:
 
     def _delivery(self, run_id, version):
         relay = run_id + ":events"
-        if version == VERSION:
+        if version in NATIVE_RESULT_VERSIONS:
             return self.client.get_event(relay, "delivery", 0) or {
                 "offset": 0,
                 "generation": 0,
@@ -641,7 +642,7 @@ class RunClient:
             phase in HUMAN_PHASES
             and pause.get("phase") == phase
             and (
-                version != VERSION
+                version not in NATIVE_RESULT_VERSIONS
                 or interaction is not None
                 and pause.get("version") == interaction["version"]
             )

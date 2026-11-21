@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+from functools import partial
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
@@ -79,6 +80,7 @@ def install_steps(monkeypatch, reviews=(), *, slower="public_signal"):
     script = iter(reviews)
 
     async def agent(*, role, state, config):
+        assert role in ROLES[:2]
         round = state["workflow"]["round"]
         tasks = state["workflow"].get("pending_tasks", [])
         task_ids = [
@@ -90,18 +92,13 @@ def install_steps(monkeypatch, reviews=(), *, slower="public_signal"):
             for name, value in state["agents"].items()
             if name != role
         )
-        if role in ROLES[:2] and round == 1:
+        if round == 1:
             arrivals.add(role)
             if len(arrivals) == 2:
                 barrier.set()
             await asyncio.wait_for(barrier.wait(), 1)
             if role == slower:
                 await asyncio.sleep(0)
-        if role == "risk_assessment":
-            assert events[-1][0] == "review"
-        if role == "response_strategy":
-            assert "risk_assessment" in state["agents"]["risk_assessment"]["report"]
-            assert events[-1][0] == "risk_assessment"
         events.append((role, round, task_ids))
         return {
             "agents": {
@@ -111,6 +108,19 @@ def install_steps(monkeypatch, reviews=(), *, slower="public_signal"):
             "runtime": {
                 "budget": {"model_calls": 2, "tool_calls": 1, "input_tokens": 10}
             },
+        }
+
+    async def analysis(state, config, *, role):
+        round = state["workflow"]["round"]
+        if role == "risk_assessment":
+            assert events[-1][0] == "review"
+        else:
+            assert "risk_assessment" in state["agents"]["risk_assessment"]["report"]
+            assert events[-1][0] == "risk_assessment"
+        events.append((role, round, []))
+        return {
+            "agents": {role: {"report": f"{role}:{round}"}},
+            "runtime": {"budget": {"model_calls": 1, "input_tokens": 10}},
         }
 
     async def review(state, config):
@@ -147,6 +157,8 @@ def install_steps(monkeypatch, reviews=(), *, slower="public_signal"):
         return {"report": {"final": report}, "messages": [AIMessage(content=report)]}
 
     monkeypatch.setattr(research, "run_business_agent", agent)
+    for role in ROLES[2:]:
+        monkeypatch.setattr(research, role, partial(analysis, role=role))
     monkeypatch.setattr(research, "research_review", review)
     monkeypatch.setattr(reporting, "section_writer", sections)
     monkeypatch.setattr(reporting, "write_final_sections", final_sections)
@@ -171,9 +183,9 @@ def test_true_parallel_join_order_and_private_state(monkeypatch, slower):
             "response_strategy",
         ]
         assert list(result["agents"]) == list(ROLES)
-        assert result["runtime"]["budget"]["model_calls"] == 16
-        assert usage["model_calls"] == 9
-        assert usage["tool_calls"] == 4
+        assert result["runtime"]["budget"]["model_calls"] == 14
+        assert usage["model_calls"] == 7
+        assert usage["tool_calls"] == 2
         assert result["runtime"]["budget"]["input_tokens"] == 110
         assert all(result["agents"][r]["report"] for r in ROLES)
         assert all(result["agents"][r]["report"] == f"{r}:1" for r in ROLES[:2])
@@ -382,21 +394,11 @@ def test_later_failure_does_not_replay_successful_tools(monkeypatch, stage):
             capture_budget_usage({"model_calls": 1})
             raise RuntimeError("later failure")
 
-        if stage in ROLES:
-            original = research.run_business_agent
-
-            async def role_call(*, role, state, config):
-                return (
-                    await fail(state, config)
-                    if role == stage
-                    else await original(role=role, state=state, config=config)
-                )
-
-            monkeypatch.setattr(research, "run_business_agent", role_call)
-        else:
-            monkeypatch.setattr(
-                research if stage == "research_review" else reporting, stage, fail
-            )
+        monkeypatch.setattr(
+            research if stage in (*ROLES[2:], "research_review") else reporting,
+            stage,
+            fail,
+        )
         with pytest.raises(WorkflowExecutionError) as caught:
             await PythonWorkflow().ainvoke(initial(), config(), start_at="research")
         assert sum(e[0] == "public_signal" for e in events) == 1

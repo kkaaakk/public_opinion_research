@@ -27,6 +27,7 @@ _DOMAIN_UPDATES = {
     "runtime": runtime_reducer,
 }
 RESEARCH_ROLES = ("public_signal", "internal_knowledge")
+ANALYSIS_ROLES = ("risk_assessment", "response_strategy")
 
 
 def apply_patch(state: DeepResearchState, patch: Mapping[str, Any]) -> None:

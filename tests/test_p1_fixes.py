@@ -245,7 +245,12 @@ def test_web_research_requests_are_semaphore_limited(native_case):
         time.sleep(0.01)
     assert case.blocked.is_set()
     assert len(case.models) == 2
-    active_ids = {rt.workspace.run_id for rt in case.runtimes}
+    active_ids = {
+        wf.workflow_id.removesuffix(":research")
+        for wf in case.client.client.list_workflows(
+            name="por.research", status="PENDING", load_input=False, load_output=False
+        )
+    }
     assert len(active_ids) == 1
     active = next(r for r in (first, second) if r["run_id"] in active_ids)
     waiting = next(r for r in (first, second) if r is not active)

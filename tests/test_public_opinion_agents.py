@@ -20,12 +20,10 @@ from open_deep_research.workflow import reporting
 
 # 验证注册表只包含当前精简角色。
 def test_public_opinion_agent_registry_has_compact_roles() -> None:
-    """Public-opinion workflow exposes four compact business agents."""
+    """Only the research roles have SDK Agent specs."""
     assert PUBLIC_OPINION_AGENT_ORDER == (
         "public_signal",
         "internal_knowledge",
-        "risk_assessment",
-        "response_strategy",
     )
     assert set(PUBLIC_OPINION_AGENT_SPECS) == set(PUBLIC_OPINION_AGENT_ORDER)
 

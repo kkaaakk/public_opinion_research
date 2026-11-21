@@ -3,9 +3,11 @@
 ## Current architecture and migration boundary
 
 Phase 5 retires the LangGraph business workflow and handwritten Agent loop.
-The only new research chain is FastAPI/CLI Run API -> native DBOS 3.3.0
-Workflow/Step/Queue -> SDKAgentRuntime -> official DBOSRunner 0.3.0 -> OpenAI Agents SDK 0.24.0 ->
-SDK Context Harness -> existing business tools.
+The research chain starts at the FastAPI/CLI Run API and uses native DBOS 3.3.0
+Workflow/Step/Queue. Public Signal and Internal Knowledge use SDKAgentRuntime,
+official DBOSRunner 0.3.0, OpenAI Agents SDK 0.24.0, the SDK Context Harness and
+existing business tools. Risk Assessment and Response Strategy use bounded SDK
+model Steps inside the research Workflow.
 
 Read `docs/audits/openai-agents-phase5.md`, the migration plan,
 `docs/audits/openai-agents-phase4-dbos.md` and
@@ -22,7 +24,8 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `por-sdk-models-v1`. Drain `por-vertical-v1` with its matching release before cutover. Pending `dbos-events-v1` and earlier
+Application version is `por-research-agents-v1`. Drain `por-sdk-models-v1` and
+`por-vertical-v1` with their matching releases before cutover. Pending `dbos-events-v1` and earlier
 journals must drain with their matching release before cutover. Native Stream offsets
 drive SSE resume. The single writer records one delivery Event per published
 prefix. Finalizer reads native results and the effect ledger before publishing
@@ -45,10 +48,10 @@ State carries only `messages`, `workflow`, `agents` (role reports), `report` and
 `runtime.budget`. Each SDK invocation keeps its rolling summary and compacted
 turn window invocation-local; DBOS Steps persist them without a second history.
 
-The SDK owns all four business Agent loops. Planning, intake, review, report and
-rolling compaction call the same SDK Model directly through bounded DBOS Steps.
-Only the four business Agents execute a Runner loop. RAG retains separate ownership
-of indexing and retrieval and uses the shared SDK path for inference.
+The SDK owns the two research Agent loops. Planning, intake, review, risk,
+strategy, report and rolling compaction use the same SDK Model directly with
+bounded DBOS Steps. RAG retains ownership of indexing and retrieval and uses the
+shared SDK path for inference.
 Unknown model aliases use a 32,768-token
 application window unless explicitly configured; this is not a provider claim.
 DBOSRunner owns SDK model checkpoints; explicit tool and bounded Context Steps
@@ -80,7 +83,7 @@ in the migration plan, which links to the original Git evidence.
 - `src/open_deep_research/workflow/`: intake, planning, research orchestration,
   reporting and native DBOS workflows; pure State reducers remain explicit.
 - `runtime/`: SDK Runner integration, Harness and role assembly; `public_opinion_agents/`:
-  the four business roles and their prompts, contracts and tool policies.
+  the two research agents and their prompts, contracts and tool policies.
 - `tools/plugins.py` owns plugin manifest, Skill and MCP assembly; `plugins/social-research/`
   declares the Apify hosted MCP server plus the xiaohongshu, douyin and weibo research
   skills. There is no local social adapter or HTTP collector: social platform data is

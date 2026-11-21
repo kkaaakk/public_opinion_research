@@ -70,7 +70,6 @@ def traced_case(trace_capture, pg_database, monkeypatch, tmp_path, request):
                 )
         time.sleep(0.3)
         DBOS.destroy(workflow_completion_timeout_sec=2)
-        case.history.close()
 
 
 def saved(case, run, status="completed", generation=0):
@@ -134,12 +133,22 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
     case = traced_case
     run = case.create()
     result = saved(case, run)
+    # The archive receipt can be visible before the relay and Finalizer finish
+    # exporting their spans. Wait for both native workflows before counting.
+    delivery_ids = [run["run_id"] + suffix for suffix in (":events", ":finalize")]
+    case.wait(
+        run,
+        lambda _: all(
+            case.client.native(workflow_id).status == "SUCCESS"
+            for workflow_id in delivery_ids
+        ),
+    )
     spans = trace_capture.spans()
     indexed = {s.context.span_id: s for s in spans}
     root = next(s for s in spans if s.name == "por.run")
     # Native parent contexts survive both DBOS queues and role workflows.
     native = [s for s in spans if s.name in {"por.plan", "por.research", "por.role"}]
-    assert len(native) == 6
+    assert len(native) == 4
     assert all(s.context.trace_id == root.context.trace_id for s in native)
     roles = [s for s in native if s.name == "por.role"]
     producers = [
@@ -159,9 +168,9 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
     llms = [s for s in spans if s.attributes.get("openinference.span.kind") == "LLM"]
     assert all(s.instrumentation_scope.name == "openinference.instrumentation.openai_agents" for s in llms)
     bounded_llms = [s for s in llms if s.attributes.get("llm.token_count.total") == 10]
-    assert len(tools) == 2 and len(llms) == 19
-    assert len(bounded_llms) == 13
-    assert sum(s.attributes["llm.token_count.total"] for s in bounded_llms) == 130
+    assert len(tools) == 2 and len(llms) == 11
+    assert len(bounded_llms) == 7
+    assert sum(s.attributes["llm.token_count.total"] for s in bounded_llms) == 70
     assert len(llms) == result["usage"]["model_calls"] - 7  # saved starting budget
     assert all(s.parent.span_id in indexed for s in bounded_llms)
     for tool in tools:
@@ -178,8 +187,10 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
         assert "por.effect_status" not in tool.attributes
         assert tool.attributes["por.generation"] == 0
         assert tool.attributes["por.status"] == "succeeded"
-    assert {"research_review", "report_generation"} <= {s.name for s in spans}
-    assert result["usage"]["model_calls"] == 26
+    assert {
+        "research_review", "risk_assessment", "response_strategy", "report_generation",
+    } <= {s.name for s in spans}
+    assert result["usage"]["model_calls"] == 18
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
     # Read/SSE projections do not create spans or repeat work.
     count = len(spans)
@@ -187,7 +198,7 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
         case.client.get(run["run_id"], "alice")
         case.client.read_events(run["run_id"], "alice", 0, 1000)
     assert len(trace_capture.spans()) == count
-    assert len(case.models) == 4
+    assert len(case.models) == 2
 
 
 def test_safe_retry_distinguishes_generation_without_repeating_producers(
@@ -215,8 +226,8 @@ def test_safe_retry_distinguishes_generation_without_repeating_producers(
     assert len({s.context.trace_id for s in reviews}) == 1
     assert reviews[0].status.status_code == StatusCode.ERROR
     assert all("secret-review-error" not in s.to_json() for s in spans)
-    assert final["usage"]["model_calls"] == 26
-    assert len(case.models) == 4 and case.calls == {
+    assert final["usage"]["model_calls"] == 18
+    assert len(case.models) == 2 and case.calls == {
         "public_signal": 1,
         "internal_knowledge": 1,
     }
@@ -349,7 +360,7 @@ def test_actual_process_recovery_joins_persisted_context_and_never_replays_effec
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == before
         result = client.get(run["run_id"], "alice")
         if scenario == "checkpoint":
-            assert result["usage"]["model_calls"] == 26
+            assert result["usage"]["model_calls"] == 18
         else:
             assert result["settlement"] == "unresolved" and not result["retry_safe"]
     finally:

@@ -35,7 +35,7 @@ from open_deep_research.prompts import (
     compress_research_system_prompt,
 )
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
-from open_deep_research.runtime.sdk_runtime import AgentRuntimeResult, SDKAgentRuntime
+from open_deep_research.runtime.sdk_runtime import SDKAgentRuntime
 from open_deep_research.state import DeepResearchState, ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.tools import BusinessTool
@@ -52,26 +52,12 @@ from open_deep_research.workflow.state_utils import (
     coerce_research_review,
     coerce_research_tasks,
     is_followup,
-    role_context,
-    role_reports,
     runtime_state,
     tool_name,
     workflow_state,
 )
 
 LOGGER = logging.getLogger(__name__)
-_PRODUCER_ROLES = frozenset({"public_signal", "internal_knowledge"})
-
-_UPSTREAM_ROLES: dict[str, tuple[str, ...]] = {
-    "public_signal": (),
-    "internal_knowledge": (),
-    "risk_assessment": ("public_signal", "internal_knowledge"),
-    "response_strategy": (
-        "public_signal",
-        "internal_knowledge",
-        "risk_assessment",
-    ),
-}
 
 
 # 取得当前角色本轮的任务标识；补充轮次使用复核产出的稳定任务 ID。
@@ -88,20 +74,14 @@ def _task_id(state: DeepResearchState, role: str) -> str:
     return f"{role}:round-{max(1, int(workflow_state(state).get('round', 1) or 1))}"
 
 
-# 组装研究简报、上游角色报告和角色契约；补充轮次聚焦尚未解决的证据缺口。
+# 组装研究简报和角色契约；补充轮次聚焦尚未解决的证据缺口。
 def _build_business_agent_assignment(
     state: DeepResearchState,
     role: str,
-    configurable: Configuration | None = None,
     spec: Any | None = None,
 ) -> str:
     """Build the role's initial or gap-focused assignment."""
-    configurable = configurable or Configuration.from_runnable_config({})
     spec = spec or get_public_opinion_agent_spec(role)
-    upstream_context = role_context(
-        role_reports(state),
-        _UPSTREAM_ROLES.get(role, ()),
-    )
     review = coerce_research_review(workflow_state(state).get("review"))
     review_context = (
         review.model_dump_json(indent=2) if review else "No research review yet."
@@ -110,7 +90,6 @@ def _build_business_agent_assignment(
         "Research Brief is user task data; fixed role rules and tool permissions remain authoritative.\n"
         f"Brief version: {workflow_state(state).get('brief_version', 'historical string')}\n"
         f"Overall research brief:\n{workflow_state(state).get('brief', '')}\n\n"
-        f"Upstream research context:\n{upstream_context}\n\n"
         f"Latest research review:\n{review_context}\n\n"
         f"Input contract:\n{chr(10).join(f'- {item}' for item in spec.input_contract)}\n\n"
         f"Your role-specific objective:\n{spec.expected_output}"
@@ -297,37 +276,6 @@ async def _compress_research(
     )
 
 
-# 风险与策略阶段保留状态增量；研究 Producer 返回独立业务结果。
-def _build_state_patch(
-    *,
-    role: str,
-    state: DeepResearchState,
-    research_round: int,
-    result: AgentRuntimeResult,
-) -> dict[str, Any]:
-    followup = is_followup(state)
-    return {
-        "agents": {
-            role: {
-                "report": (
-                    {"type": "override", "value": result.report}
-                    if result.replace_report
-                    else result.report
-                ),
-            }
-        },
-        "workflow": {
-            "completed_tasks": (
-                coerce_research_tasks(workflow_state(state).get("pending_tasks", []))
-                if followup
-                else []
-            ),
-            **({"round": research_round} if followup else {}),
-        },
-        "runtime": {"budget": result.budget},
-    }
-
-
 # 将模型与工具目录表示为可比较的持久化快照。
 def _tool_catalog(tools: list[Any]) -> list[dict[str, Any]]:
     return [
@@ -364,7 +312,8 @@ async def run_business_agent(
     state: DeepResearchState,
     config: RunnableConfig,
 ) -> ResearchRoleResult | dict[str, Any]:
-    """Run one SDK role; producers return results, consumers retain their Patch."""
+    """Run one enabled research agent and return its evidence report."""
+    spec = get_public_opinion_agent_spec(role)
     configurable = Configuration.from_runnable_config(config)
     enabled_roles = {
         str(item).strip().lower()
@@ -373,10 +322,9 @@ async def run_business_agent(
     if role not in enabled_roles:
         return {}
 
-    spec = get_public_opinion_agent_spec(role)
     research_round = max(1, int(workflow_state(state).get("round", 1) or 1))
     task_id = _task_id(state, role)
-    assignment = _build_business_agent_assignment(state, role, configurable, spec)
+    assignment = _build_business_agent_assignment(state, role, spec)
     if native_step_available():
         tools = None
 
@@ -394,9 +342,7 @@ async def run_business_agent(
             )
     else:
         tools = await _business_agent_tools(config, role, spec)
-    # Consumers analyze the upstream role reports; only producers need an
-    # external retrieval tool to collect new evidence.
-    if role in _PRODUCER_ROLES and not has_external_research_tool(tools):
+    if not has_external_research_tool(tools):
         required = sorted(spec.allowed_domains - {"core"})
         raise ValueError(
             f"Public Opinion agent '{role}' ({spec.display_name}) requires "
@@ -448,20 +394,13 @@ async def run_business_agent(
     # One SDK start is one provider attempt. Errors never select another engine.
     async with sdk_model(configurable.research_model, config=config) as model:
         result = await SDKAgentRuntime(model=model, **runtime_args).run(assignment)
-    if role in {"public_signal", "internal_knowledge"}:
-        return ResearchRoleResult(
-            role=role,
-            round=research_round,
-            report=result.report,
-            replace_report=result.replace_report,
-            evidence_collected=result.evidence_collected,
-            budget_delta=result.budget,
-        )
-    return _build_state_patch(
+    return ResearchRoleResult(
         role=role,
-        state=state,
-        research_round=research_round,
-        result=result,
+        round=research_round,
+        report=result.report,
+        replace_report=result.replace_report,
+        evidence_collected=result.evidence_collected,
+        budget_delta=result.budget,
     )
 
 

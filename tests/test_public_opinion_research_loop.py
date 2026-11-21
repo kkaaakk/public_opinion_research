@@ -8,6 +8,7 @@ from sdk_model_support import install_sequence
 
 import open_deep_research.runtime.business_agent as business_agent_module
 import open_deep_research.workflow.research as workflow_research
+from open_deep_research.prompts import response_strategy_prompt, risk_assessment_prompt
 from open_deep_research.state import ResearchReview, ResearchTask, agents_reducer
 from open_deep_research.workflow import reporting
 
@@ -95,7 +96,7 @@ def _invoke_with_fixtures(
     max_rounds: int = 2,
 ):
     """Invoke the compiled subgraph with deterministic review and agent fixtures."""
-    reviewer = install_sequence(monkeypatch, *reviews)
+    requests = install_sequence(monkeypatch, *reviews, "risk analysis", "response strategy")
     calls: list[tuple[str, str, list[str]]] = []
     monkeypatch.setattr(
         workflow_research,
@@ -115,7 +116,16 @@ def _invoke_with_fixtures(
             start_at="research",
         )
     )
-    return result, calls, reviewer
+    assert [request.schema_name for request in requests] == [
+        *(["ResearchReview"] * len(reviews)),
+        None,
+        None,
+    ]
+    assert [request.prompt for request in requests[-2:]] == [
+        risk_assessment_prompt,
+        response_strategy_prompt,
+    ]
+    return result, calls, requests[:-2]
 
 
 # 验证首轮证据充分时直接进入风险评估。
@@ -130,10 +140,10 @@ def test_sufficient_initial_research_goes_directly_to_risk(monkeypatch) -> None:
     assert {(role, mode) for role, mode, _ in calls} == {
         ("public_signal", "initial"),
         ("internal_knowledge", "initial"),
-        ("risk_assessment", "initial"),
-        ("response_strategy", "initial"),
     }
     assert result["workflow"]["round"] == 1
+    assert result["agents"]["risk_assessment"]["report"] == "risk analysis"
+    assert result["agents"]["response_strategy"]["report"] == "response strategy"
 
 
 # 验证仅公众信号补充后回到复核并合并报告。

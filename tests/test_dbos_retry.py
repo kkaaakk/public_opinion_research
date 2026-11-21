@@ -82,7 +82,7 @@ def test_terminal_delivery_drains_reordered_committed_messages(
     usage = next(e for e in terminal if e["type"] == "usage")
     history = next(e for e in terminal if e["type"] == "history_saved")
     assert tail["seq"] < usage["seq"] < history["seq"] < events[-1]["seq"]
-    assert len(attempts) == 2 and len(case.models) == 4
+    assert len(attempts) == 2 and len(case.models) == 2
 
 
 def saved(case, run, status, generation):
@@ -251,7 +251,7 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
         record, events = assert_consistent(case, run, completed)
         assert completed["usage"]["model_calls"] == 28
         assert attempts == [1, 2, 3]
-        assert len(case.models) == 4
+        assert len(case.models) == 2
         assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
         assert not any(e.get("id") == "late-old-archive" for e in events)
         assert [e["generation"] for e in events if e["type"] == "retry_started"] == [
@@ -317,7 +317,7 @@ def test_concurrent_distinct_keys_authorize_one_native_failure(
     completed = saved(case, run, "completed", 1)
     assert_consistent(case, run, completed)
     assert len(attempts) == 2
-    assert len(case.models) == 4
+    assert len(case.models) == 2
     with domain_engine().connect() as db:
         assert (
             db.execute(
@@ -579,7 +579,7 @@ def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypat
     retry_observed_failure(case, run, "fresh", observed)
     final = saved(case, run, "completed", 1)
     assert final["generation"] == 1
-    assert len(attempts) == 2 and len(case.models) == 4
+    assert len(attempts) == 2 and len(case.models) == 2
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
 
 
