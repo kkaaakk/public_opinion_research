@@ -406,6 +406,7 @@ def test_business_harness_snapshot_round_trip():
         research_round=1,
         config=Configuration(research_model="openai:fixture"),
         budget=_RunBudget(initial={}),
+        runtime_config={},
     )
     harness.model_calls = 3
     harness.rolling_summary = "older work summarized"

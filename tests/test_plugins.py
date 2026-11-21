@@ -24,6 +24,7 @@ from dbos import DBOS, DBOSClient, SetWorkflowID
 from test_sdk_runtime import TOKENS, _runtime
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.llm import generation
 from open_deep_research.mcp import tools as mcp_tools_module
 from open_deep_research.mcp.tools import MCPServerSpec
 from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
@@ -699,7 +700,7 @@ def test_agent_runs_apify_actor_chain_through_tool_executor(
     async def begin_model_call():
         return None
 
-    monkeypatch.setattr(sdk_runtime, "begin_model_call", begin_model_call)
+    monkeypatch.setattr(generation, "begin_model_call", begin_model_call)
     monkeypatch.setattr(
         sdk_runtime, "settings", lambda: SimpleNamespace(session_path=None)
     )
@@ -1263,7 +1264,7 @@ def test_committed_actor_step_restores_without_rerunning_the_run(tmp_path, monke
         assert DBOS.step_id is not None
         return None
 
-    monkeypatch.setattr(sdk_runtime, "begin_model_call", begin_model_call)
+    monkeypatch.setattr(generation, "begin_model_call", begin_model_call)
     monkeypatch.setattr(
         sdk_runtime, "settings", lambda: SimpleNamespace(session_path=None)
     )

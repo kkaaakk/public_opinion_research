@@ -112,10 +112,11 @@ async def metered_model_response(
             raise error from exc
         usage = budget_from_sdk_usage(response.usage)
         usage["model_calls"] = 1
-        if completion.usage is not None:
+        if completion.usage and completion.usage.input_tokens_details.cached_tokens:
             # DeepSeek may report cache hits beside, rather than inside, token details.
-            usage["input_token_details"]["cache_read"] = max(
-                usage["input_token_details"]["cache_read"],
+            input_details = usage.setdefault("input_token_details", {})
+            input_details["cache_read"] = max(
+                input_details.get("cache_read", 0),
                 completion.usage.input_tokens_details.cached_tokens,
             )
         await end_model_call(identity, physical_model_usage(usage))

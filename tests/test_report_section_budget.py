@@ -247,7 +247,15 @@ def test_reporting_uses_post_research_usage_and_preserves_final_call(
         )
         assert final_result["runtime"]["budget"]["model_calls"] == 1
         assert usage["model_calls"] == 12
-        assert state["report"]["sections"] == sections
+        actual = state["report"]["sections"]
+        # The plan's identity survives serialization and section writing.
+        for field in ("name", "description", "research", "agent_role"):
+            assert [getattr(section, field) for section in actual] == [
+                getattr(section, field) for section in sections
+            ]
+        assert [section.status for section in actual] == [
+            "done" if section.research else "pending" for section in sections
+        ]
         assert final_result["report"]["final"]
 
     asyncio.run(run_stages())

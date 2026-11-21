@@ -478,15 +478,18 @@ def budget_from_sdk_usage(sdk_usage: Any) -> dict[str, Any]:
     usage = empty_budget_usage()
     for field in TOKEN_FIELDS:
         usage[field] = int(getattr(sdk_usage, field, 0) or 0)
-    input_details = getattr(sdk_usage, "input_tokens_details", None)
-    output_details = getattr(sdk_usage, "output_tokens_details", None)
-    usage["input_token_details"] = {
-        "cache_read": int(getattr(input_details, "cached_tokens", 0) or 0),
-        "cache_creation": int(getattr(input_details, "cache_write_tokens", 0) or 0),
-    }
-    usage["output_token_details"] = {
-        "reasoning": int(getattr(output_details, "reasoning_tokens", 0) or 0),
-    }
+    for field, names in (
+        ("input", {"cache_read": "cached_tokens", "cache_creation": "cache_write_tokens"}),
+        ("output", {"reasoning": "reasoning_tokens"}),
+    ):
+        details = getattr(sdk_usage, f"{field}_tokens_details", None)
+        reported = {
+            label: int(count)
+            for label, name in names.items()
+            if (count := getattr(details, name, 0))
+        }
+        if reported:
+            usage[f"{field}_token_details"] = reported
     return usage
 
 

@@ -6,7 +6,6 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from open_deep_research.budget import model_budget_admission
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.generation import generate_structured
 from open_deep_research.prompts import (
@@ -141,16 +140,15 @@ async def research_review(state: DeepResearchState, config: RunnableConfig) -> d
             previous_review=previous_review_text,
         )
     )
-    with model_budget_admission(configurable, lambda: runtime_state(state).get("budget", {})):
-        review, review_budget = await generate_structured(
-            configurable.research_model,
-            prompt,
-            ResearchReview,
-            config=config,
-            max_tokens=configurable.research_model_max_tokens,
-            max_attempts=configurable.max_structured_output_retries,
-            component=f"research_review_round_{current_round}",
-        )
+    review, review_budget = await generate_structured(
+        configurable.research_model,
+        prompt,
+        ResearchReview,
+        config=config,
+        max_tokens=configurable.research_model_max_tokens,
+        max_attempts=configurable.max_structured_output_retries,
+        component=f"research_review_round_{current_round}",
+    )
 
     return {
         "workflow": {
