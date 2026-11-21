@@ -8,25 +8,15 @@ from open_deep_research.public_opinion_agents.internal_knowledge import (
 from open_deep_research.public_opinion_agents.public_signal import (
     AGENT as PUBLIC_SIGNAL_AGENT,
 )
-from open_deep_research.public_opinion_agents.response_strategy import (
-    AGENT as RESPONSE_STRATEGY_AGENT,
-)
-from open_deep_research.public_opinion_agents.risk_assessment import (
-    AGENT as RISK_ASSESSMENT_AGENT,
-)
 
 PUBLIC_OPINION_AGENT_ORDER = (
     "public_signal",
     "internal_knowledge",
-    "risk_assessment",
-    "response_strategy",
 )
 
 PUBLIC_OPINION_AGENT_SPECS: dict[str, PublicOpinionAgentSpec] = {
     PUBLIC_SIGNAL_AGENT.role: PUBLIC_SIGNAL_AGENT,
     INTERNAL_KNOWLEDGE_AGENT.role: INTERNAL_KNOWLEDGE_AGENT,
-    RISK_ASSESSMENT_AGENT.role: RISK_ASSESSMENT_AGENT,
-    RESPONSE_STRATEGY_AGENT.role: RESPONSE_STRATEGY_AGENT,
 }
 
 

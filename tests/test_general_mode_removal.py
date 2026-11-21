@@ -114,6 +114,8 @@ class TestGraphStructure:
             "generate_final_report",
             "section_plan_step",
             "research_review",
+            "risk_assessment",
+            "response_strategy",
             "section_writer",
             "write_final_sections",
             "compile_final_report",
@@ -131,7 +133,8 @@ class TestGraphStructure:
         )
         assert "for role in RESEARCH_ROLES:" in source
         assert 'packets = reviewed["followup"]' in source
-        assert 'for role in ("risk_assessment", "response_strategy"):' in source
+        assert "research.risk_assessment" in source
+        assert "research.response_strategy" in source
         assert "dispatch_followup_research" not in source
 
 

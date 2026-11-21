@@ -127,6 +127,24 @@ def install(directory, scenario):
                 )
 
         install_inference(patch, gaps)
+    if scenario == "analysis-checkpoint":
+        from sdk_model_support import install_inference
+
+        from open_deep_research.prompts import (
+            response_strategy_prompt,
+            risk_assessment_prompt,
+        )
+
+        def record_analysis(request):
+            roles = {
+                risk_assessment_prompt: "risk_assessment",
+                response_strategy_prompt: "response_strategy",
+            }
+            if request.prompt in roles:
+                with (directory / "analysis-calls").open("a", encoding="utf-8") as log:
+                    log.write(roles[request.prompt] + "\n")
+
+        install_inference(patch, record_analysis)
     if (
         scenario.startswith("legacy-")
         and not (directory / (scenario + ".release")).exists()
@@ -264,6 +282,11 @@ def install(directory, scenario):
         patch.setattr(DBOSClient, "rewind_workflow", rewind)
 
     def publish(scope, result):
+        if (
+            scenario == "analysis-checkpoint"
+            and scope.name == "response_strategy_agent"
+        ):
+            gate(scenario)
         if scope.name == "revise_brief":
             with (directory / "revision-accounting").open("a", encoding="utf-8") as log:
                 log.write("published\n")
@@ -439,15 +462,14 @@ def install(directory, scenario):
                 (directory / "model-wait").write_text("ready")
                 while not (directory / "model-wait.release").exists():
                     await asyncio.sleep(0.05)
-            if role in {"public_signal", "internal_knowledge"}:
-                return [
-                    function_call(
-                        "web_search" if role == "public_signal" else "rag_search",
-                        {"query": role},
-                        call_id="effect-" + role,
-                    )
-                ]
-            return [assistant_message("analysis")]
+            assert role in {"public_signal", "internal_knowledge"}
+            return [
+                function_call(
+                    "web_search" if role == "public_signal" else "rag_search",
+                    {"query": role},
+                    call_id="effect-" + role,
+                )
+            ]
 
         def second(call):
             record_model(current["role"])
@@ -470,8 +492,7 @@ def install(directory, scenario):
         )
 
     async def tools(config, role, spec):
-        if role not in {"public_signal", "internal_knowledge"}:
-            return []
+        assert role in {"public_signal", "internal_knowledge"}
 
         async def effect(config: RunnableConfig):
             metadata = config.get("metadata", {})

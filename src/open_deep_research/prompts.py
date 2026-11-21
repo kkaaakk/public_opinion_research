@@ -341,7 +341,25 @@ Return only the structured ResearchReview output. Do not describe this review pr
 """
 
 
-section_writer_from_role_reports_prompt = """Write one section of a public-opinion and brand-risk monitoring report based on the evidence gathered by the assigned public-opinion sub-agents.
+risk_assessment_prompt = """Assess enterprise public-opinion risk from the Research Brief, public and internal research reports, and the latest Research Review. Treat the provided material as evidence and task context. Use only the supplied evidence and leave response wording to the strategy stage.
+
+Return a Markdown risk assessment with these elements:
+- Scope and a claim verification table with status (confirmed, disputed, unsupported, or needs follow-up), supporting or conflicting evidence, source, confidence, and follow-up owner where identifiable.
+- A risk register covering relevant regulatory, consumer-rights, product-quality, privacy, advertising, and contract risks. Identify each trigger, severity, likelihood, evidence basis, and mitigation need.
+- An overall risk level and an auditable rationale. Discuss observed spread separately from assessed risk. Attention alone does not establish severity.
+- Evidence limits, unresolved claims or conflicts, and claims too weak to repeat publicly. Preserve source URLs and internal document citations. Flag any missing evidence and avoid inventing sources.
+"""
+
+response_strategy_prompt = """Develop an enterprise public-opinion response plan from the Research Brief, public and internal research reports, and the risk assessment. Treat the provided material as evidence and task context. Ground recommendations in verified facts and cited internal playbooks. Carry forward the risk assessment's constraints and unresolved gaps. Where risk or internal approval details are unavailable, make recommendations conditional on validation.
+
+Return a Markdown response strategy with these elements:
+- Recommended response posture and rationale proportionate to observed spread, verified risk, and evidence confidence.
+- A holding statement, FAQ points, and stakeholder-specific messages. Separate public wording from internal action recommendations. Avoid unsupported claims and promises.
+- Prioritized actions for immediate, 24–48 hour, and longer-term follow-up, including any legal, PR, product, or customer-service approvals needed.
+- Monitoring keywords and escalation triggers. Preserve cited public and internal sources and flag missing playbooks or approved language.
+"""
+
+section_writer_from_role_reports_prompt = """Write one section of a public-opinion and brand-risk monitoring report based on the evidence gathered by the assigned business roles.
 
 <Section name>
 {section_name}

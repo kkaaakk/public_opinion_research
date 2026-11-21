@@ -461,13 +461,26 @@ async def research_workflow(run_id, initial):
                 round=round_ + 1,
                 roles=list(packets),
             )
-    for role in ("risk_assessment", "response_strategy"):
-        unit = run_id + ":" + role
-        with SetWorkflowID(unit):
-            handle = await DBOS.start_workflow_async(
-                role_workflow, run_id, unit, role, state
-            )
-        apply_patch(state, (await handle.get_result())["patch"])
+    config = business_config(await load_request(run_id))
+    for role, analyze in (
+        ("risk_assessment", research.risk_assessment),
+        ("response_strategy", research.response_strategy),
+    ):
+        # Keep the public stage ID and the progress/report contract used by Studio
+        # and History. The model call itself is checkpointed by generate_text.
+        event = f"analysis:{role}"
+        await DBOS.set_event_async(event, {"running": True})
+        async with observe_stage(
+            run_id, role + "_agent", state, config, stage_id=f"{run_id}:{role}"
+        ) as cfg:
+            with business_span(role):
+                patch = await analyze(state, cfg)
+            artifact = {"patch": patch}
+            if not patch:
+                artifact["observation"] = {"skipped": True, "reason": "role_disabled"}
+            await publish_stage_step(artifact)
+            await DBOS.set_event_async(event, artifact)
+            apply_patch(state, patch)
     with SetWorkflowID(run_id + ":report"):
         return await report_workflow(run_id, state)
 

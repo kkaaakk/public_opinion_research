@@ -1,8 +1,11 @@
 # 验证四个状态域的归属、并发合并、动态任务载荷及角色上下文。
 """Regression tests for the domain-owned research state architecture."""
 
-from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
-from open_deep_research.runtime import business_agent
+import asyncio
+
+from sdk_model_support import install_sequence
+
+from open_deep_research.prompts import risk_assessment_prompt
 from open_deep_research.state import (
     DeepResearchState,
     ResearchReview,
@@ -11,7 +14,10 @@ from open_deep_research.state import (
     runtime_reducer,
     workflow_reducer,
 )
-from open_deep_research.workflow.research import _build_followup_send_payload
+from open_deep_research.workflow.research import (
+    _build_followup_send_payload,
+    risk_assessment,
+)
 
 
 # 构造标准研究任务供状态合并测试使用。
@@ -112,26 +118,21 @@ def test_workflow_reducer_can_clear_pending_tasks_without_losing_history() -> No
 
 
 # 验证角色任务包含上游报告且提示词不再声明私有记忆。
-def test_assignment_uses_formal_role_reports_only() -> None:
-    """Downstream roles receive upstream reports, never a private memory record."""
+def test_analysis_uses_formal_role_reports_only(monkeypatch) -> None:
+    """Downstream analysis receives public role text and excludes private fields."""
     state = {
         "workflow": {"brief": "brief", "round": 1},
         "agents": {
-            "public_signal": {"report": "PUBLIC_SENTINEL"},
+            "public_signal": {"report": "PUBLIC_SENTINEL", "memory": "PRIVATE_SENTINEL"},
             "internal_knowledge": {"report": "INTERNAL_SENTINEL"},
         },
     }
-    assignment = business_agent._build_business_agent_assignment(
-        state, "risk_assessment"
-    )
-    assert "PUBLIC_SENTINEL" in assignment
-    assert "INTERNAL_SENTINEL" in assignment
-    spec = get_public_opinion_agent_spec("risk_assessment")
-    system_prompt = spec.format_system_prompt(
-        retrieval_tool_prompt="tools",
-        mcp_prompt="",
-        date="2026-09-12",
-        organization_context="org",
-    )
-    assert "PRIVATE" not in system_prompt
-    assert "<Memory Policy>" not in system_prompt
+    requests = install_sequence(monkeypatch, "risk assessment")
+    asyncio.run(risk_assessment(state, {}))
+    [request] = requests
+    assert request.prompt == risk_assessment_prompt
+    data = request.messages[-1]["content"]
+    assert "PUBLIC_SENTINEL" in data
+    assert "INTERNAL_SENTINEL" in data
+    assert "PRIVATE_SENTINEL" not in data
+    assert "<Memory Policy>" not in request.prompt

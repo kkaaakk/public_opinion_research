@@ -15,8 +15,11 @@ from dbos_support import (
     stage_observations,
 )
 from fastapi.testclient import TestClient
+from sdk_model_support import install_inference
 from sqlalchemy import text
 
+from open_deep_research.prompts import response_strategy_prompt, risk_assessment_prompt
+from open_deep_research.state import ResearchReview, ResearchRoleResult
 from open_deep_research.web.run_data import (
     RunConflict,
     RunNotFound,
@@ -24,6 +27,7 @@ from open_deep_research.web.run_data import (
     read_request,
 )
 from open_deep_research.workflow.dbos_config import domain_engine, native_client
+from open_deep_research.workflow.python_state import ANALYSIS_ROLES, RESEARCH_ROLES
 
 pytestmark = pytest.mark.integration
 
@@ -206,7 +210,10 @@ def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(nativ
     assert all(e["generation"] == 0 for e in events)
     sdk = [e for e in events if e["type"] == "sdk_event"]
     invocations = {e["invocation_id"] for e in sdk}
-    assert len(invocations) == 4
+    assert len(invocations) == 2
+    assert {e["role"] for e in sdk if e["event"] == "agent_started"} == set(
+        RESEARCH_ROLES
+    )
     assert all(e["unit_id"].startswith(run["run_id"] + ":") for e in sdk)
     for invocation in invocations:
         local = [e for e in sdk if e["invocation_id"] == invocation]
@@ -215,7 +222,7 @@ def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(nativ
         assert all(e.get("execution_id") and e.get("observed_at") for e in local)
     starts = [e for e in sdk if e["event"] == "model_started"]
     ends = [e for e in sdk if e["event"] == "model_completed"]
-    assert len(starts) == len(ends) == 6
+    assert len(starts) == len(ends) == 4
     assert {(e["invocation_id"], e["model_turn"]) for e in starts} == {
         (e["invocation_id"], e["model_turn"]) for e in ends
     }
@@ -227,7 +234,6 @@ def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(nativ
     tools = [e for e in sdk if e["event"] == "tool_result"]
     assert len(tools) == 2 and all(e["status"] == "succeeded" for e in tools)
     assert all(e["tool_call_id"] for e in tools)
-    assert any(e.get("stage") == "context_ready" for e in sdk)
     assert any(e.get("stage") == "settlement" and e["status"] == "settled" for e in sdk)
     assert not any(
         {"prompt", "arguments", "output", "observation", "system_prompt"} & e.keys()
@@ -239,12 +245,18 @@ def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(nativ
         for w in catalog["workflows"]
     )
     assert catalog["steps"]
-    assert len(case.models) == before == 4
-    assert result["usage"]["model_calls"] == 26
+    for role in RESEARCH_ROLES:
+        role_steps = case.client.client.list_workflow_steps(
+            f"{run['run_id']}:{role}:1", load_output=False
+        )
+        assert any(step["function_name"] == "por.agent_context" for step in role_steps)
+    assert len(case.models) == before == 2
+    assert result["usage"]["model_calls"] == 18
 
 
-def test_studio_disabled_role_is_an_explicit_skip_not_a_completed_agent(
-    native_case, monkeypatch
+@pytest.mark.parametrize("disabled_role", ["internal_knowledge", "response_strategy"])
+def test_studio_disabled_role_is_an_explicit_skip(
+    native_case, monkeypatch, disabled_role
 ):
     from contextlib import asynccontextmanager
 
@@ -254,53 +266,41 @@ def test_studio_disabled_role_is_an_explicit_skip_not_a_completed_agent(
     from open_deep_research.runtime import business_agent
 
     case = native_case
-    case.cfg["configurable"]["enabled_business_agents"] = [
-        "public_signal",
-        "risk_assessment",
-        "response_strategy",
-    ]
-
-    # Consumers have no search tool; use their real role identity to select the fixture.
-    from agents.testing import ModelStep
+    case.cfg["configurable"]["enabled_business_agents"].remove(disabled_role)
 
     @asynccontextmanager
     async def model(*_args, **_kwargs):
-        def first(call):
-            role = call.system_instructions.split("<Role>\n", 1)[1].split(
-                "\n</Role>", 1
-            )[0]
-            return (
-                [function_call("web_search", {"query": "brand"}, call_id="skip-proof")]
-                if role == "public_signal"
-                else [assistant_message("consumer analysis")]
-            )
-
         yield ScriptedModel(
-            [ModelStep.respond(first), [assistant_message("analysis")]],
+            [
+                [function_call("web_search", {"query": "brand"}, call_id="skip-proof")],
+                [assistant_message("public evidence")],
+            ],
             default_usage=TOKENS,
         )
 
-    monkeypatch.setattr(business_agent, "sdk_model", model)
+    if disabled_role == "internal_knowledge":
+        monkeypatch.setattr(business_agent, "sdk_model", model)
     run = case.create()
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert result["status"] == "completed", result["error"]
     events = case.client.read_events(run["run_id"], "alice", 0, 1000)
     skipped = [e for e in events if e["type"] == "step_skipped"]
-    assert len(skipped) == 1 and skipped[0]["step"] == "internal_knowledge_agent"
+    step = disabled_role + "_agent"
+    assert len(skipped) == 1 and skipped[0]["step"] == step
     assert skipped[0]["reason"] == "role_disabled"
     assert not any(
-        e["type"] == "sdk_event" and e.get("role") == "internal_knowledge"
-        for e in events
+        e["type"] == "sdk_event" and e.get("role") == disabled_role for e in events
     )
     assert not any(
-        e["type"] == "step_completed" and e.get("step") == "internal_knowledge_agent"
-        for e in events
+        e["type"] == "step_completed" and e.get("step") == step for e in events
     )
-    assert {runtime.role for runtime in case.runtimes} == {
-        "public_signal",
-        "risk_assessment",
-        "response_strategy",
+    assert {runtime.role for runtime in case.runtimes} == set(RESEARCH_ROLES) - {
+        disabled_role
     }
+    assert {report["role"] for report in result["role_reports"]} == set(
+        (*RESEARCH_ROLES, *ANALYSIS_ROLES)
+    ) - {disabled_role}
+    assert step not in result["completed_steps"]
 
 
 def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
@@ -345,19 +345,47 @@ def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
     data = [frame for frame in frames if frame.startswith("id:")]
     assert len(data) == 1
     assert f"id: {end}\n" in data[0] and '"type": "done"' in data[0]
-    assert len(case.models) == before == 4
+    assert len(case.models) == before == 2
 
 
 @pytest.mark.parametrize(
     "native_case", ["normal", "complete", "rolling"], indirect=True
 )
-def test_native_four_roles_real_sdk_graph_budget_and_history(native_case):
+def test_approved_brief_reaches_two_agents_analysis_report_and_history(
+    native_case, monkeypatch
+):
     case = native_case
-    run = case.create()
-    result = case.wait(run)
+    calls = []
+
+    def observe(request):
+        if request.schema_name == "ResearchReview":
+            calls.append("review")
+        if request.prompt == risk_assessment_prompt:
+            calls.append("risk")
+            assert request.tools == [] and request.schema_name is None
+            context = request.messages[-1]["content"]
+            assert approved["plan"]["brief"] in context
+            assert all(f"## {role}\n" in context for role in RESEARCH_ROLES)
+            assert '"research_complete": true' in context
+        if request.prompt == response_strategy_prompt:
+            calls.append("strategy")
+            assert request.tools == [] and request.schema_name is None
+            assert "risk_assessment analysis" in request.messages[-1]["content"]
+        if "Create the complete enterprise" in request.prompt:
+            calls.append("report")
+            assert all(f"{role} analysis" in request.prompt for role in ANALYSIS_ROLES)
+
+    install_inference(monkeypatch, observe)
+    run = case.create(approval=True)
+    approved = case.wait(run, lambda r: r["status"] == "awaiting_approval")
+    assert not case.runtimes
+    case.client.approve(run["run_id"], "alice", approved["plan"]["version"], "approve")
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert result["status"] == "completed", result["error"]
     assert "FINAL brand recall report" in result["report"]
-    assert len(case.runtimes) == len(case.models) == 4
+    assert calls == ["review", "risk", "strategy", "report"]
+    assert len(case.runtimes) == len(case.models) == 2
+    assert {runtime.role for runtime in case.runtimes} == set(RESEARCH_ROLES)
     # Includes the rolling-compaction scenario: the full locked Brief is visible
     # once on every SDK model request, including after history compaction.
     for model in case.models:
@@ -369,25 +397,62 @@ def test_native_four_roles_real_sdk_graph_budget_and_history(native_case):
             )
             assert content.count(result["plan"]["brief"]) == 1
     assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
-    assert all(rt.workspace.working_context.active_evidence_ids for rt in case.runtimes)
+    assert all(
+        rt.harness.results[f"lookup-{rt.role}"].status == "succeeded"
+        for rt in case.runtimes
+    )
     assert (
         result["usage"]["model_calls"]
-        == 7 + sum(rt.budget_usage["model_calls"] for rt in case.runtimes) + 3
+        == 7 + sum(rt.budget_usage["model_calls"] for rt in case.runtimes) + 5
     )
-    # Unified Plan, Review and synthesis use exactly one model call each.
-    # Exact normal fixture is also an oracle for all SDK/Graph service charges.
+    # Initial usage plus four Runner turns and seven bounded model calls.
     if case.mode != "rolling":
-        assert result["usage"]["total_tokens"] == 291
-        assert result["usage"]["model_calls"] == 26
-    from open_deep_research.state import ResearchRoleResult
+        assert result["usage"]["total_tokens"] == 203
+        assert result["usage"]["model_calls"] == 18
 
-    archived = case.wait(run, lambda r: r["archive_status"] == "saved")
-    for unit in stage_observations(run["run_id"]):
-        if unit["name"] not in {"public_signal_agent", "internal_knowledge_agent"}:
-            continue
+    run_id = run["run_id"]
+    client = case.client.client
+    state = client.retrieve_workflow(run_id).get_result()
+    assert set(state["agents"]) == set((*RESEARCH_ROLES, *ANALYSIS_ROLES))
+    assert {
+        wf.workflow_id
+        for wf in client.list_workflows(
+            workflow_id_prefix=run_id + ":", name="por.role"
+        )
+    } == {f"{run_id}:{role}:1" for role in RESEARCH_ROLES}
+    model_steps = [
+        step
+        for step in client.list_workflow_steps(run_id + ":research")
+        if step["function_name"] == "por.llm"
+    ]
+    assert len(model_steps) == 2 and all(step["output"] for step in model_steps)
+
+    stages = {unit["name"]: unit for unit in stage_observations(run_id)}
+    for role in ANALYSIS_ROLES:
+        unit = stages[role + "_agent"]
+        assert unit["id"] == f"{run_id}:{role}"
+        assert {
+            field: unit["usage"][field]
+            for field in (
+                "model_calls",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+            )
+        } == {
+            "model_calls": 1,
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "total_tokens": 10,
+        }
+        assert state["agents"][role]["report"] == f"{role} analysis"
+        assert unit["artifact"] and not unit["error"]
+
+    for role in RESEARCH_ROLES:
+        unit = stages[role + "_agent"]
         event = next(
             e
-            for e in case.client.read_events(run["run_id"], "alice", 0, 1000)
+            for e in case.client.read_events(run_id, "alice", 0, 1000)
             if e["type"] == "agent_report" and e["unit_id"] == unit["id"]
         )
         assert (
@@ -399,11 +464,40 @@ def test_native_four_roles_real_sdk_graph_budget_and_history(native_case):
         assert role_result.round == 1
         for field in ("model_calls", "input_tokens", "output_tokens", "total_tokens"):
             assert role_result.budget_delta[field] == unit["usage"][field]
-        assert role_result.working_context_scope.run_id == run["run_id"]
-    saved = case.history.get(archived["history_id"], owner="alice")
-    assert saved["run_id"] == run["run_id"]
-    assert len(saved["role_reports"]) == 4
+        assert role_result.evidence_collected
+        assert role_result.report == state["agents"][role]["report"]
+    saved = case.history.get(result["history_id"], owner="alice")
+    assert saved["run_id"] == run_id
+    assert {entry["role"]: entry["content"] for entry in saved["role_reports"]} == {
+        role: data["report"] for role, data in state["agents"].items()
+    }
     assert saved["report"] == result["report"]
+
+
+def test_analysis_respects_the_reserved_report_model_call(native_case, monkeypatch):
+    case = native_case
+    # Seven starting calls, Plan, two three-call producers, and Review leave
+    # only the reserved final-report call.
+    case.cfg["configurable"].update(max_model_calls=16, reserve_final_report_call=True)
+
+    def reject_analysis(request):
+        assert request.prompt not in (risk_assessment_prompt, response_strategy_prompt)
+
+    install_inference(monkeypatch, reject_analysis)
+    run = case.create()
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert result["status"] == "completed", result["error"]
+    assert result["report"] and result["usage"]["model_calls"] == 16
+    reports = {entry["role"]: entry["content"] for entry in result["role_reports"]}
+    for role in ANALYSIS_ROLES:
+        assert "research model budget was exhausted" in reports[role]
+        assert reports[role] in result["usage"]["degradation_reasons"]
+    stages = {unit["name"]: unit for unit in stage_observations(run["run_id"])}
+    assert all(
+        stages[role + "_agent"]["usage"].get("model_calls", 0) == 0
+        for role in ANALYSIS_ROLES
+    )
+    assert stages["generate_final_report"]["usage"]["model_calls"] == 1
 
 
 def test_concurrent_acceptance_is_idempotent_and_conflicts_are_atomic(native_case):
@@ -507,7 +601,7 @@ def test_sse_cursor_replay_is_read_only_and_redacted(native_case):
             e["type"] == "sdk_event" and e.get("event") == "agent_started"
             for e in events
         )
-        == 4
+        == 2
     )
     assert any(
         e["type"] == "status" and e.get("granularity") == "stage" for e in events
@@ -542,7 +636,11 @@ def test_sdk_failure_and_cancel_preserve_budget_and_settlement(native_case):
         rt.budget_usage["model_calls"] for rt in case.runtimes
     )
     assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
-    assert all(len(rt.workspace.receipts) == 1 for rt in case.runtimes)
+    assert all(
+        len(rt.harness.results) == 1
+        and rt.harness.results[f"lookup-{rt.role}"].status == "succeeded"
+        for rt in case.runtimes
+    )
     assert len(case.models) == 2
 
 
@@ -846,7 +944,7 @@ def test_archive_compensates_independently_without_rerunning_research(
     unavailable.clear()
     result = case.wait(run, lambda r: r["archive_status"] == "saved", timeout=50)
     assert result["report"] == completed["report"]
-    assert len(case.models) == before == 4
+    assert len(case.models) == before == 2
     assert result["usage"] == completed["usage"]
 
 
@@ -883,8 +981,8 @@ def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
     failed = retry_observed_failure(case, run, key, failed)
     case.client.retry(run["run_id"], "alice", key, failed["state_version"])
     result = case.wait(run, lambda r: r["status"] == "completed")
-    assert len(case.models) == 4
-    assert result["usage"]["model_calls"] == 27
+    assert len(case.models) == 2
+    assert result["usage"]["model_calls"] == 19
     assert result["generation"] == 1
     saved = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert case.history.get(saved["history_id"], owner="alice")["status"] == "completed"
@@ -990,43 +1088,80 @@ def test_every_run_api_control_requires_auth(native_case, monkeypatch, path, met
         assert result.status_code == 401
 
 
-def test_gap_loop_uses_native_role_children_and_original_reducer(
-    native_case, monkeypatch
+@pytest.mark.parametrize(
+    ("targets", "keep_requesting"),
+    [
+        ((), False),
+        (("public_signal",), False),
+        (("internal_knowledge",), False),
+        (RESEARCH_ROLES, False),
+        (RESEARCH_ROLES, True),
+    ],
+    ids=["sufficient", "public-only", "internal-only", "both", "round-cap"],
+)
+def test_gap_loop_dispatches_only_targeted_roles_and_merges_reports(
+    native_case, monkeypatch, targets, keep_requesting
 ):
-    from sdk_model_support import install_inference
     from test_python_workflow import gap
 
-    from open_deep_research.state import ResearchReview
-
     case = native_case
+    case.cfg["configurable"]["max_research_rounds"] = 2
     reviews = []
+    analysis_order = []
 
     def review(request):
+        if request.prompt == risk_assessment_prompt:
+            analysis_order.append("risk")
+            assert (
+                f'"research_complete": {str(reviews[-1].research_complete).lower()}'
+                in request.messages[-1]["content"]
+            )
+        if request.prompt == response_strategy_prompt:
+            analysis_order.append("strategy")
         if request.schema_name != "ResearchReview":
             return None
+        tasks = (
+            [gap(f"evidence-{role}-{len(reviews) + 1}", role) for role in targets]
+            if not reviews or keep_requesting
+            else []
+        )
         result = ResearchReview(
-            research_complete=bool(reviews),
-            next_tasks=[] if reviews else [gap("date"), gap("approval", "internal_knowledge")],
+            research_complete=not tasks,
+            next_tasks=tasks,
         )
         reviews.append(result)
+        analysis_order.append("review")
         return result
 
     install_inference(monkeypatch, review)
     run = case.create()
-    result = case.wait(run)
+    result = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert result["status"] == "completed", result["error"]
-    assert len(case.runtimes) == 6
-    assert case.calls == {"public_signal": 2, "internal_knowledge": 2}
+    expected_round = 2 if targets else 1
+    assert len(reviews) == expected_round
+    assert analysis_order == ["review"] * expected_round + ["risk", "strategy"]
+    assert len(case.runtimes) == 2 + len(targets)
+    assert case.calls == {role: 1 + (role in targets) for role in RESEARCH_ROLES}
     final = case.client.client.list_workflows(
         workflow_ids=[run["run_id"]], load_input=False, load_output=True
     )[0].output
-    assert final["workflow"]["round"] == 2
+    assert final["workflow"]["round"] == expected_round
+    assert final["workflow"]["review"].research_complete is not keep_requesting
     assert {t.task_id for t in final["workflow"]["completed_tasks"]} == {
-        "date",
-        "approval",
+        f"evidence-{role}-1" for role in targets
     }
     assert final["workflow"]["pending_tasks"] == []
-    assert len(result["role_reports"]) == 6
+    for role in RESEARCH_ROLES:
+        report = final["agents"][role]["report"]
+        assert "Research round: 1" in report
+        assert ("Research round: 2" in report) == (role in targets)
+    assert len(result["role_reports"]) == 4 + len(targets)
+    followups = [
+        (event["round"], event["roles"])
+        for event in case.client.read_events(run["run_id"], "alice", 0, 1000)
+        if event["type"] == "research_followup"
+    ]
+    assert followups == ([(2, list(targets))] if targets else [])
     assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
 
 
@@ -1053,16 +1188,11 @@ def test_sdk_session_is_private_to_role_invocation_not_workflow_recovery(
             "SELECT session_id FROM agent_sessions WHERE session_id LIKE ?",
             (run["run_id"] + "%",),
         ).fetchall()
-        assert len(rows) == 4
-        assert len({r[0] for r in rows}) == 4
-        for role in (
-            "public_signal",
-            "internal_knowledge",
-            "risk_assessment",
-            "response_strategy",
-        ):
+        assert len(rows) == 2
+        assert len({r[0] for r in rows}) == 2
+        for role in RESEARCH_ROLES:
             assert sum(role in row[0] for row in rows) == 1
-    assert len(case.models) == 4
+    assert len(case.models) == 2
 
 
 @pytest.mark.parametrize(
@@ -1237,13 +1367,13 @@ def test_retry_after_failed_result_publication_keeps_committed_model(
         run, lambda r: r["status"] == "completed" and r["archive_status"] == "saved"
     )
     assert done["generation"] == 1
-    assert done["usage"]["model_calls"] == 26
-    assert done["usage"]["total_tokens"] == 291
+    assert done["usage"]["model_calls"] == 18
+    assert done["usage"]["total_tokens"] == 203
     assert len(case.plan_prompts) == 1
     assert [s for s in steps() if s["function_name"] == "por.llm"] == model
 
 
-def test_committed_role_ack_loss_does_not_repeat_sdk_or_drop_usage(
+def test_committed_analysis_publication_ack_loss_preserves_usage(
     native_case, monkeypatch
 ):
     from sqlalchemy.exc import OperationalError
@@ -1266,9 +1396,9 @@ def test_committed_role_ack_loss_does_not_repeat_sdk_or_drop_usage(
     result = native_case.wait(run)
     assert lost
     assert result["status"] == "completed"
-    assert result["usage"]["model_calls"] == 26
-    assert result["usage"]["total_tokens"] == 291
-    assert len(native_case.models) == 4
+    assert result["usage"]["model_calls"] == 18
+    assert result["usage"]["total_tokens"] == 203
+    assert len(native_case.models) == 2
     native_case.wait(run, lambda r: r["archive_status"] == "saved")
     events = native_case.client.read_events(run["run_id"], "alice", 0, 1000)
     assert (
@@ -1448,7 +1578,7 @@ def test_operator_approval_cannot_be_bypassed_or_replanned(native_case, monkeypa
     case.client.approve(run["run_id"], "alice", paused["plan"]["version"], "approve")
     result = case.wait(run)
     assert result["status"] == "completed"
-    assert result["usage"]["model_calls"] == 26
+    assert result["usage"]["model_calls"] == 18
     assert result["plan"] == dict(paused["plan"], locked=True)
 
 
@@ -1462,7 +1592,7 @@ def test_paused_runs_do_not_starve_another_runs_archive(native_case):
     case.client.approve(last["run_id"], "alice", plan["version"], "approve")
     saved = case.wait(last, lambda r: r["archive_status"] == "saved")
     assert saved["status"] == "completed"
-    assert len(case.models) == 4
+    assert len(case.models) == 2
     assert all(
         case.client.get(r["run_id"], "alice")["status"] == "awaiting_approval"
         for r in runs[:-1]
@@ -1508,7 +1638,7 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
     result = case.wait(run, lambda r: r["status"] == "completed")
     assert result["generation"] == 1
     assert len(attempts) == 2
-    assert len(case.models) == 4
+    assert len(case.models) == 2
 
 
 def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypatch):
@@ -1535,8 +1665,8 @@ def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypat
     run = case.create()
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert result["status"] == "completed", result["error"]
-    assert result["usage"]["model_calls"] == 27
-    assert result["usage"]["total_tokens"] == 306
+    assert result["usage"]["model_calls"] == 19
+    assert result["usage"]["total_tokens"] == 218
     unit = next(
         u
         for u in stage_observations(run["run_id"])
@@ -1714,6 +1844,6 @@ def test_research_results_are_joined_after_both_native_children(
     assert set(joined[0]["agents"]) == {"public_signal", "internal_knowledge"}
     for role in ("public_signal", "internal_knowledge"):
         assert output["agents"][role] == joined[0]["agents"][role]
-    assert result["usage"]["model_calls"] == 26
+    assert result["usage"]["model_calls"] == 18
     assert len(result["role_reports"]) == 4
-    assert len(case.runtimes) == 4
+    assert len(case.runtimes) == 2

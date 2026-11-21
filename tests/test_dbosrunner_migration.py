@@ -16,6 +16,7 @@ pytestmark = pytest.mark.integration
 @pytest.mark.parametrize(
     "version,workflow,args",
     [
+        ("por-sdk-models-v1", "por.research", ("old", {})),
         ("dbos-brief-spec-v1", "por.role", ("old", "old:role", "public_signal", {})),
         ("dbosrunner-unified-v1", "por.run", ("old",)),
         ("dbos-native-recovery-v1", "por.run", ("old",)),

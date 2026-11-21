@@ -26,6 +26,9 @@ def test_section_failure_reuses_completed_chapter_and_prior_phase(
                         name=f"CHAPTER_{chapter}_SENTINEL",
                         description=subject,
                         research=True,
+                        agent_role="risk_assessment"
+                        if chapter == "A"
+                        else "response_strategy",
                     )
                     for chapter, subject in (("A", "Evidence"), ("B", "Risk"))
                 ]
@@ -33,6 +36,10 @@ def test_section_failure_reuses_completed_chapter_and_prior_phase(
         if request.schema_name is None:
             for chapter in ("A", "B"):
                 if f"CHAPTER_{chapter}_SENTINEL" in request.prompt:
+                    expected = (
+                        "risk_assessment" if chapter == "A" else "response_strategy"
+                    )
+                    assert f"{expected} analysis" in request.prompt
                     calls[chapter] += 1
                     if chapter == "B" and calls[chapter] == 1:
                         return Reply("Partial chapter with real usage", status="length")
@@ -59,7 +66,7 @@ def test_section_failure_reuses_completed_chapter_and_prior_phase(
     )
     assert calls == {"plan": 1, "A": 1, "B": 2}
     assert done["usage"]["model_calls"] == before + 1
-    assert len(case.models) == 4
+    assert len(case.models) == 2
     assert "Chapter A:" in done["report"] and "Chapter B:" in done["report"]
 
 
@@ -98,5 +105,5 @@ def test_incomplete_synthesis_retries_last_response_without_repeating_roles(
         and r["archive_status"] == "saved"
         and r["events_complete"],
     )
-    assert len(calls) == 2 and len(case.models) == 4
+    assert len(calls) == 2 and len(case.models) == 2
     assert done["usage"]["model_calls"] == failed["usage"]["model_calls"] + 1

@@ -445,15 +445,9 @@ def test_hybrid_retriever_does_not_execute_a_stage_twice(monkeypatch):
 
 # 验证图节点携带角色信息，并依赖原生子调用追踪。
 def test_graph_nodes_carry_agent_metadata_and_auto_trace_children():
-    from open_deep_research.public_opinion_agents import get_public_opinion_agent_spec
+    from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
 
-    for role in (
-        "public_signal",
-        "internal_knowledge",
-        "risk_assessment",
-        "response_strategy",
-    ):
-        spec = get_public_opinion_agent_spec(role)
+    for role, spec in PUBLIC_OPINION_AGENT_SPECS.items():
         metadata = agent_metadata(spec.node_name, role)
         assert metadata["agent_role"] == role
         assert role in str(metadata)
