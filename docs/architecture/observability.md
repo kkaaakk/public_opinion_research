@@ -14,7 +14,7 @@ or resource release. See the [implementation audit](../audits/langfuse-otel.md).
 | Public progress | DBOS Durable Stream seq, generation and Run ID; SSE is a read projection |
 | Report archive | Stable History ID, owner, Run ID and generation-derived `run_state_version` |
 | Trace hierarchy/timing | Native DBOS + OpenInference SDK spans and selected business spans exported to Langfuse |
-| LangChain/RAG request tracing | Official OpenInference model callbacks on the same Provider/exporter; LangSmith remains independently opt-in |
+| Bounded SDK generation | OpenInference Agents SDK spans on the shared Provider and exporter. LangSmith remains opt-in for other business spans. |
 
 Telemetry defaults off. After successful initialization, Harness RunConfig enables
 SDK tracing with `trace_include_sensitive_data=False`. Native DBOS and SDK spans
@@ -73,28 +73,17 @@ Other business spans are `rolling_compaction`, `research_review` and
 `report_generation`. Counts reuse Harness facts and effect receipts.
 Context/compaction tokens are estimates, not provider usage.
 
-Planning, intake, extraction, compaction and report models remain bounded
-LangChain business services. Each actual Core model lifecycle creates one
-`langchain_generation` through OpenInference LangChain **0.1.80**. The
-model-only adapter forwards public model callbacks to OI's official handler;
-Core's public configure hook inherits it into nested services and threads. OI's
-global all-event hook is removed before enabling the pipeline. Chains,
-retrievers and LC tools are not recorded again. No private tracer is patched.
-SDK Models remain owned by OI Agents. Stage and child usage overlap: do not sum them.
+Plan, Review, report, extraction, rewrite and compaction call SDK Model directly.
+Each admitted request produces one OpenInference SDK LLM span when tracing
+is enabled. Calls inside a role reuse its active SDK trace. Standalone phases
+use an SDK trace under the active business span. Structured retries create a
+span for each new request. HTTP client retries are disabled.
 
-Structured parsing retries produce separate Generations only when Core actually
-starts another model lifecycle. Provider SDK HTTP retries inside a lifecycle are
-not individually observable here. OI retains canonical usage, cache and reasoning
-details; an error's partial Core usage enriches the same existing span. Missing
-usage stays absent. Nothing is submitted to the business budget by this adapter.
-Cancellation is recorded when Core delivers its model-error callback. If outer
-awaiter cancellation omits that callback, the inline callback's original Task
-ends the already-started observation with an unknown effect and a
-`model_callback_missing` marker. It does not cancel, wait for or retry a request,
-or invent response/usage. The existing budget admission callback also runs inline
-before model observers, so a rejected request produces no Generation. Admission
-rules, charges, owned-I/O settlement and DBOS recovery remain unchanged. A process
-crash can still lose an open/buffered span; no missing Generation is reconstructed.
+The budget ledger stores actual SDK Usage and can retain provider-reported
+counts when SDK conversion rejects a billed response. Trace export keeps
+allowlisted model labels and usage when available. Stage/child spans can
+show overlapping usage. A crashed process can lose buffered observations
+while DBOS and model receipts retain the accounting state.
 
 ## Configuration and startup
 
@@ -150,7 +139,7 @@ and its DBOS tracing configuration. Configuration changes require a restart.
 ## Fixed versions and privacy
 
 The lock uses DBOS **3.3.0**, Agents SDK **0.24.0**, Langfuse **4.18.0**,
-OpenInference Agents **2.6.0**, OpenInference LangChain **0.1.80** and OTel
+OpenInference Agents **2.6.0** and OTel
 **1.45.1**. No Langfuse v2 API is used.
 `tracing_disabled=True` suppresses SDK events needed by OpenInference; it is
 disabled only after successful initialization. Sensitive SDK data stays off.
@@ -202,7 +191,7 @@ auth or baggage is propagated. Retries/recovery emit fresh span identities under
 the persisted caller. A killed process cannot finish/export its in-flight spans.
 Unknown effects remain quarantined; completed tools are never replayed for traces.
 
-Current application and SDK Runtime versions are `por-vertical-v1` and
+Current application and SDK Runtime versions are `por-sdk-models-v1` and
 `sdk-vertical-v1`. When a matching-version journal lacks the optional OTel carrier,
 the Run ID still groups its observations. Earlier journals use their matching
 Executor for drain. [Deployment](dbos-deployment.md)

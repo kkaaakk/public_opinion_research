@@ -157,23 +157,13 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
     )
     tools = [s for s in spans if s.attributes.get("openinference.span.kind") == "TOOL"]
     llms = [s for s in spans if s.attributes.get("openinference.span.kind") == "LLM"]
-    sdk_llms = [
-        s
-        for s in llms
-        if s.instrumentation_scope.name == "openinference.instrumentation.openai_agents"
-    ]
-    lc_llms = [
-        s
-        for s in llms
-        if s.instrumentation_scope.name == "openinference.instrumentation.langchain"
-    ]
-    assert len(tools) == 2 and len(sdk_llms) == 6
-    assert len(lc_llms) == 13
-    assert sum(s.attributes["llm.token_count.total"] for s in lc_llms) == 130
-    assert (
-        len(llms) == result["usage"]["model_calls"] - 7
-    )  # fixture's saved starting budget
-    assert all(s.parent.span_id in indexed for s in lc_llms)
+    assert all(s.instrumentation_scope.name == "openinference.instrumentation.openai_agents" for s in llms)
+    bounded_llms = [s for s in llms if s.attributes.get("llm.token_count.total") == 10]
+    assert len(tools) == 2 and len(llms) == 19
+    assert len(bounded_llms) == 13
+    assert sum(s.attributes["llm.token_count.total"] for s in bounded_llms) == 130
+    assert len(llms) == result["usage"]["model_calls"] - 7  # saved starting budget
+    assert all(s.parent.span_id in indexed for s in bounded_llms)
     for tool in tools:
         parent = indexed[tool.parent.span_id]
         assert (

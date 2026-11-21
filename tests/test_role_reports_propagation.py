@@ -4,11 +4,10 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from agents.testing import ScriptedModel, assistant_message
-from langchain_core.messages import AIMessage
+from sdk_model_support import install_sequence
 from test_sdk_runtime import _tool
 
 import open_deep_research.runtime.business_agent as business_agent_module
-import open_deep_research.workflow.shared as workflow_shared
 from open_deep_research.state import Section, agents_reducer
 from open_deep_research.workflow import reporting
 
@@ -28,13 +27,6 @@ def test_full_role_report_is_not_replaced_by_compact_notes(monkeypatch) -> None:
     """The producer result carries the complete compressed role report."""
     full_report_body = "A" * 5_000 + "\nCOMPLETE_REPORT_TAIL"
 
-    class FakeModel:
-        def with_config(self, _config):
-            return self
-
-        async def ainvoke(self, _messages, config=None):
-            return AIMessage(content="agent step")
-
     async def fake_tools(_config, _role, _spec=None):
         return [_tool("public_signal")]
 
@@ -46,7 +38,6 @@ def test_full_role_report_is_not_replaced_by_compact_notes(monkeypatch) -> None:
         yield ScriptedModel([[assistant_message("agent step")]])
 
     monkeypatch.setattr(business_agent_module, "sdk_model", offline_model)
-    monkeypatch.setattr(business_agent_module, "_CONFIGURABLE_MODEL", FakeModel())
     monkeypatch.setattr(business_agent_module, "_business_agent_tools", fake_tools)
     monkeypatch.setattr(business_agent_module, "_compress_research", fake_compress)
 
@@ -121,17 +112,7 @@ def test_response_strategy_assignment_uses_full_risk_report() -> None:
 # 验证章节写作使用完整正式报告。
 def test_section_writer_uses_full_role_report(monkeypatch) -> None:
     full_report = "S" * 5_000 + "\nSECTION_TAIL"
-    prompts = []
-
-    class FakeModel:
-        def with_config(self, _config):
-            return self
-
-        async def ainvoke(self, messages, config=None):
-            prompts.append(messages[0].content)
-            return AIMessage(content="section body")
-
-    monkeypatch.setattr(workflow_shared, "configurable_model", FakeModel())
+    requests = install_sequence(monkeypatch, "section body")
     result = asyncio.run(
         reporting.section_writer(
             {
@@ -149,27 +130,17 @@ def test_section_writer_uses_full_role_report(monkeypatch) -> None:
                 "agents": {"public_signal": {"report": full_report}},
                 "runtime": {"budget": {}},
             },
-            {"configurable": {"section_writer_model": "fixture:model"}},
+            {"configurable": {"section_writer_model": "openai:fixture-model"}},
         )
     )
-    assert "SECTION_TAIL" in prompts[0]
+    assert "SECTION_TAIL" in requests[0].prompt
     assert result["report"]["completed_sections"][0].content == "section body"
 
 
 # 验证最终报告兜底使用完整角色报告。
 def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
     full_report = "F" * 6_000 + "\nFALLBACK_TAIL"
-    prompts = []
-
-    class FakeModel:
-        def with_config(self, _config):
-            return self
-
-        async def ainvoke(self, messages, config=None):
-            prompts.append(messages[0].content)
-            return AIMessage(content="final report")
-
-    monkeypatch.setattr(workflow_shared, "configurable_model", FakeModel())
+    requests = install_sequence(monkeypatch, "final report")
     result = asyncio.run(
         reporting._fallback_report_generation(
             {
@@ -179,8 +150,8 @@ def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
                 "report": {},
                 "runtime": {"budget": {}},
             },
-            {"configurable": {"final_report_model": "fixture:model"}},
+            {"configurable": {"final_report_model": "openai:fixture-model"}},
         )
     )
-    assert "FALLBACK_TAIL" in prompts[0]
+    assert "FALLBACK_TAIL" in requests[0].prompt
     assert result["report"]["final"] == "final report"

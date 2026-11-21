@@ -1,6 +1,6 @@
 # DBOS 部署、数据库和恢复
 
-当前应用版本为 `por-vertical-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-vertical-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
+当前应用版本为 `por-sdk-models-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-vertical-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
 
 ## Local setup
 
@@ -83,6 +83,11 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 2. 保存同一切换点的 `por_dbos`、`por_domain` 与业务数据备份，包括需要保留的原生 Stream。运行新版 `python -m open_deep_research.web.executor --migration-check`。其输出为 JSON；上线前确认盘点为空，包含超出恢复尝试次数的旧 journal 也需核查。
 3. `dbos-domain-v1` 已有五张业务表，从该版切到 `dbos-events-v1` 沿用业务 schema。若仍有旧 `por_domain.units`，在排空、备份并演练后显式运行 `--migrate-domain`。事务将旧 `units` 和 `operations` 移到 `por_archive_native_recovery`，将 `requests.released` 更名为 `reconciliation` 并移除 `occupied`，再创建当前表。需要历史读取的运行角色保留归档 schema 的 `USAGE` 和表 `SELECT`。
 4. 同步切换 API、Studio/Classic 与 Executor，核对版本、请求创建、澄清/审批、SSE/状态与 History。对已终止旧 Run，`RunClient` 读取保留的旧投影/事件/Stream、旧账单及操作记录。旧 journal 和旧回执继续保留。
+
+`por-sdk-models-v1` 更换了独立模型 Step 的结果格式与重试判断。上线前用
+`por-vertical-v1` 的 API 和 Executor 排空该版本的 journal、人工交互及归档。
+新 Executor 继续读取已交付的历史状态。已终止旧 Run 的原生 rewind 要由其匹配版本执行。
+本次模型迁移沿用 `por_domain.model_attempts` 和现有 schema。
 
 历史 Phase 4 DBOS、`dbos-phase5-v1`、`dbos-phase5-studio-v1`、`dbos-brief-spec-v1`、`dbosrunner-unified-v1`、后续规划/审批版本（含 `dbosrunner-brief-idempotency-v1` 预览）、`dbosrunner-native-interaction-v1` 与 `dbos-native-recovery-v1` 均由各自的发行版处理原生执行。旧 SQL 队列也由原 SQL 发行版排空，保留原 History。数据库中可能存在的旧 `approvals` 与 `brief_revision_receipts` 供历史或回滚保留。 [版本与恢复](https://docs.dbos.dev/python/tutorials/upgrading-workflows) · [原生交互变更](research-brief.md) · [旧阶段清算记录](../audits/run-execution-reliability.md) · [业务 schema 迁移审计](../audits/dbos-domain-simplification.md)
 

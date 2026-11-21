@@ -1,26 +1,21 @@
 # 验证真实模型尝试记账、令牌聚合、预算过滤和上下文捕获隔离。
-"""Budget Guard and token accounting tests.
-
-Token usage authority is LangChain ``UsageMetadata`` reported by the official
-``UsageMetadataCallbackHandler``; model-call attempt authority is the official
-``on_chat_model_start`` lifecycle.  These tests use real LangChain message types.
-"""
+"""Budget Guard and SDK token-accounting tests."""
 
 import asyncio
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from agents import Usage
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.messages.ai import UsageMetadata, add_usage
 from langchain_core.tools import tool
+from sdk_model_support import Reply, install_sequence
 
 from open_deep_research.budget import (
-    ModelAttemptCounter,
     append_budget_summary,
     available_research_unit_slots,
     budget_capture,
-    budget_from_model_accounting,
+    budget_from_sdk_usage,
     budget_usage_with_reason,
     capture_budget_usage,
     context_pressure_ratio,
@@ -33,14 +28,15 @@ from open_deep_research.budget import (
     is_over_budget,
     is_over_model_budget,
     merge_budget_usage,
-    model_accounting_config,
-    require_valid_structured_output,
-    start_budget_capture,
-    stop_budget_capture,
     truncate_text_to_token_budget,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.state import runtime_reducer
+from open_deep_research.llm.generation import (
+    ModelOutputError,
+    generate_structured,
+    generate_text,
+)
+from open_deep_research.state import Summary, runtime_reducer
 
 
 # 构造带指定令牌元数据的测试消息。
@@ -63,13 +59,21 @@ def _message(
     return AIMessage(content="done", usage_metadata=metadata)
 
 
-# 构造已填充用量记录的官方回调处理器。
-def _usage_handler(usage: dict | None = None) -> SimpleNamespace:
-    """Stand-in for the public ``.usage_metadata`` of the official usage handler."""
-    return SimpleNamespace(usage_metadata=({"fixture": usage} if usage else {}))
+def _model_delta(attempts, usage=None):
+    reported = dict(usage or {})
+    inputs = reported.pop("input_token_details", {})
+    outputs = reported.pop("output_token_details", {})
+    delta = budget_from_sdk_usage(Usage(
+        requests=attempts, **reported,
+        input_tokens_details={
+            "cached_tokens": inputs.get("cache_read", 0),
+            "cache_write_tokens": inputs.get("cache_creation", 0),
+        },
+        output_tokens_details={"reasoning_tokens": outputs.get("reasoning", 0)},
+    ))
+    return {**delta, "model_calls": attempts}
 
 
-# 提供用于工具预算分类的示例搜索工具。
 @tool
 def sample_search(query: str) -> str:
     """Search the web for one query."""
@@ -82,8 +86,8 @@ def sample_search(query: str) -> str:
 
 
 # 验证预算从官方回调读取输入输出令牌。
-def test_budget_from_model_accounting_usage_metadata():
-    usage = budget_from_model_accounting(1, _usage_handler(_message(13, 7).usage_metadata))
+def test_budget_projects_official_sdk_usage():
+    usage = _model_delta(1, _message(13, 7).usage_metadata)
 
     assert usage["model_calls"] == 1
     assert usage["input_tokens"] == 13
@@ -93,7 +97,7 @@ def test_budget_from_model_accounting_usage_metadata():
 
 # 验证供应商响应附加字段不会作为额外令牌来源。
 def test_provider_response_metadata_is_not_a_token_source():
-    """Provider-specific token fields never reach the official usage handler."""
+    """Provider-specific fields outside SDK Usage do not add tokens."""
     message = AIMessage(
         content="done",
         response_metadata={
@@ -105,7 +109,7 @@ def test_provider_response_metadata_is_not_a_token_source():
         },
     )
 
-    usage = budget_from_model_accounting(1, _usage_handler(message.usage_metadata))
+    usage = _model_delta(1, message.usage_metadata)
 
     assert usage["input_tokens"] == 0
     assert usage["output_tokens"] == 0
@@ -113,16 +117,12 @@ def test_provider_response_metadata_is_not_a_token_source():
 
 
 # 验证处理器中的全部用量记录都参与聚合。
-def test_budget_from_model_accounting_aggregates_all_handler_entries():
+def test_budget_aggregates_all_sdk_usage_deltas():
     """Multiple model keys are aggregated with the official ``add_usage``."""
-    handler = SimpleNamespace(
-        usage_metadata={
-            "model-a": _message(10, 4).usage_metadata,
-            "model-b": _message(3, 6).usage_metadata,
-        }
+    usage = merge_budget_usage(
+        _model_delta(1, _message(10, 4).usage_metadata),
+        _model_delta(1, _message(3, 6).usage_metadata),
     )
-
-    usage = budget_from_model_accounting(2, handler)
 
     assert usage["model_calls"] == 2
     assert usage["input_tokens"] == 13
@@ -132,75 +132,37 @@ def test_budget_from_model_accounting_aggregates_all_handler_entries():
 
 # 验证缺失用量时保持零值，不生成猜测令牌。
 def test_missing_usage_never_fabricates_tokens():
-    usage = budget_from_model_accounting(1, _usage_handler())
+    usage = _model_delta(1, )
 
     assert usage["input_tokens"] == 0
     assert usage["output_tokens"] == 0
     assert usage["total_tokens"] == 0
 
 
-# 验证真实聊天模型启动会增加尝试次数。
-def test_model_attempt_counter_counts_real_chat_model_starts():
-    """One provider attempt equals one ``on_chat_model_start`` event."""
-    model = GenericFakeChatModel(
-        messages=iter([AIMessage(content="ok", response_metadata={"model_name": "fixture"})])
+@pytest.mark.parametrize("schema", [False, True])
+def test_one_sdk_response_counts_once(monkeypatch, schema):
+    payload = {"summary": "done", "key_excerpts": "source"} if schema else "done"
+    calls = install_sequence(monkeypatch, payload)
+    response, usage = asyncio.run(
+        generate_structured("openai:fixture", "hi", Summary)
+        if schema else generate_text("openai:fixture", "hi")
     )
-    config, counter, _usage = model_accounting_config()
-
-    model.invoke([HumanMessage(content="hi")], config=config)
-
-    assert isinstance(counter, ModelAttemptCounter)
-    assert counter.starts == 1
+    assert response is not None and len(calls) == usage["model_calls"] == 1
 
 
-# 验证聊天回调与普通 LLM 回调不会重复记账。
-def test_model_attempt_counter_does_not_double_count_a_chat_model():
-    """A ChatModel emits ``on_chat_model_start`` only; ``on_llm_start`` must not add."""
-    model = GenericFakeChatModel(
-        messages=iter([AIMessage(content="ok", response_metadata={"model_name": "fixture"})])
-    )
-    handler = ModelAttemptCounter()
-    model.invoke([HumanMessage(content="hi")], config={"callbacks": [handler]})
-
-    assert handler.starts == 1
+def test_each_structured_sdk_retry_counts_separately(monkeypatch):
+    calls = install_sequence(monkeypatch, {}, {}, {"summary": "done", "key_excerpts": "source"})
+    result, usage = asyncio.run(generate_structured("openai:fixture", "hi", Summary, max_attempts=3))
+    assert result.summary == "done"
+    assert len(calls) == usage["model_calls"] == 3
 
 
-# 验证失败重试产生的真实模型尝试全部计入预算。
-def test_model_attempt_counter_counts_retry_attempts():
-    """``with_retry`` re-invokes the provider, so each attempt is counted."""
-    state = {"n": 0}
-
-    # 模拟前两次失败、第三次成功的聊天模型，验证真实重试次数。
-    class Flaky(GenericFakeChatModel):
-        # 前两次抛出临时错误，第三次委托正常生成，验证重试计数。
-        def _generate(self, *args, **kwargs):
-            state["n"] += 1
-            if state["n"] < 3:
-                raise ValueError("transient")
-            return super()._generate(*args, **kwargs)
-
-    model = Flaky(
-        messages=iter([AIMessage(content="ok", response_metadata={"model_name": "fixture"})])
-    )
-    config, counter, _usage = model_accounting_config()
-
-    model.with_retry(stop_after_attempt=5).invoke([HumanMessage(content="hi")], config=config)
-
-    assert state["n"] == 3
-    assert counter.starts == 3
-
-
-# 验证结构化解析错误向外抛出以触发真实请求重试。
-def test_require_valid_structured_output_raises_parsing_error():
-    error = ValueError("bad parse")
-    with pytest.raises(ValueError, match="bad parse"):
-        require_valid_structured_output(
-            {"raw": _message(), "parsed": None, "parsing_error": error}
-        )
-    with pytest.raises(ValueError, match="did not contain a parsed result"):
-        require_valid_structured_output({"raw": _message(), "parsed": None, "parsing_error": None})
-    envelope = {"raw": _message(), "parsed": object(), "parsing_error": None}
-    assert require_valid_structured_output(envelope) is envelope
+@pytest.mark.parametrize("content", ["{}", "invalid JSON"])
+def test_invalid_sdk_structured_output_raises_and_is_billed(monkeypatch, content):
+    install_sequence(monkeypatch, content)
+    with budget_capture() as usage, pytest.raises(ModelOutputError, match="Invalid structured output"):
+        asyncio.run(generate_structured("openai:fixture", "hi", Summary))
+    assert usage["model_calls"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -210,20 +172,16 @@ def test_require_valid_structured_output_raises_parsing_error():
 
 # 验证缓存和推理令牌明细按上报值保留与合并。
 def test_token_details_are_preserved_and_merged_without_guessing():
-    left = budget_from_model_accounting(
+    left = _model_delta(
         1,
-        _usage_handler(
-            _message(
-                10,
-                4,
-                input_details={"cache_read": 3, "cache_creation": 2},
-                output_details={"reasoning": 1},
-            ).usage_metadata
-        ),
+        _message(
+            10, 4, input_details={"cache_read": 3, "cache_creation": 2},
+            output_details={"reasoning": 1},
+        ).usage_metadata,
     )
-    right = budget_from_model_accounting(
+    right = _model_delta(
         1,
-        _usage_handler(_message(6, 2, input_details={"cache_read": 1}).usage_metadata),
+        _message(6, 2, input_details={"cache_read": 1}).usage_metadata,
     )
 
     merged = merge_budget_usage(left, right)
@@ -235,7 +193,7 @@ def test_token_details_are_preserved_and_merged_without_guessing():
 # 验证没有令牌明细时不报错，也不伪造明细字段。
 def test_missing_token_details_do_not_error_or_appear():
     usage = merge_budget_usage(
-        budget_from_model_accounting(1, _usage_handler(_message().usage_metadata)),
+        _model_delta(1, _message().usage_metadata),
         empty_budget_usage(),
     )
 
@@ -245,11 +203,9 @@ def test_missing_token_details_do_not_error_or_appear():
 
 # 验证格式化只展示供应商实际提供的令牌明细。
 def test_token_details_formatting_only_shows_provider_reported_values():
-    usage = budget_from_model_accounting(
+    usage = _model_delta(
         1,
-        _usage_handler(
-            _message(10, 4, input_details={"cache_read": 3}, output_details={"reasoning": 2}).usage_metadata
-        ),
+        _message(10, 4, input_details={"cache_read": 3}, output_details={"reasoning": 2}).usage_metadata,
     )
     configurable = Configuration(budget_enabled=True)
 
@@ -266,11 +222,11 @@ def test_token_details_formatting_only_shows_provider_reported_values():
 
 # 验证预算令牌合并遵循 LangChain 官方聚合语义。
 def test_merge_matches_langchain_add_usage_semantics():
-    left = budget_from_model_accounting(
-        1, _usage_handler(_message(10, 4, input_details={"cache_read": 2}).usage_metadata)
+    left = _model_delta(
+        1, _message(10, 4, input_details={"cache_read": 2}).usage_metadata
     )
-    right = budget_from_model_accounting(
-        1, _usage_handler(_message(3, 6, output_details={"reasoning": 5}).usage_metadata)
+    right = _model_delta(
+        1, _message(3, 6, output_details={"reasoning": 5}).usage_metadata
     )
 
     merged = merge_budget_usage(left, right)
@@ -303,8 +259,8 @@ def test_merge_matches_langchain_add_usage_semantics():
 
 # 构造单节点预算增量，供并行合并测试使用。
 def _node_delta(message: AIMessage, *, attempts: int = 1) -> dict:
-    """Build the delta a node returns from the official usage handler shape."""
-    return budget_from_model_accounting(attempts, _usage_handler(message.usage_metadata))
+    """Build the delta a node returns from provider Usage."""
+    return _model_delta(attempts, message.usage_metadata)
 
 
 # 验证并行角色增量各自只被 reducer 累计一次。
@@ -339,26 +295,10 @@ def test_subgraph_delta_returns_only_the_increment():
 
 
 # 验证嵌套模型请求不会因捕获和外层统计重复记账。
-def test_nested_model_call_records_once_without_double_count():
-    model = GenericFakeChatModel(
-        messages=iter(
-            [
-                AIMessage(
-                    content="nested",
-                    response_metadata={"model_name": "fixture"},
-                    usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
-                )
-            ]
-        )
-    )
-    token = start_budget_capture()
-    config, counter, usage_handler = model_accounting_config()
-    model.invoke([HumanMessage(content="hi")], config=config)
-    capture_budget_usage(
-        budget_from_model_accounting(counter.starts, usage_handler)
-    )
-
-    captured_usage = stop_budget_capture(token)
+def test_nested_model_call_records_once_without_double_count(monkeypatch):
+    install_sequence(monkeypatch, Reply("nested", 3, 2))
+    with budget_capture() as captured_usage:
+        asyncio.run(generate_text("openai:fixture", "hi"))
 
     assert captured_usage["model_calls"] == 1
     assert captured_usage["input_tokens"] == 3
@@ -577,9 +517,7 @@ def test_tool_messages_do_not_contribute_token_usage():
     """Only AIMessage usage reaches the handler; tool outputs never bill tokens."""
     assert not hasattr(ToolMessage(content="x", tool_call_id="call-1", name="web_search"), "usage_metadata")
 
-    usage = budget_from_model_accounting(1, _usage_handler(ToolMessage(
-        content="raw result", tool_call_id="call-1", name="web_search"
-    ).model_dump().get("usage_metadata")))
+    usage = budget_from_sdk_usage(None)
 
     assert usage["total_tokens"] == 0
 

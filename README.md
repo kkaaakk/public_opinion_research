@@ -1,6 +1,6 @@
 # 🔬 Public Opinion Research
 
-> 当前应用版本为 `por-vertical-v1`。研究经过 Plan、可恢复澄清和 Brief 审批，再进入四角色研究及 Review/Gap，默认生成一份综合报告。 [Brief 合同](docs/architecture/research-brief.md)
+> 当前应用版本为 `por-sdk-models-v1`。研究经过 Plan、可恢复澄清和 Brief 审批，再进入四角色研究及 Review/Gap，默认生成一份综合报告。 [Brief 合同](docs/architecture/research-brief.md)
 
 基于 DBOS、OpenAI Agents SDK、RAG、MCP 和四角色协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了企业知识 RAG、舆情分析、社交媒体监控和可追溯来源记录等能力。
 
@@ -146,9 +146,7 @@ por retry <run-id>
 ## 🔭 可观测性与预算
 
 DBOS journal/Step/Stream 记录持久执行、阶段、错误和重试。Run ID 与证据、工具操作回执、History 关联。
-SDK hooks 提供角色调用事实和实际 usage；SDK Trace 当前禁用且不包含敏感输入。
-LangSmith 可选保留在 RAG、报告等 LangChain 单次服务调用和业务 span；它不再提供 Graph 根执行权。
-`budget.py` 汇合 SDK/provider usage 与业务服务实际尝试，未知 token 不猜测，费用不因 SSE 重连重复累计。
+SDK hooks 提供角色执行事实。所有推理使用 SDK Usage 写入模型尝试收据，未知 token 标记为未确认。OpenTelemetry 可按进程启用，只导出经过筛选的诊断信息。LangSmith 仍可用于 RAG 等非模型业务追踪。
 详见 [观测说明](docs/architecture/observability.md)。
 
 ## 🧩 模块结构
@@ -167,8 +165,8 @@ src/open_deep_research/
 ├── runtime/                    # SDK Runner 装配、Context Harness 与滚动压缩
 ├── public_opinion_agents/      # 四个业务角色、提示词、权限与输出合同
 ├── rag/                        # 企业知识加载、索引、向量/关键词检索与重排
-├── models/                     # SDK Model 与 LangChain 单次业务模型工厂
-├── llm/                        # 上下文窗口、错误与 provider 辅助函数
+├── models/                     # 共享 SDK Model 工厂与供应商协议
+├── llm/                        # 有界 SDK 生成、上下文窗口和错误处理
 ├── search/                     # Tavily 搜索与网页摘要
 ├── mcp/                        # 协议连接、工具命名和领域准入
 ├── observability/              # 可选 LangSmith 业务观测
@@ -190,12 +188,11 @@ src/open_deep_research/
 | Summarization / RAG rewrite / Rolling compaction | `volcengine:doubao-seed-2-0-mini-260428` | 高频辅助调用 |
 | Vision | `volcengine:doubao-seed-2-0-mini-260428` | 图片理解与 RAG 多模态 |
 
-模型引用采用 `provider:model` 格式，每类任务在 `config.yaml` 中独立配置，不再由一个
-Web 请求字段批量覆盖。四角色 Agent 通过 `models.sdk.sdk_model()` 使用官方 SDK Model，
-当前已验证的 SDK 供应商为 OpenAI、DeepSeek、Volcengine Ark 和 Groq；规划、报告、RAG、
-滚动压缩等单次业务服务通过 `create_chat_model()` 创建 LangChain `BaseChatModel`。
-`por doctor` 会区分这两条模型路径并检查凭据和适配器包，不会把“LangChain 可以构造”
-误报为“Agents SDK 已验证可调用”。
+模型引用采用 `provider:model` 格式，各任务从 `config.yaml` 读取模型。四角色 Agent
+由 DBOSRunner 完成多轮推理和工具调用。规划、报告、图片识别、RAG 改写和摘要直接调用
+SDK Model，由 DBOS 保留运行中的调用结果。两条路径通过 `sdk_model()` 创建模型，
+共享预算准入和 Usage 记账。`por doctor` 检查这些模型的供应商、地址及凭据配置。
+[供应商兼容范围](docs/architecture/model-providers.md)
 
 ### 搜索 API
 

@@ -18,13 +18,14 @@ _CREDENTIAL_ENV_BY_PROVIDER = {
     "volcengine": "ARK_API_KEY",
     "mistralai": "MISTRAL_API_KEY",
     "cohere": "COHERE_API_KEY",
+    "ollama": "OLLAMA_API_KEY",
 }
 
 _PROVIDER_ALIASES = {"google": "google_genai", "mistral": "mistralai"}
 
-# Providers already delegated to LangChain by this project.  Keeping this list
-# explicit prevents a typo from silently selecting another provider.
-_LANGCHAIN_PROVIDERS = {
+# Keep known native-only references recognizable so preflight can explain
+# their credential and protocol boundary.
+_KNOWN_PROVIDERS = {
     "anthropic",
     "bedrock",
     "cohere",
@@ -35,6 +36,7 @@ _LANGCHAIN_PROVIDERS = {
     "mistralai",
     "ollama",
     "openai",
+    "volcengine",
 }
 
 
@@ -74,7 +76,7 @@ def parse_model_ref(value: str) -> ModelRef:
         raise ModelConfigurationError(
             f"Invalid model reference {original!r}; provider and model are required."
         )
-    if provider != "volcengine" and provider not in _LANGCHAIN_PROVIDERS:
+    if provider not in _KNOWN_PROVIDERS:
         raise ModelConfigurationError(
             f"Unknown model provider {provider!r} for model {model!r}."
         )
@@ -145,6 +147,13 @@ _COMPATIBLE_ENDPOINTS = {
     "openai": ("OPENAI_BASE_URL", None),
     "deepseek": ("DEEPSEEK_API_BASE", "https://api.deepseek.com"),
     "groq": ("GROQ_API_BASE", "https://api.groq.com/openai/v1"),
+    "anthropic": ("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"),
+    "google_genai": (
+        "GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
+    ),
+    "ollama": ("OLLAMA_HOST", "http://localhost:11434/v1"),
+    "mistralai": ("MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),
+    "cohere": ("COHERE_BASE_URL", "https://api.cohere.ai/compatibility/v1"),
 }
 
 
@@ -173,4 +182,36 @@ def resolve_base_url(
     parsed = urlparse(endpoint)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ModelConfigurationError("Model base URL must be an absolute http(s) URL.")
+    if ref.provider == "ollama" and not parsed.path.rstrip("/").endswith("/v1"):
+        endpoint += "/v1"
     return endpoint
+
+
+def require_sdk_provider(ref: ModelRef) -> None:
+    """Reject providers with no configured OpenAI-compatible SDK route."""
+    if ref.provider == "google_vertexai":
+        raise ModelConfigurationError(
+            "google_vertexai (native ADC) has no SDK route. "
+            "Use google_genai with a Gemini developer API key, or a compatible gateway."
+        )
+    if ref.provider == "bedrock":
+        raise ModelConfigurationError(
+            "bedrock (native AWS credentials) has no SDK route. "
+            "Use a configured OpenAI-compatible gateway."
+        )
+
+
+def sdk_api_for(ref: ModelRef, config: Mapping[str, Any] | None) -> str:
+    """Resolve the protocol once for the shared SDK factory and preflight."""
+    if ref.provider != "openai":
+        return "chat_completions"
+    value = (
+        _configurable(config).get("OPENAI_MODEL_API")
+        or os.getenv("OPENAI_MODEL_API")
+        or "responses"
+    )
+    if value not in ("responses", "chat_completions"):
+        raise ModelConfigurationError(
+            "OPENAI_MODEL_API must be responses or chat_completions."
+        )
+    return value

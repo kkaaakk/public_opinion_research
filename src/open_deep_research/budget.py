@@ -1,36 +1,27 @@
 # 统一统计模型、工具、检索和令牌消耗，并在预算不足时控制降级与上下文裁剪。
 """Budget policy and enforcement for bounded deep research runs.
 
-LangChain services use ``AIMessage.usage_metadata`` and ``on_chat_model_start``;
-SDK business roles use official response Usage and RunHooks model starts. Token
-aggregation goes through LangChain's ``add_usage``; this module only adds the
-project-owned policy layer: model/tool/search limits, token budgets, warnings,
+Model requests use SDK Usage and share the same physical admission and receipt
+policy. This module also owns model/tool/search limits, token budgets, warnings,
 degradation reasons, and per-stage budget deltas for the State reducers.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping, cast
 
 from dbos import DBOS
-from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
-from langchain_core.callbacks.base import BaseCallbackManager
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.messages.ai import UsageMetadata, add_usage
 from langchain_core.messages.utils import count_tokens_approximately
-from langchain_core.outputs import ChatGeneration, LLMResult
-from langchain_core.runnables import RunnableLambda
-from langchain_core.runnables.config import ensure_config, merge_configs
 from sqlalchemy import text
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
+from open_deep_research.llm.errors import ModelInvocationError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,14 +35,12 @@ MIN_MODEL_CALLS_PER_RESEARCH_UNIT = 2
 # Per-tool-call attribution for model calls executed *inside* a tool (e.g. per-URL
 # webpage summarization in ``tavily_search``).  Model attempts and provider tokens
 # are recorded here while a capture is active, so the enclosing node can merge one
-# delta for the tool.  LangChain's UsageMetadataCallbackHandler cannot replace this:
-# it aggregates a whole run per model name and cannot attribute a delta to one tool
-# result, which is exactly what the Budget Guard needs mid-run.
+# delta for the tool and the Budget Guard can use it mid-run.
 _BUDGET_CAPTURE: ContextVar[dict[str, Any] | None] = ContextVar(
     "open_deep_research_budget_capture",
     default=None,
 )
-_MODEL_ADMISSION: ContextVar[Callable[[int], None] | None] = ContextVar(
+_MODEL_ADMISSION: ContextVar[Callable[[dict[str, Any]], None] | None] = ContextVar(
     "research_model_admission", default=None
 )
 
@@ -250,33 +239,29 @@ def physical_model_usage(usage, *, failed=False):
     return value
 
 
-def _failed_physical_usage(error):
-    usage = getattr(error, "budget_usage", {})
-    if isinstance(error, ModelBudgetExceeded) and not usage.get("model_calls"):
-        return {}
-    return physical_model_usage(usage, failed=True)
+def admit_model_call(prior_attempts: dict[str, Any]) -> None:
+    """Apply the current local budget before an independent SDK request."""
+    admission = _MODEL_ADMISSION.get()
+    if admission is not None:
+        admission(prior_attempts)
 
 
 @contextmanager
 def model_budget_admission(
     configurable: Configuration, usage: Callable[[], dict[str, Any]]
 ) -> Iterator[None]:
-    """Apply existing policy to nested graph, summary and report model attempts.
-
-    Pending attempts belong to one accounting invocation (including its retry
-    chain). This is a role-local guard, not a distributed quota reservation.
-    """
+    """Apply role-local budget policy to bounded model generation and its retries."""
 
     baseline_capture = _BUDGET_CAPTURE.get()
 
-    def admit(pending_attempts: int) -> None:
+    def admit(prior_attempts: dict[str, Any]) -> None:
         projected = usage()
         active_capture = _BUDGET_CAPTURE.get()
         if active_capture is not None and active_capture is not baseline_capture:
             # Tool/report subcaptures are merged into the role only on exit;
             # account their already-completed calls during admission as well.
             projected = merge_budget_usage(projected, active_capture)
-        projected = merge_budget_usage(projected, {"model_calls": pending_attempts})
+        projected = merge_budget_usage(projected, prior_attempts)
         if is_over_model_budget(configurable, projected) or not can_spend_model_call(
             configurable, projected, reserve_final_report_call=True
         ):
@@ -475,443 +460,6 @@ def budget_usage_with_warning(warning: str) -> dict[str, Any]:
     return usage
 
 
-# 通过 LangChain 模型启动回调统计真实尝试次数，自动涵盖重试。
-class ModelAttemptCounter(BaseCallbackHandler):
-    """Count real model attempts through LangChain's official start lifecycle.
-
-    One ``on_chat_model_start`` (or ``on_llm_start`` for non-chat LLMs) equals one
-    underlying model attempt, so ``Runnable.with_retry`` attempts are counted
-    naturally without re-implementing any retry logic.  A chat model emits only
-    ``on_chat_model_start``, so a single attempt is never counted twice.
-    """
-
-    raise_error = True
-    # Admission must run before inline model observers. This changes callback
-    # dispatch only; the admission predicate and usage accounting are unchanged.
-    run_inline = True
-
-    # 初始化调用计数及回调处理所需的实例状态。
-    def __init__(self) -> None:
-        """Initialize the attempt counter."""
-        super().__init__()
-        self.starts = 0
-        self.admission = _MODEL_ADMISSION.get()
-
-    # 每次聊天模型真正开始请求时增加一次尝试计数。
-    def on_chat_model_start(
-        self,
-        serialized: dict[str, Any],
-        messages: list[list[Any]],
-        *,
-        run_id: Any,
-        parent_run_id: Any = None,
-        tags: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """Count one chat-model attempt."""
-        if self.admission is not None:
-            self.admission(self.starts)
-        self.starts += 1
-
-    # 记录非聊天 LLM 的启动次数，与聊天模型回调分别适配。
-    def on_llm_start(
-        self,
-        serialized: dict[str, Any],
-        prompts: list[str],
-        *,
-        run_id: Any,
-        parent_run_id: Any = None,
-        tags: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """Count one non-chat LLM attempt (chat models use ``on_chat_model_start``)."""
-        if self.admission is not None:
-            self.admission(self.starts)
-        self.starts += 1
-
-
-class _ObservedUsageMetadata(UsageMetadataCallbackHandler):
-    """Feed observed successes and partial failures to the official aggregator."""
-
-    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        first = response.generations[0] if response.generations else []
-        generation = first[0] if first else None
-        if isinstance(generation, ChatGeneration):
-            message = generation.message
-            if (
-                isinstance(message, AIMessage)
-                and message.usage_metadata
-                and not message.response_metadata.get("model_name")
-            ):
-                # A missing label does not make reported usage unknown. Project
-                # only for this collector; callers/other callbacks keep the raw response.
-                message = message.model_copy(
-                    update={
-                        "response_metadata": {
-                            **message.response_metadata,
-                            "model_name": "_unidentified",
-                        }
-                    }
-                )
-                groups = [list(group) for group in response.generations]
-                groups[0][0] = generation.model_copy(update={"message": message})
-                response = response.model_copy(update={"generations": groups})
-        super().on_llm_end(response, **kwargs)
-
-    def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
-        response = kwargs.pop("response", None)
-        if isinstance(response, LLMResult):
-            self.on_llm_end(response, **kwargs)
-
-
-# 复制调用配置并挂载尝试计数、令牌用量回调，返回配置与两个处理器。
-def model_accounting_config(
-    config: Any = None,
-    *,
-    metadata: Mapping[str, Any] | None = None,
-) -> tuple[Any, ModelAttemptCounter, UsageMetadataCallbackHandler]:
-    """Return ``(config, attempt_counter, usage_handler)`` for one model invocation.
-
-    Both handlers use LangChain's lifecycle: ``ModelAttemptCounter`` consumes the
-    ``on_chat_model_start`` lifecycle and ``UsageMetadataCallbackHandler`` consumes
-    ``AIMessage.usage_metadata`` from every call, including partial failures and attempts whose
-    structured output fails to parse.  A fresh usage handler per invocation keeps
-    parallel agents, section writers, and tools isolated from each other.
-
-    ``metadata`` is optional LangSmith correlation metadata (component, structured
-    output).  It does not affect token accounting or the provider call.
-    """
-    counter = ModelAttemptCounter()
-    usage_handler = _ObservedUsageMetadata()
-    overrides: dict[str, Any] = {"callbacks": [counter, usage_handler]}
-    if metadata:
-        overrides["metadata"] = dict(metadata)
-    merged = merge_configs(ensure_config(config), overrides)
-    # A parent Tool/Runnable may already inherit a model observer. Core appends
-    # the new counter when merging, so inline dispatch alone is insufficient.
-    # These are the merged copy's public lists: preserve membership, inheritance
-    # and all other relative ordering without mutating the caller's manager.
-    callbacks = merged.get("callbacks")
-    if isinstance(callbacks, BaseCallbackManager):
-        callbacks.handlers.sort(
-            key=lambda handler: not isinstance(handler, ModelAttemptCounter)
-        )
-        callbacks.inheritable_handlers.sort(
-            key=lambda handler: not isinstance(handler, ModelAttemptCounter)
-        )
-    elif isinstance(callbacks, list):
-        callbacks.sort(key=lambda handler: not isinstance(handler, ModelAttemptCounter))
-    return merged, counter, usage_handler
-
-
-# 构造本次模型调用的有限追踪字段，标记模型、组件和结构化输出模式。
-def _model_langsmith_metadata(
-    model_name: str | None = None,
-    *,
-    component: str | None = None,
-    structured_output: bool = False,
-) -> dict[str, Any]:
-    """Build LangSmith-only metadata for one model invocation (bounded)."""
-    from open_deep_research.observability.langsmith import model_metadata
-
-    return model_metadata(
-        component=str(component) if component else None,
-        structured_output=structured_output,
-    )
-
-
-# 将真实尝试次数与供应商上报的令牌用量转换为预算增量；缺失用量不估算。
-def budget_from_model_accounting(
-    attempts: int,
-    usage_handler: UsageMetadataCallbackHandler,
-) -> dict[str, Any]:
-    """Bridge the official attempt count and usage metadata into one Budget delta.
-
-    Token aggregation is LangChain's ``add_usage`` over the handler's reported
-    ``UsageMetadata`` values; missing usage stays zero and is never estimated.
-    """
-    usage = empty_budget_usage()
-    usage["model_calls"] = max(0, int(attempts or 0))
-    combined: UsageMetadata | None = None
-    for metadata in usage_handler.usage_metadata.values():
-        combined = add_usage(combined, metadata)
-    _apply_usage_metadata(usage, combined)
-    return usage
-
-
-# 异步调用模型并返回响应和消耗增量；异常退出时也保留已发生的用量。
-# runnable/payload 是实际模型链和输入；config 中原有回调会与记账回调合并。
-# 成功返回 (response, delta)，失败时先写入当前捕获上下文，再原样抛出异常。
-async def ainvoke_model_with_budget(
-    runnable: Any,
-    payload: Any,
-    *,
-    config: Any = None,
-    model_name: str | None = None,
-    component: str | None = None,
-    structured_output: bool = False,
-) -> tuple[Any, dict[str, Any]]:
-    """Invoke one model runnable and account its budget.
-
-    Returns ``(response, budget_delta)`` where real attempts come from the official
-    chat-model start lifecycle and tokens come from the official
-    ``UsageMetadataCallbackHandler`` (every provider-reported ``AIMessage``, not only
-    the final response).  Nested calls record the delta into the active Budget
-    Capture; if the call raises after real attempts, that fact is captured before
-    the original exception is re-raised.
-
-    ``model_name``/``component``/``structured_output`` are optional LangSmith
-    correlation hints; they do not affect the provider call or token accounting.
-    """
-    from open_deep_research.workflow.execution import (
-        ExecutionControlError,
-        native_step_available,
-    )
-
-    if isinstance(runnable, _DurableStructured):
-        usage = {}
-        for attempt in range(runnable.attempts):
-            try:
-                response, delta = await ainvoke_model_with_budget(
-                    runnable.raw,
-                    payload,
-                    config=config,
-                    model_name=model_name,
-                    component=component,
-                    structured_output=structured_output,
-                )
-                usage = merge_budget_usage(usage, delta)
-                return require_valid_structured_output(response), usage
-            except Exception as exc:
-                if isinstance(exc, (ExecutionControlError, ModelBudgetExceeded)):
-                    raise
-                if hasattr(exc, "budget_usage"):
-                    usage = merge_budget_usage(usage, exc.budget_usage)
-                if attempt + 1 == runnable.attempts:
-                    setattr(exc, "budget_usage", usage)
-                    raise
-
-    executed = False
-
-    async def execute():
-        nonlocal executed
-        executed = True
-        identity = await begin_model_call()
-        try:
-            result, delta = await _ainvoke_model_accounted(
-                runnable,
-                payload,
-                config=config,
-                model_name=model_name,
-                component=component,
-                structured_output=structured_output,
-            )
-        except BaseException as exc:
-            if isinstance(exc, (Exception, asyncio.CancelledError)):
-                await end_model_call(identity, _failed_physical_usage(exc))
-            invocation_error = _durable_model_error(exc, identity, model_name)
-            if invocation_error is not None:
-                raise invocation_error from exc
-            raise
-        await end_model_call(identity, physical_model_usage(delta))
-        return result, delta
-
-    try:
-        response, delta = (
-            await DBOS.run_step_async({"name": "por.llm", "preemptible": True}, execute)
-            if native_step_available()
-            else await execute()
-        )
-    except BaseException as exc:
-        if not executed:
-            capture_budget_usage(getattr(exc, "budget_usage", {}))
-        raise
-    capture_budget_usage(delta)
-    return response, delta
-
-
-async def _ainvoke_model_accounted(
-    runnable,
-    payload,
-    *,
-    config=None,
-    model_name=None,
-    component=None,
-    structured_output=False,
-):
-    merged, counter, usage_handler = model_accounting_config(
-        config,
-        metadata=_model_langsmith_metadata(
-            model_name,
-            component=component,
-            structured_output=structured_output,
-        ),
-    )
-    try:
-        response = await runnable.ainvoke(payload, config=merged)
-    except BaseException as exc:
-        delta = budget_from_model_accounting(counter.starts, usage_handler)
-        capture_budget_usage(delta)
-        setattr(exc, "budget_usage", delta)
-        raise
-    delta = budget_from_model_accounting(counter.starts, usage_handler)
-    return response, delta
-
-
-# 同步执行模型调用，采用与异步入口一致的尝试次数和令牌记账规则。
-def invoke_model_with_budget(
-    runnable: Any,
-    payload: Any,
-    *,
-    config: Any = None,
-    model_name: str | None = None,
-    component: str | None = None,
-    structured_output: bool = False,
-) -> tuple[Any, dict[str, Any]]:
-    """Invoke one model synchronously and account its budget.
-
-    Mirrors :func:`ainvoke_model_with_budget`, including attempt and usage
-    accounting when the call raises.
-    """
-    from open_deep_research.workflow.execution import (
-        native_step_available,
-        stage_context,
-    )
-
-    executed = False
-
-    def execute():
-        nonlocal executed
-        executed = True
-        identity = asyncio.run(begin_model_call()) if stage_context.get() else None
-        try:
-            response, delta = _invoke_model_accounted(
-                runnable,
-                payload,
-                config=config,
-                model_name=model_name,
-                component=component,
-                structured_output=structured_output,
-            )
-        except BaseException as exc:
-            if identity is not None and isinstance(
-                exc, (Exception, asyncio.CancelledError)
-            ):
-                asyncio.run(end_model_call(identity, _failed_physical_usage(exc)))
-            invocation_error = _durable_model_error(exc, identity, model_name)
-            if invocation_error is not None:
-                raise invocation_error from exc
-            raise
-        if identity is not None:
-            asyncio.run(end_model_call(identity, physical_model_usage(delta)))
-        return response, delta
-
-    try:
-        response, delta = (
-            DBOS.run_step({"name": "por.llm_sync"}, execute)
-            if native_step_available()
-            else execute()
-        )
-    except BaseException as exc:
-        if not executed:
-            capture_budget_usage(getattr(exc, "budget_usage", {}))
-        raise
-    capture_budget_usage(delta)
-    return response, delta
-
-
-def _durable_model_error(error, identity, model_name):
-    from open_deep_research.workflow.execution import ExecutionControlError
-
-    if (
-        identity is not None
-        and isinstance(error, Exception)
-        and not isinstance(error, (ExecutionControlError, ModelBudgetExceeded))
-    ):
-        return ModelInvocationError(
-            type(error).__name__,
-            context_limit=is_token_limit_exceeded(error, model_name),
-            budget_usage=getattr(error, "budget_usage", {}),
-        )
-    return None
-
-
-def _invoke_model_accounted(
-    runnable,
-    payload,
-    *,
-    config=None,
-    model_name=None,
-    component=None,
-    structured_output=False,
-):
-    merged, counter, usage_handler = model_accounting_config(
-        config,
-        metadata=_model_langsmith_metadata(
-            model_name,
-            component=component,
-            structured_output=structured_output,
-        ),
-    )
-    try:
-        response = runnable.invoke(payload, config=merged)
-    except BaseException as exc:
-        delta = budget_from_model_accounting(counter.starts, usage_handler)
-        capture_budget_usage(delta)
-        setattr(exc, "budget_usage", delta)
-        raise
-    delta = budget_from_model_accounting(counter.starts, usage_handler)
-    return response, delta
-
-
-# 校验包含原始响应的结构化输出；解析失败时抛错，让外层重试重新请求模型。
-def require_valid_structured_output(envelope: Any) -> Any:
-    """Validate a LangChain ``include_raw=True`` structured envelope.
-
-    Raises the parsing error (or a ``ValueError`` when nothing was parsed) so that
-    a surrounding ``with_retry`` re-invokes the model instead of re-checking the
-    same invalid envelope.
-    """
-    if not isinstance(envelope, Mapping):
-        raise ValueError("Structured output did not return a raw/parsed envelope.")
-    parsing_error = envelope.get("parsing_error")
-    if parsing_error is not None:
-        raise parsing_error
-    if envelope.get("parsed") is None:
-        raise ValueError("Structured output did not contain a parsed result.")
-    return envelope
-
-
-# 组合原始响应保留、结构化校验和重试，确保重试覆盖真实模型调用。
-@dataclass(frozen=True)
-class _DurableStructured:
-    raw: Any
-    attempts: int
-
-
-def structured_output_chain(model: Any, schema: Any, *, max_attempts: int = 0) -> Any:
-    """Build a structured-output chain that keeps raw usage and retries real calls.
-
-    Composition: ``with_structured_output(include_raw=True)`` (official raw/parsed/
-    parsing_error envelope) ``|`` validation, wrapped in ``with_retry`` so the retry
-    covers both the model call and parse validation.
-    """
-    from open_deep_research.workflow.execution import native_step_available
-
-    raw = model.with_structured_output(schema, include_raw=True)
-    if native_step_available():
-        # Retry decisions execute in the phase Workflow. Each actual response,
-        # including a malformed structured response, is independently journaled.
-        return _DurableStructured(raw, max(1, max_attempts))
-    chain = raw | RunnableLambda(require_valid_structured_output)
-    if max_attempts and max_attempts > 0:
-        chain = chain.with_retry(stop_after_attempt=max_attempts)
-    return chain
-
-
-# 为模型供应商内置搜索生成一次检索消耗记录。
 def budget_from_native_search() -> dict[str, Any]:
     """Create a budget payload for provider-side native web search."""
     usage = empty_budget_usage()

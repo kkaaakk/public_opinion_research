@@ -4,7 +4,7 @@
 The project's observability architecture is exactly:
 
 * LangSmith (``observability.langsmith``) for execution tracing;
-* ``budget.py`` on LangChain official callbacks for token/budget accounting.
+* ``budget.py`` on SDK Usage and physical admission for token/budget accounting.
 
 The third system (an ``agent_observer`` sidecar with ``ObservedGraph`` /
 ``ObserverRunLifecycle`` / ``observe_*`` wrappers) was removed entirely.

@@ -11,7 +11,6 @@ from typing import Any
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
-    SystemMessage,
     ToolMessage,
     get_buffer_string,
 )
@@ -19,7 +18,6 @@ from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.budget import (
     ModelBudgetExceeded,
-    ainvoke_model_with_budget,
     budget_usage_with_reason,
     can_spend_model_call,
     capture_budget_usage,
@@ -28,10 +26,10 @@ from open_deep_research.budget import (
     model_budget_admission,
     start_budget_capture,
     stop_budget_capture,
-    structured_output_chain,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
+from open_deep_research.llm.generation import generate_structured
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     report_planner_instructions,
@@ -46,9 +44,6 @@ from open_deep_research.state import (
     Sections,
 )
 from open_deep_research.time_utils import get_today_str
-
-# Initialize a configurable model that we will use throughout the agent
-from open_deep_research.workflow import shared
 from open_deep_research.workflow.execution import owned_io
 from open_deep_research.workflow.state_utils import (
     report_state,
@@ -198,34 +193,19 @@ async def clarification_step(
             },
         )
 
-    # Step 2: Prepare the model for structured clarification analysis
-    messages = state["messages"]
-    model_config = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-        "provider_config": config,
-        "tags": ["langsmith:nostream"],
-    }
-
-    # Configure model with structured output and retry logic
-    clarification_model = structured_output_chain(
-        shared.configurable_model.with_config(model_config),
-        ClarifyWithUser,
-        max_attempts=configurable.max_structured_output_retries,
-    )
-
-    # Step 3: Analyze whether clarification is needed
     prompt_content = clarify_with_user_instructions.format(
-        messages=get_buffer_string(messages), date=get_today_str(config)
+        messages=get_buffer_string(state["messages"]), date=get_today_str(config)
     )
-    response, budget_update = await ainvoke_model_with_budget(
-        clarification_model,
-        [HumanMessage(content=prompt_content)],
-        model_name=configurable.research_model,
-        structured_output=True,
-        component="clarification",
-    )
-    response = response["parsed"]
+    with model_budget_admission(configurable, lambda: budget_usage):
+        response, budget_update = await generate_structured(
+            configurable.research_model,
+            prompt_content,
+            ClarifyWithUser,
+            config=config,
+            max_tokens=configurable.research_model_max_tokens,
+            max_attempts=configurable.max_structured_output_retries,
+            component="clarification",
+        )
 
     # Step 4: Route based on clarification analysis
     if response.need_clarification:
@@ -286,20 +266,6 @@ async def research_brief_step(
             },
         )
 
-    research_model_config = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-        "provider_config": config,
-        "tags": ["langsmith:nostream"],
-    }
-
-    # Configure model for structured research question generation
-    research_model = structured_output_chain(
-        shared.configurable_model.with_config(research_model_config),
-        ResearchQuestion,
-        max_attempts=configurable.max_structured_output_retries,
-    )
-
     # Step 2: Generate structured research brief from user messages.
     prompt_content = transform_messages_into_research_topic_prompt.format(
         messages=get_buffer_string(state.get("messages", [])),
@@ -312,14 +278,16 @@ async def research_brief_step(
         "and any internal-knowledge requirements. If a detail is unspecified, "
         "state that it is unspecified rather than inventing it."
     )
-    response, budget_update = await ainvoke_model_with_budget(
-        research_model,
-        [HumanMessage(content=prompt_content)],
-        model_name=configurable.research_model,
-        structured_output=True,
-        component="research_brief",
-    )
-    response = response["parsed"]
+    with model_budget_admission(configurable, lambda: budget_usage):
+        response, budget_update = await generate_structured(
+            configurable.research_model,
+            prompt_content,
+            ResearchQuestion,
+            config=config,
+            max_tokens=configurable.research_model_max_tokens,
+            max_attempts=configurable.max_structured_output_retries,
+            component="research_brief",
+        )
 
     return IntakeDecision(
         goto="plan_report_sections",
@@ -362,16 +330,6 @@ async def section_plan_step(
 
     # Plan sections using planner model
     planner_model_name = configurable.planner_model or configurable.research_model
-    planner_max_tokens = configurable.planner_model_max_tokens
-
-    planner_model_config: dict[str, Any] = {
-        "model": planner_model_name,
-        "provider_config": config,
-        "tags": ["langsmith:nostream"],
-    }
-    if planner_max_tokens is not None:
-        planner_model_config["max_tokens"] = planner_max_tokens
-
     feedback_text = (
         "\n///\n".join(report_state(state).get("plan_feedback", []))
         or "No feedback yet."
@@ -384,26 +342,22 @@ async def section_plan_step(
         date=get_today_str(config),
     )
 
-    planner = structured_output_chain(
-        shared.configurable_model.with_config(planner_model_config),
-        Sections,
-        max_attempts=configurable.max_structured_output_retries,
-    )
-
     # Budget Capture so a failed planner attempt keeps its model_calls/usage.
     # try/finally guarantees the ContextVar is reset on every exit path.
     fallback_reason = ""
     attempt_token = start_budget_capture()
     try:
         try:
-            response, _ = await ainvoke_model_with_budget(
-                planner,
-                [HumanMessage(content=prompt)],
-                model_name=planner_model_name,
-                structured_output=True,
-                component="report_planner",
-            )
-            response = response["parsed"]
+            with model_budget_admission(configurable, lambda: budget_usage):
+                response, _ = await generate_structured(
+                    planner_model_name,
+                    prompt,
+                    Sections,
+                    config=config,
+                    max_tokens=configurable.planner_model_max_tokens,
+                    max_attempts=configurable.max_structured_output_retries,
+                    component="report_planner",
+                )
         except Exception as exc:
             if not is_token_limit_exceeded(exc, planner_model_name):
                 LOGGER.exception("Unexpected report section planning failure.")
@@ -464,27 +418,16 @@ async def _brief_response(
         raise ModelBudgetExceeded(
             "Insufficient budget to generate a validated Research Brief"
         )
-    chain = structured_output_chain(
-        shared.configurable_model.with_config(
-            {
-                "model": cfg.research_model,
-                "max_tokens": max(4096, cfg.research_model_max_tokens),
-                "provider_config": config,
-                "tags": ["langsmith:nostream"],
-            }
-        ),
-        schema,
-        max_attempts=1 if compact else cfg.max_structured_output_retries,
-    )
     with model_budget_admission(cfg, lambda: cumulative):
-        response, delta = await ainvoke_model_with_budget(
-            chain,
+        return await generate_structured(
+            cfg.research_model,
             messages,
-            model_name=cfg.research_model,
-            structured_output=True,
+            schema,
+            config=config,
+            max_tokens=max(4096, cfg.research_model_max_tokens),
+            max_attempts=1 if compact else cfg.max_structured_output_retries,
             component=component,
         )
-    return schema.model_validate(response["parsed"]), delta
 
 
 async def plan_research(state: DeepResearchState, config: RunnableConfig) -> dict:
@@ -537,7 +480,7 @@ async def plan_research(state: DeepResearchState, config: RunnableConfig) -> dic
             cfg,
             config,
             PlanDecision,
-            [HumanMessage(content=prompt)],
+            prompt,
             merge_budget_usage(initial_usage, usage),
             component="plan" if attempt == 0 else "brief_compaction",
             compact=bool(attempt),
@@ -604,8 +547,8 @@ async def revise_brief(
             config,
             BriefRevision,
             [
-                SystemMessage(content=instructions),
-                HumanMessage(content=json.dumps(data, ensure_ascii=False)),
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
             ],
             initial_usage,
             component="brief_revision",
@@ -617,14 +560,14 @@ async def revise_brief(
                 config,
                 BriefRevision,
                 [
-                    SystemMessage(
-                        content=instructions
-                        + (
+                    {
+                        "role": "system",
+                        "content": instructions + (
                             " Shorten candidate_brief to the token limit. Preserve every user "
                             "constraint and the explicit changes from feedback without truncating."
                         )
-                    ),
-                    HumanMessage(content=json.dumps(data, ensure_ascii=False)),
+                    },
+                    {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
                 ],
                 merge_budget_usage(initial_usage, delta),
                 component="brief_revision_compaction",

@@ -1,6 +1,6 @@
 # Agent Execution Studio：事实协议与展示边界
 
-当前应用版本为 `por-vertical-v1`，Studio 和 Classic 共用 Run API 与 SSE 协议。 [执行架构](agent-loop.md) · [部署与切换](dbos-deployment.md) · [Markdown Research Brief](research-brief.md)
+当前应用版本为 `por-sdk-models-v1`，Studio 和 Classic 共用 Run API 与 SSE 协议。 [执行架构](agent-loop.md) · [部署与切换](dbos-deployment.md) · [Markdown Research Brief](research-brief.md)
 
 ## 1. 数据所有权
 

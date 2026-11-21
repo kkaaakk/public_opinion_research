@@ -4,10 +4,9 @@ from collections import Counter
 
 import pytest
 from dbos_support import retry_observed_failure
-from langchain_core.runnables import RunnableLambda
+from sdk_model_support import Reply, install_inference
 
 from open_deep_research.state import Section, Sections
-from open_deep_research.workflow import shared
 
 pytestmark = pytest.mark.integration
 
@@ -16,54 +15,30 @@ def test_section_failure_reuses_completed_chapter_and_prior_phase(
     native_case, monkeypatch
 ):
     case = native_case
-    service = shared.configurable_model
     calls = Counter()
 
-    class Chapters:
-        def with_config(self, config):
-            return self
-
-        def with_structured_output(self, schema, include_raw=False):
-            raw = service.with_structured_output(schema, include_raw)
-
-            async def respond(messages, config=None):
-                result = await raw.ainvoke(messages, config)
-                if schema is Sections:
-                    calls["plan"] += 1
-                    result["parsed"] = Sections(
-                        sections=[
-                            Section(
-                                name="CHAPTER_A_SENTINEL",
-                                description="Evidence",
-                                research=True,
-                            ),
-                            Section(
-                                name="CHAPTER_B_SENTINEL",
-                                description="Risk",
-                                research=True,
-                            ),
-                        ]
+    def chapters(request):
+        if request.schema_name == "Sections":
+            calls["plan"] += 1
+            return Sections(
+                sections=[
+                    Section(
+                        name=f"CHAPTER_{chapter}_SENTINEL",
+                        description=subject,
+                        research=True,
                     )
-                return result
-
-            return RunnableLambda(respond)
-
-        async def ainvoke(self, messages, config=None):
-            result = await service.ainvoke(messages, config)
-            text = str(messages)
+                    for chapter, subject in (("A", "Evidence"), ("B", "Risk"))
+                ]
+            )
+        if request.schema_name is None:
             for chapter in ("A", "B"):
-                if f"CHAPTER_{chapter}_SENTINEL" in text:
+                if f"CHAPTER_{chapter}_SENTINEL" in request.prompt:
                     calls[chapter] += 1
                     if chapter == "B" and calls[chapter] == 1:
-                        raise RuntimeError(
-                            "Controlled chapter failure after real usage"
-                        )
-                    return result.model_copy(
-                        update={"content": f"Chapter {chapter}: supported evidence"}
-                    )
-            return result
+                        return Reply("Partial chapter with real usage", status="length")
+                    return f"Chapter {chapter}: supported evidence"
 
-    monkeypatch.setattr(shared, "configurable_model", Chapters())
+    install_inference(monkeypatch, chapters)
     case.cfg["configurable"]["report_mode"] = "sections"
     run = case.create()
     failed = case.wait(
@@ -88,29 +63,26 @@ def test_section_failure_reuses_completed_chapter_and_prior_phase(
     assert "Chapter A:" in done["report"] and "Chapter B:" in done["report"]
 
 
+@pytest.mark.parametrize(
+    "first_reply", [Reply(""), Reply("Partial synthesis", status="length")]
+)
 def test_incomplete_synthesis_retries_last_response_without_repeating_roles(
-    native_case, monkeypatch
+    native_case, monkeypatch, first_reply
 ):
     case = native_case
-    service = shared.configurable_model
     calls = []
 
-    class Responses:
-        def with_config(self, config):
-            return self
+    def responses(request):
+        if (
+            request.schema_name is None
+            and "Create the complete enterprise" in request.prompt
+        ):
+            calls.append(1)
+            if len(calls) == 1:
+                return first_reply
+        return None
 
-        def with_structured_output(self, *args, **kwargs):
-            return service.with_structured_output(*args, **kwargs)
-
-        async def ainvoke(self, messages, config=None):
-            result = await service.ainvoke(messages, config)
-            if "Role:" not in str(messages[0].content):
-                calls.append(1)
-                if len(calls) == 1:
-                    return result.model_copy(update={"content": ""})
-            return result
-
-    monkeypatch.setattr(shared, "configurable_model", Responses())
+    install_inference(monkeypatch, responses)
     run = case.create()
     failed = case.wait(
         run,
@@ -119,7 +91,7 @@ def test_incomplete_synthesis_retries_last_response_without_repeating_roles(
         and r["events_complete"],
     )
     assert failed["retry_safe"] and len(calls) == 1
-    retry_observed_failure(case, run, "replace-empty-response", failed)
+    retry_observed_failure(case, run, "replace-incomplete-response", failed)
     done = case.wait(
         run,
         lambda r: r["status"] == "completed"

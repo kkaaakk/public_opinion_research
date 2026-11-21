@@ -4,19 +4,12 @@ import asyncio
 from copy import deepcopy
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
-from test_token_accounting import (
-    SMALL_USAGE,
-    ScriptedChat,
-    _chat_result,
-    _script,
-    _text_step,
-    _tool_step,
-)
+from sdk_model_support import Reply, install_sequence
 
 from open_deep_research.budget import budget_capture, estimate_text_tokens
-from open_deep_research.workflow import intake, reporting, shared
+from open_deep_research.workflow import intake, reporting
 from open_deep_research.workflow.brief import (
     PlanDecision,
     PlanQuestion,
@@ -52,8 +45,7 @@ def ask():
 
 @pytest.mark.parametrize("decision", [ready(), ask()])
 def test_one_plan_model_request_and_actual_usage(monkeypatch, decision):
-    _script(_tool_step("PlanDecision", decision, SMALL_USAGE))
-    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
+    install_sequence(monkeypatch, Reply(decision, 4, 2))
     with budget_capture() as usage:
         result = asyncio.run(
             intake.plan_research(
@@ -75,11 +67,11 @@ def test_one_plan_model_request_and_actual_usage(monkeypatch, decision):
 def test_overlimit_compacts_at_most_once_without_truncating(monkeypatch, second, valid):
     long = BRIEF + "长" * 10000
     assert estimate_text_tokens(long) > 2500
-    _script(
-        _tool_step("PlanDecision", ready(long), SMALL_USAGE),
-        _tool_step("PlanDecision", ready(second), SMALL_USAGE),
+    install_sequence(
+        monkeypatch,
+        Reply(ready(long), 4, 2),
+        Reply(ready(second), 4, 2),
     )
-    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
     with budget_capture() as usage:
         if valid:
             result = asyncio.run(intake.plan_research({}, CFG))
@@ -112,8 +104,7 @@ def test_no_further_questions_after_limit_skip_or_disabled(
         ]
     }
     cfg = {"configurable": {**CFG["configurable"], "allow_clarification": allowed}}
-    _script(_tool_step("PlanDecision", ask(), SMALL_USAGE))
-    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
+    install_sequence(monkeypatch, Reply(ask(), 4, 2))
     with pytest.raises(ValueError, match="disabled, skipped or at the round limit"):
         asyncio.run(intake.plan_research(state, cfg))
 
@@ -166,22 +157,13 @@ def test_choices_and_skip_are_validated():
 def test_report_is_one_call_includes_entire_brief_and_role_evidence(
     monkeypatch, with_evidence
 ):
-    from langchain_core.callbacks import BaseCallbackHandler
-
-    prompts = []
-
-    class Capture(BaseCallbackHandler):
-        def on_chat_model_start(self, serialized, messages, **kwargs):
-            prompts.append(str(messages))
-
-    _script(
-        _text_step(
+    requests = install_sequence(
+        monkeypatch,
+        Reply(
             "# Report\nQuestion answered with source https://example.org and evidence E1",
-            SMALL_USAGE,
-        )
-    )
-    monkeypatch.setattr(
-        shared, "configurable_model", ScriptedChat(callbacks=[Capture()])
+            4,
+            2,
+        ),
     )
     state = {
         "workflow": {"brief": BRIEF},
@@ -202,17 +184,16 @@ def test_report_is_one_call_includes_entire_brief_and_role_evidence(
         result = asyncio.run(reporting.generate_final_report(state, CFG))
     assert usage["model_calls"] == 1 and usage["total_tokens"] == 6
     assert "# Report" in result["report"]["final"] and state == original
-    assert "Completion criteria" in prompts[0]
+    assert "Completion criteria" in requests[0].prompt
     assert (
-        ("risk_assessment evidence" in prompts[0])
+        ("risk_assessment evidence" in requests[0].prompt)
         if with_evidence
-        else ("No evidence was collected" in prompts[0])
+        else ("No evidence was collected" in requests[0].prompt)
     )
 
 
 def test_invalid_model_decision_is_a_billed_failure(monkeypatch):
-    _script(_tool_step("PlanDecision", ready("not Markdown"), SMALL_USAGE))
-    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
+    install_sequence(monkeypatch, Reply(ready("not Markdown"), 4, 2))
     with budget_capture() as usage:
         with pytest.raises(Exception):
             asyncio.run(intake.plan_research({}, CFG))
@@ -220,11 +201,11 @@ def test_invalid_model_decision_is_a_billed_failure(monkeypatch):
 
 
 def test_brief_compaction_cannot_ask_for_clarification(monkeypatch):
-    _script(
-        _tool_step("PlanDecision", ready(BRIEF + "长" * 10000), SMALL_USAGE),
-        _tool_step("PlanDecision", ask(), SMALL_USAGE),
+    install_sequence(
+        monkeypatch,
+        Reply(ready(BRIEF + "长" * 10000), 4, 2),
+        Reply(ask(), 4, 2),
     )
-    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
     with (
         budget_capture() as usage,
         pytest.raises(ValueError, match="compaction must return ready"),
@@ -234,11 +215,11 @@ def test_brief_compaction_cannot_ask_for_clarification(monkeypatch):
 
 
 def test_invalid_compaction_cannot_hide_extra_structured_retries(monkeypatch):
-    _script(
-        _tool_step("PlanDecision", ready(BRIEF + "长" * 10000), SMALL_USAGE),
-        _tool_step("PlanDecision", ready("invalid compacted brief"), SMALL_USAGE),
+    install_sequence(
+        monkeypatch,
+        Reply(ready(BRIEF + "长" * 10000), 4, 2),
+        Reply(ready("invalid compacted brief"), 4, 2),
     )
-    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
     cfg = deepcopy(CFG)
     cfg["configurable"]["max_structured_output_retries"] = 3
     with budget_capture() as usage:
@@ -253,28 +234,13 @@ def test_revision_uses_current_brief_context_and_independent_compaction(
 ):
     import json
 
-    from langchain_core.callbacks import BaseCallbackHandler
-
-    prompts = []
-
-    class Capture(BaseCallbackHandler):
-        def on_chat_model_start(self, serialized, messages, **kwargs):
-            prompts.append(messages[0])
-
     feedback = "Compare the competitor's support complaints."
     changed = BRIEF + "\n\n" + feedback
     long = changed + "\n" + "长" * 10000
-    script = [
-        _tool_step(
-            "BriefRevision", {"brief_md": long if compact else changed}, SMALL_USAGE
-        )
-    ]
+    script = [Reply({"brief_md": long if compact else changed}, 4, 2)]
     if compact:
-        script.append(_tool_step("BriefRevision", {"brief_md": changed}, SMALL_USAGE))
-    _script(*script)
-    monkeypatch.setattr(
-        shared, "configurable_model", ScriptedChat(callbacks=[Capture()])
-    )
+        script.append(Reply({"brief_md": changed}, 4, 2))
+    requests = install_sequence(monkeypatch, *script)
     state = {
         "workflow": {"brief": BRIEF},
         "messages": [
@@ -292,25 +258,28 @@ def test_revision_uses_current_brief_context_and_independent_compaction(
         == usage["model_calls"]
         == 1 + compact
     )
-    for prompt in prompts:
-        assert prompt[0].type == "system"
-        assert feedback not in prompt[0].content
-        data = json.loads(prompt[-1].content)
+    for request in requests:
+        prompt = request.messages
+        assert prompt[0]["role"] == "system"
+        assert feedback not in prompt[0]["content"]
+        data = json.loads(prompt[-1]["content"])
         assert data["current_brief"] == BRIEF and data["feedback"] == feedback
         assert all(
             part in data["request_context"]
             for part in ("Original subject", "blue package", "only confirmed")
         )
     if compact:
-        assert json.loads(prompts[1][-1].content)["candidate_brief"] == long
+        assert (
+            json.loads(requests[1].messages[-1]["content"])["candidate_brief"] == long
+        )
 
 
 def test_revision_structured_retry_is_billed_as_two_calls(monkeypatch):
-    _script(
-        _tool_step("BriefRevision", {"brief_md": ""}, SMALL_USAGE),
-        _tool_step("BriefRevision", {"brief_md": BRIEF}, SMALL_USAGE),
+    install_sequence(
+        monkeypatch,
+        Reply({"brief_md": ""}, 4, 2),
+        Reply({"brief_md": BRIEF}, 4, 2),
     )
-    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
     cfg = deepcopy(CFG)
     cfg["configurable"]["max_structured_output_retries"] = 2
     with budget_capture() as usage:
@@ -338,28 +307,15 @@ def test_multiple_choice_answers_remain_bounded_to_declared_options():
             validate_answers(questions, {"sources": answer}, False)
 
 
-@pytest.mark.parametrize("stop_reason", ["end_turn", "max_tokens"])
-def test_report_text_blocks_preserve_text_and_reject_output_limit(
-    monkeypatch, stop_reason
-):
-    _script(
-        lambda: _chat_result(
-            AIMessage(
-                content=[
-                    {
-                        "type": "text",
-                        "text": "# Report\nEvidence E1 supports this finding.",
-                    }
-                ],
-                response_metadata={"stop_reason": stop_reason},
-                usage_metadata=SMALL_USAGE,
-            )
-        )
+@pytest.mark.parametrize("finish", ["stop", "length"])
+def test_report_preserves_text_and_rejects_output_limit(monkeypatch, finish):
+    install_sequence(
+        monkeypatch,
+        Reply("# Report\nEvidence E1 supports this finding.", 4, 2, status=finish),
     )
-    monkeypatch.setattr(shared, "configurable_model", ScriptedChat())
     with budget_capture() as usage:
-        if stop_reason == "max_tokens":
-            with pytest.raises(ValueError, match="empty or incomplete"):
+        if finish == "length":
+            with pytest.raises(ValueError, match="truncated"):
                 asyncio.run(
                     reporting.generate_final_report({"workflow": {"brief": BRIEF}}, CFG)
                 )

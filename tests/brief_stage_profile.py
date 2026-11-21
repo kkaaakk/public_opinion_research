@@ -16,9 +16,8 @@ from pathlib import Path
 import conftest
 import pytest
 from langchain_core.messages import HumanMessage
-from langchain_core.runnables import RunnableLambda
+from sdk_model_support import install_inference
 from test_research_brief import BRIEF
-from test_sdk_phase2_integration import Services
 
 from open_deep_research.budget import budget_capture
 from open_deep_research.state import (
@@ -27,7 +26,7 @@ from open_deep_research.state import (
     Section,
     Sections,
 )
-from open_deep_research.workflow import intake, reporting, shared
+from open_deep_research.workflow import intake, reporting
 from open_deep_research.workflow.brief import PlanDecision
 from open_deep_research.workflow.python_state import apply_patch
 
@@ -42,30 +41,24 @@ SECTIONS = [
 ]
 
 
-class Inference(Services):
-    def with_structured_output(self, schema, include_raw=False):
-        parsed = {
-            ClarifyWithUser: ClarifyWithUser(
-                need_clarification=False, question="", verification="Scope confirmed"
-            ),
-            ResearchQuestion: ResearchQuestion(research_brief=BRIEF),
-            Sections: Sections(sections=SECTIONS),
-            PlanDecision: PlanDecision(action="ready", questions=[], brief_md=BRIEF),
-        }[schema]
-
-        async def reply(messages, config=None):
-            raw = await self.raw.ainvoke(messages, config)
-            return dict(raw=raw, parsed=parsed, parsing_error=None)
-
-        return RunnableLambda(reply)
+def infer(request):
+    return {
+        "ClarifyWithUser": ClarifyWithUser(
+            need_clarification=False, question="", verification="Scope confirmed",
+        ),
+        "ResearchQuestion": ResearchQuestion(research_brief=BRIEF),
+        "Sections": Sections(sections=SECTIONS),
+        "PlanDecision": PlanDecision(action="ready", questions=[], brief_md=BRIEF),
+        None: "FINAL brand recall report, sourced and reviewed",
+    }[request.schema_name]
 
 
 async def measure(kind):
     cfg = {
         "configurable": {
             "allow_clarification": True,
-            "research_model": "fixture:profile",
-            "final_report_model": "fixture:profile",
+            "research_model": "openai:fixture-profile",
+            "final_report_model": "openai:fixture-profile",
             "budget_enabled": True,
             "max_model_calls": 100,
         }
@@ -143,7 +136,7 @@ def main():
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(socket.socket, "connect", local_connect)
-        patch.setattr(shared, "configurable_model", Inference())
+        install_inference(patch, infer)
         for kind in ("old_plan", "new_plan", "old_report", "new_report"):
             samples = [asyncio.run(measure(kind)) for _ in range(args.samples)]
             values = [sample["seconds"] for sample in samples]

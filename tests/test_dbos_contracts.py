@@ -993,42 +993,25 @@ def test_every_run_api_control_requires_auth(native_case, monkeypatch, path, met
 def test_gap_loop_uses_native_role_children_and_original_reducer(
     native_case, monkeypatch
 ):
-    from langchain_core.runnables import RunnableLambda
+    from sdk_model_support import install_inference
     from test_python_workflow import gap
 
     from open_deep_research.state import ResearchReview
-    from open_deep_research.workflow import shared
 
     case = native_case
-    original = shared.configurable_model
     reviews = []
 
-    class ReviewServices:
-        def with_config(self, cfg):
-            return self
+    def review(request):
+        if request.schema_name != "ResearchReview":
+            return None
+        result = ResearchReview(
+            research_complete=bool(reviews),
+            next_tasks=[] if reviews else [gap("date"), gap("approval", "internal_knowledge")],
+        )
+        reviews.append(result)
+        return result
 
-        def with_structured_output(self, schema, include_raw=False):
-            chain = original.with_structured_output(schema, include_raw)
-            if schema is not ResearchReview:
-                return chain
-
-            async def reply(messages, config=None):
-                value = await chain.ainvoke(messages, config)
-                value["parsed"] = ResearchReview(
-                    research_complete=bool(reviews),
-                    next_tasks=[]
-                    if reviews
-                    else [gap("date"), gap("approval", "internal_knowledge")],
-                )
-                reviews.append(value["parsed"])
-                return value
-
-            return RunnableLambda(reply)
-
-        async def ainvoke(self, *args, **kw):
-            return await original.ainvoke(*args, **kw)
-
-    monkeypatch.setattr(shared, "configurable_model", ReviewServices())
+    install_inference(monkeypatch, review)
     run = case.create()
     result = case.wait(run)
     assert result["status"] == "completed", result["error"]
@@ -1326,27 +1309,28 @@ def test_cancel_during_safe_retry_preserves_inflight_model_bill(
 ):
     import threading
 
-    from langchain_core.messages import AIMessage, HumanMessage
+    from sdk_model_support import Reply, install_inference
 
-    from open_deep_research import budget
+    from open_deep_research.llm.generation import generate_text
     from open_deep_research.workflow import dbos_workflow as engine
 
     entered, release = threading.Event(), threading.Event()
     attempts = []
 
-    class Model:
-        async def ainvoke(self, payload, config=None):
-            entered.set()
-            await asyncio.to_thread(release.wait, 20)
-            return AIMessage(content="review")
+    async def infer(request):
+        if request.model_ref != "openai:blocked-review":
+            return None
+        entered.set()
+        await asyncio.to_thread(release.wait, 20)
+        return Reply("review", 0, 0)
+
+    install_inference(monkeypatch, infer)
 
     async def review(state, config):
         attempts.append(1)
         if len(attempts) == 1:
             raise RuntimeError("Safe review failure")
-        await budget.ainvoke_model_with_budget(
-            Model(), [HumanMessage(content="review")]
-        )
+        await generate_text("openai:blocked-review", "review")
 
     monkeypatch.setattr(engine.research, "research_review", review)
     case = native_case
@@ -1529,14 +1513,14 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
 
 def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypatch):
     from langchain_core.messages import HumanMessage
+    from sdk_model_support import install_inference
     from test_query_images import _data_url
     from test_vision_budget import VisionModel
 
-    from open_deep_research.rag.loaders import knowledge
 
     case = native_case
     model = VisionModel()
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
     case.state["messages"] = [
         HumanMessage(
             content=[
@@ -1594,10 +1578,10 @@ def test_native_cancelled_vision_keeps_reservation_until_actual_usage_settles(
     import threading
 
     from langchain_core.messages import HumanMessage
+    from sdk_model_support import install_inference
     from test_query_images import _data_url
     from test_vision_budget import BlockingVision
 
-    from open_deep_research.rag.loaders import knowledge
     from open_deep_research.workflow import intake
 
     case = native_case
@@ -1616,7 +1600,7 @@ def test_native_cancelled_vision_keeps_reservation_until_actual_usage_settles(
         error=provider_error,
         wait_seconds=20,
     )
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
     case.state["messages"] = [
         HumanMessage(
             content=[

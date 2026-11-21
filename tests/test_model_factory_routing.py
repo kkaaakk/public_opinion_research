@@ -3,20 +3,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
+from sdk_model_support import install_inference
 
 from open_deep_research.search import tavily as utils
 
 
 # 验证 Tavily 摘要采用豆包模型配置与工厂入口。
-@pytest.mark.asyncio
-async def test_tavily_summarization_routes_to_doubao(
+def test_tavily_summarization_routes_to_doubao(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("SUMMARIZATION_MODEL", raising=False)
-    captured: dict[str, Any] = {}
+    captured = []
 
     # 返回固定网页来源与正文，隔离实际 Tavily 请求。
     async def fake_search(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
@@ -34,29 +35,19 @@ async def test_tavily_summarization_routes_to_doubao(
             }
         ]
 
-    # 保存摘要模型创建参数，避免实例化真实供应商模型。
-    def fake_factory(**kwargs: Any) -> object:
-        captured.update(kwargs)
-        return object()
-
-    # 返回固定网页摘要，隔离实际摘要模型调用。
-    async def fake_summarize(*_args: Any, **_kwargs: Any) -> str:
-        return "summary"
+    def summarize(request):
+        captured.append(request)
+        return {"summary": "summary", "key_excerpts": "page body"}
 
     monkeypatch.setattr(utils, "tavily_search_async", fake_search)
-    monkeypatch.setattr(utils, "create_chat_model", fake_factory)
-    monkeypatch.setattr(
-        utils, "structured_output_chain", lambda model, *_a, **_k: model
-    )
-    monkeypatch.setattr(utils, "summarize_webpage", fake_summarize)
-
-    await utils.tavily_search.coroutine(
+    install_inference(monkeypatch, summarize)
+    output = asyncio.run(utils.tavily_search.coroutine(
         ["q"],
         config={
             "configurable": {
                 "summarization_model": "volcengine:doubao-seed-2-0-mini-260428"
             }
         },
-    )
-
-    assert captured["model"] == "volcengine:doubao-seed-2-0-mini-260428"
+    ))
+    assert "summary" in output and len(captured) == 1
+    assert captured[0].model_ref == "volcengine:doubao-seed-2-0-mini-260428"

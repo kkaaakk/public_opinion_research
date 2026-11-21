@@ -1,7 +1,20 @@
 # 提供报告两两比较和多份报告统一排序的模型评估入口。
-from langchain_anthropic import ChatAnthropic
+import asyncio
+
 from langsmith.evaluation import evaluate_comparative
 from pydantic import BaseModel, Field
+
+from open_deep_research.llm.generation import generate_structured
+
+
+def _grade(schema, prompt):
+    result, _ = asyncio.run(generate_structured(
+        "anthropic:claude-opus-4-20250514", prompt, schema,
+        max_tokens=20000,
+        extra_body={"thinking": {"type": "enabled", "budget_tokens": 16000}},
+    ))
+    return result
+
 
 HEAD_TO_HEAD_PROMPT = """
 We are testing out two different implementations of a deep research agent. This research agent is designed to conduct deep research on a given question.
@@ -36,13 +49,7 @@ class HeadToHeadRanking(BaseModel):
 
 # 将两份报告交给评估模型，根据统一准则判定排序。
 def head_to_head_evaluator(inputs: dict, outputs: list[dict]) -> list:
-    grader_llm = ChatAnthropic(
-        model="claude-opus-4-20250514",
-        max_tokens=20000,
-        thinking={"type": "enabled", "budget_tokens": 16000},
-    )
-
-    response = grader_llm.with_structured_output(HeadToHeadRanking).invoke(HEAD_TO_HEAD_PROMPT.format(
+    response = _grade(HeadToHeadRanking, HEAD_TO_HEAD_PROMPT.format(
         question=inputs["messages"][0]["content"],
         answer_a=outputs[0].get("final_report", "N/A"),
         answer_b=outputs[1].get("final_report", "N/A"),
@@ -95,13 +102,7 @@ class Rankings(BaseModel):
 
 # 同时比较多份报告并生成整体排名。
 def free_for_all_evaluator(inputs: dict, outputs: list[dict]) -> list:
-    grader_llm = ChatAnthropic(
-        model="claude-opus-4-20250514",
-        max_tokens=20000,
-        thinking={"type": "enabled", "budget_tokens": 16000},
-    )
-
-    response = grader_llm.with_structured_output(Rankings).invoke(ALL_THREE_PROMPT.format(
+    response = _grade(Rankings, ALL_THREE_PROMPT.format(
         question=inputs["messages"][0]["content"],
         answer_a=outputs[0].get("final_report", "N/A"),
         answer_b=outputs[1].get("final_report", "N/A"),

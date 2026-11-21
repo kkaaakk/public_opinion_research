@@ -1,10 +1,9 @@
 # 使用结构化模型评分评估报告的质量、相关性、结构、正确性和证据支撑。
-from typing import cast
+import asyncio
 
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from open_deep_research.llm.generation import generate_structured
 from open_deep_research.time_utils import get_today_str
 from tests.prompts import (
     COMPLETENESS_PROMPT,
@@ -15,9 +14,12 @@ from tests.prompts import (
     STRUCTURE_PROMPT,
 )
 
-eval_model = ChatOpenAI(
-    model="gpt-4.1",
-)
+
+def _evaluate(schema, messages, *, max_attempts=1):
+    result, _ = asyncio.run(generate_structured(
+        "openai:gpt-4.1", messages, schema, max_attempts=max_attempts,
+    ))
+    return result
 
 # 把评估输入整理为统一研究问题文本。
 def _format_input_query(inputs: dict) -> str:
@@ -48,16 +50,10 @@ def eval_overall_quality(inputs: dict, outputs: dict):
     query = _format_input_query(inputs)
     final_report = outputs["final_report"]
     user_input_content = f"""User input: {query}\n\nReport: \n\n{final_report}\n\nEvaluate whether the report meets the criteria and provide detailed justification for your evaluation."""
-    if isinstance(eval_model, ChatAnthropic):
-        user_input_content = [{
-            "type": "text",
-            "text": user_input_content,
-            "cache_control": {"type": "ephemeral", "ttl": "1h"}
-        }]
-    eval_result = cast(OverallQualityScore, eval_model.with_structured_output(OverallQualityScore).invoke([
+    eval_result = _evaluate(OverallQualityScore, [
         {"role": "system", "content": OVERALL_QUALITY_PROMPT.format(today=get_today_str())},
         {"role": "user", "content": user_input_content}
-    ]))
+    ])
     return [
         {"key": "research_depth_score", "score": eval_result.research_depth / 5},
         {"key": "source_quality_score", "score": eval_result.source_quality / 5},
@@ -79,17 +75,11 @@ def eval_relevance(inputs: dict, outputs: dict):
     query = _format_input_query(inputs)
     final_report = outputs["final_report"]
     user_input_content = f"""User input: {query}\n\nReport: \n\n{final_report}\n\nEvaluate whether the report meets the criteria and provide detailed justification for your evaluation."""
-    if isinstance(eval_model, ChatAnthropic):
-        user_input_content = [{
-            "type": "text",
-            "text": user_input_content,
-            "cache_control": {"type": "ephemeral", "ttl": "1h"}
-        }]
 
-    eval_result = cast(RelevanceScore, eval_model.with_structured_output(RelevanceScore).invoke([
+    eval_result = _evaluate(RelevanceScore, [
         {"role": "system", "content": RELEVANCE_PROMPT.format(today=get_today_str())},
         {"role": "user", "content": user_input_content}
-    ]))
+    ])
     return {"key": "relevance_score", "score": eval_result.score / 5, "comment": eval_result.reasoning}
 
 
@@ -104,16 +94,10 @@ def eval_structure(inputs: dict, outputs: dict):
     query = _format_input_query(inputs)
     final_report = outputs["final_report"]
     user_input_content = STRUCTURE_PROMPT.format(user_question=query, report=final_report, today=get_today_str())
-    if isinstance(eval_model, ChatAnthropic):
-        user_input_content = [{
-            "type": "text",
-            "text": user_input_content,
-            "cache_control": {"type": "ephemeral", "ttl": "1h"}
-        }]
 
-    eval_result = cast(StructureScore, eval_model.with_structured_output(StructureScore).invoke([
+    eval_result = _evaluate(StructureScore, [
         {"role": "user", "content": user_input_content}
-    ]))
+    ])
     return {"key": "structure_and_cohesiveness_score", "score": eval_result.score / 5, "comment": eval_result.reasoning}
 
 
@@ -129,16 +113,10 @@ def eval_correctness(inputs: dict, outputs: dict, reference_outputs: dict):
     final_report = outputs["final_report"]
     answer = reference_outputs["answer"]
     user_input_content = CORRECTNESS_PROMPT.format(user_question=query, report=final_report, answer=answer, today=get_today_str())
-    if isinstance(eval_model, ChatAnthropic):
-        user_input_content = [{
-            "type": "text",
-            "text": user_input_content,
-            "cache_control": {"type": "ephemeral", "ttl": "1h"}
-        }]
 
-    eval_result = cast(CorrectnessScore, eval_model.with_structured_output(CorrectnessScore).invoke([
+    eval_result = _evaluate(CorrectnessScore, [
         {"role": "user", "content": user_input_content}
-    ]))
+    ])
     return {"key": "correctness_score", "score": eval_result.score / 5, "comment": eval_result.reasoning}
 
 # 保存单个报告主张及是否有上下文证据支撑的判断。
@@ -158,16 +136,8 @@ def eval_groundedness(inputs: dict, outputs: dict):
     context = str(outputs["raw_notes"])
 
     user_input_content = GROUNDEDNESS_PROMPT.format(context=context, report=final_report, today=get_today_str())
-    if isinstance(eval_model, ChatAnthropic):
-        user_input_content = [{
-            "type": "text",
-            "text": user_input_content,
-            "cache_control": {"type": "ephemeral", "ttl": "1h"}
-        }]
 
-    eval_result = cast(GroundednessScore, eval_model.with_structured_output(GroundednessScore).with_retry(stop_after_attempt=3).invoke([
-        {"role": "user", "content": user_input_content},
-    ]))
+    eval_result = _evaluate(GroundednessScore, [{"role": "user", "content": user_input_content}], max_attempts=3)
     # normalize to 0-1
     grounded_claims = [claim for claim in eval_result.claims if claim.grounded]
     return {"key": "groundedness_score", "score": len(grounded_claims) / len(eval_result.claims), "comment": str(eval_result.claims)}
@@ -185,14 +155,8 @@ def eval_completeness(inputs: dict, outputs: dict):
     final_report = outputs["final_report"]
     research_brief = outputs["research_brief"]
     user_input_content = COMPLETENESS_PROMPT.format(user_question=query, research_brief=research_brief, report=final_report, today=get_today_str())
-    if isinstance(eval_model, ChatAnthropic):
-        user_input_content = [{
-            "type": "text",
-            "text": user_input_content,
-            "cache_control": {"type": "ephemeral", "ttl": "1h"}
-        }]
 
-    eval_result = cast(CompletenessScore, eval_model.with_structured_output(CompletenessScore).invoke([
+    eval_result = _evaluate(CompletenessScore, [
         {"role": "user", "content": user_input_content}
-    ]))
+    ])
     return {"key": "completeness_score", "score": eval_result.score / 5, "comment": eval_result.reasoning}

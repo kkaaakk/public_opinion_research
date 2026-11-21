@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 
+from open_deep_research.budget import ModelBudgetExceeded
 from open_deep_research.rag.loaders.knowledge import (
     SUPPORTED_IMAGE_EXTENSIONS,
     _image_mime_type,
     extract_image_bytes_vision_text,
 )
+from open_deep_research.workflow.execution import is_execution_control_failure
 
 LOGGER = logging.getLogger(__name__)
 DATA_IMAGE_RE = re.compile(
@@ -64,6 +66,8 @@ def build_query_image_context(
                 mime_type=mime_type,
             ).strip()
         except Exception as exc:
+            if is_execution_control_failure(exc) and not isinstance(exc, ModelBudgetExceeded):
+                raise
             LOGGER.warning("Failed Vision extraction for query image %s: %s", image_index, exc)
             continue
         if not text:

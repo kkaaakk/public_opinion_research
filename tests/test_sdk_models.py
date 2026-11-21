@@ -15,7 +15,290 @@ from agents.testing import ScriptedModel, assistant_message
 from openai import AsyncOpenAI, AuthenticationError, InternalServerError, RateLimitError
 
 import open_deep_research.models.sdk as sdk_models
-from open_deep_research.models.factory import ModelConfigurationError
+from open_deep_research.budget import (
+    ModelBudgetExceeded,
+    budget_capture,
+    model_budget_admission,
+)
+from open_deep_research.configuration import Configuration
+from open_deep_research.llm import generation
+from open_deep_research.llm.generation import (
+    ModelOutputError,
+    generate_structured,
+    generate_text,
+)
+from open_deep_research.models import ModelConfigurationError
+from open_deep_research.state import ResearchReview, Summary
+from open_deep_research.workflow.brief import PlanDecision
+
+
+def _mock_http(monkeypatch, handler):
+    client_class = sdk_models.DefaultAsyncHttpxClient
+    monkeypatch.setattr(
+        sdk_models,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: client_class(
+            transport=httpx2.MockTransport(handler), **kwargs
+        ),
+    )
+    monkeypatch.setenv("GET_API_KEYS_FROM_CONFIG", "false")
+    for key in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ARK_API_KEY", "GROQ_API_KEY"):
+        monkeypatch.setenv(key, "fixture-key")
+    monkeypatch.delenv("OPENAI_MODEL_API", raising=False)
+
+
+def _chat_text(request, *, content, finish="stop"):
+    body = _reply("chat_completions", 2, json.loads(request.content)["model"])
+    choice = body["choices"][0]
+    choice["message"]["content"] = content
+    choice["finish_reason"] = finish
+    return body
+
+
+def test_openai_plan_and_review_validate_and_bill_each_structured_attempt(monkeypatch):
+    brief = "# Scope\n\n## Objective\nVerify recall claims and document independent evidence."
+    payloads = iter(
+        [
+            {"action": "ready", "questions": [], "brief_md": "not Markdown"},
+            {"action": "ready", "questions": [], "brief_md": brief},
+            {
+                "research_complete": False,
+                "next_tasks": [
+                    {
+                        "task_id": "notice",
+                        "objective": "Find notice",
+                        "target_role": "public_signal",
+                        "evidence_needed": "Official recall notice",
+                        "reason": "Verify date",
+                    }
+                ],
+            },
+        ]
+    )
+    bodies = []
+    receipts = []
+
+    async def begin():
+        return len(receipts) + 1
+
+    async def settle(identity, usage):
+        receipts.append((identity, usage))
+
+    def respond(request):
+        assert request.url.path.endswith("/responses")
+        request_body = json.loads(request.content)
+        bodies.append(request_body)
+        body = _reply("responses", 2, request_body["model"])
+        body["output"][0]["content"][0]["text"] = json.dumps(next(payloads))
+        return httpx2.Response(200, json=body)
+
+    _mock_http(monkeypatch, respond)
+    monkeypatch.setattr(generation, "begin_model_call", begin)
+    monkeypatch.setattr(generation, "end_model_call", settle)
+    with budget_capture() as captured:
+        decision, used = asyncio.run(
+            generate_structured(
+                "openai:fixture",
+                "Investigate recall",
+                PlanDecision,
+                max_attempts=2,
+                max_tokens=450,
+            )
+        )
+        review, review_usage = asyncio.run(
+            generate_structured(
+                "openai:fixture",
+                "Review recall evidence",
+                ResearchReview,
+            )
+        )
+    assert decision.brief_md == brief and used["total_tokens"] == 30
+    assert (
+        review.next_tasks[0].priority == "medium" and review_usage["model_calls"] == 1
+    )
+    assert [identity for identity, _ in receipts] == [1, 2, 3]
+    assert [usage["total_tokens"] for _, usage in receipts] == [15, 15, 15]
+    assert captured["model_calls"] == 3 and captured["total_tokens"] == 45
+    assert bodies[0]["text"]["format"]["schema"]["title"] == "PlanDecision"
+    assert bodies[0]["max_output_tokens"] == 450
+    assert bodies[2]["text"]["format"]["schema"]["title"] == "ResearchReview"
+    assert all(request.get("tools", []) == [] for request in bodies)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "deepseek:deepseek-flash",
+        "deepseek:deepseek-v4-flash",
+        "groq:fixture",
+    ],
+)
+def test_json_mode_uses_sdk_schema_and_preserves_plain_text_settings(
+    monkeypatch, reference
+):
+    bodies = []
+
+    def respond(request):
+        assert request.url.path.endswith("/chat/completions")
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            json=_chat_text(
+                request,
+                content='{"summary":"Evidence","key_excerpts":"Quote"}'
+                if len(bodies) == 1
+                else "plain",
+            ),
+        )
+
+    _mock_http(monkeypatch, respond)
+    summary, usage = asyncio.run(
+        generate_structured(reference, "Summarize", Summary, max_tokens=140)
+    )
+    plain, plain_usage = asyncio.run(generate_text(reference, "Answer", max_tokens=65))
+    assert (
+        isinstance(summary, Summary)
+        and summary.key_excerpts == "Quote"
+        and plain == "plain"
+    )
+    assert usage["model_calls"] == plain_usage["model_calls"] == 1
+    structured, text = bodies
+    assert structured["response_format"] == {"type": "json_object"}
+    assert structured["max_tokens"] == 140 and text["max_tokens"] == 65
+    assert "key_excerpts" in structured["messages"][0]["content"]
+    assert "tool_choice" not in structured and "response_format" not in text
+    if reference.startswith("deepseek:"):
+        assert structured["thinking"] == {"type": "disabled"}
+        assert "thinking" not in text
+
+
+@pytest.mark.parametrize("model", ["ep-fixture", "doubao-seed-2-0-mini-260428"])
+def test_ark_uses_one_output_cap_and_function_schema(monkeypatch, model):
+    def respond(request):
+        assert request.url.path.endswith("/api/v3/chat/completions")
+        sent = json.loads(request.content)
+        assert sent["model"] == model
+        assert sent["max_completion_tokens"] == 321 and "max_tokens" not in sent
+        assert "response_format" not in sent
+        assert sent["tool_choice"]["function"]["name"] == "Summary"
+        function = sent["tools"][0]["function"]
+        assert function["name"] == "Summary"
+        assert function["parameters"]["required"] == ["summary", "key_excerpts"]
+        body = _reply("chat_completions", 1, model)
+        body["choices"][0]["message"]["tool_calls"][0]["function"] = {
+            "name": "Summary",
+            "arguments": '{"summary":"Evidence","key_excerpts":"Quote"}',
+        }
+        return httpx2.Response(200, json=body)
+
+    _mock_http(monkeypatch, respond)
+    monkeypatch.setenv("ARK_BASE_URL", "https://ark.example.test/api/v3")
+    result, usage = asyncio.run(
+        generate_structured(
+            f"volcengine:{model}",
+            "Summarize",
+            Summary,
+            max_tokens=321,
+        )
+    )
+    assert result.summary == "Evidence" and usage["total_tokens"] == 15
+
+
+@pytest.mark.parametrize(
+    "status,content,message",
+    [
+        ("length", "Visible but partial", "truncated"),
+        ("length", "", "truncated"),
+        ("content_filter", "partial before policy filter", "refused"),
+        ("stop", "", "empty"),
+        (None, "No status", "confirm model completion"),
+    ],
+)
+def test_chat_rejects_incomplete_output_after_usage_settlement(
+    monkeypatch, status, content, message
+):
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx2.Response(
+            200,
+            json=_chat_text(request, content=content, finish=status),
+        ),
+    )
+    with budget_capture() as usage, pytest.raises(ModelOutputError, match=message):
+        asyncio.run(generate_text("deepseek:deepseek-flash", "Write a full report"))
+    assert usage["model_calls"] == 1 and usage["total_tokens"] == 15
+
+
+@pytest.mark.parametrize(
+    "status,reason,match",
+    [
+        ("incomplete", "max_output_tokens", "truncated"),
+        ("incomplete", "content_filter", "refused"),
+        ("failed", None, "confirm model completion"),
+    ],
+)
+def test_responses_checks_top_level_completion_even_with_text(
+    monkeypatch, status, reason, match
+):
+    def respond(request):
+        body = _reply("responses", 2, "fixture")
+        body["status"] = status
+        body["incomplete_details"] = {"reason": reason} if reason else None
+        return httpx2.Response(200, json=body)
+
+    _mock_http(monkeypatch, respond)
+    with budget_capture() as used, pytest.raises(ModelOutputError, match=match):
+        asyncio.run(generate_text("openai:fixture", "Write the report"))
+    assert used["total_tokens"] == 15
+
+
+def test_retry_admission_sees_consumed_budget_and_never_sends_rejected_attempt(
+    monkeypatch,
+):
+    sent = []
+
+    def respond(request):
+        sent.append(request)
+        return httpx2.Response(
+            200, json=_chat_text(request, content='{"unknown":false}')
+        )
+
+    _mock_http(monkeypatch, respond)
+    cfg = Configuration(budget_enabled=True, max_model_calls=2)
+    with budget_capture() as used, model_budget_admission(cfg, dict):
+        with pytest.raises(ModelBudgetExceeded):
+            asyncio.run(
+                generate_structured(
+                    "deepseek:deepseek-flash",
+                    "Try",
+                    Summary,
+                    max_attempts=3,
+                )
+            )
+    assert len(sent) == used["model_calls"] == 1 and used["total_tokens"] == 15
+
+
+def test_sdk_never_retries_transport_or_http_errors_internally(monkeypatch):
+    sent = []
+
+    def respond(request):
+        sent.append(request)
+        return httpx2.Response(503, json={"error": {"message": "fixture unavailable"}})
+
+    _mock_http(monkeypatch, respond)
+    with (
+        budget_capture() as used,
+        pytest.raises(RuntimeError, match="InternalServerError"),
+    ):
+        asyncio.run(
+            generate_structured(
+                "deepseek:deepseek-flash",
+                "Try",
+                Summary,
+                max_attempts=3,
+            )
+        )
+    assert len(sent) == used["model_calls"] == 1 and used["total_tokens"] == 0
 
 
 def _reply(api, turn, model):
@@ -155,15 +438,14 @@ def test_official_sdk_provider_model_tool_model_protocol_and_configuration(
             )
 
         def client_factory(**kwargs):
-            assert kwargs == {"api_key": "fixture-credential", "base_url": endpoint}
-            client = AsyncOpenAI(
-                **kwargs,
-                max_retries=0,
-                http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
-            )
+            assert kwargs["api_key"] == "fixture-credential"
+            assert kwargs["base_url"] == endpoint
+            assert kwargs["max_retries"] == 0
+            client = AsyncOpenAI(**kwargs)
             clients.append(client)
             return client
 
+        _mock_http(monkeypatch, handler)
         monkeypatch.setattr(sdk_models, "AsyncOpenAI", client_factory)
         monkeypatch.setenv("GET_API_KEYS_FROM_CONFIG", "true")
         config = {
@@ -278,11 +560,11 @@ def test_sdk_propagates_official_provider_errors_without_a_custom_loop(
 
 @pytest.mark.parametrize(
     "provider",
-    ["anthropic", "bedrock", "cohere", "google", "google_genai", "mistral", "ollama"],
+    ["bedrock", "google_vertexai"],
 )
 def test_unverified_sdk_providers_fail_explicitly(provider):
     async def scenario():
-        with pytest.raises(ModelConfigurationError, match="No verified SDK adapter"):
+        with pytest.raises(ModelConfigurationError, match="has no SDK route"):
             async with sdk_models.sdk_model(f"{provider}:fixture"):
                 raise AssertionError("An unsupported provider was admitted")
 
@@ -296,7 +578,9 @@ def test_sdk_credentials_and_explicit_endpoint_preserve_existing_resolution(
         created = []
 
         def factory(**kwargs):
-            created.append(kwargs)
+            created.append(
+                {key: value for key, value in kwargs.items() if key != "http_client"}
+            )
             return AsyncOpenAI(**kwargs)
 
         monkeypatch.setattr(sdk_models, "AsyncOpenAI", factory)
@@ -315,10 +599,12 @@ def test_sdk_credentials_and_explicit_endpoint_preserve_existing_resolution(
             {
                 "api_key": "fixture-env-key",
                 "base_url": "https://env.example.test/api/v3",
+                "max_retries": 0,
             },
             {
                 "api_key": "explicit-fixture-key",
                 "base_url": "https://explicit.example.test/v3",
+                "max_retries": 0,
             },
         ]
         monkeypatch.delenv("ARK_API_KEY")

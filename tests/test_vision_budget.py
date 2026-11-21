@@ -1,14 +1,11 @@
-"""Vision requests use the real LangChain lifecycle and the existing ledger."""
+"""Vision requests use SDK Usage and the existing ledger."""
 
 import asyncio
 import threading
-from typing import Any
 
+import httpx2
 import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk
-from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.runnables import RunnableLambda
+from sdk_model_support import Reply, install_inference, install_sequence
 
 from open_deep_research.budget import (
     ModelBudgetExceeded,
@@ -21,29 +18,24 @@ from open_deep_research.rag.loaders import knowledge
 USAGE = {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15}
 
 
-class VisionModel(BaseChatModel):
-    requests: list = []
-    usage: dict | None = USAGE
-    error: bool = False
+class VisionModel:
+    def __init__(self, *, usage=USAGE, error=False, status="stop"):
+        self.requests = []
+        self.usage = usage or {}
+        self.error = error
+        self.status = status
 
-    @property
-    def _llm_type(self):
-        return "vision-budget-fixture"
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        self.requests.append(messages)
+    def __call__(self, request):
+        if request.settings is None or request.model_ref != "openai:vision-fixture":
+            return None
+        self.requests.append(request.messages)
         if self.error:
             raise RuntimeError("provider unavailable")
-        return ChatResult(
-            generations=[
-                ChatGeneration(
-                    message=AIMessage(
-                        content=" visible text ",
-                        usage_metadata=self.usage,
-                        response_metadata={"model_name": "vision-fixture"},
-                    )
-                )
-            ]
+        return Reply(
+            " visible text ",
+            self.usage.get("input_tokens", 0),
+            self.usage.get("output_tokens", 0),
+            status=self.status,
         )
 
 
@@ -58,46 +50,40 @@ def test_vision_success_captures_one_attempt_and_only_reported_tokens(
     monkeypatch, usage
 ):
     model = VisionModel(usage=usage)
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
     with budget_capture() as captured:
         assert invoke() == "visible text"
     assert captured["model_calls"] == 1
     assert captured["total_tokens"] == (15 if usage else 0)
     assert captured["input_tokens"] == (12 if usage else 0)
-    assert model.requests[0][0].content == [
-        {"type": "text", "text": "Describe"},
+    assert model.requests[0][0]["content"] == [
+        {"type": "input_text", "text": "Describe"},
         {
-            "type": "image_url",
-            "image_url": {"url": "data:image/jpeg;base64,Zml4dHVyZS1pbWFnZQ=="},
+            "type": "input_image",
+            "image_url": "data:image/jpeg;base64,Zml4dHVyZS1pbWFnZQ==",
+            "detail": "auto",
         },
     ]
 
 
 def test_vision_provider_failure_counts_attempt_and_preserves_exception(monkeypatch):
     model = VisionModel(error=True)
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
     with budget_capture() as captured:
-        with pytest.raises(RuntimeError, match="provider unavailable"):
+        with pytest.raises(RuntimeError, match="RuntimeError") as failure:
             invoke()
+        assert str(failure.value.__cause__) == "provider unavailable"
     assert captured["model_calls"] == 1
     assert captured["total_tokens"] == 0
 
 
-@pytest.mark.parametrize("inside_runnable", [False, True])
-def test_vision_parse_failure_preserves_observed_usage_once(
-    monkeypatch, inside_runnable
-):
-    def fail(_):
-        raise ValueError("parse failed")
-
-    model = VisionModel()
-    runnable = model | RunnableLambda(fail) if inside_runnable else model
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: runnable)
-    if not inside_runnable:
-        monkeypatch.setattr(knowledge, "_message_content_to_text", fail)
+@pytest.mark.parametrize("status", ["length", "content_filter"])
+def test_vision_rejected_output_preserves_observed_usage_once(monkeypatch, status):
+    model = VisionModel(status=status)
+    install_inference(monkeypatch, model)
     with budget_capture() as outer:
         with budget_capture() as captured:
-            with pytest.raises(ValueError, match="parse failed"):
+            with pytest.raises(ValueError, match="truncated|refused"):
                 invoke()
         assert outer["model_calls"] == 0
     assert captured["model_calls"] == len(model.requests) == 1
@@ -106,7 +92,7 @@ def test_vision_parse_failure_preserves_observed_usage_once(
 
 def test_vision_budget_rejects_request_before_provider_start(monkeypatch):
     model = VisionModel()
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
     with budget_capture() as captured:
         with model_budget_admission(
             Configuration(budget_enabled=True, max_model_calls=1), lambda: {}
@@ -119,7 +105,7 @@ def test_vision_budget_rejects_request_before_provider_start(monkeypatch):
 
 def test_vision_repeated_calls_consume_remaining_budget(monkeypatch):
     model = VisionModel()
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
     with budget_capture() as role:
         with model_budget_admission(
             Configuration(budget_enabled=True, max_model_calls=2), lambda: role
@@ -134,10 +120,10 @@ def test_vision_repeated_calls_consume_remaining_budget(monkeypatch):
 def test_local_file_encoding_and_construction_errors_are_not_model_attempts(
     monkeypatch, tmp_path
 ):
-    def fail(**kwargs):
+    def fail(*args):
         raise ValueError("invalid model configuration")
 
-    monkeypatch.setattr(knowledge, "init_chat_model", fail)
+    install_inference(monkeypatch, lambda request: pytest.fail("unexpected request"), open_model=fail)
     with budget_capture() as captured:
         with pytest.raises(FileNotFoundError):
             knowledge.extract_image_vision_text(
@@ -171,14 +157,9 @@ def test_intake_vision_delta_reaches_success_patch_once(monkeypatch, outcome):
     model = VisionModel(
         error=outcome == "provider_failure",
         usage=None if outcome == "no_usage" else USAGE,
+        status="length" if outcome == "parse_failure" else "stop",
     )
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
-    if outcome == "parse_failure":
-
-        def fail(_):
-            raise ValueError("unreadable content")
-
-        monkeypatch.setattr(knowledge, "_message_content_to_text", fail)
+    install_inference(monkeypatch, model)
     state = {
         "messages": [
             HumanMessage(
@@ -215,7 +196,7 @@ def test_intake_vision_admission_preserves_final_report_reserve(monkeypatch):
     from open_deep_research.workflow import intake
 
     model = VisionModel()
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
     state = {
         "messages": [
             HumanMessage(
@@ -237,7 +218,7 @@ def test_intake_failure_after_vision_preserves_existing_step_error_accounting(
     from open_deep_research.workflow import intake
 
     model = VisionModel()
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
 
     def build(*args, **kwargs):
         invoke()
@@ -251,18 +232,18 @@ def test_intake_failure_after_vision_preserves_existing_step_error_accounting(
 
 
 class BlockingVision(VisionModel):
-    started: Any
-    release: Any
-    finished: Any
-    wait_seconds: float = 5
+    def __init__(self, *, started, release, finished, wait_seconds=5, **kwargs):
+        super().__init__(**kwargs)
+        self.started, self.release, self.finished = started, release, finished
+        self.wait_seconds = wait_seconds
 
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+    def __call__(self, request):
+        if request.model_ref != "openai:vision-fixture":
+            return None
         self.started.set()
         try:
-            assert self.release.wait(self.wait_seconds), (
-                "Test did not release the provider request"
-            )
-            return super()._generate(messages, stop, run_manager, **kwargs)
+            assert self.release.wait(self.wait_seconds), "Test did not release provider request"
+            return super().__call__(request)
         finally:
             self.finished.set()
 
@@ -285,7 +266,7 @@ def test_intake_waits_for_started_vision_before_settling_cancel_or_timeout(
         finished=threading.Event(),
         error=provider_error,
     )
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    install_inference(monkeypatch, model)
     state = {
         "messages": [
             HumanMessage(
@@ -337,131 +318,62 @@ def test_intake_waits_for_started_vision_before_settling_cancel_or_timeout(
 
 
 def test_real_google_vision_reports_usage_without_optional_model_version(monkeypatch):
-    from google.genai.types import (
-        Candidate,
-        Content,
-        GenerateContentResponse,
-        GenerateContentResponseUsageMetadata,
-        Part,
-    )
-    from langchain_core.callbacks import BaseCallbackHandler
+    import json
+
     from test_query_images import PNG_BYTES
+    from test_sdk_models import _chat_text, _mock_http
 
-    from open_deep_research.models import create_chat_model
-
-    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "false")
-    observed = []
-
-    class ObserveRaw(BaseCallbackHandler):
-        def on_llm_end(self, response, **kwargs):
-            observed.append(response.generations[0][0].message)
-
-    model = create_chat_model(
-        "google_genai:gemini-2.5-pro", api_key="fixture-only", callbacks=[ObserveRaw()]
-    )
     requests = []
 
-    def generate(**kwargs):
-        requests.append(kwargs)
-        return GenerateContentResponse(
-            candidates=[
-                Candidate(
-                    content=Content(role="model", parts=[Part(text="visible")]),
-                    finish_reason="STOP",
-                )
-            ],
-            usage_metadata=GenerateContentResponseUsageMetadata(
-                prompt_token_count=12,
-                candidates_token_count=3,
-                total_token_count=15,
-            ),
-        )
+    def respond(request):
+        assert request.url.host == "generativelanguage.googleapis.com"
+        requests.append(json.loads(request.content))
+        body = _chat_text(request, content="visible")
+        body.pop("model")
+        return httpx2.Response(200, json=body)
 
-    monkeypatch.setattr(model.client.models, "generate_content", generate)
-    monkeypatch.setattr(knowledge, "init_chat_model", lambda **kw: model)
+    _mock_http(monkeypatch, respond)
+    monkeypatch.setenv("GOOGLE_API_KEY", "fixture-only")
     with budget_capture() as captured:
-        assert (
-            knowledge.extract_image_bytes_vision_text(
-                PNG_BYTES,
-                "google_genai:gemini-2.5-pro",
-                "Describe",
-                123,
-            )
-            == "visible"
-        )
+        assert knowledge.extract_image_bytes_vision_text(
+            PNG_BYTES, "google_genai:gemini-2.5-pro", "Describe", 123,
+        ) == "visible"
     assert len(requests) == captured["model_calls"] == 1
+    assert requests[0]["messages"][0]["content"][1]["type"] == "image_url"
     assert captured["total_tokens"] == 15
-    assert not observed[0].response_metadata.get("model_name")
 
 
 @pytest.mark.parametrize("named", [False, True])
-def test_observable_partial_usage_survives_a_failed_model_stream(monkeypatch, named):
-    class StreamFailure(VisionModel):
-        def _stream(self, messages, stop=None, run_manager=None, **kwargs):
-            self.requests.append(messages)
-            yield ChatGenerationChunk(
-                message=AIMessageChunk(
-                    content="partial",
-                    usage_metadata=USAGE,
-                    response_metadata={"model_name": "stream-fixture"} if named else {},
-                )
-            )
-            raise RuntimeError("provider stream interrupted")
+def test_observable_partial_usage_survives_sdk_rejecting_billed_output(monkeypatch, named):
+    from test_sdk_models import _mock_http, _reply
 
-    model = StreamFailure()
+    def respond(request):
+        body = _reply("responses", 2, "vision-fixture")
+        body["status"] = "incomplete"
+        body["incomplete_details"] = {"reason": "max_output_tokens"}
+        if not named:
+            body.pop("model")
+        return httpx2.Response(200, json=body)
 
-    def consume(payload):
-        return list(model.stream(payload))
-
-    monkeypatch.setattr(
-        knowledge, "init_chat_model", lambda **kw: RunnableLambda(consume)
-    )
-    with budget_capture() as captured:
-        with pytest.raises(RuntimeError, match="provider stream interrupted"):
-            invoke()
-    assert captured["model_calls"] == len(model.requests) == 1
-    assert captured["total_tokens"] == 15
+    _mock_http(monkeypatch, respond)
+    with budget_capture() as captured, pytest.raises(ValueError, match="truncated"):
+        invoke()
+    assert captured["model_calls"] == 1 and captured["total_tokens"] == 15
 
 
-def test_nameless_structured_retry_counts_each_observed_response_once():
-    from test_token_accounting import ScriptedChat, _chat_result, _script
-
-    from open_deep_research.budget import (
-        invoke_model_with_budget,
-        structured_output_chain,
-    )
+def test_nameless_structured_retry_counts_each_observed_response_once(monkeypatch):
+    from open_deep_research.llm.generation import generate_structured
     from open_deep_research.state import ClarifyWithUser
 
-    raw = [
-        AIMessage(
-            content="",
-            usage_metadata=USAGE,
-            tool_calls=[
-                {
-                    "name": "ClarifyWithUser",
-                    "id": f"call-{index}",
-                    "args": arguments,
-                }
-            ],
-        )
-        for index, arguments in enumerate(
-            [
-                {"invalid": True},
-                {"need_clarification": False, "question": "", "verification": "ok"},
-            ]
-        )
-    ]
-    _script(lambda: _chat_result(raw[0]), lambda: _chat_result(raw[1]))
+    install_sequence(
+        monkeypatch,
+        Reply({"invalid": True}, 12, 3),
+        Reply({"need_clarification": False, "question": "", "verification": "ok"}, 12, 3),
+    )
     with budget_capture() as captured:
-        result, delta = invoke_model_with_budget(
-            structured_output_chain(
-                ScriptedChat(),
-                ClarifyWithUser,
-                max_attempts=2,
-            ),
-            "question",
-        )
-    assert result["parsed"].verification == "ok"
+        result, delta = asyncio.run(generate_structured(
+            "openai:fixture", "question", ClarifyWithUser, max_attempts=2
+        ))
+    assert result.verification == "ok"
     assert captured["model_calls"] == delta["model_calls"] == 2
     assert captured["total_tokens"] == delta["total_tokens"] == 30
-    assert all(not message.response_metadata.get("model_name") for message in raw)

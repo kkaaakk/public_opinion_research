@@ -154,28 +154,9 @@ def has_unconfirmed_bills_or_effects(run_id):
 
 
 async def record_scripted_model_attempt():
-    from langchain_core.language_models.fake_chat_models import (
-        FakeMessagesListChatModel,
-    )
-    from langchain_core.messages import AIMessage, HumanMessage
+    from open_deep_research.llm.generation import generate_text
 
-    from open_deep_research.budget import ainvoke_model_with_budget
-
-    model = FakeMessagesListChatModel(
-        responses=[
-            AIMessage(
-                content="controlled failed review",
-                usage_metadata={
-                    "input_tokens": 2,
-                    "output_tokens": 0,
-                    "total_tokens": 2,
-                },
-            )
-        ]
-    )
-    await ainvoke_model_with_budget(
-        model, [HumanMessage(content="test review")], model_name="fixture:review"
-    )
+    await generate_text("openai:fixture-review-attempt", "test review")
 
 
 def retry_observed_failure(case, run, key, observed):

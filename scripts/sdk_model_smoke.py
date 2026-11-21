@@ -8,7 +8,7 @@ import logging
 
 from agents import Agent, ModelSettings, RunConfig, Runner
 
-from open_deep_research.models.factory import parse_model_ref
+from open_deep_research.models import parse_model_ref
 from open_deep_research.models.sdk import sdk_model
 
 LOGGER = logging.getLogger(__name__)

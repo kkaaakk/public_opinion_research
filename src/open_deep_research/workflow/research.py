@@ -4,16 +4,11 @@
 import logging
 from typing import Any
 
-from langchain_core.messages import (
-    HumanMessage,
-)
 from langchain_core.runnables import RunnableConfig
 
-from open_deep_research.budget import (
-    ainvoke_model_with_budget,
-    structured_output_chain,
-)
+from open_deep_research.budget import model_budget_admission
 from open_deep_research.configuration import Configuration
+from open_deep_research.llm.generation import generate_structured
 from open_deep_research.prompts import (
     research_review_prompt,
 )
@@ -24,9 +19,6 @@ from open_deep_research.state import (
     ResearchRoleResult,
     ResearchTask,
 )
-
-# Initialize a configurable model that we will use throughout the agent
-from open_deep_research.workflow import shared
 from open_deep_research.workflow.state_utils import (
     agents_state,
     coerce_research_review,
@@ -149,30 +141,15 @@ async def research_review(state: DeepResearchState, config: RunnableConfig) -> d
             previous_review=previous_review_text,
         )
     )
-    review_model_config: dict[str, Any] = {
-        "model": configurable.research_model,
-        "provider_config": config,
-        "tags": ["langsmith:nostream"],
-    }
-    if configurable.research_model_max_tokens is not None:
-        review_model_config["max_tokens"] = configurable.research_model_max_tokens
-
-    reviewer = structured_output_chain(
-        shared.configurable_model.with_config(review_model_config),
-        ResearchReview,
-        max_attempts=configurable.max_structured_output_retries,
-    )
-    response, review_budget = await ainvoke_model_with_budget(
-        reviewer,
-        [HumanMessage(content=prompt)],
-        model_name=configurable.research_model,
-        structured_output=True,
-        component=f"research_review_round_{current_round}",
-    )
-    review = coerce_research_review(response["parsed"])
-    if review is None:
-        raise TypeError(
-            "Research review model returned an invalid ResearchReview structured output."
+    with model_budget_admission(configurable, lambda: runtime_state(state).get("budget", {})):
+        review, review_budget = await generate_structured(
+            configurable.research_model,
+            prompt,
+            ResearchReview,
+            config=config,
+            max_tokens=configurable.research_model_max_tokens,
+            max_attempts=configurable.max_structured_output_retries,
+            component=f"research_review_round_{current_round}",
         )
 
     return {

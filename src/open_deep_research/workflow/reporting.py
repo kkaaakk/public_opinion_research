@@ -7,14 +7,12 @@ from typing import Any, Callable
 
 from langchain_core.messages import (
     AIMessage,
-    HumanMessage,
     get_buffer_string,
 )
 from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.budget import (
     ModelBudgetExceeded,
-    ainvoke_model_with_budget,
     append_budget_summary,
     budget_capture,
     budget_usage_with_reason,
@@ -34,6 +32,7 @@ from open_deep_research.llm.context import (
     resolve_context_capacity,
 )
 from open_deep_research.llm.errors import is_token_limit_exceeded
+from open_deep_research.llm.generation import generate_text
 from open_deep_research.prompts import (
     final_section_writer_instructions,
     public_opinion_final_report_generation_prompt,
@@ -44,9 +43,6 @@ from open_deep_research.state import (
     Section,
 )
 from open_deep_research.time_utils import get_today_str
-
-# Initialize a configurable model that we will use throughout the agent
-from open_deep_research.workflow import shared
 from open_deep_research.workflow.execution import (
     gather_owned,
     native_step_available,
@@ -145,7 +141,8 @@ async def _write_sections_parallel(
     sections: list[Section],
     *,
     model_name: str,
-    model_config: dict[str, Any],
+    config: RunnableConfig,
+    max_tokens: int | None = None,
     prompt_for: Callable[[Section], str],
     log_label: str,
     failure_reason_for: Callable[[Section], str],
@@ -158,13 +155,13 @@ async def _write_sections_parallel(
         failure_reason = ""
         with budget_capture() as response_budget:
             try:
-                writer = shared.configurable_model.with_config(model_config)
-                response, _ = await ainvoke_model_with_budget(
-                    writer,
-                    [HumanMessage(content=prompt_for(section))],
-                    model_name=model_name,
+                section.content, _ = await generate_text(
+                    model_name,
+                    prompt_for(section),
+                    config=config,
+                    max_tokens=max_tokens,
+                    component="report_section",
                 )
-                section.content = str(response.content)
                 section.status = "done"
             except Exception as exc:
                 if not is_token_limit_exceeded(exc, model_name):
@@ -292,20 +289,11 @@ async def section_writer(state: DeepResearchState, config: RunnableConfig) -> di
     writer_model_name = (
         configurable.section_writer_model or configurable.final_report_model
     )
-    writer_max_tokens = configurable.section_writer_model_max_tokens
-
-    writer_model_config: dict[str, Any] = {
-        "model": writer_model_name,
-        "provider_config": config,
-        "tags": ["langsmith:nostream"],
-    }
-    if writer_max_tokens is not None:
-        writer_model_config["max_tokens"] = writer_max_tokens
-
     completed, budget_update = await _write_sections_parallel(
         sections_to_write,
         model_name=writer_model_name,
-        model_config=writer_model_config,
+        config=config,
+        max_tokens=configurable.section_writer_model_max_tokens,
         prompt_for=lambda section: section_writer_from_role_reports_prompt.format(
             section_name=section.name,
             section_description=section.description,
@@ -373,16 +361,10 @@ async def write_final_sections(state: DeepResearchState, config: RunnableConfig)
     if not sections_to_write:
         return {"runtime": {"budget": skipped_budget}}
 
-    writer_model_config: dict[str, Any] = {
-        "model": configurable.final_report_model,
-        "provider_config": config,
-        "tags": ["langsmith:nostream"],
-    }
-
     completed, budget_update = await _write_sections_parallel(
         sections_to_write,
         model_name=configurable.final_report_model,
-        model_config=writer_model_config,
+        config=config,
         prompt_for=lambda section: final_section_writer_instructions.format(
             section_name=section.name,
             section_description=section.description,
@@ -455,19 +437,15 @@ async def compile_final_report(
                     )
                 )
 
-                writer_config: dict[str, Any] = {
-                    "model": configurable.final_report_model,
-                    "provider_config": config,
-                    "tags": ["langsmith:nostream"],
-                }
                 attempt_token = start_budget_capture()
                 fill_failed = False
                 try:
                     try:
-                        fill_response, _ = await ainvoke_model_with_budget(
-                            shared.configurable_model.with_config(writer_config),
-                            [HumanMessage(content=final_report_prompt)],
-                            model_name=configurable.final_report_model,
+                        fill_response, _ = await generate_text(
+                            configurable.final_report_model,
+                            final_report_prompt,
+                            config=config,
+                            component="report_section_fill",
                         )
                     except Exception as exc:
                         if not is_token_limit_exceeded(
@@ -497,7 +475,7 @@ async def compile_final_report(
                     )
                     final_usage = merge_budget_usage(budget_usage, budget_update)
                     report = append_budget_summary(
-                        str(fill_response.content),
+                        fill_response,
                         configurable,
                         final_usage,
                     )
@@ -626,13 +604,6 @@ async def _fallback_report_generation(
                 "runtime": {"budget": budget_update},
             }
 
-    writer_model_config = {
-        "model": configurable.final_report_model,
-        "max_tokens": final_report_max_tokens,
-        "provider_config": config,
-        "tags": ["langsmith:nostream"],
-    }
-
     # Step 3: Attempt report generation with token limit retry logic
     max_retries = 3
     current_retry = 0
@@ -657,10 +628,12 @@ async def _fallback_report_generation(
                 )
 
                 # Generate the final report
-                final_report, _ = await ainvoke_model_with_budget(
-                    shared.configurable_model.with_config(writer_model_config),
-                    [HumanMessage(content=final_report_prompt)],
-                    model_name=configurable.final_report_model,
+                final_report, _ = await generate_text(
+                    configurable.final_report_model,
+                    final_report_prompt,
+                    config=config,
+                    max_tokens=final_report_max_tokens,
+                    component="report_fallback",
                 )
             except Exception as exc:
                 if not is_token_limit_exceeded(exc, configurable.final_report_model):
@@ -677,7 +650,7 @@ async def _fallback_report_generation(
         if not token_limit_hit:
             final_usage = merge_budget_usage(budget_usage, budget_update)
             final_report_content = append_budget_summary(
-                str(final_report.content),
+                final_report,
                 configurable,
                 final_usage,
             )
@@ -824,29 +797,13 @@ async def generate_final_report(state: DeepResearchState, config: RunnableConfig
         "\n\n".join(bounded)
         or "No evidence was collected. Explicitly report that the questions cannot be answered reliably."
     )
-    report, delta = await ainvoke_model_with_budget(
-        shared.configurable_model.with_config(
-            {
-                "model": cfg.final_report_model,
-                "max_tokens": output,
-                "provider_config": config,
-                "tags": ["langsmith:nostream"],
-            }
-        ),
-        [HumanMessage(content=prompt)],
-        model_name=cfg.final_report_model,
+    text, delta = await generate_text(
+        cfg.final_report_model,
+        prompt,
+        config=config,
+        max_tokens=output,
         component="report_synthesis",
     )
-    # Core normalizes string and provider text-block messages through .text.
-    text = report.text
-    if (
-        not text.strip()
-        or report.response_metadata.get("finish_reason") in {"length", "max_tokens"}
-        or report.response_metadata.get("stop_reason") == "max_tokens"
-    ):
-        raise ValueError(
-            "Final report is empty or incomplete; increase the bounded report output budget"
-        )
     content = append_budget_summary(text, cfg, merge_budget_usage(usage, delta))
     return {
         "report": {"final": content},

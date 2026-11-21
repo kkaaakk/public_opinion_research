@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
-from open_deep_research.budget import ainvoke_model_with_budget, structured_output_chain
+from open_deep_research.llm.generation import generate_structured
 
 
 # 承载滚动压缩输出的唯一结构化模型。
@@ -24,8 +24,9 @@ async def summarize_history(
     *,
     previous_summary: str,
     task_context: str,
-    model: Any,
     model_name: str,
+    config: Mapping[str, Any] | None = None,
+    max_tokens: int | None = None,
     max_retries: int = 3,
 ) -> tuple[str, dict[str, Any]]:
     """Summarize one admitted history slice and merge it into the summary."""
@@ -40,32 +41,19 @@ async def summarize_history(
         f"New compactable steps:\n{compactable_text}\n\n"
         "Return RollingCompactOutput."
     )
-    structured = structured_output_chain(
-        model, RollingCompactOutput, max_attempts=max_retries
-    )
-    response, budget_usage = await ainvoke_model_with_budget(
-        structured,
-        [HumanMessage(content=prompt)],
-        model_name=model_name,
-        structured_output=True,
+    response, budget_usage = await generate_structured(
+        model_name,
+        prompt,
+        RollingCompactOutput,
+        config=config,
+        max_tokens=max_tokens,
+        max_attempts=max_retries,
         component="rolling_compact",
     )
-    summary = _coerce_output(response["parsed"]).rolling_summary.strip()
+    summary = response.rolling_summary.strip()
     if not summary:
         raise ValueError("Rolling compaction returned an empty summary.")
     return summary, budget_usage
-
-
-# 兼容模型对象、字典和普通响应，统一为滚动压缩输出模型。
-def _coerce_output(response: Any) -> RollingCompactOutput:
-    if isinstance(response, RollingCompactOutput):
-        return response
-    if isinstance(response, dict):
-        return RollingCompactOutput.model_validate(response)
-    model_dump = getattr(response, "model_dump", None)
-    if callable(model_dump):
-        return RollingCompactOutput.model_validate(model_dump())
-    return RollingCompactOutput(rolling_summary=str(getattr(response, "content", "") or ""))
 
 
 __all__ = ["RollingCompactOutput", "summarize_history"]
