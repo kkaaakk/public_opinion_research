@@ -76,6 +76,48 @@ def is_cancellation(error):
     )
 
 
+def _error_chain_links(error):
+    """Visit causes and grouped failures, flagging implicit ``__context__`` links."""
+    pending = [(error, True)]
+    seen = set()
+    while pending:
+        exc, explicit = pending.pop()
+        if exc is None or id(exc) in seen:
+            continue
+        seen.add(id(exc))
+        yield exc, explicit
+        pending.append((exc.__context__, False))
+        pending.append((exc.__cause__, True))
+        pending.extend((item, explicit) for item in getattr(exc, "exceptions", ()))
+
+
+def is_execution_control_failure(error):
+    """Return whether any error in the causal chain must abort execution.
+
+    Budget/model wrappers and SDK/MCP transports can wrap a lower-level failure.
+    Explicit causes are inspected for cancellation too, while implicit contexts
+    are not: anyio reports an ordinary MCP timeout as ``McpError`` whose context
+    is its internal ``CancelledError``, and that must stay a tool failure.
+    """
+    from open_deep_research.budget import ModelBudgetExceeded
+
+    for cause, explicit in _error_chain_links(error):
+        if isinstance(
+            cause,
+            (
+                ModelBudgetExceeded,
+                ExecutionControlError,
+                SQLAlchemyError,
+                dbos_error.DBOSBaseException,
+                dbos_error.DBOSException,
+            ),
+        ):
+            return True
+        if explicit and is_cancellation(cause):
+            return True
+    return False
+
+
 def failure_kind(error):
     """Classify business failures without publishing exception contents."""
     from open_deep_research.budget import ModelBudgetExceeded
@@ -85,12 +127,12 @@ def failure_kind(error):
         return "execution_control_error"
     if any(is_cancellation(cause) for cause in error_chain(error)):
         return "cancelled"
+    if any(isinstance(cause, ModelBudgetExceeded) for cause in error_chain(error)):
+        return "budget_exhausted"
     if isinstance(
         error, (TimeoutError, asyncio.TimeoutError, dbos_error.DBOSStepTimeoutError)
     ):
         return "timeout"
-    if isinstance(error, ModelBudgetExceeded):
-        return "budget_exhausted"
     if isinstance(error, ModelInvocationError):
         return "model_error"
     if type(error).__name__ == "ToolCallError":
@@ -319,6 +361,45 @@ def start_operation(run_id, workflow_id, executor_id, operation_id, name, finger
             != 1
         ):
             raise unconfirmed("External tool was already admitted; inspect its receipt")
+
+
+def admit_tool_call(configurable, run_id, workflow_id, executor_id, call_id, search):
+    """Admit one tool call against the Run-wide tool/search ceiling.
+
+    The request row lock serializes concurrent Producers. A repeated call
+    identity returns without charging again, so DBOS recovery of an uncommitted
+    ``por.agent_tool`` Step cannot consume a second allowance. A committed row
+    means the call stays charged even if the tool later fails or is cancelled.
+    """
+    from open_deep_research.budget import can_spend_tool_call
+
+    keys = {"r": run_id, "id": call_id}
+    increment = {"tool_calls": 1, "search_calls": int(bool(search))}
+    with domain_engine().begin() as db:
+        require_live_effect(db, run_id, workflow_id, executor_id)
+        if db.scalar(
+            text("SELECT 1 FROM por_domain.tool_calls WHERE run_id=:r AND id=:id"),
+            keys,
+        ):
+            return True
+        calls, searches = db.execute(
+            text(
+                "SELECT count(*), coalesce(sum(search_calls), 0) "
+                "FROM por_domain.tool_calls WHERE run_id=:r"
+            ),
+            {"r": run_id},
+        ).one()
+        usage = {"tool_calls": int(calls), "search_calls": int(searches)}
+        if not can_spend_tool_call(configurable, usage, increment):
+            return False
+        db.execute(
+            text(
+                "INSERT INTO por_domain.tool_calls(run_id, id, search_calls) "
+                "VALUES (:r, :id, :search)"
+            ),
+            dict(keys, search=increment["search_calls"]),
+        )
+        return True
 
 
 def finish_operation(run_id, operation_id, outcome):

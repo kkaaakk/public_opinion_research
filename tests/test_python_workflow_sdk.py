@@ -231,9 +231,18 @@ def install_sdk(
                     if local_tool
                     else "rag_search"
                 )
-                return [
+                pending = [
                     function_call(tool_name, {"query": role}, call_id=f"lookup-{role}")
                 ]
+                if mode == "tool_budget_multi":
+                    pending.append(
+                        function_call(
+                            tool_name,
+                            {"query": role + "-second"},
+                            call_id=f"lookup-{role}-2",
+                        )
+                    )
+                return pending
             assert "Upstream research context" in text
             if role == "response_strategy":
                 assert "## risk_assessment" in text
@@ -242,6 +251,9 @@ def install_sdk(
         async def second(call):
             role = current["role"]
             text = json.dumps(call.input)
+            if mode.startswith("tool_budget"):
+                # A budget-rejected sibling returns failure text, not evidence.
+                return [assistant_message("producer analysis complete")]
             assert "research_raw_search" in text or "Synthetic internal brand recall evidence" in text
             if mode == "admission" and role in ROLES[:2]:
                 started = time.monotonic()

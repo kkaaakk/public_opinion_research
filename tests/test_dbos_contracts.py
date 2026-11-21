@@ -51,6 +51,68 @@ def test_parallel_producers_wait_for_the_shared_token_bill(native_case):
         assert next_start >= end
 
 
+@pytest.mark.parametrize("native_case", ["tool_budget"], indirect=True)
+@pytest.mark.parametrize("limit", ["max_tool_calls", "max_search_calls"])
+def test_parallel_producers_share_one_run_tool_allowance(native_case, limit):
+    """Two Producers cannot each spend the same final allowance."""
+    case = native_case
+    case.cfg["configurable"].update({limit: 1})
+    run = case.create()
+    result = case.wait(run, timeout=60)
+
+    assert result["status"] == "completed", result["error"]
+    assert sum(case.calls.values()) == 1
+    records = {
+        rt.role: rt.harness.results[f"lookup-{rt.role}"]
+        for rt in case.runtimes
+        if rt.role in {"public_signal", "internal_knowledge"}
+    }
+    assert set(records) == {"public_signal", "internal_knowledge"}
+    assert sorted(record.status for record in records.values()) == [
+        "failed",
+        "succeeded",
+    ]
+    rejected = next(record for record in records.values() if record.status == "failed")
+    assert "Budget guard skipped" in str(rejected.observation)
+    final = case.client.client.list_workflows(
+        workflow_ids=[run["run_id"]], load_input=False, load_output=True
+    )[0].output
+    assert final["runtime"]["budget"]["tool_calls"] == 1
+    with domain_engine().connect() as db:
+        assert (
+            db.scalar(
+                text("SELECT count(*) FROM por_domain.tool_calls WHERE run_id=:r"),
+                {"r": run["run_id"]},
+            )
+            == 1
+        )
+
+
+@pytest.mark.parametrize("native_case", ["tool_budget_multi"], indirect=True)
+def test_parallel_producers_cannot_exceed_multiple_tool_calls(native_case):
+    """Concurrent batches across Producers share one Run-wide ceiling."""
+    case = native_case
+    case.cfg["configurable"].update(max_tool_calls=3)
+    run = case.create()
+    result = case.wait(run, timeout=60)
+
+    assert result["status"] == "completed", result["error"]
+    assert sum(case.calls.values()) == 3
+    records = [
+        rt.harness.results[f"lookup-{rt.role}{suffix}"]
+        for rt in case.runtimes
+        if rt.role in {"public_signal", "internal_knowledge"}
+        for suffix in ("", "-2")
+    ]
+    assert len(records) == 4
+    assert [record.status for record in records].count("succeeded") == 3
+    assert [record.status for record in records].count("failed") == 1
+    final = case.client.client.list_workflows(
+        workflow_ids=[run["run_id"]], load_input=False, load_output=True
+    )[0].output
+    assert final["runtime"]["budget"]["tool_calls"] == 3
+
+
 @pytest.mark.parametrize("native_case", ["cancel"], indirect=True)
 def test_studio_cancel_records_failed_model_and_agent_after_cancel_intent(native_case):
     case = native_case

@@ -76,6 +76,8 @@ class ResearchRoleResult(BaseModel):
     round: int = Field(ge=1)
     report: str
     replace_report: bool = False
+    # 有效证据由本次调用的成功工具结果与未降级的报告构成，Review 仍判断缺口是否补齐。
+    evidence_collected: bool = False
     budget_delta: dict[str, JsonValue] = Field(default_factory=dict)
 
 

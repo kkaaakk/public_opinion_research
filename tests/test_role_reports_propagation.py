@@ -64,7 +64,14 @@ def test_full_role_report_is_not_replaced_by_compact_notes(monkeypatch) -> None:
 
     assert full_report_body in result.report
     assert len(result.report) > 1_800
-    assert set(result.__dict__) == {"role", "round", "report", "replace_report", "budget_delta"}
+    assert set(result.__dict__) == {
+        "role",
+        "round",
+        "report",
+        "replace_report",
+        "evidence_collected",
+        "budget_delta",
+    }
 
 
 # 验证并行角色报告按角色合并。

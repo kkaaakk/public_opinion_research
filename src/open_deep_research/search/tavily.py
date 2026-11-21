@@ -83,42 +83,6 @@ def _bounded_fallback(
     return prefix + "\n" + excerpt
 
 
-# 预算拒绝、执行控制异常、取消和存储故障不得被当作普通摘要失败吞掉。
-def _is_execution_control_failure(error: BaseException) -> bool:
-    """Return whether any error in the causal chain must propagate.
-
-    ``ainvoke_model_with_budget`` can wrap a lower-level failure in
-    ``ModelInvocationError``. Inspect the existing ``error_chain`` instead of
-    classifying only the outer exception, so wrapped database, execution-control
-    and cancellation failures are never degraded into a webpage excerpt.
-    """
-    from dbos import error as dbos_error
-    from sqlalchemy.exc import SQLAlchemyError
-
-    from open_deep_research.budget import ModelBudgetExceeded
-    from open_deep_research.workflow.execution import (
-        ExecutionControlError,
-        error_chain,
-        is_cancellation,
-    )
-
-    for cause in error_chain(error):
-        if isinstance(
-            cause,
-            (
-                ModelBudgetExceeded,
-                ExecutionControlError,
-                SQLAlchemyError,
-                dbos_error.DBOSBaseException,
-                dbos_error.DBOSException,
-            ),
-        ):
-            return True
-        if is_cancellation(cause):
-            return True
-    return False
-
-
 # 为每条来源分配均等输出额度，避免长网页挤掉后续来源。
 def _format_search_results(
     results: dict[str, dict[str, Any]],
@@ -503,7 +467,11 @@ async def summarize_webpage(
             reason="timed out",
         )
     except Exception as exc:
-        if _is_execution_control_failure(exc):
+        from open_deep_research.workflow.execution import (
+            is_execution_control_failure,
+        )
+
+        if is_execution_control_failure(exc):
             raise
         # Do not put provider messages, stack traces or request parameters into
         # the model context; only the exception type reaches the log.

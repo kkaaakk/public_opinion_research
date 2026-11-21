@@ -149,6 +149,10 @@ def initialize_domain(*, migrate_legacy=False):
             """CREATE TABLE IF NOT EXISTS por_domain.model_attempts
                (run_id text REFERENCES por_domain.requests(id), id text,
                 stage_id text NOT NULL, usage text, PRIMARY KEY(run_id, id))""",
+            """CREATE TABLE IF NOT EXISTS por_domain.tool_calls
+               (run_id text REFERENCES por_domain.requests(id), id text,
+                search_calls smallint NOT NULL DEFAULT 0,
+                PRIMARY KEY(run_id, id))""",
             """CREATE TABLE IF NOT EXISTS por_domain.retries
                (run_id text REFERENCES por_domain.requests(id), key text,
                 version bigint NOT NULL, generation bigint NOT NULL, outcome text,

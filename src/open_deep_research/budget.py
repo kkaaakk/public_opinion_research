@@ -72,7 +72,7 @@ MODEL_BILL_POLL_SECONDS = 0.5
 def require_physical_model_budget(config, baseline, actual, *, reserve_report):
     """Check paid attempts, including prior failures and outstanding receipts."""
     total = merge_budget_usage(baseline, actual)
-    if is_over_budget(config, total) or not can_spend_model_call(
+    if is_over_model_budget(config, total) or not can_spend_model_call(
         config, total, reserve_final_report_call=reserve_report
     ):
         raise ModelBudgetExceeded(
@@ -277,7 +277,7 @@ def model_budget_admission(
             # account their already-completed calls during admission as well.
             projected = merge_budget_usage(projected, active_capture)
         projected = merge_budget_usage(projected, {"model_calls": pending_attempts})
-        if is_over_budget(configurable, projected) or not can_spend_model_call(
+        if is_over_model_budget(configurable, projected) or not can_spend_model_call(
             configurable, projected, reserve_final_report_call=True
         ):
             raise ModelBudgetExceeded(
@@ -1077,6 +1077,23 @@ def available_research_unit_slots(
     reserve = 1 if configurable.reserve_final_report_call else 0
     remaining = max(0, configurable.max_model_calls - reserve - current)
     return remaining // MIN_MODEL_CALLS_PER_RESEARCH_UNIT
+
+
+# 模型准入只受模型调用与令牌上限约束，工具次数耗尽不得阻断模型请求。
+def is_over_model_budget(configurable: Configuration, usage: Any) -> bool:
+    """Return whether a model limit is exhausted; tool/search quotas are separate."""
+    if not configurable.budget_enabled:
+        return False
+    normalized = normalize_budget_usage(usage)
+    limits = {
+        "model_calls": configurable.max_model_calls,
+        "input_tokens": configurable.max_input_tokens,
+        "output_tokens": configurable.max_output_tokens,
+    }
+    return any(
+        limit is not None and normalized[field] >= limit
+        for field, limit in limits.items()
+    )
 
 
 # 检查任一受限预算是否已超额，用于终止或降级研究。

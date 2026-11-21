@@ -34,7 +34,7 @@ from open_deep_research.budget import (
     diff_budget_usage,
     end_model_call,
     estimate_text_tokens,
-    is_over_budget,
+    is_over_model_budget,
     merge_budget_usage,
     model_budget_admission,
     physical_model_usage,
@@ -76,6 +76,7 @@ class AgentRuntimeResult:
     report: str
     budget: dict[str, Any] = field(default_factory=dict)
     replace_report: bool = False
+    evidence_collected: bool = False
 
 
 class SDKContextLimitExceeded(RuntimeError):
@@ -226,14 +227,14 @@ class _BusinessAgentHarness(SDKContextHarness):
         filtered = await super().filter_model_input(data)
         if not can_spend_model_call(
             self.config, self._filter_budget(), reserve_final_report_call=True
-        ) or is_over_budget(self.config, self._filter_budget()):
+        ) or is_over_model_budget(self.config, self._filter_budget()):
             raise _ReasoningStopped(
                 "Business budget stopped SDK reasoning before another request."
             )
         filtered = await self._compact_history(filtered, data.agent)
         if not can_spend_model_call(
             self.config, self._filter_budget(), reserve_final_report_call=True
-        ) or is_over_budget(self.config, self._filter_budget()):
+        ) or is_over_model_budget(self.config, self._filter_budget()):
             raise _ReasoningStopped(
                 "Rolling compaction used the remaining reasoning allowance."
             )
@@ -498,6 +499,21 @@ class SDKAgentRuntime:
         """Return cumulative business usage for admission, without submitting it."""
         return self.run_budget.projected()
 
+    def _evidence_collected(self) -> bool:
+        """Return whether this invocation produced usable new evidence.
+
+        A non-empty report alone is insufficient: degraded reports (budget or
+        compression fallbacks) and invocations whose tool calls all failed are
+        not new evidence. Review still decides whether a gap is resolved.
+        """
+        return bool(
+            not self.budget_usage.get("degradation_reasons")
+            and any(
+                record.status == "succeeded"
+                for record in self.harness.results.values()
+            )
+        )
+
     def _report_messages(self, task: str) -> list[Any]:
         messages: list[Any] = [HumanMessage(content=task)]
         output_ids: set[str] = set()
@@ -654,6 +670,7 @@ class SDKAgentRuntime:
             # usage here so none of those costs are merged twice.
             self.budget_usage = merge_budget_usage(self.run_budget.delta, nested)
             result.budget = self.budget_usage
+            result.evidence_collected = self._evidence_collected()
             return result
         except BaseException as exc:
             self.budget_usage = merge_budget_usage(

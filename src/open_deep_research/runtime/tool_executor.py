@@ -30,7 +30,6 @@ from open_deep_research.budget import (
     budget_from_tool_calls,
     budget_usage_with_reason,
     can_spend_tool_call,
-    is_over_budget,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.domain_filter import get_tool_domain
@@ -39,9 +38,12 @@ from open_deep_research.tools.registry import tool_effect
 from open_deep_research.web.run_data import digest
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
+    admit_tool_call,
     commit_receipt,
     finish_operation,
     finish_owned,
+    is_cancellation,
+    is_execution_control_failure,
     native_step_available,
     owned_io,
     stage_context,
@@ -198,7 +200,7 @@ class ToolExecutor:
                 raise asyncio.CancelledError()
             try:
                 self._authorize(tool.name)
-                self._admit(tool.name)
+                await self._admit(tool.name, record.tool_call_id)
                 # The original SDK declaration validates arguments and defaults
                 # before the tool body admits a protected external operation.
                 call = tool.on_invoke_tool(context, arguments)
@@ -211,11 +213,18 @@ class ToolExecutor:
                     context, "cancelled", None, error_type="CancelledError"
                 )
                 raise
-            except Exception as exc:
-                if isinstance(exc, ExecutionControlError):
+            except BaseException as exc:
+                # Wrapped budget, storage, DBOS and cancellation failures must
+                # stop the Agent loop instead of becoming tool failure text.
+                if is_execution_control_failure(exc):
                     harness.record_tool(
-                        context, "failed", None, error_type=type(exc).__name__
+                        context,
+                        "cancelled" if is_cancellation(exc) else "failed",
+                        None,
+                        error_type=type(exc).__name__,
                     )
+                    raise
+                if not isinstance(exc, Exception):
                     raise
                 output = f"Error executing tool: {exc}"
                 harness.record_tool(
@@ -265,16 +274,49 @@ class ToolExecutor:
                 f"Tool {name!r} is no longer authorized for {self.role}."
             )
 
-    def _admit(self, name: str) -> None:
-        """Reserve before validation and before the first await."""
+    async def _admit(self, name: str, call_id: str) -> None:
+        """Reserve before validation against the Run-wide tool/search ceiling."""
         increment = self._increment(name)
         projected = self.budget.projected()
-        if is_over_budget(self.config, projected) or not can_spend_tool_call(
-            self.config, projected, increment
-        ):
+        # Tool admission only enforces tool/search quotas; model call and token
+        # budgets are checked by model admission and must not reject a tool call.
+        if not can_spend_tool_call(self.config, projected, increment):
             reason = f"Budget guard skipped {name}: tool or search budget exhausted."
             self.budget.add(budget_usage_with_reason(reason))
             raise _ToolRejected(reason)
+        scope = stage_context.get()
+        if (
+            scope is not None
+            and self.config.budget_enabled
+            and (
+                self.config.max_tool_calls is not None
+                or self.config.max_search_calls is not None
+            )
+        ):
+            # Concurrent Producers share the Run's State snapshot, so only an
+            # atomic Run-level admission can enforce the configured ceiling.
+            try:
+                admitted, cancellation = await owned_io(
+                    admit_tool_call,
+                    self.config,
+                    scope.run_id,
+                    DBOS.workflow_id,
+                    DBOS.executor_id,
+                    digest((DBOS.workflow_id, call_id)),
+                    increment["search_calls"] > 0,
+                )
+            except SQLAlchemyError as exc:
+                raise ExecutionControlError(
+                    "Tool admission storage unavailable"
+                ) from exc
+            if cancellation is not None:
+                raise cancellation
+            if not admitted:
+                reason = (
+                    f"Budget guard skipped {name}: tool or search budget exhausted."
+                )
+                self.budget.add(budget_usage_with_reason(reason))
+                raise _ToolRejected(reason)
         self.budget.add(increment)
 
     def _increment(self, name: str) -> dict[str, Any]:

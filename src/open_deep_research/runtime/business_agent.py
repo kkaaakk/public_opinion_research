@@ -454,6 +454,7 @@ async def run_business_agent(
             round=research_round,
             report=result.report,
             replace_report=result.replace_report,
+            evidence_collected=result.evidence_collected,
             budget_delta=result.budget,
         )
     return _build_state_patch(

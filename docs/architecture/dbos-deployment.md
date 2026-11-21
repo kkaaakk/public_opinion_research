@@ -57,7 +57,7 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 
 ## 数据库设计
 
-以下五张表由 `workflow/domain_schema.py:initialize_domain` 建立。`value`、`usage`、`outcome` 中承载 JSON 的字段使用应用的 `RunJSON` 序列化约定，具体 SQL 类型为 `text`。
+以下六张表由 `workflow/domain_schema.py:initialize_domain` 建立。`value`、`usage`、`outcome` 中承载 JSON 的字段使用应用的 `RunJSON` 序列化约定，具体 SQL 类型为 `text`。
 
 | PostgreSQL 业务表 | 关键字段 | 职责 |
 | --- | --- | --- |
@@ -65,6 +65,7 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 | `por_domain.policy` | `id=1`、`value` | 共享并发、容量和期限设置，启动及首次取得 RunClient 时校验。 |
 | `por_domain.retries` | `(run_id, key)` 主键，`version`、`generation`、`outcome`，`(run_id, generation)` 唯一 | `version` 绑定用户看到的状态游标，`outcome` 保存含源代次、应用版本和具体原生目标的授权数据。应用结果由 DBOS `retry_applied` Event 记录。 |
 | `por_domain.model_attempts` | `(run_id, id)` 主键，`stage_id`、可空 `usage` | 执行前登记物理尝试。`NULL` 表示尝试尚无结算回执，已返回用量含实际调用与已知 Token。 |
+| `por_domain.tool_calls` | `(run_id, id)` 主键，`search_calls` | Run 级工具与搜索准入。`id` 由 Role Workflow 与 Tool Call ID 派生；相同身份表示 DBOS 重放，不再扣减。 |
 | `por_domain.operations` | `(run_id, id)` 主键，`name`、`fingerprint`、`executor_id`、可空 `outcome` | 保护需核对的外部工具。准入时 outcome 为 `NULL`，后续写 `returned`、`unknown` 或 `not_executed`。 |
 
 | 其他存储 | 所有权与可读内容 |
@@ -73,6 +74,8 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 | PostgreSQL `por_archive_native_recovery` | 仅迁移安装存在。原 `units`、`operations` 连同数据、索引和约束归档到此；`web/run_data.py:legacy_projection` 读取旧产物、用量与未确认效果。 |
 | PostgreSQL History | `web/history.py:HistoryStore` 写 `por_domain.history`。稳定 ID 由 Run ID 派生，`run_state_version = generation + 1` 阻止旧重试代次覆盖新归档。存报告、阶段产物、用量、状态和 owner。 |
 | 长期 Memory / RAG | 配置 MySQL 时，原始记忆在 `rag_chat_memories`（可配置表名），`memory_id` 唯一，包含用户、会话、记录类型、内容与索引状态。RAG 维护知识及可索引记忆的向量副本和独立知识图。 [Memory](memory.md) · [RAG](rag.md) |
+
+现有安装升级到含 `por_domain.tool_calls` 的版本前，先运行 `--initialize-only`；该命令使用 `CREATE TABLE IF NOT EXISTS` 只补齐缺失表。
 
 ## 事件与归档版本切换
 

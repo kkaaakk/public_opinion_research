@@ -30,6 +30,8 @@ from open_deep_research.budget import (
     estimate_text_tokens,
     filter_tool_calls_for_budget,
     format_budget_summary,
+    is_over_budget,
+    is_over_model_budget,
     merge_budget_usage,
     model_accounting_config,
     require_valid_structured_output,
@@ -389,6 +391,22 @@ def test_filter_tool_calls_skips_after_tool_budget():
 
     assert [tool_call["id"] for tool_call in allowed] == ["call_1"]
     assert [tool_call["id"] for tool_call in skipped] == ["call_2"]
+
+
+# 验证工具次数耗尽不会阻断模型准入，两类预算保持独立。
+def test_tool_quota_does_not_block_model_admission():
+    """Tool/search exhaustion is an ordinary tool limit, not a model budget."""
+    tool_limited = Configuration(
+        budget_enabled=True, max_tool_calls=1, max_search_calls=1
+    )
+    usage = {"tool_calls": 1, "search_calls": 1}
+    assert is_over_budget(tool_limited, usage) is True
+    assert is_over_model_budget(tool_limited, usage) is False
+
+    model_limited = Configuration(budget_enabled=True, max_model_calls=1)
+    assert is_over_model_budget(model_limited, {"model_calls": 1}) is True
+    token_limited = Configuration(budget_enabled=True, max_input_tokens=10)
+    assert is_over_model_budget(token_limited, {"input_tokens": 10}) is True
 
 
 # 验证搜索预算耗尽后过滤检索工具调用。

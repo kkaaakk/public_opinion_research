@@ -165,7 +165,10 @@ def effect_count(directory, table="invocations"):
     if not (directory / "external.db").exists():
         return 0
     with sqlite3.connect(directory / "external.db") as db:
-        return db.execute("SELECT count(*) FROM " + table).fetchone()[0]
+        exists = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        return db.execute("SELECT count(*) FROM " + table).fetchone()[0] if exists else 0
 
 
 def plan_prompts(directory):
@@ -699,6 +702,59 @@ def test_gap_replay_keeps_child_order_and_committed_rounds(pg_database, tmp_path
         assert effect_count(directory) == effect_count(directory, "effects") == 4
         after = {u["id"]: u["usage"] for u in stage_observations(run["run_id"])}
         assert all(after[key] == value for key, value in committed.items())
+    finally:
+        for child in (process, restart):
+            if child:
+                kill_owned(child)
+
+
+def test_process_kill_after_tool_admission_does_not_recharge(pg_database, tmp_path):
+    """DBOS recovery reuses the committed admission instead of charging again."""
+    client = RunClient()
+    executor = "tool-admitted-" + uuid4().hex
+    directory = tmp_path
+    process = start(directory, executor, "tool-admitted")
+    restart = None
+
+    def ledger(run_id):
+        with domain_engine().connect() as db:
+            return db.scalar(
+                text("SELECT count(*) FROM por_domain.tool_calls WHERE run_id=:r"),
+                {"r": run_id},
+            )
+
+    try:
+        wait(lambda: (directory / "executor-ready").exists(), process, directory)
+        cfg = configuration(directory)
+        cfg["configurable"]["max_tool_calls"] = 10
+        run = client.create(
+            "alice",
+            "tool-admitted",
+            {"topic": "brand recall"},
+            cfg,
+            initial(),
+        )[0]
+        wait(lambda: (directory / "tool-admitted").exists(), process, directory)
+        wait(lambda: ledger(run["run_id"]) == 2, process, directory)
+        assert effect_count(directory) == 0
+        kill_owned(process)
+        (directory / "tool-admitted.release").write_text("continue")
+        (directory / "executor-ready").unlink()
+        restart = start(directory, executor, "tool-admitted")
+        wait(
+            lambda: client.get(run["run_id"], "alice")["status"]
+            in {"completed", "failed", "interrupted"},
+            restart,
+            directory,
+        )
+        result = client.get(run["run_id"], "alice")
+        assert result["status"] == "completed", result["error"]
+        assert ledger(run["run_id"]) == 2
+        assert effect_count(directory) == 2
+        final = client.client.list_workflows(
+            workflow_ids=[run["run_id"]], load_input=False, load_output=True
+        )[0].output
+        assert final["runtime"]["budget"]["tool_calls"] == 2
     finally:
         for child in (process, restart):
             if child:
