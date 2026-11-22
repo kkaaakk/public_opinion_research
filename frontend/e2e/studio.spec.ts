@@ -115,7 +115,8 @@ test('actual FastAPI → DBOS → SDK: approval, trace, replay, refresh, report 
   await expect(page.locator('.native-workflow').filter({ hasText: 'por.role' })).toHaveCount(2);
   await expect(page.locator('.native-steps')).toContainText(id);
   await page.locator('.native-workflow').filter({ hasText: 'por.research' }).click();
-  await expect(page.locator('.native-steps').getByText('por.llm', { exact: true })).toHaveCount(2);
+  // Risk, Strategy, and Report share the research journal.
+  await expect(page.locator('.native-steps').getByText('por.llm', { exact: true })).toHaveCount(3);
   await page.getByRole('tab', { name: '报告', exact: true }).click();
   await expect(page.locator('.report-panel .markdown')).toContainText('FINAL brand recall report');
   const download = page.waitForEvent('download');
