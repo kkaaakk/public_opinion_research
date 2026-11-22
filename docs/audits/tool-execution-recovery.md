@@ -139,3 +139,8 @@ DBOS 的语义：**已提交的 Step 直接重放；未提交的 Step 可能重�
 ## 8. 交付状态
 
 分支、基线 Commit、最终 Commit 与 TODO 见 PR 描述；Draft、未合并，工作目录无脚本或临时文件，无 Worktree。
+
+## 9. 遗留问题
+
+- `tests/test_native_agent_replay.py::test_agent_recovery_restores_parallel_tool_results_and_usage[tool-budget-error]` 存在既有抖动：并发施压时在 `main`（`951d4eab`）与本次分支上都各有 2/18 次失败，表现为被取消的兄弟工具记录停在 `running`，而 `last_settlement` 已判成功。原因是该用例依赖 `asyncio.sleep(0.05)` 保证兄弟工具先完成，事件循环被抢占时不成立。本轮未改该用例，也未改结算语义；下一轮应让 `settle()` 在成功排空后把仍为 `running` 的记录落到 `unobserved`/`cancelled`，并补一条并发取消断言。
+- `_restore_role_tools()` 的宽松目录分支（见第 2 节）留待下一轮删除，届时需同步处理进程级场景 `runner-legacy-catalog`。
