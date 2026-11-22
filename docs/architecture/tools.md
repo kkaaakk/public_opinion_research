@@ -190,7 +190,7 @@ class MCPConfig(BaseModel):
 
 ## 7. Budget Guard 对工具的影响
 
-`ToolExecutor` 和 `budget.py` 共用 `max_tool_calls` 和 `max_search_calls`。已接纳的并发工具在首次等待前占用额度，超限调用会得到配对错误。重复调用和已提交的 Step 各自复用原结果，已记账增量随恢复回执在当前调用中重建一次。 `web_search` 与 `rag_search` 计入检索配额。推理模型和报告预留沿用各自的预算规则。
+`ToolExecutor` 和 `budget.py` 共用 `max_tool_calls` 和 `max_search_calls`。正式 Run 中每一次准入的工具调用都会写入 `por_domain.tool_calls`，预算开关只决定是否检查上限，不决定是否记账。已接纳的并发工具在首次等待前占用额度，超限调用会得到配对错误。重复调用和已提交的 Step 各自复用原结果，已记账增量随恢复回执在当前调用中重建一次。 `web_search` 与 `rag_search` 计入检索配额。受保护工具另外写入 `por_domain.operations`，并通过 `tool_call_id` 外键归属到发起它的工具调用。推理模型和报告预留沿用各自的预算规则。
 
 ## 8. 工具提示词
 

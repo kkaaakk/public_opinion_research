@@ -1,6 +1,6 @@
 # DBOS 部署、数据库和恢复
 
-当前应用版本为 `por-agent-context-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-vertical-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
+当前应用版本为 `por-call-ledger-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-vertical-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
 
 ## Local setup
 
@@ -64,9 +64,9 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 | `por_domain.requests` | `id` 主键，`owner`、`request_key` 唯一组合，`session` 索引，`value`、`cancel_requested`、`reconciliation` | 接纳身份与审计。`value` 保存请求、指纹、冻结配置与初始 State、版本、创建时间与时限。取消是请求意图，核对记录用于 Session 准入。 |
 | `por_domain.policy` | `id=1`、`value` | 共享并发、容量和期限设置，启动及首次取得 RunClient 时校验。 |
 | `por_domain.retries` | `(run_id, key)` 主键，`version`、`generation`、`outcome`，`(run_id, generation)` 唯一 | `version` 绑定用户看到的状态游标，`outcome` 保存含源代次、应用版本和具体原生目标的授权数据。应用结果由 DBOS `retry_applied` Event 记录。 |
-| `por_domain.model_attempts` | `(run_id, id)` 主键，`stage_id`、可空 `usage` | 执行前登记物理尝试。`NULL` 表示尝试尚无结算回执，已返回用量含实际调用与已知 Token。 |
-| `por_domain.tool_calls` | `(run_id, id)` 主键，`search_calls` | Run 级工具与搜索准入。`id` 由 Role Workflow 与 Tool Call ID 派生；相同身份表示 DBOS 重放，不再扣减。 |
-| `por_domain.operations` | `(run_id, id)` 主键，`name`、`fingerprint`、`executor_id`、可空 `outcome` | 保护需核对的外部工具。准入时 outcome 为 `NULL`，后续写 `returned`、`unknown` 或 `not_executed`。 |
+| `por_domain.model_attempts` | `(run_id, id)` 主键，`stage_id`、可空 `usage` | 一次真实模型请求一条记录，是本 Run 模型调用次数与 Token 用量的唯一权威。准入时插入且 `usage` 为 `NULL`（未结算）；结算后写入实际用量，供应商未报告时带 `usage_complete=false`。`id` 由 Stage、DBOS Step 与尝试序号派生，重放命中同一身份。 |
+| `por_domain.tool_calls` | `(run_id, id)` 主键，`name`、`search`、`status` | 一次经准入的工具调用一条记录，是工具次数与搜索次数的唯一权威。只要在正式 Run 中准入就写入，预算开关只决定是否检查上限。`id` 由 Run Workflow 与 Tool Call ID 派生，相同身份表示 DBOS 重放，不再扣减。`status` 为 `admitted`，结算后写 `returned`、`failed` 或 `cancelled`，任何结果都不返还额度。 |
+| `por_domain.operations` | `(run_id, id)` 主键，`tool_call_id`、`name`、`fingerprint`、`executor_id`、可空 `outcome` | 保护需核对的外部副作用，`(run_id, tool_call_id)` 外键指向 `tool_calls`。准入时 outcome 为 `NULL`，后续写 `returned`、`unknown` 或 `not_executed`。本轮之前的历史行保留空的 `tool_call_id`。 |
 
 | 其他存储 | 所有权与可读内容 |
 | --- | --- |
@@ -75,7 +75,7 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 | PostgreSQL History | `web/history.py:HistoryStore` 写 `por_domain.history`。稳定 ID 由 Run ID 派生，`run_state_version = generation + 1` 阻止旧重试代次覆盖新归档。存报告、阶段产物、用量、状态和 owner。 |
 | 长期 Memory / RAG | 配置 MySQL 时，原始记忆在 `rag_chat_memories`（可配置表名），`memory_id` 唯一，包含用户、会话、记录类型、内容与索引状态。RAG 维护知识及可索引记忆的向量副本和独立知识图。 [Memory](memory.md) · [RAG](rag.md) |
 
-现有安装升级到含 `por_domain.tool_calls` 的版本前，先运行 `--initialize-only`；该命令使用 `CREATE TABLE IF NOT EXISTS` 只补齐缺失表。
+现有安装升级时运行 `--initialize-only`。除 `CREATE TABLE IF NOT EXISTS` 补齐缺失表外，安装器还按目录检查补齐 `tool_calls.name/search/status`、`operations.tool_call_id` 以及 `operations_tool_call_fkey` 外键，旧 `search_calls` 小整数按 `> 0` 折算为 `search` 后删除。所有语句在同一事务内并且可重复执行。
 
 ## 事件与归档版本切换
 
@@ -83,6 +83,8 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 2. 保存同一切换点的 `por_dbos`、`por_domain` 与业务数据备份，包括需要保留的原生 Stream。运行新版 `python -m open_deep_research.web.executor --migration-check`。其输出为 JSON；上线前确认盘点为空，包含超出恢复尝试次数的旧 journal 也需核查。
 3. `dbos-domain-v1` 已有五张业务表，从该版切到 `dbos-events-v1` 沿用业务 schema。若仍有旧 `por_domain.units`，在排空、备份并演练后显式运行 `--migrate-domain`。事务将旧 `units` 和 `operations` 移到 `por_archive_native_recovery`，将 `requests.released` 更名为 `reconciliation` 并移除 `occupied`，再创建当前表。需要历史读取的运行角色保留归档 schema 的 `USAGE` 和表 `SELECT`。
 4. 同步切换 API、Studio/Classic 与 Executor，核对版本、请求创建、澄清/审批、SSE/状态与 History。对已终止旧 Run，`RunClient` 读取保留的旧投影/事件/Stream、旧账单及操作记录。旧 journal 和旧回执继续保留。
+
+`por-call-ledger-v1` 统一调用记录：模型用量取自 `model_attempts`，工具与搜索次数取自 `tool_calls`，外部效果取自 `operations`，阶段事件只提供告警与降级原因。本轮不改变 DBOS journal 命令序列，但改变了 Run 用量的汇总口径与工具准入的写库条件，因此旧版仍在执行的 Run 必须由 `por-agent-context-v1` 的 API 与 Executor 排空后再切换；旧版已完成的 Run 仍可读取。`--initialize-only` 负责字段与外键升级，不需要重建数据库，也不删除 History。 [调用记录与预算收敛](../audits/call-ledger-convergence.md)
 
 `por-agent-context-v1` 精简 `por.agent_context` 和 `por.agent_settlement` 的检查点。Agent 模型预算拒绝发生在 DBOSRunner 的模型 Step。切换前使用匹配的 API 和 Executor 排空 `por-inline-report-v1` 的 journal、人工交互与归档。已有 PostgreSQL 业务 schema、History 和调用回执继续使用。
 

@@ -1,6 +1,6 @@
 # 业务执行与 Agent Loop
 
-当前应用版本为 `por-agent-context-v1`，SDK Runtime 版本为 `sdk-vertical-v1`。根依赖锁包含 DBOS 3.3.0、`dbos-openai-agents` 0.3.0 和 OpenAI Agents SDK 0.24.0。 [部署](dbos-deployment.md) · [数据库设计](dbos-deployment.md#数据库设计) · [故障验收清单](../audits/dbos-architecture-closeout.md#故障验收清单)
+当前应用版本为 `por-call-ledger-v1`，SDK Runtime 版本为 `sdk-vertical-v1`。根依赖锁包含 DBOS 3.3.0、`dbos-openai-agents` 0.3.0 和 OpenAI Agents SDK 0.24.0。 [部署](dbos-deployment.md) · [数据库设计](dbos-deployment.md#数据库设计) · [故障验收清单](../audits/dbos-architecture-closeout.md#故障验收清单)
 
 ## 架构分层
 
@@ -133,7 +133,7 @@ Step 执行体与外部服务返回之间存在提交窗口。宕机发生在原
 
 已知只读工具可以在缺失 Tool Step 结果时重新执行。History 写入使用稳定业务键，效果检查结合请求取消意图和原生 Workflow/Executor 归属。PostgreSQL 的事务覆盖本库请求、原生队列和报告归档，远端 provider 独立提交。操作员确认 Executor 已停止并核对外部记录后，可以记录 reconciliation 以解除 Session 准入隔离，原记录继续保留。 [数据库与运维](dbos-deployment.md)
 
-`start_model_attempt` 持请求锁检查并行调用共享的 Run 级预算，保留最终报告额度后才登记物理调用。`model_attempts` 按 `(run_id, id)` 唯一写入，返回或失败有用量时以同键更新。`RunClient` 汇总初始预算、物理回执和阶段工具统计，已提交的模型响应重放、客户端重连和归档补偿各自复用记录。缺少真实 Token 时保留已知调用数并标记 `usage_complete=false`。有 Token 上限时，未完成或不完整的账单可阻止继续花费。公开用量来自 provider 回执，实际货币费用由 provider 账单确认。
+`start_model_attempt` 持请求锁检查并行调用共享的 Run 级预算，保留最终报告额度后才登记物理调用。`model_attempts` 按 `(run_id, id)` 唯一写入，返回或失败有用量时以同键更新。`por_domain.tool_calls` 记录每一次准入的工具调用（无论预算是否开启），`por_domain.operations` 通过 `tool_call_id` 外键归属到发起它的工具调用。`RunClient` 按字段归属汇总用量：模型次数与 Token 来自 `model_attempts`，工具与搜索次数来自 `tool_calls`，阶段事件只提供告警和降级原因，因此同一次调用不会被重复相加。已提交的模型响应重放、客户端重连和归档补偿各自复用记录。缺少真实 Token 时保留已知调用数并标记 `usage_complete=false`；一次未报告用量的尝试不会永久阻断后续调用。有 Token 上限时，在途账单按有限等待结算，超时后按预算不足结束。公开用量来自 provider 回执，实际货币费用由 provider 账单确认。
 
 ## 交付与执行状态
 

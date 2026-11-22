@@ -221,8 +221,8 @@ rag_query_rewrite_enabled: true
 ```yaml
 budget_enabled: true
 max_model_calls: 120
-max_tool_calls: 120
-max_search_calls: 60
+max_tool_calls: 160
+max_search_calls: 120
 max_input_tokens: 4000000
 max_output_tokens: 400000
 reserve_final_report_call: true

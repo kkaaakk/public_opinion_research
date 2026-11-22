@@ -11,21 +11,26 @@ extends: config.yaml
 
 # One bounded research round; no gap follow-up or Brief approval.
 max_research_rounds: 1
-max_react_tool_calls: 2
+# This caps SDK turns, not searches. Two turns cannot finish one
+# "search + read the results + answer" cycle, so the smoke Agent ran out of
+# turn budget before it produced evidence.
+max_react_tool_calls: 6
 max_content_length: 8000
 max_structured_output_retries: 2
 workflow_step_timeout_seconds: 900
 allow_clarification: false
 allow_plan_feedback: false
 
-# Smaller hard ceilings while keeping the final-report reservation.
+# Smaller hard ceilings while keeping the final-report reservation. Tool and
+# search allowances cover six productive turns; the model ceiling still bounds
+# the whole Run, so smoke stays a cheap single-round check.
 # Process-level tracing only applies when this file starts its own Executor;
 # a shared Executor keeps the formal config.yaml tracing state.
 tracing_enabled: false
 budget_enabled: true
 max_model_calls: 24
-max_tool_calls: 16
-max_search_calls: 8
+max_tool_calls: 20
+max_search_calls: 10
 max_input_tokens: 800000
 max_output_tokens: 80000
 budget_warning_ratio: 0.8
