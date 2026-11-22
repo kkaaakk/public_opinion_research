@@ -32,7 +32,7 @@ def test_full_role_report_is_not_replaced_by_compact_notes(monkeypatch) -> None:
         return [_tool("public_signal")]
 
     async def fake_compress(*_args, **_kwargs):
-        return full_report_body, [], {}
+        return full_report_body, {}
 
     @asynccontextmanager
     async def offline_model(*args, **kwargs):

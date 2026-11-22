@@ -250,6 +250,10 @@ class ToolExecutor:
             token = tool_usage.set(local)
             try:
                 output = await perform()
+            except BaseException as exc:
+                if previous is None:
+                    exc.budget_usage = local
+                raise
             finally:
                 tool_usage.reset(token)
             return {
@@ -258,9 +262,16 @@ class ToolExecutor:
                 "budget": local,
             }
 
-        saved = await DBOS.run_step_async(
-            {"name": "por.agent_tool", "preemptible": True}, invoke_step
-        )
+        try:
+            saved = await DBOS.run_step_async(
+                {"name": "por.agent_tool", "preemptible": True}, invoke_step
+            )
+        except BaseException as exc:
+            # Live execution already applied the local delta. Only a replay of
+            # the owning call has to restore it from the error receipt.
+            if not executed and previous is None:
+                self.budget.add(getattr(exc, "budget_usage", {}))
+            raise
         if not executed:
             harness.restore_tool(saved["record"])
             self.budget.add(saved["budget"])

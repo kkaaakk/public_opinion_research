@@ -11,12 +11,15 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import time
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 from uuid import uuid4
 
 from agents import Agent, FunctionTool, RunConfig, RunContextWrapper, RunHooks, Runner
+from agents.exceptions import AgentsException
 from agents.items import ModelResponse, TResponseInputItem
 from agents.memory import Session
 from agents.result import RunResult
@@ -27,22 +30,45 @@ from dbos import DBOS
 from dbos import error as dbos_error
 from dbos_openai_agents import DBOSRunner
 
-from open_deep_research.budget import budget_capture, capture_budget_usage
+from open_deep_research.budget import (
+    ModelBudgetExceeded,
+    budget_capture,
+    budget_from_sdk_usage,
+    capture_budget_usage,
+    context_pressure_ratio,
+    estimate_text_tokens,
+)
+from open_deep_research.configuration import Configuration
+from open_deep_research.llm.context import resolve_context_capacity
 from open_deep_research.observability.telemetry import (
     annotate,
+    business_span,
     correlation,
     observed,
     telemetry_enabled,
 )
+from open_deep_research.runtime.compaction import summarize_history
+from open_deep_research.web.run_data import digest
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
     is_cancellation,
+    is_execution_control_failure,
     native_step_available,
     owned_cleanup,
     stage_context,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 ToolStatus = Literal["running", "succeeded", "failed", "cancelled", "unobserved"]
+
+
+class SDKContextLimitExceeded(RuntimeError):
+    """The protected SDK input cannot fit safely after compaction."""
+
+
+class _ReasoningStopped(AgentsException):
+    """End SDK reasoning with the SDK's partial run data for the role report."""
 
 
 @dataclass
@@ -91,6 +117,8 @@ class SDKContextHarness(RunHooks):
         role: str,
         task_id: str,
         research_round: int = 1,
+        config: Configuration | None = None,
+        runtime_config: Mapping[str, Any] | None = None,
         settlement_timeout: float = 30.0,
     ) -> None:
         """Configure one run-local collector for this role invocation."""
@@ -105,17 +133,19 @@ class SDKContextHarness(RunHooks):
             else f"SDK_{DBOS.workflow_id}_{self.role}_{self.task_id}"
         )
         self.settlement_timeout = settlement_timeout
+        self.config = config
+        self.runtime_config = runtime_config
         self.results: dict[str, ObservedToolResult] = {}
-        self.events: list[tuple[str, str]] = []
-        self.model_calls = 0
+        self.model_turn = 0
         self.last_settlement: BatchSettlement | None = None
         self._response_starts: list[str] = []
-        self._owned_contexts: set[str] = set()
+        self._compacted_turns: set[int] = set()
+        self.rolling_summary = ""
+        self.estimated_input_tokens: int | None = None
         self.tool_executor: Any | None = None
-        self._batch_lock = asyncio.Lock()
-        self._agent: Agent[Any] | None = None
         self._started = False
         self._closing = False
+        self.model_name: str | None = None
         self._model_started_at: float | None = None
         self._agent_started_at: float | None = None
         self._tool_started_at: dict[str, float] = {}
@@ -131,7 +161,7 @@ class SDKContextHarness(RunHooks):
                     invocation_id=self.sdk_run_id,
                     task_id=self.task_id,
                     research_round=self.research_round,
-                    model_turn=self.model_calls,
+                    model_turn=self.model_turn,
                     **metadata,
                 ),
                 # Sibling tools can finish in a different order after replay.
@@ -139,98 +169,49 @@ class SDKContextHarness(RunHooks):
                 call_id=metadata.get("tool_call_id") if kind == "tool_result" else None,
             )
 
-    def _extra_snapshot(self) -> dict[str, Any]:
-        """Return invocation-local business state owned by a subclass."""
-        return {}
-
-    def _restore_extra(self, state: dict[str, Any]) -> None:
-        """Restore invocation-local business state owned by a subclass."""
-
-    def _durable_snapshot(self) -> dict[str, Any]:
-        """Freeze data only; never serialize clients, locks or live tasks."""
-        state: dict[str, Any] = {
-            "model_calls": self.model_calls,
-            "_response_starts": copy.deepcopy(self._response_starts),
-            "results": {
-                key: {
-                    k: v
-                    for k, v in asdict(value).items()
-                    if k not in {"observation", "arguments_json", "args"}
-                }
-                for key, value in self.results.items()
-            },
-        }
-        state.update(self._extra_snapshot())
-        return copy.deepcopy(state)
-
-    def _restore_durable_snapshot(self, state: dict[str, Any]) -> None:
-        self.model_calls = state["model_calls"]
-        self._response_starts = state["_response_starts"]
-        for key, value in state["results"].items():
-            if key not in self.results:
-                raise ValueError(
-                    "Harness snapshot is missing its native Tool Step result"
-                )
-            for name, field in value.items():
-                setattr(self.results[key], name, field)
-        self._restore_extra(state)
-
     async def durable_filter_model_input(self, data: CallModelData[Any]) -> ModelInputData:
-        """Checkpoint bounded history compaction and its mutable data.
-
-        The Agent loop stays outside the Step; each Agent model call is
-        DBOSRunner's Step. One bounded transaction shares this compaction Step.
-        """
-        self._check(data.context)
-
-        async def prepare():
-            from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
-
-            stop = None
-            try:
-                with budget_capture() as usage:
-                    self._filter_usage = usage
+        """Checkpoint the filtered window and summary costs for this turn."""
+        self.estimated_input_tokens = None
+        try:
+            with budget_capture() as usage:
+                async def prepare():
                     try:
                         result = await self.filter_model_input(data)
-                    except _ReasoningStopped as exc:
-                        stop = str(exc)
-                        result = data.model_data
-                    finally:
-                        self._filter_usage = None
-            except BaseException:
-                capture_budget_usage(usage)
-                raise
-            return {
-                "input": result.input,
-                "instructions": result.instructions,
-                "state": self._durable_snapshot(),
-                "usage": usage,
-                "stop": stop,
-            }
+                    except BaseException as exc:
+                        exc.budget_usage = usage
+                        raise
+                    return {
+                        "model_input": (
+                            None
+                            if result is data.model_data
+                            else {"input": result.input, "instructions": result.instructions}
+                        ),
+                        "compacted_turns": sorted(self._compacted_turns),
+                        "rolling_summary": self.rolling_summary,
+                        "usage": usage,
+                    }
 
-        saved = await DBOS.run_step_async(
-            {"name": "por.agent_context", "preemptible": True}, prepare
-        )
-        self._restore_durable_snapshot(saved["state"])
+                saved = await DBOS.run_step_async(
+                    {"name": "por.agent_context", "preemptible": True}, prepare
+                )
+        except BaseException as exc:
+            capture_budget_usage(getattr(exc, "budget_usage", usage))
+            raise
         capture_budget_usage(saved["usage"])
-        if saved["stop"] is not None:
-            from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
-
-            raise _ReasoningStopped(saved["stop"])
-        return ModelInputData(input=saved["input"], instructions=saved["instructions"])
+        self._compacted_turns = set(saved["compacted_turns"])
+        self.rolling_summary = saved["rolling_summary"]
+        if saved["model_input"] is None:
+            return data.model_data
+        return ModelInputData(**saved["model_input"])
 
     def _check(self, context: Any) -> None:
         if context is not self:
             raise ValueError("SDK invocation context does not match this harness.")
 
     async def filter_model_input(self, data: CallModelData[Any]) -> ModelInputData:
-        """Return the native input unchanged unless a subclass bounds it."""
+        """Apply the rolling summary to the model's copy of the SDK input."""
         self._check(data.context)
-        if self._agent is not None and data.agent is not self._agent:
-            raise ValueError(
-                "Handoffs/nested roles require a separate SDKContextHarness."
-            )
-        return data.model_data
+        return await self._compact_history(data.model_data, data.agent)
 
     @property
     def closing(self) -> bool:
@@ -266,7 +247,7 @@ class SDKContextHarness(RunHooks):
             tool_name=context.tool_name,
             arguments_json=context.tool_arguments,
             args=args,
-            model_turn=self.model_calls,
+            model_turn=self.model_turn,
         )
         self.results[call_id] = result
         return result
@@ -303,7 +284,6 @@ class SDKContextHarness(RunHooks):
             copy.deepcopy(observation),
             error_type,
         )
-        self.events.append((f"tool_{status}", result.tool_call_id))
 
     async def on_tool_start(
         self, context: RunContextWrapper[Any], agent: Agent[Any], tool: Tool
@@ -318,7 +298,6 @@ class SDKContextHarness(RunHooks):
                     effect_status=recorded.effect_status,
                 )
             annotate(tool_call_id=recorded.tool_call_id)
-            self.events.append(("tool_start", context.tool_call_id))
             self._tool_started_at[context.tool_call_id] = time.monotonic()
 
     async def on_tool_end(
@@ -338,7 +317,6 @@ class SDKContextHarness(RunHooks):
                 )
             if recorded.status == "running":
                 self.record_tool(context, "unobserved", result)
-            self.events.append(("tool_end", context.tool_call_id))
             started = self._tool_started_at.pop(context.tool_call_id, None)
             await self._observe(
                 "tool_result",
@@ -359,9 +337,8 @@ class SDKContextHarness(RunHooks):
         system_prompt: str | None,
         input_items: list[TResponseInputItem],
     ) -> None:
-        """Record the public lifecycle order of actual model requests."""
-        self.model_calls += 1
-        self.events.append(("llm_start", str(self.model_calls)))
+        """Observe entry to a model turn, before model admission."""
+        self.model_turn += 1
         self._model_started_at = time.monotonic()
         await self._observe("model_started")
 
@@ -371,38 +348,39 @@ class SDKContextHarness(RunHooks):
         agent: Agent[Any],
         response: ModelResponse,
     ) -> None:
-        """Observe a model response without treating hosted items as local evidence."""
-        self.events.append(("llm_end", str(self.model_calls)))
-        usage = response.usage
-        # SDK zero defaults do not prove a provider supplied token usage.
+        """Project a completed SDK response, including on DBOS replay."""
+        usage = budget_from_sdk_usage(response.usage)
+        usage["model_calls"] = 1
+        capture_budget_usage(usage)
         tokens = {
-            key: getattr(usage, key, None)
+            key: usage[key]
             for key in ("input_tokens", "output_tokens", "total_tokens")
         }
+        started, self._model_started_at = self._model_started_at, None
+        if self.config is not None and (items := response.to_input_items()):
+            self._response_starts.append(digest(items[0]))
         await self._observe(
             "model_completed",
             **({"usage": tokens} if any(tokens.values()) else {}),
             **(
-                {"duration_ms": (time.monotonic() - self._model_started_at) * 1000}
-                if self._model_started_at is not None
+                {"duration_ms": (time.monotonic() - started) * 1000}
+                if started is not None
                 else {}
             ),
         )
-        self._model_started_at = None
-        items = response.to_input_items()
-        if items:
-            self._response_starts.append(self._item_key(items[0]))
 
     async def on_agent_start(
         self, context: RunContextWrapper[Any], agent: Agent[Any]
     ) -> None:
         """Confirm the invocation boundary before any model or local tool runs."""
         self._check(context.context)
-        if self._agent is not None and self._agent is not agent:
-            raise ValueError("A Harness supports one Agent per invocation.")
-        # Runner supplies the bound Agent here before preparing the first input.
-        self._agent = agent
-        self.events.append(("agent_start", agent.name))
+        # Responses spans omit the model name when sensitive data is disabled.
+        model = agent.model
+        for _ in range(4):
+            if isinstance(model, str):
+                self.model_name = model
+                break
+            model = getattr(model, "model", None)
         self._agent_started_at = time.monotonic()
         await self._observe("agent_started")
 
@@ -410,20 +388,15 @@ class SDKContextHarness(RunHooks):
         self, context: RunContextWrapper[Any], agent: Agent[Any], output: Any
     ) -> None:
         """Observe final output; exit settlement remains the caller's responsibility."""
-        self.events.append(("agent_end", agent.name))
         await self._observe(
             "agent_completed",
-            model_calls=self.model_calls,
+            model_calls=self.model_turn,
             **(
                 {"duration_ms": (time.monotonic() - self._agent_started_at) * 1000}
                 if self._agent_started_at is not None
                 else {}
             ),
         )
-
-    @staticmethod
-    def _item_key(item: dict[str, Any]) -> str:
-        return json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
 
     def history_units(
         self, items: list[TResponseInputItem]
@@ -434,15 +407,17 @@ class SDKContextHarness(RunHooks):
         them for the caller's explicit capacity error instead of guessing pairs.
         """
         starts = {key: index for index, key in enumerate(self._response_starts)}
-        if len(starts) != len(self._response_starts):
-            return list(items), []
+        if not starts or len(starts) != len(self._response_starts):
+            return items, []
         boundaries = [
-            (index, starts[self._item_key(item)])
+            (index, turn)
             for index, item in enumerate(items)
-            if self._item_key(item) in starts
+            if (turn := starts.get(digest(item))) is not None
         ]
-        if not boundaries:
-            return list(items), []
+        if not boundaries or [turn for _, turn in boundaries] != list(
+            range(len(self._response_starts))
+        ):
+            return items, []
         units = []
         for offset, (start, turn) in enumerate(boundaries):
             end = (
@@ -450,8 +425,8 @@ class SDKContextHarness(RunHooks):
                 if offset + 1 < len(boundaries)
                 else len(items)
             )
-            units.append((turn, list(items[start:end])))
-        return list(items[: boundaries[0][0]]), units
+            units.append((turn, items[start:end]))
+        return items[: boundaries[0][0]], units
 
     @staticmethod
     def can_compact_unit(items: list[TResponseInputItem]) -> bool:
@@ -483,6 +458,178 @@ class SDKContextHarness(RunHooks):
                 return False
         return True
 
+    def _estimate(self, data: ModelInputData, agent: Agent[Any]) -> int:
+        return estimate_text_tokens(
+            json.dumps(
+                {
+                    "instructions": data.instructions,
+                    "input": data.input,
+                    "tools": [tool.params_json_schema for tool in agent.tools],
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+
+    @staticmethod
+    def _with_summary(
+        head: list[Any], units: list[Any], summary: str, instructions: Any
+    ) -> ModelInputData:
+        summary_items = (
+            [
+                {
+                    "role": "user",
+                    "content": "<SDK Rolling Summary>\n"
+                    + summary
+                    + "\n</SDK Rolling Summary>",
+                }
+            ]
+            if summary
+            else []
+        )
+        return ModelInputData(
+            input=[
+                *head,
+                *summary_items,
+                *(item for _, unit in units for item in unit),
+            ],
+            instructions=instructions,
+        )
+
+    async def _compact_history(
+        self, data: ModelInputData, agent: Agent[Any]
+    ) -> ModelInputData:
+        config = self.config
+        if config is None:
+            return data
+        # Reapply the committed window to the SDK's original items on each turn.
+        head, units = self.history_units(data.input)
+        active = [
+            (turn, unit) for turn, unit in units if turn not in self._compacted_turns
+        ]
+        current = (
+            self._with_summary(head, active, self.rolling_summary, data.instructions)
+            if self.rolling_summary and units
+            else data
+        )
+        capacity = resolve_context_capacity(
+            config.research_model, config.context_capacity_tokens
+        )
+        before = self._estimate(current, agent)
+        self.estimated_input_tokens = before
+        threshold = config.context_compaction_threshold_ratio
+        if context_pressure_ratio(before, capacity) < threshold:
+            return current
+        recent = max(1, config.recent_raw_steps)
+        eligible = [
+            (turn, unit)
+            for turn, unit in active[:-recent]
+            if self.can_compact_unit(unit)
+        ]
+        # Metrics only: never log prompts, page text, tool output or credentials.
+        diagnostics = {
+            "estimated_input_tokens": before,
+            "context_capacity_tokens": capacity,
+            "compaction_threshold_ratio": threshold,
+            "recent_raw_steps": recent,
+            "eligible_compaction_units": len(eligible),
+        }
+        if not eligible:
+            LOGGER.warning(
+                "SDK context capacity exceeded: %s",
+                json.dumps(diagnostics, sort_keys=True),
+            )
+            annotate(**diagnostics)
+            raise SDKContextLimitExceeded(
+                "Current task, rolling summary or recent native steps exceed "
+                "context capacity; they cannot be safely discarded; diagnostics="
+                + json.dumps(diagnostics, sort_keys=True)
+            )
+        removed = {turn for turn, _ in eligible}
+        kept = [(turn, unit) for turn, unit in active if turn not in removed]
+        # Bound the summary request independently of the business context window.
+        # The complete original items and tool observations remain available.
+        history_text = json.dumps(
+            [item for _, unit in eligible for item in unit],
+            ensure_ascii=False,
+            default=str,
+        )
+        if len(history_text) > 30_000:
+            history_text = (
+                history_text[:15_000]
+                + "\n[Middle omitted from summary input; original transcript retained.]\n"
+                + history_text[-15_000:]
+            )
+        with business_span("rolling_compaction", estimated_tokens_before=before):
+            try:
+                summary, _ = await summarize_history(
+                    history_text,
+                    previous_summary=self.rolling_summary,
+                    task_context=json.dumps(head, ensure_ascii=False, default=str),
+                    model_name=config.rolling_compaction_model,
+                    config=self.runtime_config,
+                    max_tokens=config.rolling_compaction_model_max_tokens,
+                    max_retries=config.max_structured_output_retries,
+                )
+                if estimate_text_tokens(summary) > config.rolling_compaction_model_max_tokens:
+                    raise ValueError(
+                        "Rolling summary exceeds the configured output bound."
+                    )
+                candidate = self._with_summary(head, kept, summary, data.instructions)
+                after = self._estimate(candidate, agent)
+                if (
+                    after >= before
+                    or context_pressure_ratio(after, capacity) >= threshold
+                ):
+                    raise ValueError(
+                        "Rolling compaction cannot fit the protected request or did not reduce it."
+                    )
+            except ModelBudgetExceeded as exc:
+                # The summary's model admission can consume or exhaust the
+                # reasoning allowance. The SDK still owns the original notes.
+                raise _ReasoningStopped(str(exc)) from exc
+            except Exception as exc:
+                if is_execution_control_failure(exc):
+                    raise
+                await self._observe(
+                    "harness",
+                    stage="rolling_compact",
+                    status="failed",
+                    error_type=type(exc).__name__,
+                    **diagnostics,
+                )
+                LOGGER.warning(
+                    "SDK rolling compaction failed safely: %s",
+                    json.dumps(diagnostics, sort_keys=True),
+                )
+                # Keep the bounded reason fixed; never copy arbitrary provider
+                # messages or prompt content into the archived failure.
+                detail = (
+                    "candidate cannot fit or did not reduce the protected request"
+                    if isinstance(exc, ValueError)
+                    else type(exc).__name__
+                )
+                raise SDKContextLimitExceeded(
+                    "Rolling compaction failed safely: "
+                    f"{detail}; original history retained; diagnostics="
+                    + json.dumps(diagnostics, sort_keys=True)
+                ) from exc
+            annotate(
+                estimated_tokens_after=after,
+                removed_turns=len(removed),
+                **diagnostics,
+            )
+            self._compacted_turns.update(removed)
+            self.rolling_summary = summary
+            self.estimated_input_tokens = after
+            await self._observe(
+                "harness",
+                stage="rolling_compact",
+                status="completed",
+                removed_turns=len(removed),
+            )
+            return candidate
+
     async def settle(self, reason: str) -> BatchSettlement:
         """Drain observed tools without replaying any business tool.
 
@@ -510,7 +657,6 @@ class SDKContextHarness(RunHooks):
             error_type=error_type,
         )
         self.last_settlement = settlement
-        self.events.append(("settlement", reason))
         await self._observe(
             "harness",
             stage="settlement",
@@ -528,23 +674,31 @@ class SDKContextHarness(RunHooks):
             return await self._settle_owned(reason)
 
         async def settle():
-            try:
-                with budget_capture() as usage:
-                    result = await self._settle_owned(reason)
-            except BaseException:
-                capture_budget_usage(usage)
-                raise
+            result = await self._settle_owned(reason)
             return {
                 "settlement": asdict(result),
-                "state": self._durable_snapshot(),
-                "usage": usage,
+                # A Tool Step that raises has no committed tool record to replay.
+                "failed_tools": {
+                    call_id: {
+                        "status": record.status,
+                        "error_type": record.error_type,
+                        "operation_id": record.operation_id,
+                        "effect_status": record.effect_status,
+                    }
+                    for call_id, record in self.results.items()
+                    if record.status in {"failed", "cancelled"} and record.observation is None
+                },
             }
 
         saved = await DBOS.run_step_async(
             {"name": "por.agent_settlement", "preemptible": True}, settle
         )
-        self._restore_durable_snapshot(saved["state"])
-        capture_budget_usage(saved["usage"])
+        for call_id, failed in saved["failed_tools"].items():
+            record = self.results[call_id]
+            record.status = failed["status"]
+            record.error_type = failed["error_type"]
+            record.operation_id = failed["operation_id"]
+            record.effect_status = failed["effect_status"]
         value = saved["settlement"]
         value["in_flight_call_ids"] = tuple(value["in_flight_call_ids"])
         self.last_settlement = BatchSettlement(**value)
@@ -638,6 +792,10 @@ class SDKContextHarness(RunHooks):
             raise
         except BaseException as exc:
             self._closing = True
+            if self._model_started_at is not None:
+                # For failed model Steps, the metered error carries the receipt
+                # usage. Successful responses are projected by on_llm_end.
+                capture_budget_usage(getattr(exc, "budget_usage", None))
             cancelled = is_cancellation(exc)
             reason = "cancelled" if cancelled else "exception"
             if cancelled or isinstance(exc, ExecutionControlError):
@@ -645,7 +803,6 @@ class SDKContextHarness(RunHooks):
             try:
                 await self._settle_on_exit(reason)
             except BaseException as cleanup_error:
-                self._exit_error_type = type(cleanup_error).__name__
                 if hasattr(exc, "add_note"):
                     exc.add_note(
                         f"Context settlement interrupted: {type(cleanup_error).__name__}"
@@ -709,4 +866,5 @@ __all__ = [
     "InspectionTranscript",
     "ObservedToolResult",
     "SDKContextHarness",
+    "SDKContextLimitExceeded",
 ]

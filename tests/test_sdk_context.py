@@ -1,7 +1,7 @@
 """Exercise the SDK context harness without any Research Graph dependency."""
 
 import asyncio
-import json
+from dataclasses import replace
 
 import pytest
 from agents import Agent, function_tool
@@ -9,6 +9,7 @@ from agents.exceptions import MaxTurnsExceeded
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.runtime import sdk_context
 from open_deep_research.runtime.sdk_context import (
     BatchSettlement,
     ObservedToolResult,
@@ -17,6 +18,7 @@ from open_deep_research.runtime.sdk_context import (
 from open_deep_research.runtime.sdk_runtime import _RunBudget
 from open_deep_research.runtime.tool_executor import ToolExecutor
 from open_deep_research.tools import register_tool
+from open_deep_research.web.run_data import RunJSON, digest
 from open_deep_research.workflow.execution import ExecutionControlError
 
 
@@ -49,7 +51,7 @@ def test_history_units_partition_at_observed_response_boundaries():
         {"role": "assistant", "content": "done"},
     ]
     starts = [items[1], items[3], items[6]]
-    harness._response_starts = [harness._item_key(item) for item in starts]
+    harness._response_starts = [digest(item) for item in starts]
     head, units = harness.history_units(items)
     assert head == [items[0]]
     assert [turn for turn, _ in units] == [0, 1, 2]
@@ -64,6 +66,12 @@ def test_history_units_preserve_unknown_history_for_capacity_error():
     head, units = harness.history_units(items)
     assert head == items
     assert units == []
+
+    first = {"role": "assistant", "content": "first"}
+    second = {"role": "assistant", "content": "second"}
+    harness._response_starts = [digest(first), digest(second)]
+    for ambiguous in ([second, first], [first, second, first], [second]):
+        assert harness.history_units(ambiguous) == (ambiguous, [])
 
 
 def test_can_compact_unit_requires_complete_call_output_pairs():
@@ -172,9 +180,23 @@ def test_tool_records_are_restored_and_conflicts_rejected():
         )
 
 
-def test_durable_snapshot_omits_raw_payloads():
+def test_settlement_checkpoint_only_restores_tools_without_a_committed_output(
+    monkeypatch,
+):
+    serializer = RunJSON()
+    snapshot = None
+
+    async def step(options, settle):
+        nonlocal snapshot
+        assert options["name"] == "por.agent_settlement"
+        if snapshot is None:
+            snapshot = serializer.serialize(await settle())
+        return serializer.deserialize(snapshot)
+
+    monkeypatch.setattr(sdk_context, "native_step_available", lambda: True)
+    monkeypatch.setattr(sdk_context.DBOS, "run_step_async", step)
     harness = _harness()
-    harness.results["call-1"] = ObservedToolResult(
+    completed = ObservedToolResult(
         sdk_run_id="sdk-run",
         tool_call_id="call-1",
         tool_name="search",
@@ -184,18 +206,22 @@ def test_durable_snapshot_omits_raw_payloads():
         status="succeeded",
         observation={"raw": "large payload"},
     )
-    snapshot = harness._durable_snapshot()
-    assert set(snapshot["results"]["call-1"]) == {
-        "sdk_run_id",
-        "tool_call_id",
-        "tool_name",
-        "model_turn",
-        "status",
-        "error_type",
-        "operation_id",
-        "effect_status",
-    }
-    assert "raw" not in json.dumps(snapshot)
+    pending = replace(completed, tool_call_id="call-2", status="running", observation=None)
+    failed = replace(
+        pending, status="failed", error_type="ExecutionControlError",
+        operation_id="op-2", effect_status="uncertain",
+    )
+    harness.results = {"call-1": completed, "call-2": failed}
+    expected = asyncio.run(harness._settle_on_exit("exception"))
+    assert expected.succeeded
+    assert set(serializer.deserialize(snapshot)["failed_tools"]) == {"call-2"}
+    assert "raw" not in snapshot and "secret" not in snapshot
+
+    replayed = _harness()
+    replayed.results = {"call-1": replace(completed), "call-2": pending}
+    assert asyncio.run(replayed._settle_on_exit("exception")) == expected
+    assert replayed.results["call-1"] == completed
+    assert replayed.results["call-2"] == failed
 
 
 def test_settlement_reports_live_and_pending_calls():

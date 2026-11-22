@@ -360,7 +360,7 @@ class CorrelationProcessor(SpanProcessor):
             values = dict(_identity.get())
             harness = _harness.get()
             if harness is not None:
-                values["model_turn"] = harness.model_calls
+                values["model_turn"] = harness.model_turn
                 values["estimated_input_tokens"] = getattr(
                     harness, "estimated_input_tokens", None
                 )
@@ -396,14 +396,9 @@ class SDKUsageEnrichment(TracingProcessor):
             ):
                 return  # SDK zero defaults do not prove provider token usage.
             values = {}
-            harness = _harness.get()
             model = getattr(span.span_data, "model", None) or getattr(
-                getattr(harness, "_agent", None), "model", None
+                _harness.get(), "model_name", None
             )
-            for _ in range(4):
-                if isinstance(model, str):
-                    break
-                model = getattr(model, "model", None)
             if isinstance(model, str):
                 values["llm.model_name"] = model
             for source, target in (

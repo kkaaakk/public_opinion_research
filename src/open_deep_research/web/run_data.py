@@ -61,10 +61,21 @@ def _json_default(value: Any) -> Any:
             )
         }
     if isinstance(value, BaseException):
-        from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
+        from open_deep_research.runtime.sdk_context import (
+            SDKContextLimitExceeded,
+            _ReasoningStopped,
+        )
 
         if isinstance(value, _ReasoningStopped):
-            return {"__por_reasoning_stop__": str(value)}
+            return {
+                "__por_reasoning_stop__": str(value),
+                "budget_usage": getattr(value, "budget_usage", {}),
+            }
+        if isinstance(value, SDKContextLimitExceeded):
+            return {
+                "__por_context_limit__": str(value),
+                "budget_usage": getattr(value, "budget_usage", {}),
+            }
         if isinstance(value, ModelInvocationError):
             return {
                 "__por_model_error__": {
@@ -82,7 +93,10 @@ def _json_default(value: Any) -> Any:
                 "budget_usage": getattr(value, "budget_usage", {}),
                 "unknown_outcome": getattr(value, "unknown_outcome", False),
             }
-        return {"__dbos_error__": type(value).__name__}
+        return {
+            "__dbos_error__": type(value).__name__,
+            "budget_usage": getattr(value, "budget_usage", {}),
+        }
     if isinstance(value, BaseMessage):
         return {"__p4_message__": message_to_dict(value)}
     if isinstance(value, BaseModel) and type(value).__name__ in _MODELS:
@@ -103,9 +117,17 @@ def loads(value: str) -> Any:
 
     def restore(item):
         if "__por_reasoning_stop__" in item:
-            from open_deep_research.runtime.sdk_runtime import _ReasoningStopped
+            from open_deep_research.runtime.sdk_context import _ReasoningStopped
 
-            return _ReasoningStopped(item["__por_reasoning_stop__"])
+            error = _ReasoningStopped(item["__por_reasoning_stop__"])
+            error.budget_usage = item.get("budget_usage", {})
+            return error
+        if "__por_context_limit__" in item:
+            from open_deep_research.runtime.sdk_context import SDKContextLimitExceeded
+
+            error = SDKContextLimitExceeded(item["__por_context_limit__"])
+            error.budget_usage = item["budget_usage"]
+            return error
         if "__por_model_error__" in item:
             return ModelInvocationError(**item["__por_model_error__"])
         if "__por_control_error__" in item:
@@ -123,7 +145,9 @@ def loads(value: str) -> Any:
         if "__por_sdk_response__" in item:
             return _SDK_RESPONSE.validate_python(item["__por_sdk_response__"])
         if "__dbos_error__" in item:
-            return RuntimeError(item["__dbos_error__"])
+            error = RuntimeError(item["__dbos_error__"])
+            error.budget_usage = item.get("budget_usage", {})
+            return error
         if "__p4_message__" in item:
             return messages_from_dict([item["__p4_message__"]])[0]
         if item.get("__p4_model__") in _MODELS:

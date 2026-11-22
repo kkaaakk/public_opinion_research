@@ -32,11 +32,11 @@ from opentelemetry.trace import (
     TraceFlags,
     TraceState,
 )
-from test_sdk_runtime import _RunBudget
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.observability import telemetry
 from open_deep_research.runtime.sdk_context import SDKContextHarness
+from open_deep_research.runtime.sdk_runtime import _RunBudget
 from open_deep_research.runtime.tool_executor import ToolExecutor
 from open_deep_research.tools import register_tool
 

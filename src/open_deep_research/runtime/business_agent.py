@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import partial
 from typing import Any
 
 from agents import TResponseInputItem
@@ -160,14 +161,11 @@ async def _business_agent_tools(
 # 压缩研究记录并统计用量，预算不足时保留原始笔记以预留最终报告调用。
 async def _compress_research(
     messages: list[Any],
-    task: str,
-    output_contract: str,
     cumulative_budget: dict[str, Any],
     *,
     configurable: Configuration,
     config: RunnableConfig,
-) -> tuple[str, list[str], dict[str, Any]]:
-    del task, output_contract
+) -> tuple[str, dict[str, Any]]:
     if not can_spend_model_call(
         configurable,
         cumulative_budget,
@@ -180,7 +178,6 @@ async def _compress_research(
         return (
             raw_notes
             or "Budget guard skipped research compression before any research notes were collected.",
-            [raw_notes],
             budget_usage_with_reason(
                 "Skipped research compression to preserve the final report model call."
             ),
@@ -246,27 +243,10 @@ async def _compress_research(
         if token_limit_hit:
             researcher_messages = remove_up_to_last_ai_message(researcher_messages)
             continue
-        raw_notes = "\n".join(
-            str(message.content)
-            for message in filter_messages(
-                researcher_messages, include_types=["tool", "ai"]
-            )
-        )
-        return (
-            response,
-            [raw_notes],
-            attempt_budget,
-        )
+        return response, attempt_budget
 
-    raw_notes = "\n".join(
-        str(message.content)
-        for message in filter_messages(
-            researcher_messages, include_types=["tool", "ai"]
-        )
-    )
     return (
         "Error synthesizing research report: Maximum retries exceeded",
-        [raw_notes],
         merge_budget_usage(
             attempt_budget,
             budget_usage_with_reason(
@@ -363,37 +343,24 @@ async def run_business_agent(
         ),
     )
 
-    # 将运行时的研究压缩请求转发到共享压缩实现。
-    async def compress_report(
-        messages: list[Any],
-        task: str,
-        output_contract: str,
-        cumulative_budget: dict[str, Any],
-    ) -> tuple[str, list[str], dict[str, Any]]:
-        return await _compress_research(
-            messages,
-            task,
-            output_contract,
-            cumulative_budget,
-            configurable=configurable,
-            config=config,
-        )
-
-    runtime_args: dict[str, Any] = dict(
-        role=role,
-        spec=spec,
-        task_id=task_id,
-        research_round=research_round,
-        config=configurable,
-        runtime_config=config,
-        system_prompt=system_prompt,
-        tools=tools,
-        initial_budget=runtime_state(state).get("budget", {}),
-        compress_report=compress_report,
-    )
     # One SDK start is one provider attempt. Errors never select another engine.
     async with sdk_model(configurable.research_model, config=config) as model:
-        result = await SDKAgentRuntime(model=model, **runtime_args).run(assignment)
+        runtime = SDKAgentRuntime(
+            role=role,
+            spec=spec,
+            task_id=task_id,
+            research_round=research_round,
+            config=configurable,
+            runtime_config=config,
+            model=model,
+            system_prompt=system_prompt,
+            tools=tools,
+            initial_budget=runtime_state(state).get("budget", {}),
+            compress_report=partial(
+                _compress_research, configurable=configurable, config=config
+            ),
+        )
+        result = await runtime.run(assignment)
     return ResearchRoleResult(
         role=role,
         round=research_round,

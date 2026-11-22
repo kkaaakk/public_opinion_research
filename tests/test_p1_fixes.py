@@ -47,8 +47,6 @@ def test_unknown_compression_error_is_not_swallowed(monkeypatch) -> None:
         asyncio.run(
             business_agent_module._compress_research(
                 [],
-                "task",
-                "output",
                 {},
                 configurable=Configuration.from_runnable_config({}),
                 config={},
@@ -75,8 +73,6 @@ def test_token_limit_compression_error_keeps_graceful_degradation(monkeypatch) -
     result = asyncio.run(
         business_agent_module._compress_research(
             [],
-            "task",
-            "output",
             {},
             configurable=Configuration.from_runnable_config({}),
             config={},

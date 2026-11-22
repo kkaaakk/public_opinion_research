@@ -244,16 +244,16 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
             assert [
                 s for s in restored_steps if s["function_name"] == "por.agent_tool"
             ] == [tool_step]
-            graph_context = [
+            contexts = [
                 s["output"]
                 for s in restored_steps
-                if s["function_name"] == "por.agent_context" and s["output"]
+                if s["function_name"] == "por.agent_context"
+                and s["function_id"] > tool_step["function_id"]
             ]
-            assert any(
-                state["state"]["results"]["effect-public_signal"]["consumed"]
-                for state in graph_context
-                if "effect-public_signal" in state["state"]["results"]
-            )
+            assert contexts
+            assert all(set(context) == {
+                "model_input", "compacted_turns", "rolling_summary", "usage"
+            } for context in contexts)
     finally:
         kill_owned(proc)
 

@@ -1,6 +1,6 @@
 # 🔬 Public Opinion Research
 
-> 当前应用版本为 `por-inline-report-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，ResearchWorkflow 依次生成风险评估、应对策略和一份综合 Markdown 报告。 [Brief 合同](docs/architecture/research-brief.md)
+> 当前应用版本为 `por-agent-context-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，ResearchWorkflow 依次生成风险评估、应对策略和一份综合 Markdown 报告。 [Brief 合同](docs/architecture/research-brief.md)
 
 基于 DBOS、OpenAI Agents SDK、RAG 和 MCP 的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了企业知识 RAG、舆情分析、社交媒体监控和可追溯来源记录等能力。
 

@@ -12,16 +12,15 @@ from open_deep_research.workflow import research
 
 
 # 正常压缩结果，保证测试只观察工具证据与降级信号。
-async def _compress(messages, task, output_contract, cumulative_budget):
-    return "Role report", [], {}
+async def _compress(messages, cumulative_budget):
+    return "Role report", {}
 
 
 # 模拟预算守卫生成的占位报告。
-async def _degraded_compress(messages, task, output_contract, cumulative_budget):
+async def _degraded_compress(messages, cumulative_budget):
     return (
         "Budget guard skipped research compression before any research notes "
         "were collected.",
-        [],
         budget_usage_with_reason(
             "Skipped research compression to preserve the final report model call."
         ),
