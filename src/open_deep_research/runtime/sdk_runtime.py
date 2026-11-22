@@ -1,51 +1,40 @@
 """Execute business AgentSpecs with the official SDK, retaining business results.
 
-Only Runner owns the model/tool loop. The harness adds business admission and SDK
-usage to the collector; DBOS owns durable business orchestration.
+Runner owns the model and tool loop. DBOS owns durable business orchestration.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from agents import Agent, Model, ModelSettings, RunConfig
+from agents import Agent, Model, ModelSettings, TResponseInputItem
 from agents.exceptions import MaxTurnsExceeded
 from agents.retry import ModelRetrySettings
-from agents.run import ModelInputData
 from dbos import DBOS
 from dbos import error as dbos_error
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from open_deep_research.budget import (
     ModelBudgetExceeded,
+    admit_model_call,
     budget_capture,
-    budget_from_sdk_usage,
     budget_usage_with_reason,
-    can_spend_model_call,
     capture_budget_usage,
-    context_pressure_ratio,
-    diff_budget_usage,
-    estimate_text_tokens,
-    is_over_model_budget,
     merge_budget_usage,
     model_budget_admission,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.llm.context import resolve_context_capacity
 from open_deep_research.llm.errors import ModelInvocationError
 from open_deep_research.llm.generation import ModelOutputError, metered_model_response
-from open_deep_research.observability.telemetry import (
-    annotate,
-    business_span,
-    telemetry_enabled,
+from open_deep_research.runtime.sdk_context import (
+    SDKContextHarness,
+    SDKContextLimitExceeded,
+    _ReasoningStopped,
 )
-from open_deep_research.runtime.compaction import summarize_history
-from open_deep_research.runtime.sdk_context import SDKContextHarness
 from open_deep_research.runtime.tool_executor import ToolExecutor, tool_usage
 from open_deep_research.tools import tool_result_text
 from open_deep_research.tools.manager import ToolManager
@@ -57,11 +46,9 @@ from open_deep_research.workflow.execution import (
 
 SDK_RUNTIME_VERSION = "sdk-vertical-v1"
 
-LOGGER = logging.getLogger(__name__)
-
 CompressionCallback = Callable[
-    [list[Any], str, str, dict[str, Any]],
-    Awaitable[tuple[str, list[str], dict[str, Any]]],
+    [list[BaseMessage], dict[str, Any]],
+    Awaitable[tuple[str, dict[str, Any]]],
 ]
 
 
@@ -75,16 +62,8 @@ class AgentRuntimeResult:
     evidence_collected: bool = False
 
 
-class SDKContextLimitExceeded(RuntimeError):
-    """Reject requests whose protected history cannot fit safely after compaction."""
-
-
-class _ReasoningStopped(Exception):
-    """Stop Runner at a public hook, then finish the existing business report."""
-
-
 class MeteredModel(Model):
-    """Write physical receipts inside the official DBOSRunner model Step."""
+    """Admit SDK inference and write physical receipts inside DBOSRunner's Step."""
 
     def __init__(self, model):
         self.model = model
@@ -92,6 +71,7 @@ class MeteredModel(Model):
 
     async def get_response(self, *args, **kwargs):
         try:
+            admit_model_call({})
             response, _, _ = await metered_model_response(
                 self.model_name, lambda identity: self._response(identity, *args, **kwargs)
             )
@@ -136,21 +116,20 @@ class MeteredModel(Model):
 
 @dataclass
 class _RunBudget:
-    """Share only budget data between the Runtime, tools and Context Harness."""
+    """Project this role's delta for local model and tool admission."""
 
     initial: dict[str, Any]
     delta: dict[str, Any] = field(default_factory=dict)
-    nested: dict[str, Any] = field(default_factory=dict)
 
     def projected(self) -> dict[str, Any]:
         """Project cumulative admission usage without submitting the baseline."""
-        return merge_budget_usage(
-            self.initial, merge_budget_usage(self.delta, self.nested)
-        )
+        return merge_budget_usage(self.initial, self.delta)
 
     def add(self, usage: Any) -> None:
         """Merge one actual usage delta with the existing accounting rules."""
-        self.delta = merge_budget_usage(self.delta, usage)
+        merged = merge_budget_usage(self.delta, usage)
+        self.delta.clear()
+        self.delta.update(merged)
         local = tool_usage.get()
         if local is not None:
             merged = merge_budget_usage(local, usage)
@@ -158,268 +137,8 @@ class _RunBudget:
             local.update(merged)
 
 
-class _BusinessAgentHarness(SDKContextHarness):
-    """Apply business budgets and the single rolling history compaction."""
-
-    def __init__(
-        self,
-        *,
-        role: str,
-        task_id: str,
-        research_round: int,
-        config: Configuration,
-        budget: _RunBudget,
-        runtime_config: Mapping[str, Any],
-    ) -> None:
-        super().__init__(
-            role=role, task_id=task_id, research_round=research_round
-        )
-        self.config = config
-        self.run_budget = budget
-        self.runtime_config = runtime_config
-        self.items: list[Any] = []
-        self._compacted_turns: set[int] = set()
-        self.rolling_summary = ""
-        self.estimated_input_tokens = 0
-        self.context_diagnostics: dict[str, Any] = {}
-
-    def _extra_snapshot(self) -> dict[str, Any]:
-        return {
-            "business": {
-                "delta": self.run_budget.delta,
-                "compacted_turns": sorted(self._compacted_turns),
-                "rolling_summary": self.rolling_summary,
-            }
-        }
-
-    def _restore_extra(self, state: dict[str, Any]) -> None:
-        saved = state.get("business")
-        if saved is None:
-            return
-        self.run_budget.delta = saved["delta"]
-        self._compacted_turns = set(saved["compacted_turns"])
-        self.rolling_summary = saved["rolling_summary"]
-
-    async def filter_model_input(self, data: Any) -> Any:
-        self.items = list(data.model_data.input)
-        filtered = await super().filter_model_input(data)
-        if not can_spend_model_call(
-            self.config, self._filter_budget(), reserve_final_report_call=True
-        ) or is_over_model_budget(self.config, self._filter_budget()):
-            raise _ReasoningStopped(
-                "Business budget stopped SDK reasoning before another request."
-            )
-        filtered = await self._compact_history(filtered, data.agent)
-        if not can_spend_model_call(
-            self.config, self._filter_budget(), reserve_final_report_call=True
-        ) or is_over_model_budget(self.config, self._filter_budget()):
-            raise _ReasoningStopped(
-                "Rolling compaction used the remaining reasoning allowance."
-            )
-        return filtered
-
-    def _filter_budget(self):
-        return merge_budget_usage(
-            self.run_budget.projected(), getattr(self, "_filter_usage", None)
-        )
-
-    def _estimate(self, data: ModelInputData, agent: Agent[Any]) -> int:
-        return estimate_text_tokens(
-            json.dumps(
-                {
-                    "instructions": data.instructions,
-                    "input": data.input,
-                    "tools": [tool.params_json_schema for tool in agent.tools],
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-        )
-
-    @staticmethod
-    def _with_summary(
-        head: list[Any], units: list[Any], summary: str, instructions: Any
-    ) -> ModelInputData:
-        summary_items = (
-            [
-                {
-                    "role": "user",
-                    "content": "<SDK Rolling Summary>\n"
-                    + summary
-                    + "\n</SDK Rolling Summary>",
-                }
-            ]
-            if summary
-            else []
-        )
-        return ModelInputData(
-            input=[
-                *head,
-                *summary_items,
-                *(item for _, unit in units for item in unit),
-            ],
-            instructions=instructions,
-        )
-
-    async def _compact_history(
-        self, data: ModelInputData, agent: Agent[Any]
-    ) -> ModelInputData:
-        # The public filter changes requests, not Runner's original transcript.
-        # Reapply the committed window on every call without mutating SDK internals.
-        head, units = self.history_units(data.input)
-        active = [
-            (turn, unit) for turn, unit in units if turn not in self._compacted_turns
-        ]
-        current = self._with_summary(
-            head, active, self.rolling_summary, data.instructions
-        )
-        capacity = resolve_context_capacity(
-            self.config.research_model, self.config.context_capacity_tokens
-        )
-        before = self._estimate(current, agent)
-        self.estimated_input_tokens = before
-        if (
-            context_pressure_ratio(before, capacity)
-            < self.config.context_compaction_threshold_ratio
-        ):
-            return current
-        recent = max(1, self.config.recent_raw_steps)
-        eligible = [
-            (turn, unit)
-            for turn, unit in active[:-recent]
-            if self.can_compact_unit(unit)
-        ]
-        # Metrics only: never log prompts, page text, tool output or credentials.
-        diagnostics = {
-            "estimated_input_tokens": before,
-            "context_capacity_tokens": capacity,
-            "compaction_threshold_ratio": self.config.context_compaction_threshold_ratio,
-            "recent_raw_steps": recent,
-            "eligible_compaction_units": len(eligible),
-        }
-        self.context_diagnostics = diagnostics
-        if not eligible:
-            LOGGER.warning(
-                "SDK context capacity exceeded: %s",
-                json.dumps(diagnostics, sort_keys=True),
-            )
-            annotate(**diagnostics)
-            raise SDKContextLimitExceeded(
-                "Current task, rolling summary or recent native steps exceed "
-                "context capacity; they cannot be safely discarded; diagnostics="
-                + json.dumps(diagnostics, sort_keys=True)
-            )
-        removed = {turn for turn, _ in eligible}
-        kept = [(turn, unit) for turn, unit in active if turn not in removed]
-        # Bound the summary request independently of the business context window.
-        # The complete original items and tool observations remain available.
-        history_text = json.dumps(
-            [item for _, unit in eligible for item in unit],
-            ensure_ascii=False,
-            default=str,
-        )
-        if len(history_text) > 30_000:
-            history_text = (
-                history_text[:15_000]
-                + "\n[Middle omitted from summary input; original transcript retained.]\n"
-                + history_text[-15_000:]
-            )
-        with business_span("rolling_compaction", estimated_tokens_before=before):
-            model_name = self.config.rolling_compaction_model
-            task_context = json.dumps(head, ensure_ascii=False, default=str)
-            previous = self.rolling_summary
-            try:
-                summary, _ = await summarize_history(
-                    history_text,
-                    previous_summary=previous,
-                    task_context=task_context,
-                    model_name=model_name,
-                    config=self.runtime_config,
-                    max_tokens=self.config.rolling_compaction_model_max_tokens,
-                    max_retries=self.config.max_structured_output_retries,
-                )
-                if (
-                    estimate_text_tokens(summary)
-                    > self.config.rolling_compaction_model_max_tokens
-                ):
-                    raise ValueError(
-                        "Rolling summary exceeds the configured output bound."
-                    )
-                candidate = self._with_summary(head, kept, summary, data.instructions)
-                after = self._estimate(candidate, agent)
-                if (
-                    after >= before
-                    or context_pressure_ratio(after, capacity)
-                    >= self.config.context_compaction_threshold_ratio
-                ):
-                    raise ValueError(
-                        "Rolling compaction cannot fit the protected request or did not reduce it."
-                    )
-            except BaseException as exc:
-                self.events.append(("rolling_compact_failed", type(exc).__name__))
-                await self._observe(
-                    "harness",
-                    stage="rolling_compact",
-                    status="failed",
-                    error_type=type(exc).__name__,
-                    **diagnostics,
-                )
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
-                LOGGER.warning(
-                    "SDK rolling compaction failed safely: %s",
-                    json.dumps(diagnostics, sort_keys=True),
-                )
-                # Keep the bounded reason fixed; never copy arbitrary provider
-                # messages or prompt content into the archived failure.
-                detail = (
-                    "candidate cannot fit or did not reduce the protected request"
-                    if isinstance(exc, ValueError)
-                    else type(exc).__name__
-                )
-                raise SDKContextLimitExceeded(
-                    "Rolling compaction failed safely: "
-                    f"{detail}; original history retained; diagnostics="
-                    + json.dumps(diagnostics, sort_keys=True)
-                ) from exc
-            annotate(
-                estimated_tokens_after=after,
-                removed_turns=len(removed),
-                **diagnostics,
-            )
-            self.estimated_input_tokens = after
-            self._compacted_turns.update(removed)
-            self.rolling_summary = summary
-            self.events.append(("rolling_compact", str(len(removed))))
-            await self._observe(
-                "harness",
-                stage="rolling_compact",
-                status="completed",
-                removed_turns=len(removed),
-            )
-            return candidate
-
-    async def on_llm_start(
-        self, context: Any, agent: Any, system_prompt: Any, input_items: Any
-    ) -> None:
-        await super().on_llm_start(context, agent, system_prompt, input_items)
-        self.run_budget.add({"model_calls": 1})
-
-    async def on_llm_end(self, context: Any, agent: Any, response: Any) -> None:
-        self.run_budget.add(budget_from_sdk_usage(response.usage))
-        await super().on_llm_end(context, agent, response)
-        self.items.extend(response.to_input_items())
-
-
 class SDKAgentRuntime:
-    """Map all four AgentSpecs to SDK Agents and run each exactly once.
-
-    Owns assembly and the report envelope. Runner is the only model/tool loop;
-    no alternate runtime can execute a role.
-    """
-
-    run_budget: _RunBudget
-    harness: _BusinessAgentHarness
+    """Assemble and run a Public Signal or Internal Knowledge Agent."""
 
     def __init__(
         self,
@@ -428,9 +147,9 @@ class SDKAgentRuntime:
         spec: Any,
         task_id: str,
         research_round: int,
-        config: Any,
-        runtime_config: Any,
-        model: Any,
+        config: Configuration,
+        runtime_config: Mapping[str, Any],
+        model: Model,
         system_prompt: str,
         tools: list[Any],
         initial_budget: Mapping[str, Any],
@@ -449,50 +168,12 @@ class SDKAgentRuntime:
         self.initial_budget = dict(initial_budget or {})
         self.compress_report = compress_report
 
-    async def _finish(
-        self, task: str, messages: list[Any], budget_update: dict[str, Any]
-    ) -> AgentRuntimeResult:
-        """Preserve the business report contract for SDK roles."""
-        mode = "followup" if self.research_round > 1 else "initial"
-        body, _raw_notes, compression_budget = await self.compress_report(
-            messages,
-            task,
-            self.spec.expected_output,
-            merge_budget_usage(self.initial_budget, budget_update),
-        )
-        budget_update = merge_budget_usage(budget_update, compression_budget)
-        report = (
-            f"Agent role: {self.role}\n"
-            f"Agent name: {self.spec.display_name}\n"
-            f"Research round: {self.research_round}\n"
-            f"Research mode: {mode}\n"
-            f"Expected output: {self.spec.expected_output}\n\n{body}"
-        )
-        return AgentRuntimeResult(report=report, budget=budget_update)
-
-    def projected_budget(self) -> dict[str, Any]:
-        """Return cumulative business usage for admission, without submitting it."""
-        return self.run_budget.projected()
-
-    def _evidence_collected(self) -> bool:
-        """Return whether this invocation produced usable new evidence.
-
-        A non-empty report alone is insufficient: degraded reports (budget or
-        compression fallbacks) and invocations whose tool calls all failed are
-        not new evidence. Review still decides whether a gap is resolved.
-        """
-        return bool(
-            not self.budget_usage.get("degradation_reasons")
-            and any(
-                record.status == "succeeded"
-                for record in self.harness.results.values()
-            )
-        )
-
-    def _report_messages(self, task: str) -> list[Any]:
-        messages: list[Any] = [HumanMessage(content=task)]
+    def _report_messages(
+        self, task: str, items: Iterable[TResponseInputItem]
+    ) -> list[BaseMessage]:
+        messages: list[BaseMessage] = [HumanMessage(content=task)]
         output_ids: set[str] = set()
-        for item in self.harness.items:
+        for item in items:
             kind = item.get("type")
             if kind == "function_call":
                 try:
@@ -540,7 +221,7 @@ class SDKAgentRuntime:
                     )
                 )
                 messages.append(AIMessage(content=text))
-        # MaxTurnsExceeded can occur before the next input filter, after tools.
+        # An early stop can occur after tools finish but before the SDK returns them.
         for result in self.harness.results.values():
             if result.tool_call_id not in output_ids and result.status != "running":
                 messages.append(
@@ -558,32 +239,30 @@ class SDKAgentRuntime:
             raise TypeError(
                 "SDKAgentRuntime requires an official SDK Model, not a LangChain model."
             )
-        self.run_budget = _RunBudget(initial=self.initial_budget)
-        self.harness = _BusinessAgentHarness(
+        budget = _RunBudget(initial=self.initial_budget)
+        self.harness = SDKContextHarness(
             role=self.role,
             task_id=self.task_id,
             research_round=self.research_round,
             config=self.config,
-            budget=self.run_budget,
             runtime_config=self.runtime_config,
         )
         manager = ToolManager(self.role, self.spec, self.runtime_config)
         tools = manager.index(self.tools)
-        executor = ToolExecutor(
+        self.harness.tool_executor = ToolExecutor(
             self.role,
             self.spec.allowed_domains,
             self.config,
             self.runtime_config,
-            self.run_budget,
+            budget,
             tools,
         )
-        self.harness.tool_executor = executor
         scope = stage_context.get()
         self.agent = Agent(
             name=self.spec.display_name,
             instructions=self.system_prompt,
-            model=MeteredModel(self.model) if scope else self.model,
-            tools=manager.bind(tools.values(), executor),
+            model=MeteredModel(self.model),
+            tools=manager.bind(tools.values(), self.harness.tool_executor),
             output_type=None,
             model_settings=ModelSettings(
                 max_tokens=self.config.research_model_max_tokens,
@@ -591,7 +270,6 @@ class SDKAgentRuntime:
             ),
         )
         inputs = [{"role": "user", "content": task}]
-        self.sdk_result = None
         session = None
         try:
             if scope is not None:
@@ -599,66 +277,78 @@ class SDKAgentRuntime:
                     "session_started",
                     {"role": self.role, "invocation_id": self.harness.sdk_run_id},
                 )
-                if settings().session_path:
+                if session_path := settings().session_path:
                     from agents import SQLiteSession
 
                     session, cancelled = await owned_io(
                         SQLiteSession,
                         scope.stage_id + ":" + self.harness.sdk_run_id,
-                        settings().session_path,
+                        session_path,
                     )
                     if cancelled is not None:
                         raise cancelled
             with (
-                budget_capture() as nested,
-                model_budget_admission(self.config, self.run_budget.projected),
+                budget_capture() as usage,
+                model_budget_admission(self.config, budget.projected),
             ):
-                self.run_budget.nested = nested
+                budget.delta = usage
                 try:
-                    self.sdk_result = await self.harness.run(
+                    sdk_result = await self.harness.run(
                         self.agent,
                         inputs,
-                        run_config=RunConfig(
-                            tracing_disabled=not telemetry_enabled(),
-                            trace_include_sensitive_data=False,
-                        ),
                         max_turns=max(1, self.config.max_react_tool_calls),
                         session=session,
                     )
+                    items = sdk_result.to_input_list()
                 except (_ReasoningStopped, MaxTurnsExceeded) as stopped:
                     if (
                         self.harness.last_settlement is None
                         or not self.harness.last_settlement.succeeded
                     ):
                         raise
-                    self.run_budget.add(budget_usage_with_reason(str(stopped)))
-                messages = self._report_messages(task)
-                before_report = merge_budget_usage(self.run_budget.delta, nested)
+                    budget.add(budget_usage_with_reason(str(stopped)))
+                    items = (
+                        [item.to_input_item() for item in stopped.run_data.new_items]
+                        if stopped.run_data is not None
+                        else []
+                    )
+                messages = self._report_messages(task, items)
                 with budget_capture() as report_usage:
                     try:
-                        result = await self._finish(task, messages, before_report)
+                        body, compression_usage = await self.compress_report(
+                            messages, budget.projected()
+                        )
                     except BaseException as exc:
-                        self.run_budget.add(getattr(exc, "budget_usage", report_usage))
+                        budget.add(getattr(exc, "budget_usage", report_usage))
                         raise
-                self.run_budget.add(diff_budget_usage(result.budget, before_report))
-            # _finish also returns the nested costs it was given. Use captured
-            # usage here so none of those costs are merged twice.
-            self.budget_usage = merge_budget_usage(self.run_budget.delta, nested)
-            result.budget = self.budget_usage
-            result.evidence_collected = self._evidence_collected()
-            return result
-        except BaseException as exc:
-            self.budget_usage = merge_budget_usage(
-                self.run_budget.delta, self.run_budget.nested
+                budget.add(compression_usage)
+            mode = "followup" if self.research_round > 1 else "initial"
+            return AgentRuntimeResult(
+                report=(
+                    f"Agent role: {self.role}\n"
+                    f"Agent name: {self.spec.display_name}\n"
+                    f"Research round: {self.research_round}\n"
+                    f"Research mode: {mode}\n"
+                    f"Expected output: {self.spec.expected_output}\n\n{body}"
+                ),
+                budget=usage,
+                evidence_collected=(
+                    not usage["degradation_reasons"]
+                    and any(
+                        record.status == "succeeded"
+                        for record in self.harness.results.values()
+                    )
+                ),
             )
-            setattr(exc, "budget_usage", self.budget_usage)
+        except BaseException as exc:
+            setattr(exc, "budget_usage", budget.delta)
             setattr(exc, "context_settlement", self.harness.last_settlement)
             # Keep an explicit owner for any result that outlives the bounded
             # drain. Callers can inspect/settle it without replaying the role.
             setattr(exc, "context_harness", self.harness)
             raise
         finally:
-            # Match legacy capture semantics on success and exceptional exits.
+            self.budget_usage = budget.delta
             capture_budget_usage(self.budget_usage)
             if session is not None:
                 await owned_io(session.close)

@@ -191,7 +191,7 @@ auth or baggage is propagated. Retries/recovery emit fresh span identities under
 the persisted caller. A killed process cannot finish/export its in-flight spans.
 Unknown effects remain quarantined; completed tools are never replayed for traces.
 
-Current application and SDK Runtime versions are `por-inline-report-v1` and
+Current application and SDK Runtime versions are `por-agent-context-v1` and
 `sdk-vertical-v1`. When a matching-version journal lacks the optional OTel carrier,
 the Run ID still groups its observations. Earlier journals use their matching
 Executor for drain. [Deployment](dbos-deployment.md)

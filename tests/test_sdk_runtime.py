@@ -12,6 +12,7 @@ from agents.usage import Usage
 from pydantic import Field
 
 from open_deep_research.budget import (
+    budget_capture,
     capture_budget_usage,
 )
 from open_deep_research.configuration import Configuration
@@ -19,11 +20,7 @@ from open_deep_research.public_opinion_agents import (
     PUBLIC_OPINION_AGENT_ORDER,
     get_public_opinion_agent_spec,
 )
-from open_deep_research.runtime.sdk_runtime import (
-    SDKAgentRuntime,
-    _BusinessAgentHarness,
-    _RunBudget,
-)
+from open_deep_research.runtime.sdk_runtime import SDKAgentRuntime
 from open_deep_research.tools import BusinessTool, register_tool
 
 ROLES = PUBLIC_OPINION_AGENT_ORDER
@@ -89,11 +86,11 @@ def _tool(
     )
 
 
-async def _compress(messages, task, output_contract, cumulative_budget):
+async def _compress(messages, cumulative_budget):
     notes = [
         str(message.content) for message in messages if message.type in {"ai", "tool"}
     ]
-    return "Role report\n" + "\n".join(notes), notes, {}
+    return "Role report\n" + "\n".join(notes), {}
 
 
 def _runtime(
@@ -159,7 +156,8 @@ def test_research_agents_execute_sdk_model_tool_model_with_contracts(role):
         default_usage=TOKENS,
     )
     runtime = _runtime(role, model=model, tools=[tool])
-    result = asyncio.run(runtime.run("initial assignment"))
+    with budget_capture() as captured:
+        result = asyncio.run(runtime.run("initial assignment"))
     model.assert_complete()
     assert len(model.calls) == 2
     assert invoked == [("brand", 3)]
@@ -178,7 +176,7 @@ def test_research_agents_execute_sdk_model_tool_model_with_contracts(role):
         "cache_creation": 2,
     }
     assert result.budget["output_token_details"] == {"reasoning": 6}
-    assert runtime.sdk_result.context_wrapper.usage.input_tokens == 20
+    assert captured == result.budget
     assert runtime.harness.results["lookup"].status == "succeeded"
 
 
@@ -337,23 +335,44 @@ def test_max_turns_keeps_completed_tool_results_in_report_messages():
     model = ScriptedModel(
         [ModelStep.respond(always_call), ModelStep.respond(always_call)]
     )
+    report_messages = []
+
+    async def compress(messages, cumulative_budget):
+        report_messages.extend(messages)
+        return await _compress(messages, cumulative_budget)
+
     runtime = _runtime(
         "internal_knowledge",
         model=model,
         tools=[tool],
+        compress=compress,
         config=Configuration(
             research_model="openai:fixture", max_react_tool_calls=1
         ),
     )
     result = asyncio.run(runtime.run("task"))
     assert "Research mode: initial" in result.report
-    messages = runtime._report_messages("task")
-    tool_messages = [m for m in messages if getattr(m, "type", "") == "tool"]
-    assert tool_messages
-    assert all(m.tool_call_id for m in tool_messages)
+    assert [m.tool_call_id for m in report_messages if m.type == "tool"] == ["repeat"]
+    assert any(
+        call["id"] == "repeat"
+        for message in report_messages
+        if message.type == "ai"
+        for call in message.tool_calls
+    )
 
 
-def test_exhausted_budget_finishes_from_collected_notes():
+@pytest.mark.parametrize(
+    ("limits", "initial_calls", "expected_calls"),
+    [
+        ({"max_model_calls": 5}, 5, 0),
+        ({"max_model_calls": 2}, 0, 1),
+        ({"max_input_tokens": TOKENS.input_tokens}, 0, 1),
+    ],
+    ids=["before-first-request", "final-report-reserve", "token-ceiling"],
+)
+def test_exhausted_budget_finishes_from_collected_notes(
+    limits, initial_calls, expected_calls
+):
     tool = _tool("public_signal")
     runtime = _runtime(
         "public_signal",
@@ -362,18 +381,22 @@ def test_exhausted_budget_finishes_from_collected_notes():
             [
                 [function_call(tool.name, '{"query":"q"}', call_id="one")],
                 [assistant_message("should not be requested")],
-            ]
+            ],
+            default_usage=TOKENS,
         ),
-        initial_budget={"model_calls": 5},
+        initial_budget={"model_calls": initial_calls},
         config=Configuration(
             research_model="openai:fixture",
             budget_enabled=True,
-            max_model_calls=5,
+            **limits,
         ),
     )
     result = asyncio.run(runtime.run("task"))
     assert "Agent role: public_signal" in result.report
-    assert runtime.harness.model_calls == 0
+    assert len(runtime.model.calls) == result.budget["model_calls"] == expected_calls
+    assert runtime.harness.last_settlement.succeeded
+    if expected_calls:
+        assert "Evidence q" in result.report
     assert result.budget.get("degradation_reasons")
 
 
@@ -399,29 +422,24 @@ def test_role_result_round_trip_has_no_private_memory_or_summary():
     }
 
 
-def test_business_harness_snapshot_round_trip():
-    harness = _BusinessAgentHarness(
-        role="public_signal",
-        task_id="task-1",
-        research_round=1,
-        config=Configuration(research_model="openai:fixture"),
-        budget=_RunBudget(initial={}),
-        runtime_config={},
+def test_report_compression_usage_is_counted_once():
+    async def compress(messages, cumulative_budget):
+        assert cumulative_budget["model_calls"] == 8
+        usage = {"model_calls": 1, "input_tokens": 5, "total_tokens": 5}
+        capture_budget_usage(usage)
+        return "compressed evidence", usage
+
+    runtime = _runtime(
+        model=ScriptedModel([[assistant_message("finished")]], default_usage=TOKENS),
+        initial_budget={"model_calls": 7},
+        compress=compress,
     )
-    harness.model_calls = 3
-    harness.rolling_summary = "older work summarized"
-    harness._compacted_turns = {1, 2}
-    harness.run_budget.delta = {"model_calls": 3}
-    state = harness._durable_snapshot()
-    harness.model_calls = 0
-    harness.rolling_summary = ""
-    harness._compacted_turns = set()
-    harness.run_budget.delta = {}
-    harness._restore_durable_snapshot(state)
-    assert harness.model_calls == 3
-    assert harness.rolling_summary == "older work summarized"
-    assert harness._compacted_turns == {1, 2}
-    assert harness.run_budget.delta == {"model_calls": 3}
+    with budget_capture() as captured:
+        result = asyncio.run(runtime.run("task"))
+    assert result.budget == captured
+    assert result.budget["model_calls"] == 2
+    assert result.budget["input_tokens"] == 15
+    assert result.budget["total_tokens"] == 19
 
 
 def test_duplicate_native_call_keeps_its_step_without_reexecution(monkeypatch):

@@ -168,14 +168,14 @@ def test_research_review_node_reports_structured_usage(monkeypatch):
 def _sdk_compaction(config, *, instructions="system", tools=None):
     from agents.run import ModelInputData
 
-    from open_deep_research.runtime.sdk_runtime import _BusinessAgentHarness, _RunBudget
+    from open_deep_research.runtime.sdk_context import SDKContextHarness
+    from open_deep_research.web.run_data import digest
 
-    harness = _BusinessAgentHarness(
-        role="risk_assessment",
+    harness = SDKContextHarness(
+        role="public_signal",
         task_id="t1",
         research_round=1,
         config=config,
-        budget=_RunBudget({}),
         runtime_config={},
     )
     items = [{"role": "user", "content": "assignment"}]
@@ -186,7 +186,7 @@ def _sdk_compaction(config, *, instructions="system", tools=None):
             "name": "lookup",
             "arguments": "{}",
         }
-        harness._response_starts.append(harness._item_key(call))
+        harness._response_starts.append(digest(call))
         items.extend(
             [
                 call,
@@ -297,10 +297,10 @@ def test_agent_runtime_checks_context_before_invoking_the_model(monkeypatch):
     from agents.testing import ModelStep, ScriptedModel, assistant_message
     from test_sdk_runtime import _runtime as sdk_runtime
 
-    from open_deep_research.runtime.sdk_runtime import _BusinessAgentHarness
+    from open_deep_research.runtime.sdk_context import SDKContextHarness
 
     events = []
-    original = _BusinessAgentHarness._compact_history
+    original = SDKContextHarness._compact_history
 
     async def compact(self, data, agent):
         events.append("pressure_check")
@@ -311,7 +311,7 @@ def test_agent_runtime_checks_context_before_invoking_the_model(monkeypatch):
         assert "collect evidence" in str(call.input)
         return [assistant_message("done")]
 
-    monkeypatch.setattr(_BusinessAgentHarness, "_compact_history", compact)
+    monkeypatch.setattr(SDKContextHarness, "_compact_history", compact)
     runtime = sdk_runtime(model=ScriptedModel([ModelStep.respond(reply)]))
     asyncio.run(runtime.run("collect evidence"))
     assert events == ["pressure_check", "model"]

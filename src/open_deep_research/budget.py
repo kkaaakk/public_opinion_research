@@ -469,11 +469,10 @@ def budget_from_native_search() -> dict[str, Any]:
 
 
 def budget_from_sdk_usage(sdk_usage: Any) -> dict[str, Any]:
-    """Project official SDK response tokens without recounting model starts.
+    """Project SDK token counters for one response or provider error.
 
-    RunHooks count attempts, including failed/cancelled requests. Only completed
-    response usage supplies tokens; RunResult's cumulative usage is never added
-    a second time. Missing provider usage remains zero, never an estimate.
+    The caller supplies the attempt count. Physical receipts mark missing
+    provider usage incomplete with `physical_model_usage`.
     """
     usage = empty_budget_usage()
     for field in TOKEN_FIELDS:

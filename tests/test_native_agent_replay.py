@@ -5,25 +5,41 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from agents.exceptions import UserError
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from dbos import DBOS, DBOSClient, SetWorkflowID
+from sdk_model_support import Reply, install_sequence
 from test_sdk_runtime import TOKENS, _runtime, _tool
 
+from open_deep_research.budget import ModelBudgetExceeded
 from open_deep_research.llm import generation
+from open_deep_research.llm.errors import ModelInvocationError
 from open_deep_research.runtime import sdk_runtime
 from open_deep_research.web.run_data import RunJSON
 from open_deep_research.workflow.execution import StageContext, stage_context
 
 
-def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "ending", ["completed", "denied", "provider-error", "tool-budget-error"]
+)
+def test_agent_recovery_restores_parallel_tool_results_and_usage(
+    tmp_path, monkeypatch, ending
+):
     url = f"sqlite:///{(tmp_path / 'agent.sqlite').as_posix()}"
     workflow_id = "replay-agent"
+    serializer = RunJSON()
     calls = []
+    receipts = []
     attempts = 0
 
     async def begin():
         assert DBOS.step_id is not None
         calls.append("sdk_model")
+        if ending == "denied" and calls.count("sdk_model") == 2:
+            raise ModelBudgetExceeded("Physical call receipts exhausted the research budget")
+
+    async def end(_identity, usage):
+        receipts.append(usage)
 
     async def observe(self, kind, payload, *, call_id=None):
         if kind == "tool" and payload["status"] == "started":
@@ -33,16 +49,22 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monke
             assert call_id == payload["tool_call_id"]
 
     monkeypatch.setattr(generation, "begin_model_call", begin)
+    monkeypatch.setattr(generation, "end_model_call", end)
     monkeypatch.setattr(StageContext, "observe", observe)
     monkeypatch.setattr(
         sdk_runtime, "settings", lambda: SimpleNamespace(session_path=None)
     )
+    if ending == "tool-budget-error":
+        install_sequence(monkeypatch, Reply("tool summary", 5, 3))
 
     async def search(query: str, limit: int = 3):
         # Two calls in one response exercise the SDK's parallel Tool Steps.
         if query == "first":
             await asyncio.sleep(0.05)
         calls.append(query)
+        if ending == "tool-budget-error" and query == "first":
+            await generation.generate_text("openai:fixture", query, max_tokens=64)
+            raise ModelBudgetExceeded("Tool summary ran out of allowance")
         return f"evidence {query}"
 
     def final(call):
@@ -52,6 +74,8 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monke
             if item.get("type") == "function_call_output"
         }
         assert outputs == {"call-1": "evidence first", "call-2": "evidence second"}
+        if ending == "provider-error":
+            raise RuntimeError("provider error")
         return [assistant_message("finished with two sources")]
 
     @DBOS.workflow(name=f"por.test.agent_replay.{uuid4().hex}")
@@ -80,13 +104,33 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monke
         )
         token = stage_context.set(scope)
         try:
-            outcome = await runtime.run("collect evidence")
+            if ending.endswith("error"):
+                error_type = (
+                    UserError
+                    if ending == "tool-budget-error"
+                    else ModelInvocationError
+                )
+                with pytest.raises(error_type) as caught:
+                    await runtime.run("collect evidence")
+                if ending == "tool-budget-error":
+                    assert isinstance(caught.value.__cause__, ModelBudgetExceeded)
+                usage, report = caught.value.budget_usage, None
+            else:
+                outcome = await runtime.run("collect evidence")
+                usage, report = outcome.budget, outcome.report
+            assert runtime.harness.last_settlement.succeeded
+            assert {
+                key: record.status for key, record in runtime.harness.results.items()
+            } == {
+                "call-1": "failed" if ending == "tool-budget-error" else "succeeded",
+                "call-2": "succeeded",
+            }
             if attempts == 1:
                 # Stop after the Agent result was built but before the enclosing
                 # Workflow returns it. Recovery must rebuild Python state.
                 raise RuntimeError("simulated executor failure before result")
             assert not model.calls
-            return outcome.budget, outcome.report
+            return usage, report
         finally:
             stage_context.reset(token)
 
@@ -96,7 +140,7 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monke
                 "name": "por-test-agent",
                 "system_database_url": url,
                 "application_version": "agent-replay-test",
-                "serializer": RunJSON(),
+                "serializer": serializer,
             }
         )
         DBOS.launch()
@@ -106,13 +150,19 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monke
             await role()
 
     launch()
-    client = DBOSClient(system_database_url=url, serializer=RunJSON())
+    client = DBOSClient(system_database_url=url, serializer=serializer)
     try:
         with pytest.raises(RuntimeError, match="simulated executor failure"):
             asyncio.run(first_attempt())
         before = client.list_workflow_steps(workflow_id)
-        assert sum("_model_call_step" in s["function_name"] for s in before) == 2
+        assert sum("_model_call_step" in s["function_name"] for s in before) == (
+            1 if ending == "tool-budget-error" else 2
+        )
         assert sum(s["function_name"] == "por.agent_tool" for s in before) == 2
+        assert all(
+            step["output"]["model_input"] is None
+            for step in before if step["function_name"] == "por.agent_context"
+        )
         assert calls.count("sdk_model") == 2
         assert calls.count("web_search") == 2
         assert [item for item in calls if item in {"first", "second"}] == [
@@ -128,11 +178,33 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(tmp_path, monke
             start_step=max(s["function_id"] for s in before) + 1,
         )
         usage, report = handle.get_result()
-        assert usage["model_calls"] == usage["tool_calls"] == 2
-        assert usage["total_tokens"] == 28
-        assert "finished with two sources" in report
+        assert usage["tool_calls"] == 2
+        assert usage["model_calls"] == len(receipts) == (1 if ending == "denied" else 2)
+        assert usage["total_tokens"] == {
+            "completed": 28,
+            "denied": 14,
+            "provider-error": 14,
+            "tool-budget-error": 22,
+        }[ending]
+        if ending == "completed":
+            assert "finished with two sources" in report
+        elif ending == "denied":
+            assert "evidence first" in report and "evidence second" in report
+            assert usage["degradation_reasons"]
+        elif ending == "provider-error":
+            assert report is None
+            assert receipts[-1]["usage_complete"] is False
+        else:
+            assert report is None
+            assert any(
+                isinstance(step["error"], ModelBudgetExceeded)
+                and step["error"].budget_usage["tool_calls"] == 1
+                for step in before if step["function_name"] == "por.agent_tool"
+            )
         assert calls == observed_effects
-        assert client.list_workflow_steps(workflow_id) == before
+        assert serializer.serialize(client.list_workflow_steps(workflow_id)) == (
+            serializer.serialize(before)
+        )
         assert attempts == 2
     finally:
         DBOS.destroy(workflow_completion_timeout_sec=2)

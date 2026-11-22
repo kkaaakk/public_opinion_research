@@ -391,7 +391,7 @@ def install(directory, scenario):
     async def settle(self, reason):
         if (
             scenario == "batch-error-cache"
-            and self.scope.role == "public_signal"
+            and self.role == "public_signal"
             and reason == "exception"
         ):
             await asyncio.to_thread(gate, scenario)
@@ -401,21 +401,21 @@ def install(directory, scenario):
         await original_llm_end(self, *args, **kwargs)
         if (
             scenario == "runner-model"
-            and self.scope.role == "public_signal"
-            and self.model_calls == 1
+            and self.role == "public_signal"
+            and self.model_turn == 1
         ):
             await asyncio.to_thread(gate, scenario)
         if (
             scenario == "runner-model"
-            and self.scope.role == "public_signal"
-            and self.model_calls == 2
+            and self.role == "public_signal"
+            and self.model_turn == 2
         ):
             await asyncio.to_thread(gate, "runner-second")
 
     async def tool_end(self, *args, **kwargs):
         if (
             scenario in {"runner-tool", "runner-legacy-catalog"}
-            and self.scope.role == "public_signal"
+            and self.role == "public_signal"
         ):
             await asyncio.to_thread(gate, scenario)
         await original_tool_end(self, *args, **kwargs)
@@ -424,14 +424,14 @@ def install(directory, scenario):
         result = await original_filter(self, data)
         if (
             scenario == "batch-error-cache"
-            and self.scope.role == "public_signal"
-            and self.model_calls == 2
+            and self.role == "public_signal"
+            and self.model_turn == 2
         ):
             raise RuntimeError("Controlled context failure after actual ingestion")
         if (
             scenario == "runner-batch"
-            and self.scope.role == "public_signal"
-            and self.model_calls == 2
+            and self.role == "public_signal"
+            and self.model_turn == 2
         ):
             await asyncio.to_thread(gate, scenario)
         return result

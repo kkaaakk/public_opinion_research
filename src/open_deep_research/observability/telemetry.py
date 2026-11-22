@@ -360,7 +360,7 @@ class CorrelationProcessor(SpanProcessor):
             values = dict(_identity.get())
             harness = _harness.get()
             if harness is not None:
-                values["model_turn"] = harness.model_calls
+                values["model_turn"] = harness.model_turn
                 values["estimated_input_tokens"] = getattr(
                     harness, "estimated_input_tokens", None
                 )

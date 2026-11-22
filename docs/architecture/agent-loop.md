@@ -1,6 +1,6 @@
 # 业务执行与 Agent Loop
 
-当前应用版本为 `por-inline-report-v1`，SDK Runtime 版本为 `sdk-vertical-v1`。根依赖锁包含 DBOS 3.3.0、`dbos-openai-agents` 0.3.0 和 OpenAI Agents SDK 0.24.0。 [部署](dbos-deployment.md) · [数据库设计](dbos-deployment.md#数据库设计) · [故障验收清单](../audits/dbos-architecture-closeout.md#故障验收清单)
+当前应用版本为 `por-agent-context-v1`，SDK Runtime 版本为 `sdk-vertical-v1`。根依赖锁包含 DBOS 3.3.0、`dbos-openai-agents` 0.3.0 和 OpenAI Agents SDK 0.24.0。 [部署](dbos-deployment.md) · [数据库设计](dbos-deployment.md#数据库设计) · [故障验收清单](../audits/dbos-architecture-closeout.md#故障验收清单)
 
 ## 架构分层
 
@@ -25,7 +25,8 @@ flowchart LR
     RT --> H["SDKContextHarness"]
     H --> SDK["官方 DBOSRunner.run / Agents SDK"]
     Bounded --> Model["共享 sdk_model() / SDK Model"]
-    SDK --> Model
+    SDK --> Metered["MeteredModel · 准入与用量回执"]
+    Metered --> Model
     Model --> Bills["模型预算准入与 Usage 回执"]
     SDK --> TE["ToolExecutor · 准入、预算、por.agent_tool 和回执"]
     TE --> Tools["Tavily / RAG / MCP / 社媒等"]
@@ -49,7 +50,7 @@ flowchart LR
 | --- | --- |
 | CLI / API / RunClient | `cli.py` 加载并校验 `config.yaml`，经 `RunClient.create` 冻结快照并原子入队；`status`/`inspect`/`approve`/`clarify`/`report`/`retry` 直接控制同一持久 Run，不经过 FastAPI。可选 `web/runs.py:create_run` 仍校验令牌、Idempotency-Key 与 Session，但业务设置同样来自冻结配置。`web/durable.py:RunClient` 按 owner 检查 Session、请求指纹、容量及未结算效果，用 `DBOSClient` 接受请求并提交取消、审批、澄清与重试授权。 |
 | DBOS | `web/executor.py:launch` 注册队列并启动监听。`workflow/dbos_workflow.py` 定义 Workflow 和 Step。DBOS 用同一 PostgreSQL 中的 journal 决定恢复位置，管理 Workflow 状态、消息、Event、Stream 及 rewind。 |
-| Agent Runtime / Harness | `runtime/business_agent.py:run_business_agent` 按 AgentSpec 装配任务和工具，经 `SDKAgentRuntime.run` 进入 `SDKContextHarness.run`。Runtime 把 SDK 声明绑定到 `ToolExecutor`，后者负责准入、预算、`por.agent_tool`、去重和恢复。Harness 管理 hooks、工具记录、滚动摘要和输入窗口；生产 Workflow 内调用官方 `DBOSRunner.run`。Runner 持久化模型响应并约束工具进入顺序。Harness 用 `por.agent_context` 和 `por.agent_settlement` 恢复上下文，并接收 `por.agent_tool` 恢复后的工具记录。 |
+| Agent Runtime / Harness | `SDKAgentRuntime` 装配并启动两个自主研究角色，`SDKContextHarness` 调用官方 `DBOSRunner.run`、观察 SDK 生命周期并清算工具。SDK 保有原始历史。输入过滤器估算容量，按完整轮次滚动压缩旧内容。`MeteredModel` 负责 Agent 推理的准入及回执，`ToolExecutor` 负责工具准入及 `por.agent_tool`。 |
 | 业务可靠性 | `budget.py` 负责共享配额、最终报告预留及 `model_attempts` 收据。`workflow/execution.py` 结合取消意图和原生 Executor 所有权保护外部效果，`operations` 只记录需要保护的工具。History 使用稳定业务键。 |
 | 结果交付 | `events_workflow` 单写 Stream。`RunClient.get` 和 `web/observations.py` 按需查询原生状态、输出及业务结算。`web/runs.py:event_stream` 提供 SSE，`finalize_workflow` 清算、归档补偿及执行用户已授权的重试。History 有独立读取接口。 |
 
@@ -121,6 +122,8 @@ flowchart TD
 ### 执行可靠性
 
 匹配应用版本和 Executor 身份重启后，DBOS 从持久输入重新进入 Workflow，读取已提交的 Step 结果。SDK 的 `_model_call_step` 返回已保存的模型响应，`ToolExecutor` 调度的 `por.agent_tool` 返回已保存的工具输出及局部用量，Context Step 补齐 Harness 所需状态。已完成的 Step 命中 journal 时不会进入 provider 函数或业务工具。子 Workflow 使用稳定 ID，可恢复一侧 Producer 的未完成部分并读取另一侧结果。父 Workflow 在两侧齐备后用同一 reducer 和固定顺序合并。 [DBOS 恢复](https://docs.dbos.dev/architecture#how-workflow-recovery-works) · [官方 DBOSRunner 集成](https://docs.dbos.dev/integrations/openai-agents) 独立推理的 `por.llm` / `por.llm_sync` 保存已结算文本、用量和输出验收信息。恢复用同一结果完成 Pydantic 解析或决定是否重试。只有新的请求尝试才登记新的模型回执。
+
+`por.agent_context` 保存滚动摘要、已压缩轮次、摘要调用增量和已改写的输入窗口。SDK 用重放的响应重建轮次边界及角色用量投影。工具输出及局部用量来自 `por.agent_tool`。若 Tool Step 抛出异常，其错误回执保留局部用量，`por.agent_settlement` 补齐终态。可选 SQLite transcript 供排查，SDK 恢复数据来自 DBOS journal。
 
 原生取消会沿 child Workflow 级联，根可能先进入终态。Finalizer 再检查仍活跃的业务子 Workflow，并等待已发起调用结算。人工重试需要新键、观测到的 `state_version`、当前代次终态已交付以及安全失败。`RunClient.retry` 只写授权和消息；`por.finalize` 验证授权绑定的实际失败版本和外部回执，按失败叶子到根逐个 `rewind_workflow` 并等待子结果。安全目标限于可重试的 Plan、Review 或 Report 后缀。旧键只能确认原授权。 [DBOS 取消与 rewind](https://docs.dbos.dev/python/tutorials/workflow-management)
 

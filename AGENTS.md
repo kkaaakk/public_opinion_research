@@ -24,8 +24,9 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `por-inline-report-v1`. Drain `por-research-agents-v1`,
-`por-sdk-models-v1` and `por-vertical-v1` with their matching releases before cutover.
+Application version is `por-agent-context-v1`. Drain `por-inline-report-v1`,
+`por-research-agents-v1`, `por-sdk-models-v1` and `por-vertical-v1` with their
+matching releases before cutover.
 Pending `dbos-events-v1` and earlier
 journals must drain with their matching release before cutover. Native Stream offsets
 drive SSE resume. The single writer records one delivery Event per published

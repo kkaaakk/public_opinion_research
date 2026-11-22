@@ -5,25 +5,26 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from agents.run import ModelInputData
+from agents.run import CallModelData, ModelInputData
 from sdk_model_support import Reply, install_sequence
 
+from open_deep_research.budget import budget_capture
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import (
     UNKNOWN_MODEL_CONTEXT_CAPACITY,
     get_model_token_limit,
     resolve_context_capacity,
 )
-from open_deep_research.runtime import sdk_runtime
+from open_deep_research.runtime import sdk_context
 from open_deep_research.runtime.compaction import (
     RollingCompactOutput,
     summarize_history,
 )
-from open_deep_research.runtime.sdk_runtime import (
+from open_deep_research.runtime.sdk_context import (
+    SDKContextHarness,
     SDKContextLimitExceeded,
-    _BusinessAgentHarness,
-    _RunBudget,
 )
+from open_deep_research.web.run_data import RunJSON, digest
 
 
 def _harness(*, capacity=None, recent=1):
@@ -32,12 +33,11 @@ def _harness(*, capacity=None, recent=1):
         context_capacity_tokens=capacity,
         recent_raw_steps=recent,
     )
-    return _BusinessAgentHarness(
+    return SDKContextHarness(
         role="public_signal",
         task_id="task-1",
         research_round=1,
         config=config,
-        budget=_RunBudget(initial={}),
         runtime_config={},
     )
 
@@ -59,15 +59,15 @@ def _unit(turn, payload):
     ]
 
 
-def _input(unit_count=3, payload_size=400):
+def _input(unit_count=3, payload_size=400, *, capacity=None):
     payload = "evidence " * payload_size
     items = [{"role": "user", "content": "initial task"}]
-    harness = _harness()
+    harness = _harness(capacity=capacity)
     starts = []
     for turn in range(unit_count):
         unit = _unit(turn, payload)
         items.extend(unit)
-        starts.append(harness._item_key(unit[0]))
+        starts.append(digest(unit[0]))
     harness._response_starts = starts
     return harness, ModelInputData(input=items, instructions="system prompt")
 
@@ -107,8 +107,10 @@ def test_summarize_history_rejects_empty_summary(monkeypatch):
 def test_compaction_is_skipped_below_the_threshold():
     harness, data = _input(unit_count=1, payload_size=1)
     agent = SimpleNamespace(tools=[])
-    result = asyncio.run(harness._compact_history(data, agent))
-    assert result == data
+    result = asyncio.run(harness.filter_model_input(
+        CallModelData(model_data=data, agent=agent, context=harness)
+    ))
+    assert result is data
     assert harness.rolling_summary == ""
     assert harness._compacted_turns == set()
 
@@ -124,7 +126,7 @@ def test_compaction_summarizes_older_turns_and_keeps_recent_raw(monkeypatch):
     async def summarize(*_args, **_kwargs):
         return "older research summarized", {}
 
-    monkeypatch.setattr(sdk_runtime, "summarize_history", summarize)
+    monkeypatch.setattr(sdk_context, "summarize_history", summarize)
     agent = SimpleNamespace(tools=[])
     result = asyncio.run(harness._compact_history(data, agent))
 
@@ -148,7 +150,7 @@ def test_compaction_preserves_call_and_output_pairing(monkeypatch):
     async def summarize(*_args, **_kwargs):
         return "summary", {}
 
-    monkeypatch.setattr(sdk_runtime, "summarize_history", summarize)
+    monkeypatch.setattr(sdk_context, "summarize_history", summarize)
     agent = SimpleNamespace(tools=[])
     result = asyncio.run(harness._compact_history(data, agent))
     calls = sorted(
@@ -162,7 +164,7 @@ def test_compaction_preserves_call_and_output_pairing(monkeypatch):
     assert calls == outputs == ["call-2"]
 
 
-def test_compaction_failure_keeps_original_history_and_raises(monkeypatch):
+def test_compaction_failure_keeps_original_history_and_raises(monkeypatch, caplog):
     harness, data = _input()
     harness.config = Configuration(
         research_model="openai:fixture",
@@ -173,13 +175,15 @@ def test_compaction_failure_keeps_original_history_and_raises(monkeypatch):
     async def summarize(*_args, **_kwargs):
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(sdk_runtime, "summarize_history", summarize)
+    monkeypatch.setattr(sdk_context, "summarize_history", summarize)
     agent = SimpleNamespace(tools=[])
+    original = json.dumps(data.input)
     with pytest.raises(SDKContextLimitExceeded, match="original history retained"):
         asyncio.run(harness._compact_history(data, agent))
     assert harness.rolling_summary == ""
     assert harness._compacted_turns == set()
-    assert any(event[0] == "rolling_compact_failed" for event in harness.events)
+    assert json.dumps(data.input) == original
+    assert "SDK rolling compaction failed safely" in caplog.text
 
 
 def test_compaction_rejects_summary_that_is_not_smaller(monkeypatch):
@@ -194,7 +198,7 @@ def test_compaction_rejects_summary_that_is_not_smaller(monkeypatch):
     async def summarize(*_args, **_kwargs):
         return huge, {}
 
-    monkeypatch.setattr(sdk_runtime, "summarize_history", summarize)
+    monkeypatch.setattr(sdk_context, "summarize_history", summarize)
     agent = SimpleNamespace(tools=[])
     with pytest.raises(SDKContextLimitExceeded, match="cannot fit"):
         asyncio.run(harness._compact_history(data, agent))
@@ -260,7 +264,8 @@ def test_context_limit_diagnostics_contain_only_bounded_metrics():
     with pytest.raises(SDKContextLimitExceeded) as caught:
         asyncio.run(harness._compact_history(data, agent))
 
-    diagnostics = harness.context_diagnostics
+    message = str(caught.value)
+    diagnostics = json.loads(message.split("diagnostics=", 1)[1])
     assert set(diagnostics) == {
         "estimated_input_tokens",
         "context_capacity_tokens",
@@ -274,7 +279,53 @@ def test_context_limit_diagnostics_contain_only_bounded_metrics():
     assert diagnostics["recent_raw_steps"] == 1
     assert diagnostics["eligible_compaction_units"] == 0
 
-    message = str(caught.value)
-    for key in diagnostics:
-        assert key in message
     assert "private analysis" not in message
+
+
+@pytest.mark.parametrize("summary", ["saved summary", ""], ids=["success", "failure"])
+def test_context_step_replays_the_window_and_summary_usage(monkeypatch, summary):
+    requests = install_sequence(
+        monkeypatch, Reply({"rolling_summary": summary}, 5, 3)
+    )
+    serializer = RunJSON()
+    saved = None
+
+    async def step(options, prepare):
+        nonlocal saved
+        assert options == {"name": "por.agent_context", "preemptible": True}
+        if saved is None:
+            try:
+                payload = await prepare()
+            except SDKContextLimitExceeded as exc:
+                payload = exc
+            saved = serializer.serialize(payload)
+        payload = serializer.deserialize(saved)
+        if isinstance(payload, SDKContextLimitExceeded):
+            raise payload
+        assert set(payload) == {
+            "model_input", "compacted_turns", "rolling_summary", "usage"
+        }
+        return payload
+
+    monkeypatch.setattr(sdk_context.DBOS, "run_step_async", step)
+    agent = SimpleNamespace(tools=[])
+    for _ in range(2):
+        harness, original = _input(capacity=4000)
+        data = CallModelData(model_data=original, agent=agent, context=harness)
+        with budget_capture() as usage:
+            if summary:
+                result = asyncio.run(harness.durable_filter_model_input(data))
+                assert result.instructions == original.instructions
+                assert result.input[0] == original.input[0]
+                assert result.input[-3:] == original.input[-3:]
+                assert len(result.input) == 5
+                assert summary in result.input[1]["content"]
+                assert harness._compacted_turns == {0, 1}
+            else:
+                with pytest.raises(SDKContextLimitExceeded, match="original history retained"):
+                    asyncio.run(harness.durable_filter_model_input(data))
+                assert not harness._compacted_turns
+        assert harness.rolling_summary == summary
+        assert usage["model_calls"] == 1
+        assert usage["total_tokens"] == 8
+        assert len(requests) == 1
