@@ -23,7 +23,7 @@ from open_deep_research.workflow.execution import StageContext, stage_context
     "ending", ["completed", "denied", "provider-error", "tool-budget-error"]
 )
 def test_agent_recovery_restores_parallel_tool_results_and_usage(
-    tmp_path, monkeypatch, ending
+    tmp_path, monkeypatch, ending, memory_ledger
 ):
     url = f"sqlite:///{(tmp_path / 'agent.sqlite').as_posix()}"
     workflow_id = "replay-agent"

@@ -7,7 +7,6 @@ from open_deep_research.web.run_data import (
     RunNotFound,
     public_payload,
     read_request,
-    result_budget,
     role_deliverables,
     stage_budget,
 )
@@ -159,16 +158,9 @@ def stage_results(client, run_id):
             )
             for role, content in role_deliverables(result).items()
         )
-        budget = result_budget(result)
-        usage = merge_budget_usage(
-            usage,
-            stage_budget(result)
-            | {
-                key: budget[key]
-                for key in ("tool_calls", "search_calls")
-                if key in budget
-            },
-        )
+        # Tool and search counts are read from the admission ledger, never from
+        # this projection; only business notes are aggregated here.
+        usage = merge_budget_usage(usage, stage_budget(result))
     for step, notes in other_stages:
         completed.append(step)
         usage = merge_budget_usage(usage, notes)

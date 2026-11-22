@@ -656,7 +656,7 @@ def test_public_signal_catalog_keeps_tavily_and_drops_retired_tools(
 
 # 验证 Agent 按 Skill 指引依次调用 Actor 发现、详情、执行与数据集工具。
 def test_agent_runs_apify_actor_chain_through_tool_executor(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, memory_ledger
 ):
     from open_deep_research.runtime import tool_executor
 
@@ -1224,7 +1224,9 @@ def test_plugin_secrets_resolve_from_environment_only(tmp_path, monkeypatch):
 
 
 # 验证已提交的 Actor 调用 Step 在恢复时直接复用结果，不会再次启动 Actor。
-def test_committed_actor_step_restores_without_rerunning_the_run(tmp_path, monkeypatch):
+def test_committed_actor_step_restores_without_rerunning_the_run(
+    tmp_path, monkeypatch, memory_ledger
+):
     from open_deep_research.runtime import tool_executor
 
     url = f"sqlite:///{(tmp_path / 'apify.sqlite').as_posix()}"

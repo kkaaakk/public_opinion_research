@@ -570,7 +570,9 @@ def test_duplicate_mcp_tool_call_id_calls_the_remote_once(tmp_path):
     assert harness.results["same-call"].status == "succeeded"
 
 
-def test_cancelled_protected_mcp_call_settles_unknown(monkeypatch, tmp_path):
+def test_cancelled_protected_mcp_call_settles_unknown(
+    monkeypatch, tmp_path, memory_ledger
+):
     from open_deep_research.runtime import tool_executor
 
     script = _write_server(tmp_path)
@@ -643,7 +645,9 @@ def test_cancelled_protected_mcp_call_settles_unknown(monkeypatch, tmp_path):
     assert finishes[-1][-1] == "unknown"
 
 
-def test_read_and_protected_mcp_effects_settle_operation_receipts(monkeypatch):
+def test_read_and_protected_mcp_effects_settle_operation_receipts(
+    monkeypatch, memory_ledger
+):
     from open_deep_research.runtime import tool_executor
 
     starts: list[tuple] = []

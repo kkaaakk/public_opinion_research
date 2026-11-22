@@ -158,19 +158,25 @@ def test_pending_bill_does_not_block_without_a_token_ceiling(monkeypatch):
     )
 
 
-def test_finalized_bill_without_usage_fails_closed_immediately(monkeypatch):
+def test_finalized_bill_without_usage_does_not_block_later_calls(monkeypatch):
     engine = _install(monkeypatch)
     sleeps = []
     monkeypatch.setattr(budget.time, "sleep", sleeps.append)
+    # One finalized attempt whose provider reported no usage can never be
+    # priced; it stays counted as a call and must not fence the whole Run.
     monkeypatch.setattr(budget, "model_bill", lambda _db, _run: ({}, 0, False))
 
-    with pytest.raises(budget.ModelBudgetExceeded, match="unconfirmed model bill"):
-        budget.start_model_attempt(
-            _scope(), "workflow", "executor", "call-1", wait_seconds=300
-        )
+    budget.start_model_attempt(
+        _scope(), "workflow", "executor", "call-1", wait_seconds=300
+    )
 
     assert sleeps == []
     assert engine.entered == engine.exited == 1
+    assert any(
+        parameters == {"r": "run", "id": "call-1", "stage": "stage"}
+        for statement, parameters in engine.transactions[0].executions
+        if "INSERT INTO por_domain.model_attempts" in statement
+    )
 
 
 def test_budget_rejection_still_propagates(monkeypatch):

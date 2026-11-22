@@ -51,8 +51,12 @@ enabled_plugins:
 tracing_enabled: true
 budget_enabled: true
 max_model_calls: 120
-max_tool_calls: 120
-max_search_calls: 60
+# Two research roles run up to max_react_tool_calls SDK turns per round, and one
+# turn may issue several tool calls in parallel. The tool ceiling therefore sits
+# above the search ceiling, which in turn must cover the retrieval those turns
+# need; the model ceiling stays the real bound on how much reasoning a Run buys.
+max_tool_calls: 160
+max_search_calls: 120
 max_input_tokens: 4000000
 max_output_tokens: 400000
 budget_warning_ratio: 0.8

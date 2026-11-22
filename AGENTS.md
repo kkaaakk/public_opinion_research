@@ -14,8 +14,8 @@ Read `docs/audits/openai-agents-phase5.md`, the migration plan,
 `docs/architecture/dbos-deployment.md` before changing execution ownership,
 resource reservations, external operation receipts, archive compensation or auth.
 DBOS journal/status is the execution authority. Business persistence is limited
-to request and retry authorization, actual model usage and protected external
-effects. See [domain persistence and cutover](docs/audits/dbos-domain-simplification.md). Never replay an interrupted
+to request and retry authorization, actual model and tool usage, and protected
+external effects. See [domain persistence and cutover](docs/audits/dbos-domain-simplification.md). Never replay an interrupted
 Agent/tool unit with unknown external effects. Only the durable Finalizer applies
 retry grants; an old key cannot authorize another failure generation.
 
@@ -24,9 +24,9 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `por-agent-context-v1`. Drain `por-inline-report-v1`,
-`por-research-agents-v1`, `por-sdk-models-v1` and `por-vertical-v1` with their
-matching releases before cutover.
+Application version is `por-call-ledger-v1`. Drain `por-agent-context-v1`,
+`por-inline-report-v1`, `por-research-agents-v1`, `por-sdk-models-v1` and
+`por-vertical-v1` with their matching releases before cutover.
 Pending `dbos-events-v1` and earlier
 journals must drain with their matching release before cutover. Native Stream offsets
 drive SSE resume. The single writer records one delivery Event per published
