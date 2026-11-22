@@ -81,40 +81,6 @@ class ResearchRoleResult(BaseModel):
     budget_delta: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-# 承载一条补充检索查询。
-class SearchQuery(BaseModel):
-    """One follow-up search query."""
-
-    search_query: str
-
-
-# 描述报告章节计划、证据角色、内容及完成状态。
-class Section(BaseModel):
-    """One planned report section."""
-
-    name: str
-    description: str
-    research: bool = True
-    content: str = ""
-    agent_role: str = ""
-    status: Literal["pending", "done"] = "pending"
-
-
-# 作为报告章节规划的结构化模型输出。
-class Sections(BaseModel):
-    """Structured section plan output."""
-
-    sections: list[Section]
-
-
-# 保存章节质量结论及需补充的查询。
-class Feedback(BaseModel):
-    """Section quality feedback."""
-
-    grade: Literal["pass", "fail"]
-    follow_up_queries: list[SearchQuery]
-
-
 # 保存当前研究简报、轮次、复核结果及任务进度。
 class WorkflowState(TypedDict, total=False):
     """Where the public-opinion workflow is in the current run."""
@@ -136,13 +102,9 @@ class AgentRoleState(TypedDict, total=False):
     report: str
 
 
-# 保存章节计划、完成章节、规划反馈与最终报告。
 class ReportState(TypedDict, total=False):
-    """Plan, section outputs, feedback, and final report."""
+    """Final Markdown report."""
 
-    sections: list[Section]
-    completed_sections: list[Section]
-    plan_feedback: list[str]
     final: str
 
 
@@ -291,29 +253,16 @@ def agents_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
     return merged
 
 
-# 合并章节计划与完成结果，保留并行生成的各章节。
 def report_reducer(current_value: Any, new_value: Any) -> dict[str, Any]:
-    """Merge plan and section results, preserving parallel section output."""
+    """Store the final report and preserve it across empty patches."""
     if _is_override(new_value):
-        replacement = _override_value(new_value, {})
-        return dict(replacement) if isinstance(replacement, Mapping) else {}
-    current = dict(current_value) if isinstance(current_value, Mapping) else {}
-    incoming = dict(new_value) if isinstance(new_value, Mapping) else {}
-    merged: dict[str, Any] = dict(current)
-    for key in ("sections", "final"):
-        if key in incoming:
-            merged[key] = _override_value(
-                incoming[key], [] if key == "sections" else ""
-            )
-    for key in ("completed_sections", "plan_feedback"):
-        if key in incoming:
-            value = incoming[key]
-            merged[key] = (
-                list(_override_value(value, []) or [])
-                if _is_override(value)
-                else list(current.get(key, []) or []) + list(value or [])
-            )
-    return merged
+        new_value = _override_value(new_value, {})
+        current_value = {}
+    if isinstance(new_value, Mapping) and "final" in new_value:
+        return {"final": _override_value(new_value["final"], "")}
+    if isinstance(current_value, Mapping) and "final" in current_value:
+        return {"final": current_value["final"]}
+    return {}
 
 
 # 独立累计预算，避免与流程路由混用。
@@ -357,16 +306,12 @@ __all__ = [
     "BusinessAgentRole",
     "ClarifyWithUser",
     "DeepResearchState",
-    "Feedback",
     "ReportState",
     "ResearchQuestion",
     "ResearchReview",
     "ResearchRoleResult",
     "ResearchTask",
     "RuntimeState",
-    "SearchQuery",
-    "Section",
-    "Sections",
     "Summary",
     "WorkflowState",
     "agents_reducer",

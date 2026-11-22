@@ -28,7 +28,6 @@ def test_main_graph_contract():
         "por.research",
         "por.role",
         "por.review",
-        "por.report",
         "por.events",
         "por.finalize",
         "por.cancel",
@@ -51,7 +50,7 @@ def test_research_subgraph_contract():
         source.index('packets = reviewed["followup"]')
         < source.index("research.risk_assessment")
         < source.index("research.response_strategy")
-        < source.index('with SetWorkflowID(run_id + ":report"):')
+        < source.index("await reporting.generate_final_report(")
     )
     assert source.index(
         "assemble_research_results(state, results, packets)"
@@ -59,7 +58,6 @@ def test_research_subgraph_contract():
     assert "await intake.plan_research(" in source
     assert "await intake.revise_brief(" in source
     assert "await research.research_review(" in source
-    assert "await reporting.compile_final_report(" in source
     assert "await publish_stage(" in source
     assert "stage_receipts" not in source
     assert not (SOURCE_ROOT / "workflow/run_facts.py").exists()

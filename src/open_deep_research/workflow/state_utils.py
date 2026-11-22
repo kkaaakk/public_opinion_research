@@ -46,7 +46,7 @@ def agents_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return dict(state.get("agents", {}) or {})
 
 
-# 复制并返回章节与最终报告状态域。
+# 复制并返回最终报告状态域。
 def report_state(state: Mapping[str, Any]) -> dict[str, Any]:
     """Return the report domain of the graph state."""
     return dict(state.get("report", {}) or {})

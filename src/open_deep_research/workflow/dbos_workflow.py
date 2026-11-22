@@ -203,7 +203,7 @@ async def publish_stage(result):
         # Role and Review completion already have their own native result.
         await publish_stage_step(result)
         return
-    # A report can be ready even if a later publication or Memory step fails.
+    # Keep the generated report readable while publication is retried.
     if report := result.get("patch", {}).get("report", {}).get("final"):
         await DBOS.set_event_async("report", report)
     await publish_stage_step(result)
@@ -304,48 +304,6 @@ async def review_workflow(run_id, initial):
                 state, Configuration.from_runnable_config(cfg)
             ),
         }
-
-
-@DBOS.workflow(name="por.report")
-@dbos_scope
-async def report_workflow(run_id, initial):
-    state = copy_state(initial)
-    config = business_config(await load_request(run_id))
-    sections = config["configurable"].get("report_mode", "synthesis") == "sections"
-    report_steps = (
-        [
-            ("plan_report_sections", intake.section_plan_step),
-            ("section_writer", reporting.section_writer),
-            ("write_final_sections", reporting.write_final_sections),
-        ]
-        if sections
-        else [("generate_final_report", reporting.generate_final_report)]
-    )
-    for name, generate in report_steps:
-        async with observe_stage(
-            run_id,
-            name,
-            state,
-            config,
-            retry=True,
-            reserve_report=name
-            not in {"generate_final_report", "write_final_sections"},
-        ) as cfg:
-            with business_span("report_generation", step=name):
-                result = await generate(deepcopy(state), cfg)
-            patch = result.update or {} if name == "plan_report_sections" else result
-            saved = await stable_result({"patch": patch})
-            await publish_stage(saved)
-            apply_patch(state, saved["patch"])
-    async with observe_stage(
-        run_id, "compile_final_report", state, config, retry=True, reserve_report=False
-    ) as cfg:
-        with business_span("report_generation", step="compile_final_report"):
-            patch = await reporting.compile_final_report(state, cfg, fail_on_error=True)
-        saved = await stable_result({"patch": patch})
-        await publish_stage(saved)
-        apply_patch(state, saved["patch"])
-    return state
 
 
 @DBOS.workflow(name="por.plan")
@@ -481,8 +439,16 @@ async def research_workflow(run_id, initial):
             await publish_stage_step(artifact)
             await DBOS.set_event_async(event, artifact)
             apply_patch(state, patch)
-    with SetWorkflowID(run_id + ":report"):
-        return await report_workflow(run_id, state)
+    async with observe_stage(
+        run_id, "generate_final_report", state, config, retry=True, reserve_report=False
+    ) as cfg:
+        await DBOS.set_event_async("report_started", True)
+        with business_span("report_generation", step="generate_final_report"):
+            patch = await reporting.generate_final_report(state, cfg)
+        saved = await stable_result({"patch": patch})
+        await publish_stage(saved)
+        apply_patch(state, saved["patch"])
+    return state
 
 
 @DBOS.step()
@@ -633,7 +599,6 @@ async def run_workflow(run_id):
     brief = validate_brief(state["workflow"]["brief"])
     plan = dict(
         brief=brief,
-        sections=[],
         expires_at=await approval_deadline(),
         **brief_metadata(brief, 1, run_id),
     )
@@ -822,7 +787,7 @@ async def completion_facts(run_id):
         # A cancelled child can lose ownership without publishing a stage end.
         if native_client().list_workflows(
             workflow_id_prefix=run_id + ":",
-            name=["por.plan", "por.research", "por.role", "por.review", "por.report"],
+            name=["por.plan", "por.research", "por.role", "por.review"],
             status=list(ACTIVE),
             load_input=False,
             load_output=False,
@@ -908,23 +873,32 @@ def failure_target(workflow):
         None,
     )
     last = steps[-1]["function_id"] if steps else 0
-    # Pure business validation can fail after a successful model call. Cut
-    # at that call while retaining valid earlier phases and their receipts.
     calls = [
-        step["function_id"]
-        for step in suffix
-        if step["function_name"] in {"por.llm", "por.llm_sync"}
+        step for step in suffix if step["function_name"] in {"por.llm", "por.llm_sync"}
     ]
     errors = [step["function_id"] for step in suffix if step.get("error") is not None]
     failed = bool(steps and steps[-1]["function_name"] == "por.stage_failed")
     failed_start = stage["function_id"] if stage and stage.get("error") else None
     start = failed_start or publication
     if start is None:
-        start = (
-            frozen + 1
-            if frozen
-            else max(calls or errors, default=last if failed else last + 1)
-        )
+        if frozen is not None:
+            start = frozen + 1
+        elif calls:
+            call = calls[-1]
+            start = call["function_id"]
+            output = call.get("output")
+            # The report's por.llm result already contains its text validation.
+            # Plan and Review can still fail validation after a valid model response.
+            if (
+                workflow.name == "por.research"
+                and call.get("error") is None
+                and isinstance(output, (list, tuple))
+                and len(output) == 3
+                and output[2] is None
+            ):
+                start += 1
+        else:
+            start = max(errors, default=last if failed else last + 1)
     return dict(
         workflow_id=workflow.workflow_id,
         queue=CONTROL if workflow.name == "por.run" else BUSINESS,
@@ -966,19 +940,25 @@ def retry_targets(run_id):
         (
             wf
             for wf in candidates
-            if wf.name in {"por.plan", "por.review", "por.report"}
+            if wf.name in {"por.plan", "por.review", "por.research"}
         ),
         key=lambda wf: wf.completed_at or 0,
         reverse=True,
     )
-    if not leaves:
-        raise RunConflict("No safe failed native Step to rewind")
-    leaf = leaves[0]
-    failure = client.get_event(leaf.workflow_id, "failure", 0) or {}
-    if not failure.get("retry_safe"):
-        raise RunConflict("The failed Step requires reconciliation")
-    parents = [failure_target(wf) for wf in candidates if wf.name == "por.research"]
-    return [failure_target(leaf), *parents, failure_target(root)]
+    for leaf in leaves:
+        failure = client.get_event(leaf.workflow_id, "failure", 0)
+        if leaf.name == "por.research" and failure is None:
+            # A failed child can leave research in ERROR without its own stage failure.
+            continue
+        if not failure or not failure.get("retry_safe"):
+            raise RunConflict("The failed Step requires reconciliation")
+        parents = [
+            failure_target(wf)
+            for wf in candidates
+            if wf.name == "por.research" and wf.workflow_id != leaf.workflow_id
+        ]
+        return [failure_target(leaf), *parents, failure_target(root)]
+    raise RunConflict("No safe failed native Step to rewind")
 
 
 @DBOS.step()

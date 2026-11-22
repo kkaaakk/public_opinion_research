@@ -129,7 +129,7 @@ def test_stress_client_uses_native_identity_and_requires_terminal_event(
 
     sent = []
     frames = [
-        {"type": "step_started", "step": "compile_final_report"},
+        {"type": "step_started", "step": "generate_final_report"},
         {"type": "report", "content": "fixture report"},
         {"type": "usage", "total_tokens": 12, "model_calls": 1},
     ]
@@ -148,7 +148,7 @@ def test_stress_client_uses_native_identity_and_requires_terminal_event(
     monkeypatch.setattr(agent_stress.httpx, "stream", stream)
     result = agent_stress.AgentStressTester().run_one("public_opinion_risk", "fast")
     assert result.success is (terminal == "completed")
-    assert result.nodes_visited == ["compile_final_report"]
+    assert result.nodes_visited == ["generate_final_report"]
     assert result.total_tokens == 12
     assert "scenario" not in sent[0]["json"]
     assert sent[0]["headers"]["Authorization"] == "Bearer stress-test-token"

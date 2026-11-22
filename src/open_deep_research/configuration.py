@@ -6,7 +6,7 @@ import os
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Optional
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -1099,7 +1099,7 @@ class Configuration(BaseModel):
     )
 
     # ------------------------------------------------------------------
-    # 计划执行配置：章节规划、人工反馈及并发写作。
+    # Brief 审批与报告结构。
     # ------------------------------------------------------------------
 
     allow_plan_feedback: bool = Field(
@@ -1112,54 +1112,13 @@ class Configuration(BaseModel):
             }
         },
     )
-    report_mode: Literal["synthesis", "sections"] = Field(default="synthesis", description="Single synthesis by default; sections opts into long-report planning and writing.")
     report_structure: str = Field(
         default=DEFAULT_REPORT_STRUCTURE,
         metadata={
             "x_oap_ui_config": {
                 "type": "textarea",
                 "default": DEFAULT_REPORT_STRUCTURE,
-                "description": "Report structure used by synthesis and the optional section planner.",
-            }
-        },
-    )
-    planner_model: str = Field(
-        default="",
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "default": "",
-                "description": "Model used to plan report sections. Leave empty to fall back to research_model.",
-            }
-        },
-    )
-    planner_model_max_tokens: Optional[int] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "description": "Maximum output tokens for the planner model. Leave empty for provider default.",
-            }
-        },
-    )
-    section_writer_model: str = Field(
-        default="",
-        metadata={
-            "x_oap_ui_config": {
-                "type": "text",
-                "default": "",
-                "description": "Model used to write report sections from role evidence. Leave empty to fall back to final_report_model.",
-            }
-        },
-    )
-    section_writer_model_max_tokens: Optional[int] = Field(
-        default=None,
-        optional=True,
-        metadata={
-            "x_oap_ui_config": {
-                "type": "number",
-                "description": "Maximum output tokens for the section writer model. Leave empty for provider default.",
+                "description": "Markdown structure for final report synthesis.",
             }
         },
     )

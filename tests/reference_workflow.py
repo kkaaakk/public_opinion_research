@@ -1,4 +1,4 @@
-"""Frozen Phase 3/4 behavioral oracle; NEVER a production execution path."""
+"""Test-only Phase 3/4 research oracle with the current report node."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Callable, Coroutine, Mapping
 from contextvars import ContextVar
 from copy import deepcopy
-from functools import partial
 from typing import Any, Literal, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -115,13 +114,6 @@ async def _step(
         setattr(exc, "budget_usage", getattr(source, "budget_usage", captured))
         setattr(exc, "context_settlement", getattr(source, "context_settlement", None))
         setattr(exc, "context_harness", getattr(source, "context_harness", None))
-        # A business step can own parallel section calls internally. Its public
-        # boundary has already totalled those costs; they are not role patches.
-        if hasattr(source, "parallel_errors"):
-            setattr(exc, "nested_failures", getattr(source, "parallel_errors"))
-        for field in ("parallel_results", "parallel_errors"):
-            if hasattr(exc, field):
-                delattr(exc, field)
         raise
 
 
@@ -160,7 +152,6 @@ RESUME_CURSORS = frozenset(
         "enrich_query_images",
         "clarify_with_user",
         "write_research_brief",
-        "plan_report_sections",
         "approval",
         "research_init",
         "research_agents",
@@ -168,9 +159,7 @@ RESUME_CURSORS = frozenset(
         "followup",
         "risk_assessment_agent",
         "response_strategy_agent",
-        "section_writer",
-        "write_final_sections",
-        "compile_final_report",
+        "generate_final_report",
         "done",
     }
 )
@@ -192,7 +181,7 @@ class PythonWorkflow:
         start_at: Literal["intake", "research"] = "intake",
         resume: Mapping[str, Any] | None = None,
     ) -> DeepResearchState:
-        """Run once; optionally accept an already-prepared brief and section plan."""
+        """Run once; optionally accept an already-prepared Brief."""
         config = config or {}
         settings = Configuration.from_runnable_config(config)
         if (
@@ -264,16 +253,7 @@ class PythonWorkflow:
                     "write_research_brief", intake.research_brief_step
                 )
                 apply_patch(state, decision.update or {})
-                await commit(
-                    "write_research_brief",
-                    "plan_report_sections"
-                    if decision.goto == "plan_report_sections"
-                    else "approval",
-                )
-            if cursor == "plan_report_sections":
-                decision = await call("plan_report_sections", intake.section_plan_step)
-                apply_patch(state, decision.update or {})
-                await commit("plan_report_sections", "approval")
+                await commit("write_research_brief", "approval")
             if cursor == "approval":
                 if settings.allow_plan_feedback:
                     await observe_execution("approval_required", state=deepcopy(state))
@@ -344,7 +324,7 @@ class PythonWorkflow:
 
             for role, next_cursor in (
                 ("risk_assessment", "response_strategy_agent"),
-                ("response_strategy", "section_writer"),
+                ("response_strategy", "generate_final_report"),
             ):
                 if cursor != f"{role}_agent":
                     continue
@@ -358,18 +338,10 @@ class PythonWorkflow:
                 )
                 apply_patch(state, patch)
                 await commit(f"{role}_agent", next_cursor)
-            for name, next_cursor in (
-                ("section_writer", "write_final_sections"),
-                ("write_final_sections", "compile_final_report"),
-                ("compile_final_report", "done"),
-            ):
-                if cursor != name:
-                    continue
-                operation = getattr(reporting, name)
-                if name == "compile_final_report":
-                    operation = partial(operation, fail_on_error=True)
-                apply_patch(state, await call(name, operation))
-                await commit(name, next_cursor)
+            if cursor == "generate_final_report":
+                patch = await call("generate_final_report", reporting.generate_final_report)
+                apply_patch(state, patch)
+                await commit("generate_final_report", "done")
             return state
         except PlanApprovalRequired:
             raise

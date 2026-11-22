@@ -38,7 +38,7 @@ def test_manual_edit_keeps_original_approval_deadline(native_case):
 
 
 @pytest.mark.parametrize("native_case", ["clarify"], indirect=True)
-def test_accepted_report_topology_is_frozen_across_operator_default_changes(
+def test_accepted_brief_config_is_frozen_across_operator_default_changes(
     native_case, monkeypatch
 ):
     c = native_case
@@ -46,8 +46,8 @@ def test_accepted_report_topology_is_frozen_across_operator_default_changes(
     run = c.create(approval=True)
     pending = c.wait(run, lambda r: r["status"] == "awaiting_approval")
     accepted = read_request(run["run_id"])["data"]["config"]["configurable"]
-    assert accepted["report_mode"] == "synthesis"
-    monkeypatch.setenv("REPORT_MODE", "sections")
+    assert accepted["allow_clarification"] is False
+    monkeypatch.setenv("ALLOW_CLARIFICATION", "true")
     c.client.approve(run["run_id"], "alice", pending["plan"]["version"], "approve")
     done = c.wait(
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
@@ -63,9 +63,6 @@ def test_accepted_report_topology_is_frozen_across_operator_default_changes(
     events = c.client.read_events(run["run_id"], "alice", 0, 1000)
     assert not any(event.get("status") == "awaiting_clarification" for event in events)
     assert "generate_final_report" in done["completed_steps"]
-    assert not {"plan_report_sections", "section_writer", "write_final_sections"} & set(
-        done["completed_steps"]
-    )
 
 
 @pytest.mark.parametrize("native_case", ["clarify"], indirect=True)
@@ -101,12 +98,9 @@ def test_clarification_same_run_releases_quota_and_resumes(
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
     )
     assert done["status"] == "completed" and len(c.models) == 2
-    assert (
-        done["plan"]["locked"] and "plan_report_sections" not in done["completed_steps"]
-    )
+    assert done["plan"]["locked"]
     assert done["completed_steps"].count("plan_research") == 2
     assert done["completed_steps"].count("generate_final_report") == 1
-    assert not {"section_writer", "write_final_sections"} & set(done["completed_steps"])
     assert c.calls == {"public_signal": 1, "internal_knowledge": 1}
     roles = c.client.client.list_workflows(
         workflow_id_prefix=run["run_id"] + ":",
@@ -719,18 +713,6 @@ def test_single_synthesis_failure_retries_without_repeating_roles(
         and c.calls == {"public_signal": 1, "internal_knowledge": 1}
     )
     assert done["plan"]["version"] == failed["plan"]["version"]
-
-
-def test_advanced_section_mode_remains_explicit(native_case):
-    c = native_case
-    c.cfg["configurable"]["report_mode"] = "sections"
-    run = c.create()
-    done = c.wait(run, lambda r: r["archive_status"] == "saved")
-    assert done["status"] == "completed"
-    assert {"plan_report_sections", "section_writer", "write_final_sections"} <= set(
-        done["completed_steps"]
-    )
-    assert "generate_final_report" not in done["completed_steps"]
 
 
 def test_waiting_snapshot_reads_phase_before_its_versioned_payload(

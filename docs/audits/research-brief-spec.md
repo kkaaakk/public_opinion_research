@@ -87,7 +87,7 @@ Windows 的子进程 kill 和缓存路径合同需要测试进程具有对应权
 
 ## 可复现调用/成本比较
 
-`tests/brief_stage_profile.py --samples 20 --output .tmp/brief-stage-profile.json` 调用实际旧/新业务服务，使用相同的 7 input / 3 output synthetic tokens 和同一三章节规范。它使用测试环境与非 loopback socket guard。统计状态中的真实预算 patch，避免遗漏原章节 helper 内部嵌套 capture。
+在本次审计的提交 `998c9e4b` 上，`tests/brief_stage_profile.py --samples 20 --output .tmp/brief-stage-profile.json` 对照了当时的两种实现，使用相同的 7 input / 3 output synthetic tokens 和同一三章节规范。脚本使用测试环境与非 loopback socket guard，并统计状态中的预算 patch。现行脚本测量当前 Plan 和 Report 节点。
 
 | 阶段/条件 | 旧链路模型请求 | 新默认请求 | synthetic input/output/total |
 | --- | --- | --- | --- |

@@ -3,12 +3,7 @@ import { measuredDuration, projectRun, sdkSpans } from '../src/projection';
 import { event, snapshot } from './fixtures';
 
 it('marks unified Plan and synthesis complete without waiting for retired optional steps', () => {
-  const steps = [
-    'enrich_query_images',
-    'plan_research',
-    'generate_final_report',
-    'compile_final_report',
-  ];
+  const steps = ['enrich_query_images', 'plan_research', 'generate_final_report'];
   const events = steps.flatMap((step, index) => [
     event(index * 2 + 1, { type: 'step_started', step, execution_id: step }),
     event(index * 2 + 2, { type: 'step_completed', step, execution_id: step }),
@@ -17,6 +12,14 @@ it('marks unified Plan and synthesis complete without waiting for retired option
   expect(result.statuses.intake).toBe('completed');
   expect(result.statuses.planning).toBe('completed');
   expect(result.statuses.reporting).toBe('completed');
+});
+
+it('keeps a recorded legacy report compilation failure visible in replay', () => {
+  const result = projectRun([
+    event(1, { type: 'step_completed', step: 'generate_final_report' }),
+    event(2, { type: 'step_failed', step: 'compile_final_report' }),
+  ]);
+  expect(result.statuses.reporting).toBe('failed');
 });
 
 it('keeps clarification separate from approval in the observer projection', () => {

@@ -392,12 +392,12 @@ def test_budget_summary_includes_degradation_reasons():
     configurable = Configuration(budget_enabled=True, max_model_calls=3)
     usage = merge_budget_usage(
         {},
-        budget_usage_with_reason("Section planning fell back to a single section."),
+        budget_usage_with_reason("Internal sources did not cover the monitoring window."),
     )
 
     summary = format_budget_summary(configurable, usage)
 
-    assert "Section planning fell back to a single section." in summary
+    assert "Internal sources did not cover the monitoring window." in summary
 
 
 # ---------------------------------------------------------------------------

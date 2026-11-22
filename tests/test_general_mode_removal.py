@@ -104,7 +104,7 @@ class TestGraphStructure:
             encoding="utf-8"
         )
         assert "business_scenario" not in source
-        assert "for name, generate in report_steps:" in source
+        assert source.count("await reporting.generate_final_report(") == 1
 
     def test_public_opinion_nodes_exist(self):
         assert {
@@ -112,14 +112,17 @@ class TestGraphStructure:
             "plan_research",
             "revise_brief",
             "generate_final_report",
-            "section_plan_step",
             "research_review",
             "risk_assessment",
             "response_strategy",
+        } <= business_functions()
+        assert {
+            "section_plan_step",
             "section_writer",
             "write_final_sections",
             "compile_final_report",
-        } <= business_functions()
+            "_fallback_report_generation",
+        }.isdisjoint(business_functions())
 
     def test_research_phase_is_the_only_public_opinion_wrapper(self):
         from open_deep_research.workflow.dbos_workflow import research_workflow

@@ -232,7 +232,7 @@ def test_node_and_agent_metadata_identify_agents():
         "agent_name": "public_signal_agent",
         "agent_role": "public_signal",
     }
-    plain = node_metadata("section_writer", kind="writer")
+    plain = node_metadata("generate_final_report", kind="writer")
     assert "agent_name" not in plain
     assert plain["node_kind"] == "writer"
 

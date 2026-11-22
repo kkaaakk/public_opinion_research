@@ -1,7 +1,7 @@
 # 模型供应商与 SDK 调用
 
-四角色 Agent 由 DBOSRunner 驱动。Plan、Brief、Clarification、Review、章节规划、
-报告、角色压缩、滚动压缩、网页摘要、RAG 改写与图片识别直接调用 SDK Model。
+Public Signal 和 Internal Knowledge 的研究循环由 DBOSRunner 驱动。Plan、Brief、Review、
+Risk、Strategy、Report、角色压缩、滚动压缩、网页摘要、RAG 改写与图片识别直接调用 SDK Model。
 `models/sdk.py` 的 `sdk_model()` 为两条路径构造模型。`providers.py` 负责解析
 `provider:model`、凭据和可信地址。预置模型、方舟 `ep-*` 和模型 ID 里的冒号原样保留。
 

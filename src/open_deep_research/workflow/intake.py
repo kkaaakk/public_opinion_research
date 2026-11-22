@@ -1,10 +1,7 @@
-﻿# 处理用户需求入口：图片上下文、需求澄清、研究简报和章节规划。
-"""Intake stage of the public-opinion workflow."""
+﻿"""Intake stage of the public-opinion workflow."""
 
 import asyncio
 import json
-import logging
-import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,11 +25,10 @@ from open_deep_research.budget import (
     stop_budget_capture,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.llm.errors import ModelInvocationError, is_token_limit_exceeded
+from open_deep_research.llm.errors import ModelInvocationError
 from open_deep_research.llm.generation import generate_structured
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
-    report_planner_instructions,
     transform_messages_into_research_topic_prompt,
 )
 from open_deep_research.rag import query_images
@@ -40,18 +36,13 @@ from open_deep_research.state import (
     ClarifyWithUser,
     DeepResearchState,
     ResearchQuestion,
-    Section,
-    Sections,
 )
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.workflow.execution import owned_io
 from open_deep_research.workflow.state_utils import (
-    report_state,
     runtime_state,
     workflow_state,
 )
-
-LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,7 +51,6 @@ class IntakeDecision:
 
     goto: str
     update: dict[str, Any] | None = None
-    needs_plan_feedback: bool = False
 
 
 # 检查消息历史是否已包含本轮图片解析上下文。
@@ -290,124 +280,11 @@ async def research_brief_step(
         )
 
     return IntakeDecision(
-        goto="plan_report_sections",
+        goto="research_phase",
         update={
             "workflow": {"brief": response.research_brief},
             "runtime": {"budget": budget_update},
         },
-    )
-
-
-# 根据已确认的简报生成章节计划。
-async def section_plan_step(
-    state: DeepResearchState, config: RunnableConfig
-) -> IntakeDecision:
-    """Generate structured report sections from the research brief."""
-    configurable = Configuration.from_runnable_config(config)
-    budget_usage = runtime_state(state).get("budget", {})
-
-    # Budget guard: degrade to single section if we can't reserve final report call
-    if not can_spend_model_call(
-        configurable, budget_usage, reserve_final_report_call=True
-    ):
-        budget_update = budget_usage_with_reason(
-            "Skipped section planning due to budget constraints; falling back to single section."
-        )
-        single_section = Section(
-            name="Research Report",
-            description=workflow_state(state).get("brief", ""),
-            research=True,
-            agent_role="public_signal,internal_knowledge,risk_assessment,response_strategy",
-            status="pending",
-        )
-        return IntakeDecision(
-            goto="research_phase",
-            update={
-                "report": {"sections": [single_section]},
-                "runtime": {"budget": budget_update},
-            },
-        )
-
-    # Plan sections using planner model
-    planner_model_name = configurable.planner_model or configurable.research_model
-    feedback_text = (
-        "\n///\n".join(report_state(state).get("plan_feedback", []))
-        or "No feedback yet."
-    )
-
-    prompt = report_planner_instructions.format(
-        topic=workflow_state(state).get("brief", ""),
-        report_organization=configurable.report_structure,
-        feedback=feedback_text,
-        date=get_today_str(config),
-    )
-
-    # Budget Capture so a failed planner attempt keeps its model_calls/usage.
-    # try/finally guarantees the ContextVar is reset on every exit path.
-    fallback_reason = ""
-    attempt_token = start_budget_capture()
-    try:
-        try:
-            with model_budget_admission(configurable, lambda: budget_usage):
-                response, _ = await generate_structured(
-                    planner_model_name,
-                    prompt,
-                    Sections,
-                    config=config,
-                    max_tokens=configurable.planner_model_max_tokens,
-                    max_attempts=configurable.max_structured_output_retries,
-                    component="report_planner",
-                )
-        except Exception as exc:
-            if not is_token_limit_exceeded(exc, planner_model_name):
-                LOGGER.exception("Unexpected report section planning failure.")
-                raise
-            LOGGER.warning(
-                "Section planning hit the model context limit: %s. Falling back to single section.",
-                exc,
-            )
-            fallback_reason = "Section planning hit the model context limit; falling back to a single section."
-    finally:
-        budget_update = stop_budget_capture(attempt_token)
-        if (failure := sys.exc_info()[1]) is not None:
-            setattr(failure, "budget_usage", budget_update)
-    if fallback_reason:
-        budget_update = merge_budget_usage(
-            budget_update, budget_usage_with_reason(fallback_reason)
-        )
-        single_section = Section(
-            name="Research Report",
-            description=workflow_state(state).get("brief", ""),
-            research=True,
-            agent_role="public_signal,internal_knowledge,risk_assessment,response_strategy",
-            status="pending",
-        )
-        return IntakeDecision(
-            goto="research_phase",
-            update={
-                "report": {"sections": [single_section]},
-                "runtime": {"budget": budget_update},
-            },
-        )
-
-    # 章节共享角色研究结果，不对应独立研究单元。保留完整计划，避免截断议题；
-    # 写作节点在研究结束后，按最新剩余调用次数分配实际写作额度。
-    sections = list(response.sections)
-
-    total_budget_update = merge_budget_usage(
-        budget_update,
-        budget_usage_with_reason(
-            f"Planned {len(sections)} report sections (public-opinion mode)."
-        ),
-    )
-
-    return IntakeDecision(
-        goto="research_phase",
-        update={
-            "report": {"sections": sections},
-            "runtime": {"budget": total_budget_update},
-        },
-        needs_plan_feedback=True,
     )
 
 

@@ -61,7 +61,7 @@ from open_deep_research.workflow.python_state import copy_state
 
 NATIVE_TERMINAL = {"SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED"}
 HUMAN_PHASES = {"awaiting_approval", "awaiting_clarification"}
-NATIVE_RESULT_VERSIONS = {VERSION, "por-sdk-models-v1"}
+NATIVE_RESULT_VERSIONS = {VERSION, "por-research-agents-v1", "por-sdk-models-v1"}
 DOMAIN_LEDGER_VERSIONS = NATIVE_RESULT_VERSIONS | {"dbos-domain-v1"}
 
 
@@ -321,17 +321,13 @@ class RunClient:
             for error in stage_errors(self.client, workflow.workflow_id)
         )
 
-    def _old_results(self, run_id, view, native):
+    def _old_results(self, run_id, view):
         """Read retained relay indexes and artifacts from drained releases."""
         report = view.get("legacy_report", "")
         if seq := view.get("report"):
             report = self.client.read_stream_offset(
                 run_id + ":events", "events", seq - 1, timeout_seconds=0
             )["content"]
-        if not report and native.status == "SUCCESS":
-            outcome = self.client.retrieve_workflow(run_id).get_result()
-            if isinstance(outcome, dict):
-                report = outcome.get("report", {}).get("final", "")
         roles = list(view.get("legacy_roles", []))
         for stage, seq in view.get("roles", {}).items():
             item = self.client.read_stream_offset(
@@ -441,8 +437,12 @@ class RunClient:
         view = (
             stage_results(self.client, run_id)
             if version in NATIVE_RESULT_VERSIONS
-            else self._old_results(run_id, old, native)
+            else self._old_results(run_id, old)
         )
+        if not view["report"] and native.status == "SUCCESS":
+            outcome = self.client.retrieve_workflow(run_id).get_result()
+            if isinstance(outcome, dict):
+                view["report"] = outcome.get("report", {}).get("final", "")
         usage = merge_budget_usage(
             data["initial"].get("runtime", {}).get("budget", {}),
             charges,
@@ -582,7 +582,7 @@ class RunClient:
                 section.model_dump(mode="json")
                 if hasattr(section, "model_dump")
                 else section
-                for section in plan["sections"]
+                for section in plan.get("sections", ())
             ],
             expires_at=timestamp(plan["expires_at"]),
             ai_revision=dict(

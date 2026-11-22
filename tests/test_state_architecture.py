@@ -8,9 +8,11 @@ from sdk_model_support import install_sequence
 from open_deep_research.prompts import risk_assessment_prompt
 from open_deep_research.state import (
     DeepResearchState,
+    ReportState,
     ResearchReview,
     ResearchTask,
     agents_reducer,
+    report_reducer,
     runtime_reducer,
     workflow_reducer,
 )
@@ -41,6 +43,9 @@ def test_top_level_state_contains_only_owned_domains_and_messages() -> None:
         "report",
         "runtime",
     }
+    assert set(ReportState.__annotations__) == {"final"}
+    assert report_reducer({"final": "previous"}, {}) == {"final": "previous"}
+    assert report_reducer({"final": "previous"}, {"final": "new"}) == {"final": "new"}
 
 
 # 验证旧状态别名和兼容域已删除。

@@ -107,9 +107,6 @@ def config_summary(configuration: Configuration) -> dict[str, Any]:
         "summarization_model": configuration.summarization_model,
         "rolling_compaction_model": configuration.rolling_compaction_model,
         "rag_query_rewrite_model": configuration.rag_query_rewrite_model,
-        "planner_model": configuration.planner_model or configuration.research_model,
-        "section_writer_model": configuration.section_writer_model
-        or configuration.final_report_model,
         "rag_vision_model": configuration.rag_vision_model,
         "enabled_business_agents": list(configuration.enabled_business_agents or []),
         "enabled_plugins": list(configuration.enabled_plugins or []),
@@ -120,7 +117,6 @@ def config_summary(configuration: Configuration) -> dict[str, Any]:
         "rag_enabled": configuration.rag_enabled,
         "allow_clarification": configuration.allow_clarification,
         "allow_plan_feedback": configuration.allow_plan_feedback,
-        "report_mode": configuration.report_mode,
         "tracing_enabled": configuration.tracing_enabled,
         "tracing_scope": "process",
         "budget_enabled": configuration.budget_enabled,

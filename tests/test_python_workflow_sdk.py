@@ -16,7 +16,7 @@ from sdk_model_support import Reply, install_inference
 from test_python_workflow import ROLES, config, initial
 from test_sdk_runtime import TOKENS, _tool
 
-from open_deep_research.budget import budget_capture
+from open_deep_research.budget import ModelBudgetExceeded, budget_capture
 from open_deep_research.prompts import response_strategy_prompt, risk_assessment_prompt
 from open_deep_research.runtime import business_agent
 from open_deep_research.runtime.compaction import RollingCompactOutput
@@ -25,7 +25,6 @@ from open_deep_research.state import (
     ClarifyWithUser,
     ResearchQuestion,
     ResearchReview,
-    Sections,
 )
 from open_deep_research.workflow.brief import BriefRevision, PlanDecision, PlanQuestion
 
@@ -115,7 +114,6 @@ def install_sdk(
                 need_clarification=mode == "clarify", question="Which brand?", verification="Scope confirmed",
             ),
             "ResearchQuestion": ResearchQuestion(research_brief="Investigate brand recall evidence"),
-            "Sections": Sections(sections=original_state["report"]["sections"]),
             "ResearchReview": ResearchReview(research_complete=True),
         }[schema]
 
@@ -428,14 +426,24 @@ def test_sdk_budget_stop_degrades_explicitly_without_extra_agent_calls(
             return [_tool(role)]
 
         monkeypatch.setattr(business_agent, "_business_agent_tools", tools)
-        result = await PythonWorkflow().ainvoke(state, cfg, start_at="research")
+        with budget_capture() as usage, pytest.raises(WorkflowExecutionError) as caught:
+            await PythonWorkflow().ainvoke(state, cfg, start_at="research")
+
+        failure = caught.value
+        assert failure.kinds == {"generate_final_report": "budget_exhausted"}
+        assert isinstance(failure.failures["generate_final_report"], ModelBudgetExceeded)
+        result = failure.state
         assert len(runtimes) == 2
         assert all(not model.calls for model in models)
         assert not calls
-        assert result["runtime"]["budget"]["degradation_reasons"]
+        budget = result["runtime"]["budget"]
+        assert budget["model_calls"] == 8
+        assert failure.budget_usage["model_calls"] == usage["model_calls"] == 1
+        assert budget["degradation_reasons"]
         for role in ROLES[2:]:
             assert "research model budget was exhausted" in result["agents"][role]["report"]
-        assert result["report"]["final"]
+        assert "final" not in result["report"]
+        assert result["messages"] == state["messages"]
 
     asyncio.run(run())
 
