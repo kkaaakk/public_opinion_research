@@ -51,6 +51,7 @@ from test_python_workflow_sdk import install_sdk
 from test_sdk_runtime import TOKENS, _tool
 
 from open_deep_research import budget
+from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import telemetry_enabled
 from open_deep_research.runtime import business_agent, tool_executor
 from open_deep_research.tools import register_tool
@@ -60,6 +61,7 @@ from open_deep_research.workflow import dbos_workflow as engine
 from open_deep_research.workflow.dbos_config import domain_engine
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
+    admit_tool_call,
     stage_context,
     start_operation,
 )
@@ -555,14 +557,48 @@ async def ownership_step(request):
     run_id = request["run_id"]
     wf, executor = DBOS.workflow_id, DBOS.executor_id
     await asyncio.to_thread(
-        start_operation, run_id, wf, executor, "probe", "external_write", "test"
+        admit_tool_call,
+        Configuration(),
+        run_id,
+        wf,
+        executor,
+        "probe-call",
+        "external_write",
+        False,
+    )
+    await asyncio.to_thread(
+        start_operation,
+        run_id,
+        wf,
+        executor,
+        "probe",
+        "probe-call",
+        "external_write",
+        "test",
     )
     (directory / "old-active").write_text(executor)
     while not (directory / "ownership.release").exists():
         await asyncio.sleep(0.05)
     try:
         await asyncio.to_thread(
-            start_operation, run_id, wf, executor, "stale", "external_write", "test"
+            admit_tool_call,
+            Configuration(),
+            run_id,
+            wf,
+            executor,
+            "stale-call",
+            "external_write",
+            False,
+        )
+        await asyncio.to_thread(
+            start_operation,
+            run_id,
+            wf,
+            executor,
+            "stale",
+            "stale-call",
+            "external_write",
+            "test",
         )
     except ExecutionControlError:
         (directory / "old-denied").write_text("stale executor denied")

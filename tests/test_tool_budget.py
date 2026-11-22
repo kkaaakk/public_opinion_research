@@ -90,11 +90,14 @@ def test_admission_storage_failure_is_a_control_error(monkeypatch):
     assert executor.budget.delta.get("tool_calls", 0) == 0
 
 
-def test_unbounded_tool_limits_do_not_touch_the_run_ledger(monkeypatch):
-    def unexpected(*args):
-        pytest.fail("run ledger must not be used without tool/search limits")
+def test_unbounded_tool_limits_still_record_the_call(monkeypatch):
+    calls = []
 
-    monkeypatch.setattr(tool_executor, "admit_tool_call", unexpected)
+    def allow(*args):
+        calls.append(args)
+        return True
+
+    monkeypatch.setattr(tool_executor, "admit_tool_call", allow)
     executor = _executor(
         Configuration(
             research_model="openai:fixture",
@@ -104,4 +107,23 @@ def test_unbounded_tool_limits_do_not_touch_the_run_ledger(monkeypatch):
     )
     _in_scope(executor)
 
+    # Enforcement is off, but the call is still recorded as an admitted fact.
+    assert calls[0][5] == "web_search" and calls[0][-1] is True
+    assert executor.budget.delta["tool_calls"] == 1
+
+
+def test_disabled_budget_still_records_the_call(monkeypatch):
+    calls = []
+
+    def allow(*args):
+        calls.append(args)
+        return True
+
+    monkeypatch.setattr(tool_executor, "admit_tool_call", allow)
+    executor = _executor(
+        Configuration(research_model="openai:fixture", budget_enabled=False)
+    )
+    _in_scope(executor)
+
+    assert len(calls) == 1
     assert executor.budget.delta["tool_calls"] == 1

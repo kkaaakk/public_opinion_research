@@ -9,7 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from open_deep_research.budget import (
     ModelBudgetExceeded,
     budget_usage_with_reason,
-    require_physical_model_budget,
+    model_budget_admission,
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.generation import generate_structured, generate_text
@@ -240,19 +240,19 @@ async def _generate_analysis(
         },
     ]
     try:
-        require_physical_model_budget(
-            configurable,
-            runtime_state(state).get("budget", {}),
-            {},
-            reserve_report=True,
-        )
-        report, usage = await generate_text(
-            configurable.research_model,
-            inputs,
-            config=config,
-            max_tokens=configurable.research_model_max_tokens,
-            component=role,
-        )
+        # One local guard for this analysis call; model admission still owns the
+        # Run-wide ceiling and a rejection degrades the analysis instead of
+        # failing the whole research stage.
+        with model_budget_admission(
+            configurable, lambda: runtime_state(state).get("budget", {})
+        ):
+            report, usage = await generate_text(
+                configurable.research_model,
+                inputs,
+                config=config,
+                max_tokens=configurable.research_model_max_tokens,
+                component=role,
+            )
     except ModelBudgetExceeded:
         # As with the research roles, leave an explicit gap and preserve the
         # final report reserve. Native generation still admits every actual call.

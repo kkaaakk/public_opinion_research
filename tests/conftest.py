@@ -41,3 +41,17 @@ def pytest_configure(config):
         config.option.benchmark_storage = "file://" + str(
             config.rootpath / ".tmp" / "benchmarks"
         )
+
+
+@pytest.fixture
+def memory_ledger(monkeypatch):
+    """Keep the call ledger in memory for a Run simulated without PostgreSQL.
+
+    The executor writes the model, tool and operation ledgers outside every
+    DBOS Step, so a unit test that fabricates a StageContext must either provide
+    a database or account for the tool ledger itself.
+    """
+    from open_deep_research.runtime import tool_executor
+
+    monkeypatch.setattr(tool_executor, "admit_tool_call", lambda *_args: True)
+    monkeypatch.setattr(tool_executor, "finish_tool_call", lambda *_args: True)

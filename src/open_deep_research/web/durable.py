@@ -11,7 +11,12 @@ from uuid import uuid4
 from dbos import error as dbos_error
 from sqlalchemy import text
 
-from open_deep_research.budget import merge_budget_usage, model_bill
+from open_deep_research.budget import (
+    compose_run_usage,
+    merge_budget_usage,
+    model_bill,
+    tool_ledger,
+)
 from open_deep_research.config_file import effective_config, non_sensitive_config
 from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import (
@@ -61,7 +66,12 @@ from open_deep_research.workflow.python_state import copy_state
 
 NATIVE_TERMINAL = {"SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED"}
 HUMAN_PHASES = {"awaiting_approval", "awaiting_clarification"}
-NATIVE_RESULT_VERSIONS = {VERSION, "por-research-agents-v1", "por-sdk-models-v1"}
+NATIVE_RESULT_VERSIONS = {
+    VERSION,
+    "por-agent-context-v1",
+    "por-research-agents-v1",
+    "por-sdk-models-v1",
+}
 DOMAIN_LEDGER_VERSIONS = NATIVE_RESULT_VERSIONS | {"dbos-domain-v1"}
 
 
@@ -376,12 +386,14 @@ class RunClient:
             old = self.client.get_event(run_id + ":events", "projection", 0) or {}
         with self.engine.connect() as db:
             generation = retry_generation(db, run_id)
+            tool_counts: dict[str, int] = {}
             if version not in DOMAIN_LEDGER_VERSIONS:
                 historic, charges, unknown = legacy_projection(db, run_id)
                 old |= historic
                 open_effect, complete = False, not unknown
             else:
                 charges, pending_model, complete = model_bill(db, run_id)
+                tool_counts = tool_ledger(db, run_id)
                 open_effect, unknown = external_effects(db, run_id)
                 open_effect = bool(open_effect or pending_model)
             expired = (
@@ -443,11 +455,15 @@ class RunClient:
             outcome = self.client.retrieve_workflow(run_id).get_result()
             if isinstance(outcome, dict):
                 view["report"] = outcome.get("report", {}).get("final", "")
-        usage = merge_budget_usage(
-            data["initial"].get("runtime", {}).get("budget", {}),
-            charges,
-        )
-        usage = merge_budget_usage(usage, view.pop("stage_usage"))
+        notes = view.pop("stage_usage")
+        initial_usage = data["initial"].get("runtime", {}).get("budget", {})
+        if version not in DOMAIN_LEDGER_VERSIONS:
+            # Drained releases keep their historical projection, counters included.
+            usage = merge_budget_usage(
+                merge_budget_usage(initial_usage, charges), notes
+            )
+        else:
+            usage = compose_run_usage(initial_usage, charges, tool_counts, notes)
         if not complete:
             usage["usage_complete"] = False
         settled_at = native.completed_at or native.updated_at or 0

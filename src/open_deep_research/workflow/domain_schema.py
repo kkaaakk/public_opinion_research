@@ -51,6 +51,82 @@ def _exists(db, name):
     return db.scalar(text("SELECT to_regclass(:name)"), {"name": name}) is not None
 
 
+def _columns(db, table):
+    return {
+        row[0]
+        for row in db.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='por_domain' AND table_name=:t"
+            ),
+            {"t": table},
+        )
+    }
+
+
+def _constraints(db, table):
+    return {
+        row[0]
+        for row in db.execute(
+            text(
+                "SELECT constraint_name FROM information_schema.table_constraints "
+                "WHERE table_schema='por_domain' AND table_name=:t"
+            ),
+            {"t": table},
+        )
+    }
+
+
+def _upgrade_call_ledger(db):
+    """Add call-ledger columns and the Operation link to an existing schema.
+
+    ``CREATE TABLE IF NOT EXISTS`` cannot add a column or a foreign key to a
+    table it skips, so each addition is checked against the catalog first. The
+    statements stay inside the installer's single transaction and are safe to
+    replay. Operations admitted before this release keep a ``NULL`` tool-call
+    reference; every new one is linked and validated by the foreign key.
+    """
+    columns = _columns(db, "tool_calls")
+    if "name" not in columns:
+        db.exec_driver_sql(
+            "ALTER TABLE por_domain.tool_calls ADD COLUMN name text NOT NULL DEFAULT ''"
+        )
+    if "search" not in columns:
+        db.exec_driver_sql(
+            "ALTER TABLE por_domain.tool_calls "
+            "ADD COLUMN search boolean NOT NULL DEFAULT false"
+        )
+        if "search_calls" in columns:
+            # The retired smallint carried the same fact: 1 for a retrieval tool.
+            db.exec_driver_sql(
+                "UPDATE por_domain.tool_calls SET search = search_calls > 0"
+            )
+            db.exec_driver_sql(
+                "ALTER TABLE por_domain.tool_calls DROP COLUMN search_calls"
+            )
+    if "status" not in columns:
+        db.exec_driver_sql(
+            "ALTER TABLE por_domain.tool_calls "
+            "ADD COLUMN status text NOT NULL DEFAULT 'admitted'"
+        )
+    if "tool_calls_status_check" not in _constraints(db, "tool_calls"):
+        db.exec_driver_sql(
+            "ALTER TABLE por_domain.tool_calls ADD CONSTRAINT "
+            "tool_calls_status_check CHECK "
+            "(status IN ('admitted','returned','failed','cancelled'))"
+        )
+    if "tool_call_id" not in _columns(db, "operations"):
+        db.exec_driver_sql(
+            "ALTER TABLE por_domain.operations ADD COLUMN tool_call_id text"
+        )
+    if "operations_tool_call_fkey" not in _constraints(db, "operations"):
+        db.exec_driver_sql(
+            "ALTER TABLE por_domain.operations ADD CONSTRAINT "
+            "operations_tool_call_fkey FOREIGN KEY(run_id, tool_call_id) "
+            "REFERENCES por_domain.tool_calls(run_id, id)"
+        )
+
+
 def migration_inventory():
     """Report old native work and unreconciled legacy effects without modifying either."""
     rows = []
@@ -141,18 +217,24 @@ def initialize_domain(*, migrate_legacy=False):
                 session text NOT NULL, value text NOT NULL, cancel_requested boolean NOT NULL DEFAULT false,
                 reconciliation text, UNIQUE(owner, request_key))""",
             "CREATE INDEX IF NOT EXISTS por_request_session ON por_domain.requests(session)",
-            """CREATE TABLE IF NOT EXISTS por_domain.operations
-               (run_id text REFERENCES por_domain.requests(id), id text,
-                name text NOT NULL, fingerprint text NOT NULL, executor_id text NOT NULL,
-                outcome text CHECK (outcome IN ('returned', 'unknown', 'not_executed')),
-                PRIMARY KEY(run_id, id))""",
             """CREATE TABLE IF NOT EXISTS por_domain.model_attempts
                (run_id text REFERENCES por_domain.requests(id), id text,
                 stage_id text NOT NULL, usage text, PRIMARY KEY(run_id, id))""",
             """CREATE TABLE IF NOT EXISTS por_domain.tool_calls
                (run_id text REFERENCES por_domain.requests(id), id text,
-                search_calls smallint NOT NULL DEFAULT 0,
-                PRIMARY KEY(run_id, id))""",
+                name text NOT NULL, search boolean NOT NULL DEFAULT false,
+                status text NOT NULL DEFAULT 'admitted',
+                PRIMARY KEY(run_id, id),
+                CONSTRAINT tool_calls_status_check
+                    CHECK (status IN ('admitted','returned','failed','cancelled')))""",
+            """CREATE TABLE IF NOT EXISTS por_domain.operations
+               (run_id text REFERENCES por_domain.requests(id), id text,
+                tool_call_id text,
+                name text NOT NULL, fingerprint text NOT NULL, executor_id text NOT NULL,
+                outcome text CHECK (outcome IN ('returned', 'unknown', 'not_executed')),
+                PRIMARY KEY(run_id, id),
+                CONSTRAINT operations_tool_call_fkey FOREIGN KEY(run_id, tool_call_id)
+                    REFERENCES por_domain.tool_calls(run_id, id))""",
             """CREATE TABLE IF NOT EXISTS por_domain.retries
                (run_id text REFERENCES por_domain.requests(id), key text,
                 version bigint NOT NULL, generation bigint NOT NULL, outcome text,
@@ -174,6 +256,7 @@ def initialize_domain(*, migrate_legacy=False):
             "CREATE INDEX IF NOT EXISTS por_history_owner ON por_domain.history(owner)",
         ):
             db.exec_driver_sql(ddl)
+        _upgrade_call_ledger(db)
         db.execute(
             text("INSERT INTO por_domain.policy VALUES (1,:v) ON CONFLICT DO NOTHING"),
             {"v": _policy()},

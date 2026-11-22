@@ -349,7 +349,9 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
     async def uncertain_external_write(state, cfg, **kwargs):
         from dbos import DBOS
 
+        from open_deep_research.configuration import Configuration
         from open_deep_research.workflow.execution import (
+            admit_tool_call,
             finish_operation,
             stage_context,
             start_operation,
@@ -358,11 +360,22 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
 
         run_id = stage_context.get().run_id
         await asyncio.to_thread(
+            admit_tool_call,
+            Configuration(),
+            run_id,
+            DBOS.workflow_id,
+            DBOS.executor_id,
+            "opaque-call",
+            "external_tool",
+            False,
+        )
+        await asyncio.to_thread(
             start_operation,
             run_id,
             DBOS.workflow_id,
             DBOS.executor_id,
             "opaque-before-ack",
+            "opaque-call",
             "external_tool",
             "fingerprint",
         )

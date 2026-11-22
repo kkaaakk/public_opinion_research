@@ -143,7 +143,9 @@ def test_declaration_requires_tool_context_first() -> None:
 
 
 # 验证 SDK 参数错误发生在业务执行之前，受保护操作不会被登记。
-def test_invalid_arguments_never_admit_a_protected_operation(monkeypatch) -> None:
+def test_invalid_arguments_never_admit_a_protected_operation(
+    monkeypatch, memory_ledger
+) -> None:
     from open_deep_research.runtime import tool_executor
 
     invoked: list[Any] = []
@@ -178,7 +180,9 @@ def test_invalid_arguments_never_admit_a_protected_operation(monkeypatch) -> Non
 
 
 # 验证受保护工具登记并结算回执，业务失败按不确定结果上报。
-def test_protected_tool_settles_receipts_and_unknown_failure(monkeypatch) -> None:
+def test_protected_tool_settles_receipts_and_unknown_failure(
+    monkeypatch, memory_ledger
+) -> None:
     from open_deep_research.runtime import tool_executor
 
     starts: list[tuple] = []

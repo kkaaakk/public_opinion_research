@@ -33,6 +33,9 @@ from open_deep_research.workflow.dbos_config import (
 # cancelled. That cleanup cannot submit more native commands.
 owned_cleanup: ContextVar[bool] = ContextVar("owned_cleanup", default=False)
 
+# Outcomes the tool ledger stores after admission; a call keeps its allowance.
+TOOL_CALL_OUTCOMES = frozenset({"returned", "failed", "cancelled"})
+
 
 class ExecutionControlError(RuntimeError):
     """Abort SDK execution when an external boundary cannot be confirmed."""
@@ -333,7 +336,9 @@ def require_live_effect(db, run_id, workflow_id, executor_id):
         raise ExecutionControlError("Native executor no longer owns this effect")
 
 
-def start_operation(run_id, workflow_id, executor_id, operation_id, name, fingerprint):
+def start_operation(
+    run_id, workflow_id, executor_id, operation_id, tool_call_id, name, fingerprint
+):
     with domain_engine().begin() as db:
         require_live_effect(db, run_id, workflow_id, executor_id)
         if db.scalar(
@@ -347,12 +352,14 @@ def start_operation(run_id, workflow_id, executor_id, operation_id, name, finger
         if (
             db.execute(
                 text("""
-            INSERT INTO por_domain.operations(run_id,id,name,fingerprint,executor_id)
-            VALUES (:r,:id,:name,:fingerprint,:executor) ON CONFLICT DO NOTHING
+            INSERT INTO por_domain.operations(
+                run_id,id,tool_call_id,name,fingerprint,executor_id)
+            VALUES (:r,:id,:tool_call,:name,:fingerprint,:executor) ON CONFLICT DO NOTHING
             """),
                 dict(
                     r=run_id,
                     id=operation_id,
+                    tool_call=tool_call_id,
                     name=name,
                     fingerprint=fingerprint,
                     executor=executor_id,
@@ -363,13 +370,18 @@ def start_operation(run_id, workflow_id, executor_id, operation_id, name, finger
             raise unconfirmed("External tool was already admitted; inspect its receipt")
 
 
-def admit_tool_call(configurable, run_id, workflow_id, executor_id, call_id, search):
-    """Admit one tool call against the Run-wide tool/search ceiling.
+def admit_tool_call(
+    configurable, run_id, workflow_id, executor_id, call_id, name, search
+):
+    """Admit and record one tool call against the Run-wide tool/search ceiling.
 
-    The request row lock serializes concurrent Producers. A repeated call
-    identity returns without charging again, so DBOS recovery of an uncommitted
-    ``por.agent_tool`` Step cannot consume a second allowance. A committed row
-    means the call stays charged even if the tool later fails or is cancelled.
+    The record is the authority for how often a tool ran, so it is written for
+    every admitted call whether or not budget enforcement is enabled; the
+    configured ceiling only decides whether the call is allowed. The request row
+    lock serializes concurrent Producers. A repeated call identity returns
+    without charging again, so DBOS recovery of an uncommitted ``por.agent_tool``
+    Step cannot consume a second allowance, and a committed row means the call
+    stays charged whatever its later outcome. A rejected call leaves no row.
     """
     from open_deep_research.budget import can_spend_tool_call
 
@@ -384,7 +396,7 @@ def admit_tool_call(configurable, run_id, workflow_id, executor_id, call_id, sea
             return True
         calls, searches = db.execute(
             text(
-                "SELECT count(*), coalesce(sum(search_calls), 0) "
+                "SELECT count(*), count(*) FILTER (WHERE search) "
                 "FROM por_domain.tool_calls WHERE run_id=:r"
             ),
             {"r": run_id},
@@ -394,12 +406,39 @@ def admit_tool_call(configurable, run_id, workflow_id, executor_id, call_id, sea
             return False
         db.execute(
             text(
-                "INSERT INTO por_domain.tool_calls(run_id, id, search_calls) "
-                "VALUES (:r, :id, :search)"
+                "INSERT INTO por_domain.tool_calls(run_id, id, name, search) "
+                "VALUES (:r, :id, :name, :search)"
             ),
-            dict(keys, search=increment["search_calls"]),
+            dict(keys, name=name, search=increment["search_calls"] > 0),
         )
         return True
+
+
+def finish_tool_call(run_id, tool_call_id, status):
+    """Record one terminal tool-call outcome without releasing its allowance.
+
+    Returns whether a row explains the outcome. A replay of an already settled
+    call writes nothing and still returns ``True``; the committed admission row
+    stays charged whatever the tool did.
+    """
+    if status not in TOOL_CALL_OUTCOMES:
+        return False
+    keys = {"r": run_id, "id": tool_call_id}
+    with domain_engine().begin() as db:
+        if db.execute(
+            text(
+                "UPDATE por_domain.tool_calls SET status=:status "
+                "WHERE run_id=:r AND id=:id AND status='admitted'"
+            ),
+            dict(keys, status=status),
+        ).rowcount:
+            return True
+        return bool(
+            db.scalar(
+                text("SELECT 1 FROM por_domain.tool_calls WHERE run_id=:r AND id=:id"),
+                keys,
+            )
+        )
 
 
 def finish_operation(run_id, operation_id, outcome):

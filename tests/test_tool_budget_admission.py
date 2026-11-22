@@ -5,7 +5,7 @@ from threading import Barrier
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.workflow import execution
@@ -32,8 +32,10 @@ def _create_request(run_id):
         )
 
 
-def _admit(config, run_id, call_id, *, search=False):
-    return execution.admit_tool_call(config, run_id, "role", "executor", call_id, search)
+def _admit(config, run_id, call_id, *, search=False, name="web_search"):
+    return execution.admit_tool_call(
+        config, run_id, "role", "executor", call_id, name, search
+    )
 
 
 def _compete(config, run_id, call_ids, *, search=False):
@@ -51,7 +53,7 @@ def _counts(run_id):
     with domain_engine().connect() as db:
         return db.execute(
             text(
-                "SELECT count(*), coalesce(sum(search_calls), 0) "
+                "SELECT count(*), count(*) FILTER (WHERE search) "
                 "FROM por_domain.tool_calls WHERE run_id=:r"
             ),
             {"r": run_id},
@@ -134,3 +136,55 @@ def test_admission_failure_leaves_no_phantom_row(pg_database, monkeypatch):
         _admit(config, run_id, "call-a")
 
     assert tuple(_counts(run_id)) == (0, 0)
+
+
+def test_disabled_budget_still_records_every_call(pg_database, admit):
+    run_id = "run-ledger-only"
+    _create_request(run_id)
+    config = Configuration(research_model="openai:fixture", budget_enabled=False)
+
+    assert _admit(config, run_id, "lookup", name="load_skill") is True
+    assert _admit(config, run_id, "search-a", search=True) is True
+
+    assert tuple(_counts(run_id)) == (2, 1)
+    with domain_engine().connect() as db:
+        assert db.execute(
+            text(
+                "SELECT name, search, status FROM por_domain.tool_calls "
+                "WHERE run_id=:r ORDER BY id"
+            ),
+            {"r": run_id},
+        ).all() == [("load_skill", False, "admitted"), ("web_search", True, "admitted")]
+
+
+def test_operation_must_reference_an_admitted_tool_call(pg_database, admit):
+    run_id = "run-operation-link"
+    _create_request(run_id)
+    config = _configuration(max_tool_calls=2)
+
+    with pytest.raises(IntegrityError):
+        with domain_engine().begin() as db:
+            db.execute(
+                text(
+                    "INSERT INTO por_domain.operations"
+                    "(run_id, id, tool_call_id, name, fingerprint, executor_id) "
+                    "VALUES (:r, 'op-orphan', 'missing-call', 'publish', 'fp', 'executor')"
+                ),
+                {"r": run_id},
+            )
+
+    assert _admit(config, run_id, "publish-call", name="publish") is True
+    execution.start_operation(
+        run_id, "role", "executor", "op-1", "publish-call", "publish", "fp"
+    )
+    execution.finish_tool_call(run_id, "publish-call", "returned")
+    with domain_engine().connect() as db:
+        assert db.execute(
+            text(
+                "SELECT o.tool_call_id, t.name, t.status "
+                "FROM por_domain.operations o "
+                "JOIN por_domain.tool_calls t ON t.run_id=o.run_id AND t.id=o.tool_call_id "
+                "WHERE o.run_id=:r AND o.id='op-1'"
+            ),
+            {"r": run_id},
+        ).one() == ("publish-call", "publish", "returned")

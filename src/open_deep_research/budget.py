@@ -93,6 +93,34 @@ def model_bill(db, run_id):
     )
 
 
+def tool_ledger(db, run_id):
+    """Authoritative tool and search counts for one Run."""
+    calls, searches = db.execute(
+        text(
+            "SELECT count(*), count(*) FILTER (WHERE search) "
+            "FROM por_domain.tool_calls WHERE run_id=:r"
+        ),
+        {"r": run_id},
+    ).one()
+    return {"tool_calls": int(calls), "search_calls": int(searches)}
+
+
+def compose_run_usage(initial, model_charges, tool_counts, notes=None):
+    """Compose public Run usage from the ledger that owns each number.
+
+    Model calls and tokens come from ``por_domain.model_attempts``; tool and
+    search counts come from ``por_domain.tool_calls``. Stage events contribute
+    only business notes (warnings and degradation reasons), never counters, so
+    one real call can never be counted twice.
+    """
+    usage = merge_budget_usage(initial, model_charges)
+    usage = merge_budget_usage(usage, tool_counts)
+    notes = notes or {}
+    return merge_budget_usage(
+        usage, {field: notes.get(field, []) for field in BUDGET_LIST_FIELDS}
+    )
+
+
 def start_model_attempt(
     scope, workflow_id, executor_id, call_id, *, wait_seconds=None
 ):
@@ -129,20 +157,17 @@ def start_model_attempt(
             if scope.expires_at is not None and db_time(db) >= scope.expires_at:
                 raise ModelInvocationError("BriefApprovalExpired")
             if scope.config.budget_enabled:
-                actual, pending, complete = model_bill(db, scope.run_id)
+                actual, pending, _complete = model_bill(db, scope.run_id)
                 # With token ceilings, an in-flight bill has no provider token
                 # count yet. Wait for its settlement instead of rejecting a
                 # normal parallel Agent call as a budget failure. A finalized
-                # bill with missing usage can never settle, so it remains a
-                # fail-closed rejection rather than a 300-second wait.
+                # attempt whose provider reported no usage can never be priced:
+                # it stays counted as one call and marks the Run incomplete
+                # instead of blocking every later Agent for the rest of the Run.
                 token_limit = (
                     scope.config.max_input_tokens is not None
                     or scope.config.max_output_tokens is not None
                 )
-                if token_limit and not complete and not pending:
-                    raise ModelBudgetExceeded(
-                        "Token budget is held by an unconfirmed model bill"
-                    )
                 if not (token_limit and pending):
                     require_physical_model_budget(
                         scope.config,
@@ -250,7 +275,13 @@ def admit_model_call(prior_attempts: dict[str, Any]) -> None:
 def model_budget_admission(
     configurable: Configuration, usage: Callable[[], dict[str, Any]]
 ) -> Iterator[None]:
-    """Apply role-local budget policy to bounded model generation and its retries."""
+    """Guard nested generation with this role's own projection.
+
+    This is a local fast check over one Role's snapshot: it reserves the final
+    report call so analysis and compression cannot consume it. It never claims
+    the Run-wide ceiling, which only :func:`start_model_attempt` enforces across
+    parallel Agents.
+    """
 
     baseline_capture = _BUDGET_CAPTURE.get()
 
