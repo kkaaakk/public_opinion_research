@@ -51,9 +51,7 @@ def merge_research_patches(
     """Validate ownership, then atomically join producer deltas in role order.
 
     Budgets add; tasks deduplicate; rounds take max. Role reports append unless
-    explicitly replaced. Shared replacement fields must agree. Section additions
-    retain role order, then report compilation selects the last valid version by
-    name in the original plan order.
+    explicitly replaced. Shared report replacements must agree.
     """
     candidate = deepcopy(state)
     replacements: dict[str, Any] = {}
@@ -75,14 +73,11 @@ def merge_research_patches(
         for task in workflow_reducer({}, workflow).get("completed_tasks", []):
             if task.target_role != role:
                 raise ValueError(f"Producer {role} cannot complete another role's task")
-        for field in ("sections", "final"):
-            if field in patch.get("report", {}):
-                value = patch["report"][field]
-                if field in replacements and replacements[field] != value:
-                    raise ValueError(
-                        f"Conflicting parallel report replacement: {field}"
-                    )
-                replacements[field] = value
+        report = patch.get("report", {})
+        if "final" in report:
+            if "final" in replacements and replacements["final"] != report["final"]:
+                raise ValueError("Conflicting parallel report replacement: final")
+            replacements["final"] = report["final"]
         apply_patch(candidate, patch)
     state.clear()
     state.update(candidate)

@@ -147,10 +147,9 @@ feishu_mcp_preset: preset.light
 feishu_oauth_enabled: false
 
 # ---------------------------------------------------------------------------
-# Plan approval and report topology
+# Brief approval and final report structure
 # ---------------------------------------------------------------------------
 allow_plan_feedback: true
-report_mode: synthesis
 report_structure: |
   Use this structure to create a report on the user-provided topic:
 
@@ -163,7 +162,3 @@ report_structure: |
   3. Conclusion
      - Aim for 1 structural element (either a list or table) that distills the main body sections
      - Provide a concise summary of the report
-planner_model: ""
-planner_model_max_tokens: null
-section_writer_model: ""
-section_writer_model_max_tokens: null

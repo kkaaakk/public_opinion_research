@@ -1,15 +1,15 @@
 # 🔬 Public Opinion Research
 
-> 当前应用版本为 `por-research-agents-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，风险和策略依次通过模型生成，最后默认生成一份综合报告。 [Brief 合同](docs/architecture/research-brief.md)
+> 当前应用版本为 `por-inline-report-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，ResearchWorkflow 依次生成风险评估、应对策略和一份综合 Markdown 报告。 [Brief 合同](docs/architecture/research-brief.md)
 
 基于 DBOS、OpenAI Agents SDK、RAG 和 MCP 的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了企业知识 RAG、舆情分析、社交媒体监控和可追溯来源记录等能力。
 
 ## 当前架构
 
-CLI（`por`）经 RunClient 和 DBOSClient 将研究入 PostgreSQL 队列。独立 Executor 运行 DBOS 3.3.0 Workflow，四个角色通过 SDKAgentRuntime、Context Harness 和官方 DBOSRunner 0.3.0 调用 OpenAI Agents SDK 0.24.0 及业务工具。
+CLI（`por`）经 RunClient 和 DBOSClient 将研究入 PostgreSQL 队列。独立 Executor 运行 DBOS 3.3.0 Workflow。Public Signal 和 Internal Knowledge 经 SDKAgentRuntime、Context Harness 和官方 DBOSRunner 0.3.0 调用 OpenAI Agents SDK 0.24.0 及业务工具。
 可选 FastAPI 页面复用同一 Run API，但不再是运行研究的主入口。
 新研究默认使用持久 Run，浏览器刷新只重新订阅，停止操作会请求取消并等待清算。
-两个 Producer 并行汇合，经 Review/Gap 定向补查，再顺序执行 Risk → Strategy 和报告生成。
+两个 Producer 并行汇合，经 Review/Gap 定向补查，再顺序执行 Risk → Strategy → Report Node。
 原 LangGraph Server、业务 Graph 和手写 Agent Loop 已退役。
 
 PostgreSQL 保存 DBOS journal、领域事实和报告 History；研究运行不再依赖 Neo4j 或第二套长期记忆。

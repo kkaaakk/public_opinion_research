@@ -1489,7 +1489,7 @@ def test_cancel_during_safe_retry_preserves_inflight_model_bill(
 def test_native_workflow_matches_frozen_business_reference(
     native_case, monkeypatch, tmp_path
 ):
-    """Freeze the same Brief and costs; retained long-report behavior stays identical."""
+    """Compare joined research and synthesis using the same Brief and model costs."""
     from reference_workflow import PythonWorkflow
     from test_python_workflow_sdk import install_sdk
 
@@ -1497,7 +1497,6 @@ def test_native_workflow_matches_frozen_business_reference(
     from open_deep_research.workflow.brief import brief_metadata
 
     case = native_case
-    case.cfg["configurable"]["report_mode"] = "sections"
     run = case.create()
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     native = case.client.client.list_workflows(
@@ -1510,7 +1509,7 @@ def test_native_workflow_matches_frozen_business_reference(
         # The oracle starts at unchanged research ownership, after the new Plan.
         # Account exactly the native planning artifacts rather than forging zero cost.
         for unit in stage_observations(run["run_id"]):
-            if unit["name"] in {"plan_research", "plan_report_sections"}:
+            if unit["name"] == "plan_research":
                 state["runtime"]["budget"] = merge_budget_usage(
                     state["runtime"]["budget"], unit["usage"]
                 )

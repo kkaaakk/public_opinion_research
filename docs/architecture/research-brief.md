@@ -9,24 +9,6 @@ execution.
 
 ## From intake to reporting
 
-The first diagram shows the previous three-call planning path. The second
-shows the current flow.
-
-```mermaid
-flowchart TD
-  A[por.run] --> B[por.plan: image context]
-  B --> C[Clarification LLM]
-  C -->|questions| END[Former __end__: planning ended]
-  C --> D[Brief LLM]
-  D --> E[Section planner LLM]
-  E --> F[Optional approval]
-  F --> G[Parallel Producers / Review / Gap]
-  G --> H[Risk then Strategy]
-  H --> I[Section writers]
-  I --> J[Introduction / conclusion writers]
-  J --> K[Compile / Finalizer / History]
-```
-
 ```mermaid
 flowchart TD
   A[por.run] --> B[por.plan: optional image parsing + unified Plan]
@@ -40,7 +22,7 @@ flowchart TD
   G --> H[Parallel Public Signal and Internal Knowledge]
   H --> I[Review against Brief and evidence / bounded Producer Gap rounds]
   I --> J[Risk then Strategy]
-  J --> K[One bounded report synthesis Step]
+  J --> K[por.research: one bounded report synthesis Step]
   K --> L[Persisted report artifact]
   L --> M[por.finalize publishes terminal result and archives History]
   L -. "report event" .-> S[por.events / SSE]
@@ -226,27 +208,23 @@ Review checks actual role findings/evidence against the Brief, with existing tas
 deduplication, round limits, budget and deterministic role merge. It creates no
 free scheduling Agent. Risk runs after the last review and Strategy after Risk.
 
-Default `report_mode="synthesis"` does not invoke section planning/writing or
-separate introductions/conclusions. `generate_final_report` receives the complete
-Brief, bounded evidence context, all four formal role reports including
-Risk/Strategy, and unresolved Review gaps. It uses `report_structure` and requires
-question coverage, source/evidence references and explicit uncertainty. Evidence
-is allocated bounded context with omission markers; original artifacts remain.
+`por.research` calls `generate_final_report()` directly after Strategy. It passes
+the complete approved Brief, the two research reports, Risk and Strategy, and
+the latest Review. One bounded model call writes the final Markdown and uses
+`report_structure` to guide its headings. The prompt requires coverage of the
+research questions, traceable references and explicit uncertainty. The input
+marks evidence omitted to fit the context window.
 Unknown model aliases use an application window of 32768. Insufficient input/output
 budget, model errors, empty or token-limited results fail explicitly. There is no
-hidden report request retry. Finalizer can authorize a retry of this pure model
-Step without replaying already committed roles/tools.
+hidden report request retry. Finalizer applies a user-authorized rewind of the
+failed report suffix and preserves earlier committed research and model results.
 
-`por.report` publishes the final report Event before the Finalizer reads native
-results and external receipts.
+`por.research` returns the State with `report.final` and publishes it through
+the native `report` Event. Finalizer reads the native result and external receipts.
 The relay drains committed messages before publishing the terminal prefix and
 its `delivery` receipt. Snapshots read native phase before the plan or
 clarification payload it fences. [Result delivery](agent-loop.md#交付与执行状态)
 
-Advanced `report_mode="sections"` reuses the existing planner, parallel writers,
-completed section artifacts, budget and context fallback code. It plans after the
-approved Brief is frozen. No secondary runtime or mode router was introduced.
-This preserves long-report capability with one configuration field and one branch.
 Legacy intake helper exports still have assessed reference-runner/external-script
 consumers. Production intake calls `plan_research` and `revise_brief`.
 

@@ -377,7 +377,7 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
     monkeypatch.setattr(engine.research, "research_review", review)
     if outcome == "unknown":
         monkeypatch.setattr(
-            engine.reporting, "compile_final_report", uncertain_external_write
+            engine.reporting, "generate_final_report", uncertain_external_write
         )
     run = case.create()
     failed = saved(case, run, "failed", 0)

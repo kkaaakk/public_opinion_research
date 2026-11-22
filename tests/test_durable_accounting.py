@@ -149,6 +149,22 @@ def test_lost_and_partial_provider_bills_remain_counted_and_incomplete():
             6,
         ),
         ([("child-role", False), ("child-review", True)], 2),
+        (
+            [
+                ("por.stage_started", False),
+                ("por.llm", False, ["# Usable report", {"model_calls": 1}, None]),
+                ("por.stage_failed", False),
+            ],
+            3,
+        ),
+        (
+            [
+                ("por.stage_started", False),
+                ("por.llm", False, ["", {"model_calls": 1}, ["Truncated", True]]),
+                ("por.stage_failed", False),
+            ],
+            2,
+        ),
     ],
 )
 def test_retry_preserves_completed_phases_and_prior_calls(steps, expected, monkeypatch):
@@ -162,16 +178,47 @@ def test_retry_preserves_completed_phases_and_prior_calls(steps, expected, monke
                 function_id=i + 1,
                 function_name=name,
                 error=RuntimeError("failed") if failed else None,
+                output=output[0] if output else None,
             )
-            for i, (name, failed) in enumerate(steps)
+            for i, (name, failed, *output) in enumerate(steps)
         ]
     )
     status = SimpleNamespace(
-        workflow_id="report",
-        name="por.report",
+        workflow_id="run:research",
+        name="por.research",
         app_version="current",
         updated_at=2,
         completed_at=3,
     )
     monkeypatch.setattr(dbos_workflow, "native_client", lambda: client)
     assert dbos_workflow.failure_target(status)["start_step"] == expected
+
+
+@pytest.mark.parametrize("failed_step", ["generate_final_report", "research_review"])
+def test_retry_targets_follow_the_owning_workflow(monkeypatch, failed_step):
+    from types import SimpleNamespace
+
+    from open_deep_research.workflow import dbos_workflow
+
+    root = SimpleNamespace(workflow_id="run", name="por.run", completed_at=3)
+    research = SimpleNamespace(
+        workflow_id="run:research", name="por.research", completed_at=2,
+    )
+    failed = research
+    workflows = [root, research]
+    if failed_step == "research_review":
+        failed = SimpleNamespace(
+            workflow_id="run:review:1", name="por.review", completed_at=1,
+        )
+        workflows.append(failed)
+    client = SimpleNamespace(
+        list_workflows=lambda **kwargs: workflows,
+        get_event=lambda wf_id, *_args: {"step": failed_step, "retry_safe": True}
+        if wf_id == failed.workflow_id
+        else None,
+    )
+    monkeypatch.setattr(dbos_workflow, "native_client", lambda: client)
+    monkeypatch.setattr(dbos_workflow, "failure_target", lambda wf: wf.workflow_id)
+    assert dbos_workflow.retry_targets("run") == [
+        wf.workflow_id for wf in reversed(workflows)
+    ]

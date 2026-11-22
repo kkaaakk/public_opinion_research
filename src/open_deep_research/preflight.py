@@ -148,8 +148,6 @@ def _check_models(report: PreflightReport, configuration: Configuration) -> None
         "final_report_model": configuration.final_report_model,
         "summarization_model": configuration.summarization_model,
         "rolling_compaction_model": configuration.rolling_compaction_model,
-        "planner_model": configuration.planner_model or configuration.research_model,
-        "section_writer_model": configuration.section_writer_model or configuration.final_report_model,
     }
     if configuration.rag_vision_enabled or configuration.rag_query_image_enabled:
         routes["rag_vision_model"] = configuration.rag_vision_model
@@ -537,10 +535,6 @@ def _check_conflicts(report: PreflightReport, configuration: Configuration) -> N
             "No producer role is enabled; Review and the final report will have "
             "no fresh evidence.",
         )
-    if configuration.report_mode == "sections" and not (
-        configuration.planner_model or configuration.research_model
-    ):
-        report.add(ERROR, "conflict", "sections report mode requires a planner model.")
     sensitive = [
         name
         for name in ("dbhub_dsn", "feishu_app_secret", "rag_milvus_token")

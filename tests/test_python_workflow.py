@@ -19,7 +19,7 @@ from open_deep_research.budget import (
     capture_budget_usage,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.state import ResearchReview, ResearchTask, Section
+from open_deep_research.state import ResearchReview, ResearchTask
 from open_deep_research.workflow import get_workflow, intake, reporting, research
 from open_deep_research.workflow.python_state import (
     apply_patch,
@@ -49,9 +49,7 @@ def initial():
         "messages": [HumanMessage(content="brand recall", id="input")],
         "workflow": {"brief": "brand recall"},
         "agents": {role: {"report": ""} for role in ROLES},
-        "report": {
-            "sections": [Section(name="Evidence", description="brand evidence")]
-        },
+        "report": {},
         "runtime": {
             "budget": {
                 "model_calls": 7,
@@ -134,24 +132,9 @@ def install_steps(monkeypatch, reviews=(), *, slower="public_signal"):
             "runtime": {"budget": {"model_calls": 1}},
         }
 
-    async def sections(state, config):
-        return {
-            "report": {
-                "completed_sections": [
-                    Section(
-                        name="Evidence",
-                        description="brand evidence",
-                        content="complete evidence",
-                        status="done",
-                    )
-                ]
-            }
-        }
-
-    async def final_sections(state, config):
-        return {}
-
-    async def final(state, config, **kwargs):
+    async def final(state, config):
+        assert events[-1][0] == "response_strategy"
+        events.append(("report", state["workflow"]["round"], []))
         assert all(state["agents"][role].get("report") for role in ROLES)
         report = "\n".join(state["agents"][role]["report"] for role in ROLES)
         return {"report": {"final": report}, "messages": [AIMessage(content=report)]}
@@ -160,9 +143,7 @@ def install_steps(monkeypatch, reviews=(), *, slower="public_signal"):
     for role in ROLES[2:]:
         monkeypatch.setattr(research, role, partial(analysis, role=role))
     monkeypatch.setattr(research, "research_review", review)
-    monkeypatch.setattr(reporting, "section_writer", sections)
-    monkeypatch.setattr(reporting, "write_final_sections", final_sections)
-    monkeypatch.setattr(reporting, "compile_final_report", final)
+    monkeypatch.setattr(reporting, "generate_final_report", final)
     return events
 
 
@@ -181,6 +162,7 @@ def test_true_parallel_join_order_and_private_state(monkeypatch, slower):
             "review",
             "risk_assessment",
             "response_strategy",
+            "report",
         ]
         assert list(result["agents"]) == list(ROLES)
         assert result["runtime"]["budget"]["model_calls"] == 14
@@ -189,7 +171,6 @@ def test_true_parallel_join_order_and_private_state(monkeypatch, slower):
         assert result["runtime"]["budget"]["input_tokens"] == 110
         assert all(result["agents"][r]["report"] for r in ROLES)
         assert all(result["agents"][r]["report"] == f"{r}:1" for r in ROLES[:2])
-        assert result["report"]["completed_sections"][0].content == "complete evidence"
         assert all(role in result["report"]["final"] for role in ROLES)
 
     asyncio.run(run())
@@ -382,8 +363,7 @@ def test_timeout_propagates_and_keeps_completed_sibling_delta(monkeypatch):
         "research_review",
         "risk_assessment",
         "response_strategy",
-        "section_writer",
-        "compile_final_report",
+        "generate_final_report",
     ],
 )
 def test_later_failure_does_not_replay_successful_tools(monkeypatch, stage):
@@ -420,11 +400,6 @@ def test_parallel_merges_are_completion_order_independent_and_preserve_contracts
             "workflow": {
                 "round": 2,
                 "completed_tasks": [gap(role, role), gap(role, role)],
-            },
-            "report": {
-                "completed_sections": [
-                    Section(name=role, description=role, content=role)
-                ]
             },
             "runtime": {"budget": {"model_calls": 2, "input_tokens": 10}},
         }
@@ -535,43 +510,6 @@ def test_python_workflow_does_not_compile_or_invoke_legacy_graph(monkeypatch):
     asyncio.run(run())
 
 
-def test_parallel_section_failure_drains_sibling_and_keeps_all_attempts(monkeypatch):
-    async def run():
-        entered = asyncio.Event()
-        cleaned = []
-
-        async def invoke(model_name, prompt, *args, **kwargs):
-            capture_budget_usage({"model_calls": 1, "input_tokens": 3})
-            if prompt == "slow":
-                entered.set()
-                try:
-                    await asyncio.Event().wait()
-                finally:
-                    cleaned.append("slow")
-            await entered.wait()
-            raise RuntimeError("section failed after request")
-
-        monkeypatch.setattr(reporting, "generate_text", invoke)
-        with pytest.raises(RuntimeError) as caught:
-            await reporting._write_sections_parallel(
-                [
-                    Section(name="slow", description=""),
-                    Section(name="fail", description=""),
-                ],
-                model_name="fixture:writer",
-                config={},
-                prompt_for=lambda s: s.name,
-                log_label="fixture",
-                failure_reason_for=lambda s: s.name,
-                completion_reason_for=str,
-            )
-        assert cleaned == ["slow"]
-        assert caught.value.budget_usage["model_calls"] == 2
-        assert caught.value.budget_usage["input_tokens"] == 6
-
-    asyncio.run(run())
-
-
 def test_failed_planner_preserves_its_nested_capture(monkeypatch):
     async def run():
         calls = []
@@ -579,61 +517,17 @@ def test_failed_planner_preserves_its_nested_capture(monkeypatch):
         async def enrich(state, config):
             return {}
 
-        async def decision(state, config):
-            return intake.IntakeDecision(goto="plan_report_sections")
-
         async def invoke(model_name, prompt, *args, **kwargs):
             calls.append("planner")
             capture_budget_usage({"model_calls": 1, "input_tokens": 9})
             raise RuntimeError("planner failed")
 
         monkeypatch.setattr(intake, "enrich_query_images", enrich)
-        monkeypatch.setattr(intake, "clarification_step", decision)
-        monkeypatch.setattr(intake, "research_brief_step", decision)
         monkeypatch.setattr(intake, "generate_structured", invoke)
         with pytest.raises(WorkflowExecutionError) as caught:
             await PythonWorkflow().ainvoke(initial(), config())
         assert calls == ["planner"]
         assert caught.value.budget_usage["model_calls"] == 1
         assert caught.value.budget_usage["input_tokens"] == 9
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("strict", [False, True])
-@pytest.mark.parametrize("known_capacity", [False, True])
-def test_final_report_error_keeps_legacy_contract_and_fails_python(
-    monkeypatch, strict, known_capacity
-):
-    async def run():
-        async def invoke(*args, **kwargs):
-            capture_budget_usage({"model_calls": 1, "input_tokens": 2})
-            raise RuntimeError("context length exceeded")
-
-        monkeypatch.setattr(reporting, "generate_text", invoke)
-        monkeypatch.setattr(reporting, "is_token_limit_exceeded", lambda *a: True)
-        monkeypatch.setattr(
-            reporting,
-            "get_model_token_limit",
-            lambda *a: 32_768 if known_capacity else None,
-        )
-        state = copy_state(initial())
-        state["report"]["sections"] = []
-        if strict:
-            with pytest.raises(
-                RuntimeError, match="Final report generation failed"
-            ) as caught:
-                await reporting.compile_final_report(
-                    state, config(), fail_on_error=True
-                )
-            assert caught.value.budget_usage["model_calls"] == (
-                4 if known_capacity else 1
-            )
-        else:
-            patch = await reporting.compile_final_report(state, config())
-            assert patch["report"]["final"].startswith("Error generating final report")
-            assert patch["runtime"]["budget"]["model_calls"] == (
-                4 if known_capacity else 1
-            )
 
     asyncio.run(run())

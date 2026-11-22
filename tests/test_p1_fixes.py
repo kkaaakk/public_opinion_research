@@ -11,104 +11,27 @@ from starlette.requests import Request
 
 import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.configuration import Configuration
-from open_deep_research.state import Section
 from open_deep_research.workflow import reporting
 
 
-# 构造章节写作所需的隔离配置。
-def _writer_config() -> dict:
-    return {
-        "configurable": {
-            "section_writer_model": "openai:writer-fixture",
-        }
-    }
-
-
-# 构造包含计划章节和角色证据的测试状态。
-def _section_state(section: Section) -> dict:
-    return {
-        "report": {"sections": [section], "completed_sections": []},
-        "agents": {"risk_assessment": {"report": "risk evidence"}},
-        "runtime": {"budget": {}},
-    }
-
-
-# 验证研究章节与最终章节写作均记录响应令牌。
-def test_section_and_final_section_writer_record_response_usage(monkeypatch) -> None:
-    """Both parallel writer stages merge model calls and token usage."""
-    install_sequence(monkeypatch, Reply("written", 11, 7), Reply("written", 11, 7))
-
-    research_result = asyncio.run(
-        reporting.section_writer(
-            _section_state(
-                Section(
-                    name="Risk",
-                    description="Risk evidence",
-                    research=True,
-                    agent_role="risk_assessment",
-                )
-            ),
-            _writer_config(),
-        )
-    )
-    final_result = asyncio.run(
-        reporting.write_final_sections(
-            {
-                "report": {
-                    "sections": [
-                        Section(
-                            name="Conclusion",
-                            description="Summarize the report",
-                            research=False,
-                        )
-                    ],
-                    "completed_sections": [
-                        Section(
-                            name="Risk",
-                            description="Risk evidence",
-                            research=True,
-                            content="risk section",
-                            status="done",
-                        )
-                    ],
-                },
-                "agents": {},
-                "runtime": {"budget": {}},
-            },
-            _writer_config(),
-        )
-    )
-
-    for result in (research_result, final_result):
-        assert result["runtime"]["budget"]["model_calls"] == 1
-        assert result["runtime"]["budget"]["input_tokens"] == 11
-        assert result["runtime"]["budget"]["output_tokens"] == 7
-        assert result["runtime"]["budget"]["total_tokens"] == 18
-
-
-# 验证缺少令牌元数据时仍记录真实模型调用次数。
-def test_writer_without_usage_still_records_one_model_call(monkeypatch) -> None:
-    """Providers without usage metadata are counted without fabricated tokens."""
-    install_sequence(monkeypatch, Reply("written", 0, 0))
-
+@pytest.mark.parametrize("input_tokens,output_tokens", [(11, 7), (0, 0)])
+def test_final_report_records_actual_usage(monkeypatch, input_tokens, output_tokens):
+    requests = install_sequence(monkeypatch, Reply("# Report", input_tokens, output_tokens))
     result = asyncio.run(
-        reporting.section_writer(
-            _section_state(
-                Section(
-                    name="Risk",
-                    description="Risk evidence",
-                    research=True,
-                    agent_role="risk_assessment",
-                )
-            ),
-            _writer_config(),
+        reporting.generate_final_report(
+            {
+                "workflow": {"brief": "Report on brand risk"},
+                "agents": {"risk_assessment": {"report": "risk evidence"}},
+            },
+            {"configurable": {"final_report_model": "openai:writer-fixture"}},
         )
     )
 
-    assert result["runtime"]["budget"]["model_calls"] == 1
-    assert result["runtime"]["budget"]["input_tokens"] == 0
-    assert result["runtime"]["budget"]["output_tokens"] == 0
-    assert result["runtime"]["budget"]["total_tokens"] == 0
+    usage = result["runtime"]["budget"]
+    assert usage["model_calls"] == len(requests) == 1
+    assert usage["input_tokens"] == input_tokens
+    assert usage["output_tokens"] == output_tokens
+    assert usage["total_tokens"] == input_tokens + output_tokens
 
 
 # 验证未知压缩错误向外传播。

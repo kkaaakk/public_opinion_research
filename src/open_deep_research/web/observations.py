@@ -83,7 +83,7 @@ def stage_errors(client, run_id):
     failed = client.list_workflows(
         workflow_id_prefix=run_id + ":",
         status="ERROR",
-        name=["por.plan", "por.research", "por.review", "por.role", "por.report"],
+        name=["por.plan", "por.research", "por.review", "por.role"],
         load_input=False,
         load_output=False,
     )
@@ -119,10 +119,12 @@ def stage_results(client, run_id):
 
     for workflow in client.list_workflows(
         workflow_id_prefix=run_id + ":",
-        name=["por.plan", "por.research", "por.report"],
+        name=["por.plan", "por.research"],
         load_input=False,
         load_output=False,
     ):
+        stages = client.get_event(workflow.workflow_id, "completed_stages", 0) or {}
+        other_stages.extend(stages.items())
         if workflow.name == "por.research":
             for role in ANALYSIS_ROLES:
                 result = client.get_event(workflow.workflow_id, f"analysis:{role}", 0)
@@ -134,13 +136,16 @@ def stage_results(client, run_id):
                         active.append((workflow.updated_at or 0, step))
                 else:
                     outputs.append((f"{run_id}:{role}", step, result))
-            continue
-        if workflow.status == "PENDING":
+            if (
+                workflow.status == "PENDING"
+                and "generate_final_report" not in stages
+                and client.get_event(workflow.workflow_id, "report_started", 0)
+            ):
+                active.append((workflow.updated_at or 0, "generate_final_report"))
+        elif workflow.status == "PENDING":
             active.append(
                 (workflow.updated_at or 0, workflow.name.removeprefix("por."))
             )
-        stages = client.get_event(workflow.workflow_id, "completed_stages", 0) or {}
-        other_stages.extend(stages.items())
 
     for stage_id, step, result in outputs:
         if not result.get("observation", {}).get("skipped"):
@@ -172,7 +177,7 @@ def stage_results(client, run_id):
         "completed_steps": completed,
         "current_step": max(active, default=(0, ""))[1],
         "role_reports": roles,
-        "report": client.get_event(run_id + ":report", "report", 0) or "",
+        "report": client.get_event(run_id + ":research", "report", 0) or "",
         "stage_usage": usage,
     }
 

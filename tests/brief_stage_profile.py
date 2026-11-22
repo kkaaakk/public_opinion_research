@@ -1,4 +1,4 @@
-"""Compare actual bounded business services with identical synthetic inference.
+"""Measure bounded Plan and Report stages with synthetic inference.
 
 Run with the root locked environment. This measures stage plumbing, NOT provider
 latency, generated report quality, or production token savings. Native end-to-end
@@ -20,37 +20,16 @@ from sdk_model_support import install_inference
 from test_research_brief import BRIEF
 
 from open_deep_research.budget import budget_capture
-from open_deep_research.state import (
-    ClarifyWithUser,
-    ResearchQuestion,
-    Section,
-    Sections,
-)
 from open_deep_research.workflow import intake, reporting
 from open_deep_research.workflow.brief import PlanDecision
 from open_deep_research.workflow.python_state import apply_patch
 
-SECTIONS = [
-    Section(
-        name="Findings",
-        description="Answer the research question with evidence",
-        research=True,
-    ),
-    Section(name="Introduction", description="Scope and method", research=False),
-    Section(name="Conclusion", description="Risk and next actions", research=False),
-]
-
 
 def infer(request):
-    return {
-        "ClarifyWithUser": ClarifyWithUser(
-            need_clarification=False, question="", verification="Scope confirmed",
-        ),
-        "ResearchQuestion": ResearchQuestion(research_brief=BRIEF),
-        "Sections": Sections(sections=SECTIONS),
-        "PlanDecision": PlanDecision(action="ready", questions=[], brief_md=BRIEF),
-        None: "FINAL brand recall report, sourced and reviewed",
-    }[request.schema_name]
+    if request.schema_name == "PlanDecision":
+        return PlanDecision(action="ready", questions=[], brief_md=BRIEF)
+    assert request.schema_name is None
+    return "FINAL brand recall report, sourced and reviewed"
 
 
 async def measure(kind):
@@ -70,7 +49,6 @@ async def measure(kind):
             )
         ],
         "workflow": {"brief": BRIEF},
-        "report": {"sections": [s.model_copy(deep=True) for s in SECTIONS]},
         "agents": {
             role: {
                 "report": "Verified claim E1, source https://example.org; uncertainty remains."
@@ -85,23 +63,8 @@ async def measure(kind):
     }
     start = time.perf_counter()
     with budget_capture():
-        if kind == "old_plan":
-            for fn in (
-                intake.clarification_step,
-                intake.research_brief_step,
-                intake.section_plan_step,
-            ):
-                decision = await fn(state, cfg)
-                apply_patch(state, decision.update or {})
-        elif kind == "new_plan":
+        if kind == "plan":
             apply_patch(state, (await intake.plan_research(state, cfg))["patch"])
-        elif kind == "old_report":
-            for fn in (
-                reporting.section_writer,
-                reporting.write_final_sections,
-                reporting.compile_final_report,
-            ):
-                apply_patch(state, await fn(state, cfg))
         else:
             apply_patch(state, await reporting.generate_final_report(state, cfg))
     return dict(
@@ -120,7 +83,7 @@ def main():
         parser.error("Use at least two samples")
 
     result = {
-        "inference": "identical synthetic 7 input / 3 output token replies; no live provider; 3-section report fixture",
+        "inference": "identical synthetic 7 input / 3 output token replies, using synthetic inference",
         "stages": {},
     }
     original_connect = socket.socket.connect
@@ -137,7 +100,7 @@ def main():
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(socket.socket, "connect", local_connect)
         install_inference(patch, infer)
-        for kind in ("old_plan", "new_plan", "old_report", "new_report"):
+        for kind in ("plan", "report"):
             samples = [asyncio.run(measure(kind)) for _ in range(args.samples)]
             values = [sample["seconds"] for sample in samples]
             result["stages"][kind] = dict(

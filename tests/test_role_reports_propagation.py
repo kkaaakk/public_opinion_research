@@ -9,7 +9,7 @@ from sdk_model_support import install_sequence
 from test_sdk_runtime import _tool
 
 import open_deep_research.runtime.business_agent as business_agent_module
-from open_deep_research.state import ResearchReview, Section, agents_reducer
+from open_deep_research.state import ResearchReview, agents_reducer
 from open_deep_research.workflow import reporting, research
 
 
@@ -141,40 +141,12 @@ def test_disabled_analysis_does_not_open_a_model(monkeypatch, analyze):
     assert not requests
 
 
-# 验证章节写作使用完整正式报告。
-def test_section_writer_uses_full_role_report(monkeypatch) -> None:
-    full_report = "S" * 5_000 + "\nSECTION_TAIL"
-    requests = install_sequence(monkeypatch, "section body")
-    result = asyncio.run(
-        reporting.section_writer(
-            {
-                "report": {
-                    "sections": [
-                        Section(
-                            name="Risk",
-                            description="risk evidence",
-                            research=True,
-                            agent_role="public_signal",
-                        )
-                    ],
-                    "completed_sections": [],
-                },
-                "agents": {"public_signal": {"report": full_report}},
-                "runtime": {"budget": {}},
-            },
-            {"configurable": {"section_writer_model": "openai:fixture-model"}},
-        )
-    )
-    assert "SECTION_TAIL" in requests[0].prompt
-    assert result["report"]["completed_sections"][0].content == "section body"
-
-
-# 验证最终报告兜底使用完整角色报告。
-def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
-    full_report = "F" * 6_000 + "\nFALLBACK_TAIL"
+# 验证综合报告使用上下文容量内的完整角色报告。
+def test_final_report_reads_formal_role_reports(monkeypatch) -> None:
+    full_report = "F" * 6_000 + "\nREPORT_TAIL"
     requests = install_sequence(monkeypatch, "final report")
     result = asyncio.run(
-        reporting._fallback_report_generation(
+        reporting.generate_final_report(
             {
                 "messages": [],
                 "workflow": {"brief": "brand risk"},
@@ -185,5 +157,5 @@ def test_final_report_fallback_reads_formal_role_reports(monkeypatch) -> None:
             {"configurable": {"final_report_model": "openai:fixture-model"}},
         )
     )
-    assert "FALLBACK_TAIL" in requests[0].prompt
+    assert "REPORT_TAIL" in requests[0].prompt
     assert result["report"]["final"] == "final report"

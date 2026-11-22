@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.messages import HumanMessage
 
-from open_deep_research.state import ResearchReview, ResearchTask, Section
+from open_deep_research.state import ResearchReview, ResearchTask
 from open_deep_research.web.run_data import (
     RunJSON,
     dumps,
@@ -28,7 +28,6 @@ from open_deep_research.workflow.execution import (
     "value",
     [
         HumanMessage(content="hello"),
-        Section(name="A", description="B"),
         ResearchReview(research_complete=True),
         ResearchTask(
             task_id="t",

@@ -20,12 +20,7 @@ pytestmark = pytest.mark.integration
 
 def test_native_runner_profile(native_case, monkeypatch):
     c = native_case
-    mode = os.environ.get("PROFILE_REPORT_MODE", "synthesis")
-    c.cfg["configurable"]["report_mode"] = mode
-    chapter_delay = float(os.environ.get("PROFILE_CHAPTER_DELAY", "0"))
     from sdk_model_support import install_inference
-
-    from open_deep_research.state import Section, Sections
 
     bounded_calls = 0
     model_lock = threading.Lock()
@@ -34,13 +29,6 @@ def test_native_runner_profile(native_case, monkeypatch):
         nonlocal bounded_calls
         with model_lock:
             bounded_calls += 1
-        if chapter_delay and "PROFILE_CHAPTER_" in request.prompt:
-            await asyncio.sleep(chapter_delay)
-        if mode == "sections" and request.schema_name == "Sections":
-            return Sections(sections=[
-                Section(name=f"PROFILE_CHAPTER_{i}", description="Evidence and risk", research=True)
-                for i in range(3)
-            ])
         return None
 
     install_inference(monkeypatch, respond)
@@ -169,8 +157,6 @@ def test_native_runner_profile(native_case, monkeypatch):
                     database=database,
                     inference="controlled; no paid models",
                     provider_delay_seconds=delay,
-                    report_mode=mode,
-                    chapter_delay_seconds=chapter_delay,
                     results=results,
                 ),
                 indent=2,

@@ -1,21 +1,13 @@
 # 验证精简舆情角色规范、私有记忆和完整报告的状态传播。
 """Tests for public-opinion business-agent encapsulation."""
 
-import asyncio
-
-from sdk_model_support import install_sequence
-
 from open_deep_research.configuration import Configuration
 from open_deep_research.public_opinion_agents import (
     PUBLIC_OPINION_AGENT_ORDER,
     PUBLIC_OPINION_AGENT_SPECS,
     get_public_opinion_agent_spec,
 )
-from open_deep_research.state import (
-    Section,
-    agents_reducer,
-)
-from open_deep_research.workflow import reporting
+from open_deep_research.state import agents_reducer
 
 
 # 验证注册表只包含当前精简角色。
@@ -95,43 +87,6 @@ def test_agents_reducer_keeps_reports_by_role() -> None:
     assert merged["risk_assessment"]["report"] == "old risk report"
     assert merged["response_strategy"]["report"] == "new response report"
 
-
-# 验证章节写作使用完整正式角色报告。
-def test_section_writer_uses_full_role_report(monkeypatch) -> None:
-    """Formal role reports, rather than compact memory, reach the writer prompt."""
-
-    requests = install_sequence(monkeypatch, "section output")
-    full_report = "A" * 2_000 + "\nTAIL_EVIDENCE_MUST_REACH_SECTION_WRITER"
-    state = {
-        "report": {
-            "sections": [
-                Section(
-                    name="Risk evidence",
-                    description="Summarize risk evidence.",
-                    research=True,
-                    agent_role="public_signal",
-                )
-            ]
-        },
-        "agents": {
-            "public_signal": {"report": full_report}
-        },
-        "runtime": {"budget": {}},
-    }
-
-    asyncio.run(
-        reporting.section_writer(
-            state,
-            {
-                "configurable": {
-                    "section_writer_model": "openai:fixture-model",
-                                }
-            },
-        )
-    )
-
-    assert requests
-    assert "TAIL_EVIDENCE_MUST_REACH_SECTION_WRITER" in requests[0].prompt
 
 def test_role_reports_override_previous_run() -> None:
     """A new research phase replaces prior formal reports instead of merging them."""

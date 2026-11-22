@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from sdk_model_support import Reply, install_sequence
 
 from open_deep_research.budget import budget_capture, estimate_text_tokens
+from open_deep_research.llm.generation import ModelOutputError
 from open_deep_research.workflow import intake, reporting
 from open_deep_research.workflow.brief import (
     PlanDecision,
@@ -307,15 +308,19 @@ def test_multiple_choice_answers_remain_bounded_to_declared_options():
             validate_answers(questions, {"sources": answer}, False)
 
 
-@pytest.mark.parametrize("finish", ["stop", "length"])
-def test_report_preserves_text_and_rejects_output_limit(monkeypatch, finish):
-    install_sequence(
-        monkeypatch,
-        Reply("# Report\nEvidence E1 supports this finding.", 4, 2, status=finish),
-    )
+@pytest.mark.parametrize(
+    "reply,error",
+    [
+        (Reply("# Report\nEvidence E1 supports this finding.", 4, 2), None),
+        (Reply("Partial synthesis", 4, 2, status="length"), "truncated"),
+        (Reply("", 4, 2), "empty"),
+    ],
+)
+def test_report_requires_complete_nonempty_output(monkeypatch, reply, error):
+    requests = install_sequence(monkeypatch, reply)
     with budget_capture() as usage:
-        if finish == "length":
-            with pytest.raises(ValueError, match="truncated"):
+        if error:
+            with pytest.raises(ModelOutputError, match=error):
                 asyncio.run(
                     reporting.generate_final_report({"workflow": {"brief": BRIEF}}, CFG)
                 )
@@ -326,4 +331,4 @@ def test_report_preserves_text_and_rejects_output_limit(monkeypatch, finish):
             assert result["report"]["final"].startswith(
                 "# Report\nEvidence E1 supports this finding."
             )
-    assert usage["model_calls"] == 1 and usage["total_tokens"] == 6
+    assert usage["model_calls"] == len(requests) == 1 and usage["total_tokens"] == 6

@@ -22,8 +22,6 @@ from open_deep_research.state import (
     ResearchQuestion,
     ResearchReview,
     ResearchTask,
-    Section,
-    Sections,
     Summary,
 )
 from open_deep_research.workflow.brief import BriefRevision, PlanDecision
@@ -33,8 +31,6 @@ TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted"})
 _MODELS = {
     c.__name__: c
     for c in (
-        Section,
-        Sections,
         ResearchReview,
         ResearchTask,
         ClarifyWithUser,

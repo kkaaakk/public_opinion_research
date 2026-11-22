@@ -107,8 +107,7 @@ def _invoke_with_fixtures(
     async def no_report(*args, **kwargs):
         return {}
 
-    for name in ("section_writer", "write_final_sections", "compile_final_report"):
-        monkeypatch.setattr(reporting, name, no_report)
+    monkeypatch.setattr(reporting, "generate_final_report", no_report)
     result = asyncio.run(
         PythonWorkflow().ainvoke(
             _initial_state(),

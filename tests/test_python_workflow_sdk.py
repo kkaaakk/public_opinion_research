@@ -25,7 +25,6 @@ from open_deep_research.state import (
     ClarifyWithUser,
     ResearchQuestion,
     ResearchReview,
-    Sections,
 )
 from open_deep_research.workflow.brief import BriefRevision, PlanDecision, PlanQuestion
 
@@ -115,7 +114,6 @@ def install_sdk(
                 need_clarification=mode == "clarify", question="Which brand?", verification="Scope confirmed",
             ),
             "ResearchQuestion": ResearchQuestion(research_brief="Investigate brand recall evidence"),
-            "Sections": Sections(sections=original_state["report"]["sections"]),
             "ResearchReview": ResearchReview(research_complete=True),
         }[schema]
 

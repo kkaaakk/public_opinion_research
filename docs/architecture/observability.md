@@ -59,9 +59,9 @@ run_submit                                API; only for a newly accepted Run
 │     ├─ por.role(internal_knowledge) ── sdk_invocation
 │     ├─ por.review ── research_review
 │     ├─ additional Producer rounds / review, when actually scheduled
-│     ├─ por.role(risk_assessment) ── sdk_invocation
-│     ├─ por.role(response_strategy) ── sdk_invocation
-│     └─ por.report ── report_generation
+│     ├─ risk_assessment ── por.llm
+│     ├─ response_strategy ── por.llm
+│     └─ report_generation ── por.llm
 ├─ por.events                             native durable event relay
 └─ por.finalize                           native settlement/archive/retry
 ```
@@ -191,7 +191,7 @@ auth or baggage is propagated. Retries/recovery emit fresh span identities under
 the persisted caller. A killed process cannot finish/export its in-flight spans.
 Unknown effects remain quarantined; completed tools are never replayed for traces.
 
-Current application and SDK Runtime versions are `por-research-agents-v1` and
+Current application and SDK Runtime versions are `por-inline-report-v1` and
 `sdk-vertical-v1`. When a matching-version journal lacks the optional OTel carrier,
 the Run ID still groups its observations. Earlier journals use their matching
 Executor for drain. [Deployment](dbos-deployment.md)

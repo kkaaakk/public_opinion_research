@@ -46,7 +46,15 @@ def test_formal_and_smoke_configs_share_one_schema_and_all_fields():
 
     assert set(Configuration.model_fields) <= set(formal.model_dump())
     assert smoke.business_scenario == formal.business_scenario
-    assert smoke.report_mode == formal.report_mode
+    assert smoke.report_structure == formal.report_structure
+    assert smoke.final_report_model_max_tokens == formal.final_report_model_max_tokens
+    assert not {
+        "report_mode",
+        "planner_model",
+        "planner_model_max_tokens",
+        "section_writer_model",
+        "section_writer_model_max_tokens",
+    } & Configuration.model_fields.keys()
     assert smoke.enabled_plugins == []
     assert smoke.enabled_business_agents == [
         "public_signal",
@@ -81,14 +89,14 @@ def test_unknown_fields_and_bad_yaml_are_rejected(tmp_path):
 def test_environment_does_not_override_business_configuration(monkeypatch):
     monkeypatch.setenv("RESEARCH_MODEL", "openai:gpt-4.1")
     monkeypatch.setenv("RAG_ENABLED", "false")
-    monkeypatch.setenv("REPORT_MODE", "sections")
+    monkeypatch.setenv("FINAL_REPORT_MODEL", "openai:gpt-4.1")
     monkeypatch.setenv("ENABLED_PLUGINS", "[]")
     configuration = Configuration.from_runnable_config(
         {"configurable": {"research_model": "deepseek:deepseek-flash"}}
     )
     assert configuration.research_model == "deepseek:deepseek-flash"
     assert configuration.rag_enabled is False
-    assert configuration.report_mode == "synthesis"
+    assert configuration.final_report_model == "deepseek:deepseek-flash"
     assert configuration.enabled_plugins == []
 
 

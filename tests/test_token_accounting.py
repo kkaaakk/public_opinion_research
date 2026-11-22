@@ -329,64 +329,14 @@ def _token_limit_error() -> Exception:
     return error_type("This model's maximum context length is 8192 tokens.")
 
 
-# 构造最终报告写作的测试状态。
-def _writer_state() -> dict:
-    from open_deep_research.state import Section
+def test_report_provider_error_propagates_without_retry(monkeypatch):
+    from open_deep_research.workflow import reporting
 
-    return {
-        "report": {
-            "sections": [
-                Section(
-                    name="Risk",
-                    description="Risk evidence",
-                    research=True,
-                    agent_role="risk_assessment",
-                )
-            ],
-            "completed_sections": [],
-        },
-        "agents": {"risk_assessment": {"report": "risk evidence"}},
-        "runtime": {"budget": {}},
-    }
-
-
-# 构造报告模型及预算测试配置。
-def _writer_config() -> dict:
-    return {
-        "configurable": {
-            "section_writer_model": "openai:fixture-writer",
-        }
-    }
-
-
-# 验证普通异常不会进入上下文超限恢复路径。
-def test_ordinary_exception_is_not_routed_to_token_limit_recovery(monkeypatch):
-    """Regression guard for historical ``is_token_limit_exceeded(...) or True`` logic."""
-    from open_deep_research.workflow import reporting as module
-
-    install_sequence(monkeypatch, RuntimeError("provider unavailable"))
-
+    requests = install_sequence(monkeypatch, RuntimeError("provider unavailable"))
     with pytest.raises(ModelInvocationError, match="RuntimeError") as failure:
-        asyncio.run(module.section_writer(_writer_state(), _writer_config()))
+        asyncio.run(reporting.generate_final_report({"workflow": {"brief": "brand risk"}}, {}))
     assert str(failure.value.__cause__) == "provider unavailable"
-
-
-# 验证已识别超限错误仍触发上下文恢复。
-def test_token_limit_exception_still_enters_context_recovery(monkeypatch):
-    from open_deep_research.workflow import reporting as module
-
-    install_sequence(monkeypatch, _token_limit_error())
-
-    result = asyncio.run(module.section_writer(_writer_state(), _writer_config()))
-
-    budget = result["runtime"]["budget"]
-    # The failed real attempt is still budgeted, with no fabricated tokens.
-    assert budget["model_calls"] == 1
-    assert budget["total_tokens"] == 0
-    assert (
-        "Section 'Risk' was not written because the model context limit was reached."
-        in budget["degradation_reasons"]
-    )
+    assert failure.value.budget_usage["model_calls"] == len(requests) == 1
 
 
 # 验证超限识别依赖供应商错误特征，避免误判。
@@ -407,65 +357,44 @@ def test_token_limit_detection_is_specific_to_provider_errors():
 # ---------------------------------------------------------------------------
 
 
-# 验证兜底报告按令牌预算裁剪证据。
-def test_fallback_final_report_truncates_findings_by_token_budget(monkeypatch):
-    from open_deep_research.workflow import reporting as module
+def test_final_report_bounds_evidence_but_preserves_the_brief(monkeypatch):
+    from open_deep_research.budget import estimate_text_tokens
+    from open_deep_research.workflow import reporting
 
     requests = install_sequence(monkeypatch, "final report body")
     huge_findings = "evidence line with facts, sources and citations. " * 400
+    brief = "brand risk scope and every research constraint"
     state = {
-        "messages": [HumanMessage(content="brand risk question")],
         "agents": {"public_signal": {"report": huge_findings}},
-        "workflow": {"brief": "brand risk brief"},
-        "runtime": {"budget": {}},
+        "workflow": {"brief": brief},
     }
     config = {
         "configurable": {
             "budget_enabled": True,
-            "max_input_tokens": 400,
+            "max_input_tokens": 1600,
             "final_report_model_max_tokens": 100,
         }
     }
 
-    result = asyncio.run(module._fallback_report_generation(state, config))
+    result = asyncio.run(reporting.generate_final_report(state, config))
 
     assert "final report body" in result["report"]["final"]
-    assert (
-        "Truncated research findings to fit the remaining input token budget."
-        in (result["report"]["final"])
-    )
-    assert len(requests[0].prompt) < len(huge_findings)
+    [request] = requests
+    assert brief in request.prompt
+    assert "[Evidence context bounded;" in request.prompt
+    assert estimate_text_tokens(request.prompt) <= 1600
+    assert state["agents"]["public_signal"]["report"] == huge_findings
 
 
-# 验证最终报告超限恢复保留失败与成功请求的尝试次数。
-def test_final_report_context_recovery_counts_failed_and_successful_requests(
-    monkeypatch,
-):
-    """A context-limit request plus the successful retry are both budgeted."""
-    from open_deep_research.workflow import reporting as module
+def test_final_report_surfaces_context_limit_with_billed_usage(monkeypatch):
+    from open_deep_research.workflow import reporting
 
-    install_sequence(monkeypatch, _token_limit_error(), Reply("recovered report", 4, 2))
-    state = {
-        "messages": [HumanMessage(content="brand risk question")],
-        "agents": {"public_signal": {"report": "signal evidence"}},
-        "workflow": {"brief": "brand risk brief"},
-        "runtime": {"budget": {}},
-    }
-    config = {
-        "configurable": {
-            "final_report_model": "deepseek:deepseek-chat",
-            "final_report_model_max_tokens": 1000,
-        }
-    }
-
-    result = asyncio.run(module._fallback_report_generation(state, config))
-
-    assert "recovered report" in result["report"]["final"]
-    budget = result["runtime"]["budget"]
-    # First request hit the context limit, second succeeded: both are real requests.
-    assert budget["model_calls"] == 2
-    assert budget["input_tokens"] == 4
-    assert budget["total_tokens"] == 6
+    requests = install_sequence(monkeypatch, _token_limit_error())
+    with pytest.raises(ModelInvocationError) as failure:
+        asyncio.run(reporting.generate_final_report({"workflow": {"brief": "brand risk"}}, {}))
+    assert failure.value.context_limit
+    assert failure.value.budget_usage["model_calls"] == len(requests) == 1
+    assert failure.value.budget_usage["total_tokens"] == 0
 
 
 # ---------------------------------------------------------------------------
