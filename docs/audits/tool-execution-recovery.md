@@ -120,8 +120,10 @@ DBOS 的语义：**已提交的 Step 直接重放；未提交的 Step 可能重�
 | 去重与预算 | `test_duplicate_call_id_runs_the_business_function_once`、`test_tool_budget.py`（5 例）、`test_budget_isolation.py`（2 例） |
 | 已提交 Step | `test_committed_step_result_restores_without_rerunning`、`test_native_agent_replay.py`（4 参数） |
 | 未提交 Step（新增） | `test_read_tool_reruns_after_an_uncommitted_step_and_warns`、`test_protected_tool_never_reruns_after_an_uncommitted_step`、`test_idempotent_tool_receives_a_stable_idempotency_key` |
-| 状态与异常 | `test_tool_control_errors.py`（7 例）、`test_call_ledger.py`（10 例） |
-| MCP | `test_mcp_sdk_tools.py`（25 例），含取消排空与 read/protected 回执 |
+| 状态与异常 | `test_tool_control_errors.py`（12 例）、`test_call_ledger.py`（14 例） |
+| MCP | `test_mcp_sdk_tools.py`（15 例），含取消排空与 read/protected 回执 |
+
+以上 11 个模块合计 145 例通过。
 
 `test_sdk_runtime.py::test_duplicate_business_tool_names_are_rejected_before_execution` 随 Runtime 的重复校验一起移除；同一条断言由 `test_business_tools.py::test_tool_manager_rejects_duplicate_tool_names` 在装配边界继续保证。
 
