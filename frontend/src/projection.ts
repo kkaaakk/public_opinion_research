@@ -47,7 +47,7 @@ export const PHASES = [
   {
     id: 'reporting',
     label: 'Report Generation',
-    detail: '章节 / 最终报告 / 记忆',
+    detail: '综合生成 Markdown 终稿',
     steps: [
       'generate_final_report',
       'section_writer',
@@ -315,19 +315,20 @@ export function projectRun(
     NodeStatus
   >;
   statuses.approval = approval;
+  const unifiedPlan = instances.some((i) => i.step === 'plan_research');
+  // Include compilation when replaying a run that recorded the legacy step.
+  const synthesisSteps = ['generate_final_report', 'compile_final_report'].filter((step) =>
+    instances.some((i) => i.step === step),
+  );
   for (const p of PHASES) {
     if (p.id === 'approval') continue;
-    // Historical phase steps remain readable; current execution only waits for
-    // the active pipeline's actual steps, not retired or optional writers.
-    const unifiedPlan = instances.some((i) => i.step === 'plan_research');
-    const synthesis = instances.some((i) => i.step === 'generate_final_report');
     const steps =
       p.id === 'planning' && unifiedPlan
         ? ['plan_research']
         : p.id === 'intake' && unifiedPlan
           ? ['enrich_query_images']
-          : p.id === 'reporting' && synthesis
-            ? ['generate_final_report', 'compile_final_report']
+          : p.id === 'reporting' && synthesisSteps.includes('generate_final_report')
+            ? synthesisSteps
             : p.steps;
     const latest = steps.map((step) => instances.findLast((i) => i.step === step));
     const values = latest.map((i) => i?.status ?? 'waiting');
