@@ -4,6 +4,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.exc import SQLAlchemyError
 from test_tool_budget import _executor
 
@@ -202,7 +203,8 @@ def _record(status):
     )
 
 
-def test_the_executor_settles_the_ledger_outcome(monkeypatch):
+def _settlement(monkeypatch, observed):
+    """Settle one observed call with the ledger write captured, not stored."""
     calls = []
     monkeypatch.setattr(
         tool_executor, "finish_tool_call", lambda *args: calls.append(args)
@@ -210,11 +212,30 @@ def test_the_executor_settles_the_ledger_outcome(monkeypatch):
     executor = _executor(_config(budget_enabled=True, max_tool_calls=1))
     token = stage_context.set(SimpleNamespace(run_id="run-1"))
     try:
-        asyncio.run(executor._settle_call(_record("returned")))
+        asyncio.run(executor._settle_call(_record(observed)))
     finally:
         stage_context.reset(token)
+    return calls
+
+
+def test_a_succeeded_tool_call_settles_as_returned(monkeypatch):
+    # The Harness reports ``succeeded``; the ledger's success terminal is
+    # ``returned``. Passing the Harness status through left rows at 'admitted'.
+    calls = _settlement(monkeypatch, "succeeded")
 
     assert [(args[0], args[2]) for args in calls] == [("run-1", "returned")]
+
+
+@pytest.mark.parametrize("observed", ["failed", "cancelled"])
+def test_failed_and_cancelled_calls_keep_their_ledger_status(monkeypatch, observed):
+    calls = _settlement(monkeypatch, observed)
+
+    assert [(args[0], args[2]) for args in calls] == [("run-1", observed)]
+
+
+@pytest.mark.parametrize("observed", ["unobserved", "running"])
+def test_an_unsettled_observation_is_never_written_as_success(monkeypatch, observed):
+    assert _settlement(monkeypatch, observed) == []
 
 
 def test_a_settlement_write_failure_never_masks_the_tool(monkeypatch, caplog):

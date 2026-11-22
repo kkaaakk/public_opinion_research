@@ -38,7 +38,6 @@ from open_deep_research.tools import tool_result_text
 from open_deep_research.tools.registry import tool_effect
 from open_deep_research.web.run_data import digest
 from open_deep_research.workflow.execution import (
-    TOOL_CALL_OUTCOMES,
     ExecutionControlError,
     admit_tool_call,
     commit_receipt,
@@ -65,6 +64,15 @@ if TYPE_CHECKING:
 tool_usage: ContextVar[dict | None] = ContextVar("tool_usage", default=None)
 
 LOGGER = logging.getLogger(__name__)
+
+# The Harness reports what the SDK observed; the ledger stores the durable
+# outcome. ``unobserved`` and ``running`` have no outcome and never settle a
+# call, so they are absent here instead of defaulting to success.
+LEDGER_STATUS = {
+    "succeeded": "returned",
+    "failed": "failed",
+    "cancelled": "cancelled",
+}
 
 
 class _ToolRejected(Exception):
@@ -350,14 +358,15 @@ class ToolExecutor:
         record cannot change the tool's own success, failure or cancellation.
         """
         scope = stage_context.get()
-        if scope is None or record.status not in TOOL_CALL_OUTCOMES:
+        status = LEDGER_STATUS.get(record.status)
+        if scope is None or status is None:
             return
         try:
             recorded, _ = await owned_io(
                 finish_tool_call,
                 scope.run_id,
                 self.ledger_id(record.tool_call_id),
-                record.status,
+                status,
             )
         except Exception:  # noqa: BLE001 - the journal owns the tool outcome
             LOGGER.warning("Could not record tool call outcome.", exc_info=True)
