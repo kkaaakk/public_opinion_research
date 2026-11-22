@@ -1,4 +1,4 @@
-"""Exercise all four business roles through the real offline SDK Runner."""
+"""Exercise both research agents through the real offline SDK Runner."""
 
 import asyncio
 from dataclasses import replace
@@ -130,7 +130,7 @@ def _runtime(
 
 
 @pytest.mark.parametrize("role", ROLES)
-def test_four_roles_execute_sdk_model_tool_model_with_contracts(role):
+def test_research_agents_execute_sdk_model_tool_model_with_contracts(role):
     invoked = []
 
     async def search(query: str, limit: int = 3):

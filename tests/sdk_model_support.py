@@ -24,6 +24,7 @@ class InferenceRequest:
     schema_name: str | None
     function_name: str | None
     instructions: str | None
+    tools: list[Any]
 
     @property
     def messages(self):
@@ -97,6 +98,7 @@ def install_inference(patch, respond, *, open_model=None):
                     schema_name,
                     function_name,
                     system_instructions,
+                    kwargs["tools"],
                 )
                 reply = respond(request)
                 if inspect.isawaitable(reply):

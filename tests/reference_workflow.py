@@ -351,7 +351,7 @@ class PythonWorkflow:
                 await begin(f"{role}_agent")
                 patch = await _step(
                     f"{role}_agent",
-                    getattr(research, f"{role}_agent"),
+                    getattr(research, role),
                     role_snapshot(state, role),
                     config,
                     timeout,

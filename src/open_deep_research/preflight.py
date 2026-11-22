@@ -470,7 +470,7 @@ def _check_budget_and_timeouts(
                 ERROR,
                 "budget",
                 f"max_model_calls below {_MIN_RUN_MODEL_CALLS} cannot complete "
-                "the four-role workflow and final report.",
+                "the research, analysis, and final report stages.",
             )
         if not configuration.reserve_final_report_call:
             report.add(

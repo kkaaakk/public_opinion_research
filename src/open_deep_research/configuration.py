@@ -271,7 +271,7 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "text",
                 "default": DEFAULT_PUBLIC_OPINION_AGENTS,
-                "description": "Comma-separated business sub-agent roles available in public_opinion_risk mode.",
+                "description": "Comma-separated research and analysis roles to enable in the public-opinion workflow.",
             }
         },
     )

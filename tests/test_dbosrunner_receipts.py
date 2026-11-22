@@ -52,8 +52,8 @@ def test_finished_receipt_retries_control_only(
         run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
     )
     assert injected and done["status"] == "completed", done["error"]
-    assert done["usage"]["model_calls"] == 26 and done["usage"]["total_tokens"] == 291
-    assert sum(len(m.calls) for m in case.models) == 6
+    assert done["usage"]["model_calls"] == 18 and done["usage"]["total_tokens"] == 203
+    assert sum(len(m.calls) for m in case.models) == 4
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
     events = case.client.read_events(run["run_id"], "alice", 0, 1000)
     returned = [

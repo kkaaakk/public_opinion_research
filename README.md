@@ -1,8 +1,8 @@
 # 🔬 Public Opinion Research
 
-> 当前应用版本为 `por-sdk-models-v1`。研究经过 Plan、可恢复澄清和 Brief 审批，再进入四角色研究及 Review/Gap，默认生成一份综合报告。 [Brief 合同](docs/architecture/research-brief.md)
+> 当前应用版本为 `por-research-agents-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，风险和策略依次通过模型生成，最后默认生成一份综合报告。 [Brief 合同](docs/architecture/research-brief.md)
 
-基于 DBOS、OpenAI Agents SDK、RAG、MCP 和四角色协作的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了企业知识 RAG、舆情分析、社交媒体监控和可追溯来源记录等能力。
+基于 DBOS、OpenAI Agents SDK、RAG 和 MCP 的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了企业知识 RAG、舆情分析、社交媒体监控和可追溯来源记录等能力。
 
 ## 当前架构
 
@@ -163,7 +163,7 @@ src/open_deep_research/
 ├── budget.py                   # 预算守卫
 ├── workflow/                   # DBOS 编排、持久步骤、纯状态归并与业务服务
 ├── runtime/                    # SDK Runner 装配、Context Harness 与滚动压缩
-├── public_opinion_agents/      # 四个业务角色、提示词、权限与输出合同
+├── public_opinion_agents/      # 两个研究 Agent 的提示词、权限与输出合同
 ├── rag/                        # 企业知识加载、索引、向量/关键词检索与重排
 ├── models/                     # 共享 SDK Model 工厂与供应商协议
 ├── llm/                        # 有界 SDK 生成、上下文窗口和错误处理
@@ -182,15 +182,15 @@ src/open_deep_research/
 
 | 角色 | `config.yaml` 默认模型 | 说明 |
 |------|------------------------|------|
-| Research / Plan / Review | `deepseek:deepseek-flash` | 四角色 Agent、Brief 与 Review |
+| Research / Plan / Review / Analysis | `deepseek:deepseek-flash` | 双研究 Agent、Brief、Review、风险评估与回应策略 |
 | Compression | `deepseek:deepseek-flash` | 研究内容压缩 |
 | Final Report | `deepseek:deepseek-flash` | 最终报告生成 |
 | Summarization / RAG rewrite / Rolling compaction | `volcengine:doubao-seed-2-0-mini-260428` | 高频辅助调用 |
 | Vision | `volcengine:doubao-seed-2-0-mini-260428` | 图片理解与 RAG 多模态 |
 
-模型引用采用 `provider:model` 格式，各任务从 `config.yaml` 读取模型。四角色 Agent
-由 DBOSRunner 完成多轮推理和工具调用。规划、报告、图片识别、RAG 改写和摘要直接调用
-SDK Model，由 DBOS 保留运行中的调用结果。两条路径通过 `sdk_model()` 创建模型，
+模型引用采用 `provider:model` 格式，各任务从 `config.yaml` 读取模型。两个研究 Agent
+由 DBOSRunner 完成多轮推理和工具调用。规划、Review、风险评估、回应策略、报告、
+图片识别、RAG 改写和摘要直接调用 SDK Model。DBOS 保留工作流中的调用结果。两条路径通过 `sdk_model()` 创建模型，
 共享预算准入和 Usage 记账。`por doctor` 检查这些模型的供应商、地址及凭据配置。
 [供应商兼容范围](docs/architecture/model-providers.md)
 

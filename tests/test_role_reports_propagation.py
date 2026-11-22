@@ -3,13 +3,14 @@
 import asyncio
 from contextlib import asynccontextmanager
 
+import pytest
 from agents.testing import ScriptedModel, assistant_message
 from sdk_model_support import install_sequence
 from test_sdk_runtime import _tool
 
 import open_deep_research.runtime.business_agent as business_agent_module
-from open_deep_research.state import Section, agents_reducer
-from open_deep_research.workflow import reporting
+from open_deep_research.state import ResearchReview, Section, agents_reducer
+from open_deep_research.workflow import reporting, research
 
 
 # 构造报告传播测试使用的舆情配置。
@@ -76,37 +77,68 @@ def test_parallel_role_reports_merge_by_role() -> None:
 
 
 # 验证风险角色收到完整上游报告。
-def test_risk_assessment_assignment_uses_full_upstream_reports() -> None:
+def test_risk_assessment_uses_full_upstream_reports_and_review(monkeypatch) -> None:
     public_report = "P" * 13_000 + "\nPUBLIC_TAIL"
-    assignment = business_agent_module._build_business_agent_assignment(
-        {
-            "workflow": {"brief": "brand risk", "round": 1},
-            "agents": {
-                "public_signal": {"report": public_report},
-                "internal_knowledge": {"report": "INTERNAL_FACTS"},
+    requests = install_sequence(monkeypatch, "verified claims and risk register")
+    result = asyncio.run(
+        research.risk_assessment(
+            {
+                "workflow": {
+                    "brief": "APPROVED_BRIEF",
+                    "round": 2,
+                    "review": ResearchReview(
+                        research_complete=False, unresolved_claims=["REVIEW_GAP"]
+                    ),
+                },
+                "agents": {
+                    "public_signal": {"report": public_report},
+                    "internal_knowledge": {"report": "INTERNAL_FACTS"},
+                },
             },
-        },
-        "risk_assessment",
+            {"configurable": {"research_model": "openai:fixture-risk", "research_model_max_tokens": 900}},
+        )
     )
-    assert "PUBLIC_TAIL" in assignment
-    assert "INTERNAL_FACTS" in assignment
+    [request] = requests
+    assert request.model_ref == "openai:fixture-risk" and request.max_tokens == 900
+    assert request.schema_name is None and request.tools == []
+    data = request.messages[-1]["content"]
+    assert all(text in data for text in (public_report, "INTERNAL_FACTS", "APPROVED_BRIEF", "REVIEW_GAP"))
+    assert result["agents"] == {"risk_assessment": {"report": "verified claims and risk register"}}
+    assert result["runtime"]["budget"]["model_calls"] == 1
+    assert result["runtime"]["budget"]["total_tokens"] == 10
 
 
 # 验证策略角色收到完整风险报告。
-def test_response_strategy_assignment_uses_full_risk_report() -> None:
+def test_response_strategy_uses_full_risk_report(monkeypatch) -> None:
     risk_report = "R" * 13_000 + "\nRISK_TAIL"
-    assignment = business_agent_module._build_business_agent_assignment(
-        {
-            "workflow": {"brief": "brand risk", "round": 1},
-            "agents": {
-                "public_signal": {"report": "PUBLIC"},
-                "internal_knowledge": {"report": "INTERNAL"},
-                "risk_assessment": {"report": risk_report},
+    requests = install_sequence(monkeypatch, "response priorities and monitoring")
+    result = asyncio.run(
+        research.response_strategy(
+            {
+                "workflow": {"brief": "APPROVED_BRIEF", "round": 1},
+                "agents": {
+                    "public_signal": {"report": "PUBLIC_EVIDENCE"},
+                    "internal_knowledge": {"report": "INTERNAL_PLAYBOOK"},
+                    "risk_assessment": {"report": risk_report},
+                },
             },
-        },
-        "response_strategy",
+            {"configurable": {"research_model": "openai:fixture-strategy"}},
+        )
     )
-    assert "RISK_TAIL" in assignment
+    [request] = requests
+    assert request.model_ref == "openai:fixture-strategy"
+    assert request.schema_name is None and request.tools == []
+    data = request.messages[-1]["content"]
+    assert all(text in data for text in (risk_report, "PUBLIC_EVIDENCE", "INTERNAL_PLAYBOOK", "APPROVED_BRIEF"))
+    assert result["agents"] == {"response_strategy": {"report": "response priorities and monitoring"}}
+    assert result["runtime"]["budget"]["model_calls"] == 1
+
+
+@pytest.mark.parametrize("analyze", [research.risk_assessment, research.response_strategy])
+def test_disabled_analysis_does_not_open_a_model(monkeypatch, analyze):
+    requests = install_sequence(monkeypatch)
+    assert asyncio.run(analyze({}, _public_opinion_config("public_signal"))) == {}
+    assert not requests
 
 
 # 验证章节写作使用完整正式报告。

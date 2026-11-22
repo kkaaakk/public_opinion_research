@@ -42,11 +42,17 @@ def test_main_graph_contract():
 
 
 def test_research_subgraph_contract():
-    from open_deep_research.workflow.python_state import RESEARCH_ROLES
+    from open_deep_research.workflow.python_state import ANALYSIS_ROLES, RESEARCH_ROLES
 
     assert RESEARCH_ROLES == ("public_signal", "internal_knowledge")
+    assert ANALYSIS_ROLES == ("risk_assessment", "response_strategy")
     source = (SOURCE_ROOT / "workflow/dbos_workflow.py").read_text(encoding="utf-8")
-    assert 'for role in ("risk_assessment", "response_strategy"):' in source
+    assert (
+        source.index('packets = reviewed["followup"]')
+        < source.index("research.risk_assessment")
+        < source.index("research.response_strategy")
+        < source.index('with SetWorkflowID(run_id + ":report"):')
+    )
     assert source.index(
         "assemble_research_results(state, results, packets)"
     ) < source.index('round_ = state["workflow"]["round"]')

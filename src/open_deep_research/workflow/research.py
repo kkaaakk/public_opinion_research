@@ -6,10 +6,17 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
+from open_deep_research.budget import (
+    ModelBudgetExceeded,
+    budget_usage_with_reason,
+    require_physical_model_budget,
+)
 from open_deep_research.configuration import Configuration
-from open_deep_research.llm.generation import generate_structured
+from open_deep_research.llm.generation import generate_structured, generate_text
 from open_deep_research.prompts import (
     research_review_prompt,
+    response_strategy_prompt,
+    risk_assessment_prompt,
 )
 from open_deep_research.runtime import run_business_agent
 from open_deep_research.state import (
@@ -18,14 +25,18 @@ from open_deep_research.state import (
     ResearchRoleResult,
     ResearchTask,
 )
+from open_deep_research.time_utils import get_today_str
+from open_deep_research.workflow.python_state import RESEARCH_ROLES
 from open_deep_research.workflow.state_utils import (
     agents_state,
+    business_context,
     coerce_research_review,
     coerce_research_task,
     coerce_research_tasks,
     report_state,
     research_task_identity,
     research_task_payload,
+    role_context,
     role_reports,
     runtime_state,
     workflow_state,
@@ -33,15 +44,13 @@ from open_deep_research.workflow.state_utils import (
 
 LOGGER = logging.getLogger(__name__)
 
-_RESEARCH_TASK_ROLES = ("public_signal", "internal_knowledge")
-
 
 # 取得已启用且支持补充研究的公众信号、内部知识角色集合。
 def _enabled_research_roles(configurable: Configuration) -> set[str]:
     """Return enabled roles that can execute dynamic follow-up research."""
     enabled = configurable.enabled_business_agents or []
     normalized = {str(role).strip().lower() for role in enabled}
-    return normalized.intersection(_RESEARCH_TASK_ROLES)
+    return normalized.intersection(RESEARCH_ROLES)
 
 
 # 过滤不可执行、已完成、重复或描述不完整的任务，并遵守研究轮次上限。
@@ -66,7 +75,7 @@ def _effective_followup_tasks(
     effective_tasks: list[ResearchTask] = []
     for raw_task in review.next_tasks:
         task = coerce_research_task(raw_task)
-        if task is None or task.target_role not in _RESEARCH_TASK_ROLES:
+        if task is None or task.target_role not in RESEARCH_ROLES:
             continue
         if task.target_role not in _enabled_research_roles(configurable):
             continue
@@ -178,12 +187,9 @@ def followup_assignments(
     next_round = max(1, int(workflow_state(state).get("round", 1) or 1)) + 1
     return {
         role: _build_followup_send_payload(state, tasks, next_round)
-        for role in _RESEARCH_TASK_ROLES
+        for role in RESEARCH_ROLES
         if (tasks := [task for task in effective_tasks if task.target_role == role])
     }
-
-
-# 仅让由补充 Send 启动的角色回到复核节点。
 
 
 # 执行公众信号角色，收集新闻、社交、投诉、竞争与传播证据。
@@ -204,22 +210,77 @@ async def internal_knowledge_agent(
     )
 
 
-# 执行风险角色，核验主张并评估合规、法律及产品风险。
-async def risk_assessment_agent(
-    state: DeepResearchState, config: RunnableConfig
-) -> dict:
-    """Verify claims and assess compliance, legal, and product-risk signals."""
-    return await run_business_agent(role="risk_assessment", state=state, config=config)
+async def _generate_analysis(
+    state: DeepResearchState,
+    config: RunnableConfig,
+    *,
+    role: str,
+    prompt: str,
+    upstream_roles: tuple[str, ...],
+) -> dict[str, Any]:
+    configurable = Configuration.from_runnable_config(config)
+    if role not in (configurable.enabled_business_agents or []):
+        return {}
+
+    workflow = workflow_state(state)
+    reports = role_context(role_reports(state), upstream_roles)
+    review = coerce_research_review(workflow.get("review"))
+    review_text = review.model_dump_json(indent=2) if review else "No research review."
+    inputs = [
+        {"role": "system", "content": prompt},
+        {
+            "role": "user",
+            "content": (
+                f"Research date: {get_today_str(config)}\n"
+                f"Organization context: {business_context(configurable)}\n\n"
+                f"# Research Brief\n{workflow.get('brief', '')}\n\n"
+                f"# Upstream research and analysis\n{reports}\n\n"
+                f"# Latest Research Review\n{review_text}"
+            ),
+        },
+    ]
+    try:
+        require_physical_model_budget(
+            configurable,
+            runtime_state(state).get("budget", {}),
+            {},
+            reserve_report=True,
+        )
+        report, usage = await generate_text(
+            configurable.research_model,
+            inputs,
+            config=config,
+            max_tokens=configurable.research_model_max_tokens,
+            component=role,
+        )
+    except ModelBudgetExceeded:
+        # As with the research roles, leave an explicit gap and preserve the
+        # final report reserve. Native generation still admits every actual call.
+        report = (
+            f"{role.replace('_', ' ').capitalize()} unavailable because the "
+            "research model budget was exhausted."
+        )
+        usage = budget_usage_with_reason(report)
+    return {"agents": {role: {"report": report}}, "runtime": {"budget": usage}}
 
 
-# 执行策略角色，生成回应口径、FAQ、处置行动和监测词。
-async def response_strategy_agent(
-    state: DeepResearchState, config: RunnableConfig
-) -> dict:
-    """Create PR response posture, FAQ points, actions, and monitoring keywords."""
-    return await run_business_agent(
-        role="response_strategy", state=state, config=config
+async def risk_assessment(state: DeepResearchState, config: RunnableConfig) -> dict:
+    """Assess claims and risks from the reviewed research."""
+    return await _generate_analysis(
+        state,
+        config,
+        role="risk_assessment",
+        prompt=risk_assessment_prompt,
+        upstream_roles=RESEARCH_ROLES,
     )
 
 
-# 运行首轮及缺口驱动的研究子图，汇总结果交给报告阶段。
+async def response_strategy(state: DeepResearchState, config: RunnableConfig) -> dict:
+    """Create PR response posture, FAQ points, actions, and monitoring keywords."""
+    return await _generate_analysis(
+        state,
+        config,
+        role="response_strategy",
+        prompt=response_strategy_prompt,
+        upstream_roles=(*RESEARCH_ROLES, "risk_assessment"),
+    )
