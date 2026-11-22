@@ -145,6 +145,7 @@ class SDKContextHarness(RunHooks):
         self.tool_executor: Any | None = None
         self._started = False
         self._closing = False
+        self.model_name: str | None = None
         self._model_started_at: float | None = None
         self._agent_started_at: float | None = None
         self._tool_started_at: dict[str, float] = {}
@@ -373,6 +374,13 @@ class SDKContextHarness(RunHooks):
     ) -> None:
         """Confirm the invocation boundary before any model or local tool runs."""
         self._check(context.context)
+        # Responses spans omit the model name when sensitive data is disabled.
+        model = agent.model
+        for _ in range(4):
+            if isinstance(model, str):
+                self.model_name = model
+                break
+            model = getattr(model, "model", None)
         self._agent_started_at = time.monotonic()
         await self._observe("agent_started")
 

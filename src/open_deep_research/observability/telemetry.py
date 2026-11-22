@@ -396,14 +396,9 @@ class SDKUsageEnrichment(TracingProcessor):
             ):
                 return  # SDK zero defaults do not prove provider token usage.
             values = {}
-            harness = _harness.get()
             model = getattr(span.span_data, "model", None) or getattr(
-                getattr(harness, "_agent", None), "model", None
+                _harness.get(), "model_name", None
             )
-            for _ in range(4):
-                if isinstance(model, str):
-                    break
-                model = getattr(model, "model", None)
             if isinstance(model, str):
                 values["llm.model_name"] = model
             for source, target in (
