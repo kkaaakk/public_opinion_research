@@ -150,13 +150,6 @@ def get_domain(name: str) -> DomainDef | None:
     return _DOMAIN_BY_NAME.get(name)
 
 
-# 获取领域的简短说明，供动态工具提示使用。
-def get_domain_description(name: str) -> str:
-    """Return the one-line description for *name*."""
-    dom = _DOMAIN_BY_NAME.get(name)
-    return dom.description if dom else ""
-
-
 # 获取领域面向模型或用户的可读标题。
 def get_domain_label(name: str) -> str:
     """Return the human-readable label for *name*."""
@@ -232,14 +225,3 @@ def classify_tools(tools: list) -> dict[str, list]:
         domain = _tool_domain(tool)
         buckets.setdefault(domain, []).append(tool)
     return buckets
-
-
-# 把领域分组结果整理为可读的工具摘要。
-def tool_domain_summary(tools: list) -> str:
-    """Return a human-readable summary of tools grouped by domain."""
-    buckets = classify_tools(tools)
-    lines: list[str] = []
-    for domain in sorted(buckets):
-        names = sorted(t.name for t in buckets[domain])
-        lines.append(f"  [{domain}] {', '.join(names)}")
-    return "\n".join(lines)

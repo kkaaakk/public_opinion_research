@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from functools import partial
 from typing import Any
 
@@ -153,7 +154,7 @@ async def _business_agent_tools(
     config: RunnableConfig,
     role: str,
     spec: Any | None = None,
-) -> list[Any]:
+) -> list[BusinessTool]:
     spec = spec or get_public_opinion_agent_spec(role)
     return await ToolManager(role, spec, config).discover()
 
@@ -257,7 +258,8 @@ async def _compress_research(
 
 
 # 将模型与工具目录表示为可比较的持久化快照。
-def _tool_catalog(tools: list[Any]) -> list[dict[str, Any]]:
+def _tool_catalog(tools: Iterable[BusinessTool]) -> list[dict[str, Any]]:
+    """Render the admitted declarations as the comparable ``por.role_tools`` catalog."""
     return [
         {
             "name": tool.name,
@@ -266,18 +268,21 @@ def _tool_catalog(tools: list[Any]) -> list[dict[str, Any]]:
             "schema": tool.sdk_tool.params_json_schema,
             "effect": tool_effect(tool),
         }
-        if isinstance(tool, BusinessTool)
-        else tool
         for tool in tools
     ]
 
 
 def _restore_role_tools(admitted, tools):
+    """Fence a resumed Run to the tool definitions it was admitted with.
+
+    A journal catalog without ``effect`` predates the field but describes the
+    same declarations; every current tool, including protected MCP servers,
+    states its effect itself. Anything else changed is a real definition change
+    and must not be replayed under the old admission.
+    """
     current = _tool_catalog(tools)
     if admitted == current:
         return tools
-    # Existing journals used the same catalog without effect. Every current
-    # tool already declares its effect, including protected MCP servers.
     if admitted != [
         {key: value for key, value in entry.items() if key != "effect"}
         for entry in current

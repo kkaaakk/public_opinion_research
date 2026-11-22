@@ -9,6 +9,7 @@ from test_sdk_runtime import _tool
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.runtime import tool_executor
+from open_deep_research.runtime.sdk_context import ObservedToolResult
 from open_deep_research.runtime.sdk_runtime import _RunBudget
 from open_deep_research.runtime.tool_executor import ToolExecutor, _ToolRejected
 from open_deep_research.workflow.execution import ExecutionControlError, stage_context
@@ -26,10 +27,21 @@ def _executor(config, *, initial=None):
     )
 
 
+def _record(call_id="call-1"):
+    return ObservedToolResult(
+        sdk_run_id="SDK_run_public_signal",
+        tool_call_id=call_id,
+        tool_name="web_search",
+        arguments_json='{"query":"q"}',
+        args={"query": "q"},
+        model_turn=0,
+    )
+
+
 def _in_scope(executor, call_id="call-1"):
     token = stage_context.set(SimpleNamespace(run_id="run-1"))
     try:
-        asyncio.run(executor._admit("web_search", call_id))
+        asyncio.run(executor._admit(_record(call_id)))
     finally:
         stage_context.reset(token)
 
@@ -39,7 +51,7 @@ def test_run_admission_accepts_and_charges_one_call(monkeypatch):
 
     def allow(*args):
         calls.append(args)
-        return True
+        return "admitted"
 
     monkeypatch.setattr(tool_executor, "admit_tool_call", allow)
     executor = _executor(
@@ -60,7 +72,7 @@ def test_run_admission_accepts_and_charges_one_call(monkeypatch):
 
 def test_run_admission_rejection_returns_an_ordinary_tool_error(monkeypatch):
     def deny(*args):
-        return False
+        return "rejected"
 
     monkeypatch.setattr(tool_executor, "admit_tool_call", deny)
     executor = _executor(
@@ -95,7 +107,7 @@ def test_unbounded_tool_limits_still_record_the_call(monkeypatch):
 
     def allow(*args):
         calls.append(args)
-        return True
+        return "admitted"
 
     monkeypatch.setattr(tool_executor, "admit_tool_call", allow)
     executor = _executor(
@@ -117,7 +129,7 @@ def test_disabled_budget_still_records_the_call(monkeypatch):
 
     def allow(*args):
         calls.append(args)
-        return True
+        return "admitted"
 
     monkeypatch.setattr(tool_executor, "admit_tool_call", allow)
     executor = _executor(

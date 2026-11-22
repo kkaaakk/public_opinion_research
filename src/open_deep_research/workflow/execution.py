@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from itertools import count
-from typing import Any
+from typing import Any, Literal
 
 from dbos import DBOS
 from dbos import error as dbos_error
@@ -35,6 +35,10 @@ owned_cleanup: ContextVar[bool] = ContextVar("owned_cleanup", default=False)
 
 # Outcomes the tool ledger stores after admission; a call keeps its allowance.
 TOOL_CALL_OUTCOMES = frozenset({"returned", "failed", "cancelled"})
+
+# ``admitted`` charged this call once, ``duplicate`` means an earlier attempt
+# already recorded the same logical call, ``rejected`` left no row behind.
+ToolAdmission = Literal["admitted", "duplicate", "rejected"]
 
 
 class ExecutionControlError(RuntimeError):
@@ -367,21 +371,32 @@ def start_operation(
             ).rowcount
             != 1
         ):
-            raise unconfirmed("External tool was already admitted; inspect its receipt")
+            # The receipt, not the tool-call status, is what survives a crash
+            # here. It proves the effect was admitted, never what it returned.
+            raise unconfirmed(
+                "External tool already ran for this call; its receipt is authoritative "
+                "and the response was not journaled"
+            )
 
 
 def admit_tool_call(
     configurable, run_id, workflow_id, executor_id, call_id, name, search
-):
+) -> ToolAdmission:
     """Admit and record one tool call against the Run-wide tool/search ceiling.
 
     The record is the authority for how often a tool ran, so it is written for
     every admitted call whether or not budget enforcement is enabled; the
     configured ceiling only decides whether the call is allowed. The request row
     lock serializes concurrent Producers. A repeated call identity returns
-    without charging again, so DBOS recovery of an uncommitted ``por.agent_tool``
-    Step cannot consume a second allowance, and a committed row means the call
-    stays charged whatever its later outcome. A rejected call leaves no row.
+    ``duplicate`` without charging again, so DBOS recovery of an uncommitted
+    ``por.agent_tool`` Step cannot consume a second allowance, and a committed
+    row means the call stays charged whatever its later outcome. A rejected call
+    leaves no row.
+
+    ``duplicate`` is also the only reliable evidence that an earlier attempt
+    reached this call: the Step that would have committed its result is gone, so
+    the provider may see the request again. The caller decides what that risk
+    means for the tool's declared effect.
     """
     from open_deep_research.budget import can_spend_tool_call
 
@@ -393,7 +408,7 @@ def admit_tool_call(
             text("SELECT 1 FROM por_domain.tool_calls WHERE run_id=:r AND id=:id"),
             keys,
         ):
-            return True
+            return "duplicate"
         calls, searches = db.execute(
             text(
                 "SELECT count(*), count(*) FILTER (WHERE search) "
@@ -403,7 +418,7 @@ def admit_tool_call(
         ).one()
         usage = {"tool_calls": int(calls), "search_calls": int(searches)}
         if not can_spend_tool_call(configurable, usage, increment):
-            return False
+            return "rejected"
         db.execute(
             text(
                 "INSERT INTO por_domain.tool_calls(run_id, id, name, search) "
@@ -411,7 +426,7 @@ def admit_tool_call(
             ),
             dict(keys, name=name, search=increment["search_calls"] > 0),
         )
-        return True
+        return "admitted"
 
 
 def finish_tool_call(run_id, tool_call_id, status):

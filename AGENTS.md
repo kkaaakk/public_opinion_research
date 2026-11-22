@@ -62,6 +62,21 @@ workflow engine, multi-tenant identity and cross-service exactly-once guarantees
 remain outside this migration. Read `docs/architecture/agent-loop.md` and the historical
 `docs/architecture/dbosrunner-unification.md` before changing these boundaries; domain report projections must never resume work.
 
+The tool layer has four owners and no adapter between them: `@business_tool`
+declares one SDK `FunctionTool` plus its trusted `domain`/`effect`,
+`ToolManager.discover()`/`bind()` admit and bind a role's catalog,
+`ToolExecutor` owns permission, budget admission, `por.agent_tool`,
+external-operation receipts and settlement, and DBOS journals the result.
+`SDKAgentRuntime` must not re-validate what discovery already proved;
+`ToolExecutor._authorize()` still re-reads the domain at invocation because that
+is the execution boundary, not the assembly one. An uncommitted tool Step can
+only be handled per effect: `read`/`idempotent` re-run with one ledger row and an
+explicit duplicate-request warning, `protected` fails closed when its Operation
+receipt already exists. Never add a response cache, a second executor or a
+per-effect hierarchy to narrow that window. Read
+`docs/audits/tool-execution-recovery.md` and `docs/architecture/tools.md` before
+changing tool admission, identity derivation or recovery.
+
 DeerFlow is retired. Its local environments, Docker deployment, branch
 `codex/deerflow-phase0` and tag `phase0-deerflow` were removed at the user's
 request. The original opinion project backup and `v1-pre-deerflow` remain.

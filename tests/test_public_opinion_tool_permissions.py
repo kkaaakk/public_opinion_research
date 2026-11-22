@@ -4,25 +4,25 @@
 import asyncio
 
 import pytest
+from agents.tool_context import ToolContext
 
 import open_deep_research.runtime.business_agent as business_agent_module
 from open_deep_research.mcp.domain_filter import get_tool_domain
 from open_deep_research.public_opinion_agents import PUBLIC_OPINION_AGENT_SPECS
+from open_deep_research.tools import BusinessTool, business_tool
 from open_deep_research.tools import manager as tool_manager_module
 from open_deep_research.tools.registry import get_all_tools
 
 
-# 提供带可控领域元数据的工具替身。
-class FixtureTool:
-    """Small tool-shaped fixture with optional domain metadata."""
+# 构造带可控领域声明的真实 BusinessTool 替身。
+def _declared(name: str, domain: str = "") -> BusinessTool:
+    """A genuine declaration; an empty domain models an unlabelled tool."""
 
-    # 保存工具名及测试领域标签。
-    def __init__(
-        self, name: str, domain: str | None = None, *, with_metadata: bool = True
-    ):
-        self.name = name
-        if with_metadata:
-            self.metadata = {} if domain is None else {"tool_domain": domain}
+    @business_tool(domain=domain, effect="read", name_override=name)
+    async def fixture(context: ToolContext, query: str) -> str:
+        return query
+
+    return fixture
 
 
 # 提取工具集合的名称，便于比较白名单。
@@ -58,17 +58,17 @@ def _patch_tool_source(monkeypatch, tools) -> None:
 def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
     """Public Signal cannot inherit database, Feishu, document, or RAG tools."""
     tools = [
-        FixtureTool("load_skill", "core"),
-        FixtureTool("web_search", "web_search"),
-        FixtureTool("rag_search", "rag"),
-        FixtureTool("db_query", "database"),
-        FixtureTool("feishu_send", "feishu"),
-        FixtureTool("document_convert", "document"),
-        FixtureTool("legacy_lookup", "external_mcp"),
+        _declared("load_skill", "core"),
+        _declared("web_search", "web_search"),
+        _declared("rag_search", "rag"),
+        _declared("db_query", "database"),
+        _declared("feishu_send", "feishu"),
+        _declared("document_convert", "document"),
+        _declared("legacy_lookup", "external_mcp"),
     ]
     _patch_tool_source(
         monkeypatch,
-        [*tools, FixtureTool("social_search", "social_media")],
+        [*tools, _declared("social_search", "social_media")],
     )
 
     filtered = asyncio.run(
@@ -89,13 +89,13 @@ def test_public_signal_gets_only_core_web_and_social_tools(monkeypatch) -> None:
 def test_internal_knowledge_gets_only_core_and_rag(monkeypatch) -> None:
     """Internal Knowledge cannot inherit public, database, or external MCP tools."""
     tools = [
-        FixtureTool("load_skill", "core"),
-        FixtureTool("rag_search", "rag"),
-        FixtureTool("web_search", "web_search"),
-        FixtureTool("social_search", "social_media"),
-        FixtureTool("db_query", "database"),
-        FixtureTool("feishu_send", "feishu"),
-        FixtureTool("external_lookup", "external_mcp"),
+        _declared("load_skill", "core"),
+        _declared("rag_search", "rag"),
+        _declared("web_search", "web_search"),
+        _declared("social_search", "social_media"),
+        _declared("db_query", "database"),
+        _declared("feishu_send", "feishu"),
+        _declared("external_lookup", "external_mcp"),
     ]
     _patch_tool_source(monkeypatch, tools)
 
@@ -126,9 +126,8 @@ def test_unknown_domain_is_denied_for_every_business_agent(
 ) -> None:
     """An unregistered domain cannot pass a role's allowlist fallback."""
     tools = [
-        FixtureTool("load_skill", "core"),
-        FixtureTool("unknown_tool", "unknown_domain"),
-        {"type": "function", "function": {"name": "anonymous_unknown"}},
+        _declared("load_skill", "core"),
+        _declared("unknown_tool", "unknown_domain"),
     ]
     _patch_tool_source(monkeypatch, tools)
 
@@ -140,12 +139,12 @@ def test_unknown_domain_is_denied_for_every_business_agent(
 # 验证缺少领域标签的工具默认不可用。
 def test_unlabeled_tool_is_denied_by_default(monkeypatch) -> None:
     """A normal tool without domain metadata is not exposed to a business agent."""
-    unlabeled = FixtureTool("ordinary_tool", with_metadata=False)
+    unlabeled = _declared("ordinary_tool")
     _patch_tool_source(
         monkeypatch,
         [
-            FixtureTool("load_skill", "core"),
-            FixtureTool("web_search", "web_search"),
+            _declared("load_skill", "core"),
+            _declared("web_search", "web_search"),
             unlabeled,
         ],
     )
@@ -161,12 +160,12 @@ def test_unlabeled_tool_is_denied_by_default(monkeypatch) -> None:
 def test_mcp_source_does_not_grant_public_signal_authorization(monkeypatch) -> None:
     """MCP tools are admitted by domain, not merely because they came from MCP."""
     tools = [
-        FixtureTool("load_skill", "core"),
-        FixtureTool("social_media_mcp_search", "social_media"),
-        FixtureTool("dbhub_query", "database"),
-        FixtureTool("feishu_send", "feishu"),
-        FixtureTool("markitdown_convert", "document"),
-        FixtureTool("legacy_mcp_tool", "external_mcp"),
+        _declared("load_skill", "core"),
+        _declared("social_media_mcp_search", "social_media"),
+        _declared("dbhub_query", "database"),
+        _declared("feishu_send", "feishu"),
+        _declared("markitdown_convert", "document"),
+        _declared("legacy_mcp_tool", "external_mcp"),
     ]
     _patch_tool_source(monkeypatch, tools)
 
@@ -210,21 +209,16 @@ def test_shared_loader_tags_known_builtin_domains() -> None:
     assert {"think_tool", "ResearchComplete"}.isdisjoint(loaded)
 
 
-# 验证动态与静态工具说明以及角色提示词都不再要求旧控制工具。
+# 验证动态工具说明与角色提示词都不再要求旧控制工具。
 def test_prompts_do_not_reference_retired_control_tools() -> None:
     from open_deep_research.configuration import Configuration
-    from open_deep_research.tools.registry import (
-        build_dynamic_tool_prompt,
-        get_research_tool_prompt,
-    )
+    from open_deep_research.tools.registry import build_dynamic_tool_prompt
 
     dynamic = build_dynamic_tool_prompt(
-        [FixtureTool("web_search", "web_search")], Configuration()
+        [_declared("web_search", "web_search")], Configuration()
     )
-    static = get_research_tool_prompt(Configuration())
-    for prompt in (dynamic, static):
-        assert "think_tool" not in prompt
-        assert "ResearchComplete" not in prompt
+    assert "think_tool" not in dynamic
+    assert "ResearchComplete" not in dynamic
 
     for role in PUBLIC_OPINION_AGENT_SPECS:
         rendered = PUBLIC_OPINION_AGENT_SPECS[role].format_system_prompt(

@@ -73,7 +73,7 @@ def test_two_producers_share_the_last_tool_allowance(pg_database, admit):
 
     admitted = _compete(config, run_id, ["producer-a", "producer-b"])
 
-    assert sorted(admitted) == [False, True]
+    assert sorted(admitted) == ["admitted", "rejected"]
     assert tuple(_counts(run_id)) == (1, 0)
 
 
@@ -86,7 +86,7 @@ def test_two_producers_share_the_last_search_allowance(pg_database, admit):
         config, run_id, ["producer-a", "producer-b"], search=True
     )
 
-    assert sorted(admitted) == [False, True]
+    assert sorted(admitted) == ["admitted", "rejected"]
     assert tuple(_counts(run_id)) == (1, 1)
 
 
@@ -95,9 +95,9 @@ def test_repeated_call_identity_is_not_charged_twice(pg_database, admit):
     _create_request(run_id)
     config = _configuration(max_tool_calls=1)
 
-    assert _admit(config, run_id, "same-call") is True
-    assert _admit(config, run_id, "same-call") is True
-    assert _admit(config, run_id, "next-call") is False
+    assert _admit(config, run_id, "same-call") == "admitted"
+    assert _admit(config, run_id, "same-call") == "admitted"
+    assert _admit(config, run_id, "next-call") == "rejected"
     assert tuple(_counts(run_id)) == (1, 0)
 
 
@@ -106,9 +106,9 @@ def test_distinct_call_ids_follow_the_real_allowance(pg_database, admit):
     _create_request(run_id)
     config = _configuration(max_tool_calls=2)
 
-    assert _admit(config, run_id, "call-a") is True
-    assert _admit(config, run_id, "call-b") is True
-    assert _admit(config, run_id, "call-c") is False
+    assert _admit(config, run_id, "call-a") == "admitted"
+    assert _admit(config, run_id, "call-b") == "admitted"
+    assert _admit(config, run_id, "call-c") == "rejected"
     assert tuple(_counts(run_id)) == (2, 0)
 
 
@@ -117,9 +117,9 @@ def test_non_search_calls_do_not_consume_the_search_allowance(pg_database, admit
     _create_request(run_id)
     config = _configuration(max_search_calls=1)
 
-    assert _admit(config, run_id, "lookup") is True
-    assert _admit(config, run_id, "search-a", search=True) is True
-    assert _admit(config, run_id, "search-b", search=True) is False
+    assert _admit(config, run_id, "lookup") == "admitted"
+    assert _admit(config, run_id, "search-a", search=True) == "admitted"
+    assert _admit(config, run_id, "search-b", search=True) == "rejected"
     assert tuple(_counts(run_id)) == (2, 1)
 
 
@@ -143,8 +143,8 @@ def test_disabled_budget_still_records_every_call(pg_database, admit):
     _create_request(run_id)
     config = Configuration(research_model="openai:fixture", budget_enabled=False)
 
-    assert _admit(config, run_id, "lookup", name="load_skill") is True
-    assert _admit(config, run_id, "search-a", search=True) is True
+    assert _admit(config, run_id, "lookup", name="load_skill") == "admitted"
+    assert _admit(config, run_id, "search-a", search=True) == "admitted"
 
     assert tuple(_counts(run_id)) == (2, 1)
     with domain_engine().connect() as db:
@@ -173,7 +173,7 @@ def test_operation_must_reference_an_admitted_tool_call(pg_database, admit):
                 {"r": run_id},
             )
 
-    assert _admit(config, run_id, "publish-call", name="publish") is True
+    assert _admit(config, run_id, "publish-call", name="publish") == "admitted"
     execution.start_operation(
         run_id, "role", "executor", "op-1", "publish-call", "publish", "fp"
     )

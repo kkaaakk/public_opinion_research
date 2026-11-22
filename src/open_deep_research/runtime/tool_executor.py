@@ -4,6 +4,22 @@ The SDK still owns tool declarations, argument validation and defaults. This
 executor owns admission, the ``por.agent_tool`` DBOS Step, committed-result
 recovery, in-flight de-duplication and the protected external-effect receipts.
 The Context Harness only records and projects the results it is handed back.
+
+Recovery follows the declared ``effect``, because a committed Step is the only
+proof that a call finished:
+
+* a committed ``por.agent_tool`` record is replayed without running the tool;
+* an uncommitted Step may run the tool again. ``read`` and ``idempotent`` tools
+  accept that: the ledger keeps one logical call, so no allowance is charged
+  twice, while the provider may receive the request twice. The duplicate is
+  reported as a budget warning instead of being hidden;
+* ``protected`` tools never run twice. Their Operation receipt must still match
+  this call, so a receipt left by an earlier attempt fails the Run closed for
+  reconciliation.
+
+There is no third state to recover from: the journal cannot prove a request
+that never committed, and this module does not add a response cache to pretend
+otherwise.
 """
 
 from __future__ import annotations
@@ -13,10 +29,10 @@ import json
 import logging
 from collections.abc import Callable
 from contextvars import ContextVar
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from functools import partial
 from inspect import iscoroutinefunction
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from agents import FunctionTool
 from agents.exceptions import MCPToolCancellationError
@@ -30,6 +46,7 @@ from open_deep_research.budget import (
     budget_capture,
     budget_from_tool_calls,
     budget_usage_with_reason,
+    budget_usage_with_warning,
     can_spend_tool_call,
 )
 from open_deep_research.configuration import Configuration
@@ -77,6 +94,23 @@ LEDGER_STATUS = {
 
 class _ToolRejected(Exception):
     """Return an ordinary tool error to the model."""
+
+
+@dataclass(frozen=True)
+class _Invocation:
+    """One SDK tool call: the facts every Step of that call needs.
+
+    Grouping them keeps the Step, the replay and the drain paths from threading
+    seven arguments through each other.
+    """
+
+    harness: SDKContextHarness
+    record: ObservedToolResult
+    tool: FunctionTool
+    context: ToolContext[Any]
+    arguments: str
+    previous: asyncio.Future[Any] | None
+    drain_on_cancel: bool
 
 
 def _result_text(name: str, output: Any) -> str:
@@ -153,22 +187,16 @@ class ToolExecutor:
         """Run one SDK tool call through the native ``por.agent_tool`` Step."""
         harness = context.context
         record = harness.start_tool(context)
-        call_id = record.tool_call_id
-        previous = self._tool_calls.get(call_id)
+        previous = self._tool_calls.get(record.tool_call_id)
         completion = None
         if previous is None:
             completion = asyncio.get_running_loop().create_future()
-            self._tool_calls[call_id] = completion
+            self._tool_calls[record.tool_call_id] = completion
+        call = _Invocation(
+            harness, record, tool, context, arguments, previous, drain_on_cancel
+        )
         try:
-            output = await self._tool_step(
-                harness,
-                record,
-                tool,
-                context,
-                arguments,
-                previous=previous,
-                drain_on_cancel=drain_on_cancel,
-            )
+            output = await self._step(call)
         except BaseException as exc:
             if completion is not None:
                 completion.set_exception(exc)
@@ -186,99 +214,32 @@ class ToolExecutor:
         _, live = await asyncio.wait(in_flight, timeout=timeout)
         return not live
 
-    async def _tool_step(
-        self,
-        harness: SDKContextHarness,
-        record: ObservedToolResult,
-        tool: FunctionTool,
-        context: ToolContext[Any],
-        arguments: str,
-        *,
-        previous: asyncio.Future[Any] | None,
-        drain_on_cancel: bool,
-    ) -> Any:
-        """Execute or replay one call under the ``por.agent_tool`` Step.
+    async def _step(self, call: _Invocation) -> Any:
+        """Execute or replay the call under the ``por.agent_tool`` Step.
 
         A duplicate call ID still consumes its own Step slot while sharing the
         first result, including a result restored from the journal.
         """
-
-        async def perform() -> Any:
-            if previous is not None:
-                return await asyncio.shield(previous)
-            admitted = False
-            try:
-                if harness.closing:
-                    harness.record_tool(
-                        context, "cancelled", None, error_type="CancelledError"
-                    )
-                    raise asyncio.CancelledError()
-                try:
-                    self._authorize(tool.name)
-                    await self._admit(tool.name, record.tool_call_id)
-                    admitted = True
-                    # The original SDK declaration validates arguments and defaults
-                    # before the tool body admits a protected external operation.
-                    call = tool.on_invoke_tool(context, arguments)
-                    if drain_on_cancel:
-                        output, _ = await finish_owned(asyncio.ensure_future(call))
-                    else:
-                        output = await call
-                except (asyncio.CancelledError, dbos_error.DBOSWorkflowCancelledError):
-                    harness.record_tool(
-                        context, "cancelled", None, error_type="CancelledError"
-                    )
-                    raise
-                except BaseException as exc:
-                    # Wrapped budget, storage, DBOS and cancellation failures must
-                    # stop the Agent loop instead of becoming tool failure text.
-                    if is_execution_control_failure(exc):
-                        harness.record_tool(
-                            context,
-                            "cancelled" if is_cancellation(exc) else "failed",
-                            None,
-                            error_type=type(exc).__name__,
-                        )
-                        raise
-                    if not isinstance(exc, Exception):
-                        raise
-                    output = f"Error executing tool: {exc}"
-                    harness.record_tool(
-                        context,
-                        "cancelled"
-                        if isinstance(exc, MCPToolCancellationError)
-                        else "failed",
-                        output,
-                        error_type=type(exc).__name__,
-                    )
-                    return output
-                harness.record_tool(context, "succeeded", output)
-                return output
-            finally:
-                # Only an admitted call has a ledger row to settle.
-                if admitted:
-                    await self._settle_call(record)
-
         if not native_step_available():
-            return await perform()
+            return await self._perform(call)
         executed = False
 
         async def invoke_step():
             nonlocal executed
             executed = True
-            local = {}
+            local: dict[str, Any] = {}
             token = tool_usage.set(local)
             try:
-                output = await perform()
+                output = await self._perform(call)
             except BaseException as exc:
-                if previous is None:
+                if call.previous is None:
                     exc.budget_usage = local
                 raise
             finally:
                 tool_usage.reset(token)
             return {
                 "output": output,
-                "record": asdict(harness.results[record.tool_call_id]),
+                "record": asdict(call.harness.results[call.record.tool_call_id]),
                 "budget": local,
             }
 
@@ -289,46 +250,108 @@ class ToolExecutor:
         except BaseException as exc:
             # Live execution already applied the local delta. Only a replay of
             # the owning call has to restore it from the error receipt.
-            if not executed and previous is None:
+            if not executed and call.previous is None:
                 self.budget.add(getattr(exc, "budget_usage", {}))
             raise
         if not executed:
-            harness.restore_tool(saved["record"])
+            call.harness.restore_tool(saved["record"])
             self.budget.add(saved["budget"])
         return saved["output"]
+
+    async def _perform(self, call: _Invocation) -> Any:
+        """Admit, run and settle one call; never replayed by this function."""
+        harness, record = call.harness, call.record
+        if call.previous is not None:
+            return await asyncio.shield(call.previous)
+        admitted = False
+        try:
+            if harness.closing:
+                harness.record_tool(
+                    call.context, "cancelled", None, error_type="CancelledError"
+                )
+                raise asyncio.CancelledError()
+            try:
+                self._authorize(record.tool_name)
+                await self._admit(record)
+                admitted = True
+                # The original SDK declaration validates arguments and defaults
+                # before the tool body admits a protected external operation.
+                invoked = call.tool.on_invoke_tool(call.context, call.arguments)
+                if call.drain_on_cancel:
+                    output, _ = await finish_owned(asyncio.ensure_future(invoked))
+                else:
+                    output = await invoked
+            except (asyncio.CancelledError, dbos_error.DBOSWorkflowCancelledError):
+                harness.record_tool(
+                    call.context, "cancelled", None, error_type="CancelledError"
+                )
+                raise
+            except BaseException as exc:
+                # Wrapped budget, storage, DBOS and cancellation failures must
+                # stop the Agent loop instead of becoming tool failure text.
+                if is_execution_control_failure(exc):
+                    harness.record_tool(
+                        call.context,
+                        "cancelled" if is_cancellation(exc) else "failed",
+                        None,
+                        error_type=type(exc).__name__,
+                    )
+                    raise
+                if not isinstance(exc, Exception):
+                    raise
+                output = f"Error executing tool: {exc}"
+                harness.record_tool(
+                    call.context,
+                    "cancelled"
+                    if isinstance(exc, MCPToolCancellationError)
+                    else "failed",
+                    output,
+                    error_type=type(exc).__name__,
+                )
+                return output
+            harness.record_tool(call.context, "succeeded", output)
+            return output
+        finally:
+            # Only an admitted call has a ledger row to settle.
+            if admitted:
+                await self._settle_call(record)
 
     def _authorize(self, name: str) -> None:
         # Registration filters each role's tools; re-read the current domain at
         # invocation so a tool cannot keep running after its policy is revoked.
-        if get_tool_domain(self.tools[name]) not in self.allowed_domains:
+        tool = self.tools.get(name)
+        if tool is None or get_tool_domain(tool) not in self.allowed_domains:
             raise _ToolRejected(
                 f"Tool {name!r} is no longer authorized for {self.role}."
             )
 
-    async def _admit(self, name: str, call_id: str) -> None:
-        """Charge and record one call before its arguments are validated."""
-        increment = self._increment(name)
-        projected = self.budget.projected()
+    def _skip(self, name: str) -> NoReturn:
+        reason = f"Budget guard skipped {name}: tool or search budget exhausted."
+        self.budget.add(budget_usage_with_reason(reason))
+        raise _ToolRejected(reason)
+
+    async def _admit(self, record: ObservedToolResult) -> None:
+        """Charge and record one logical call before its arguments are validated."""
+        name = record.tool_name
+        increment = budget_from_tool_calls([{"name": name}], self.tools)
         # This local snapshot only rejects a call this role already knows is
         # unaffordable; the Run ledger below owns the cross-Agent ceiling. Tool
         # admission never consults model calls or tokens.
-        if not can_spend_tool_call(self.config, projected, increment):
-            reason = f"Budget guard skipped {name}: tool or search budget exhausted."
-            self.budget.add(budget_usage_with_reason(reason))
-            raise _ToolRejected(reason)
+        if not can_spend_tool_call(self.config, self.budget.projected(), increment):
+            self._skip(name)
         scope = stage_context.get()
         if scope is not None:
             # Every admitted call is recorded, whether or not budget enforcement
             # is on. Concurrent Producers share the Run's State snapshot, so only
             # this atomic Run-level admission can enforce the configured ceiling.
             try:
-                admitted, cancellation = await owned_io(
+                outcome, cancellation = await owned_io(
                     admit_tool_call,
                     self.config,
                     scope.run_id,
                     DBOS.workflow_id,
                     DBOS.executor_id,
-                    self.ledger_id(call_id),
+                    self.ledger_id(record.tool_call_id),
                     name,
                     increment["search_calls"] > 0,
                 )
@@ -338,18 +361,37 @@ class ToolExecutor:
                 ) from exc
             if cancellation is not None:
                 raise cancellation
-            if not admitted:
-                reason = (
-                    f"Budget guard skipped {name}: tool or search budget exhausted."
+            if outcome == "rejected":
+                self._skip(name)
+            if outcome == "duplicate":
+                # An earlier attempt already paid for this logical call, so the
+                # allowance is not charged twice. Its uncommitted Step is exactly
+                # the window in which the provider may have been called twice.
+                self.budget.add(
+                    budget_usage_with_warning(
+                        f"{name} re-ran after an uncommitted tool step; one logical "
+                        "tool call is recorded but the provider may have received it twice."
+                    )
                 )
-                self.budget.add(budget_usage_with_reason(reason))
-                raise _ToolRejected(reason)
         self.budget.add(increment)
 
     @staticmethod
     def ledger_id(call_id: str) -> str:
-        """Derive the Run-scoped ledger identity of one SDK tool call."""
+        """Derive the Run-scoped ledger identity of one SDK tool call.
+
+        Stored in ``por_domain.tool_calls`` and ``por_domain.operations``, so a
+        pending Run keeps resolving the same receipts.
+        """
         return digest((DBOS.workflow_id, call_id))
+
+    @staticmethod
+    def operation_id(record: ObservedToolResult) -> str:
+        """Derive the external-operation identity of one SDK tool call.
+
+        Persisted in ``por_domain.operations``; changing the derivation would
+        orphan the receipts of an in-flight Run, so it stays fixed.
+        """
+        return digest((DBOS.workflow_id, record.tool_name, record.tool_call_id))
 
     async def _settle_call(self, record: ObservedToolResult) -> None:
         """Persist the ledger outcome; a bookkeeping error never masks the tool.
@@ -374,25 +416,34 @@ class ToolExecutor:
         if not recorded:
             LOGGER.warning("Tool call receipt was missing when its outcome settled.")
 
-    def _increment(self, name: str) -> dict[str, Any]:
-        return budget_from_tool_calls([{"name": name}], self.tools)
-
     def tool_config(self, context: ToolContext[Any]) -> RunnableConfig:
-        """Give each invoker its own operation metadata.
+        """Give each invoker its own operation or idempotency metadata.
 
         Read this inside the business callable: ``execute`` admits the protected
         operation before running it, so a config built at the tool body's call
         site would miss the operation identity.
+
+        A protected call carries the identity of its Operation row. An
+        idempotent call has no receipt; it receives the same derived identity as
+        its idempotency key, so a retry can reuse it instead of inventing a
+        second one.
         """
-        operation_id = context.context.results[context.tool_call_id].operation_id
-        if operation_id is None:
+        record = context.context.results[context.tool_call_id]
+        tool = self.tools.get(record.tool_name)
+        if record.operation_id is not None:
+            keys = {
+                "operation_id": record.operation_id,
+                "idempotency_key": record.operation_id,
+            }
+        elif tool is not None and tool_effect(tool) == "idempotent":
+            keys = {"idempotency_key": self.operation_id(record)}
+        else:
             return self.runtime_config
         return {
             **self.runtime_config,
             "metadata": {
                 **self.runtime_config.get("metadata", {}),
-                "operation_id": operation_id,
-                "idempotency_key": operation_id,
+                **keys,
             },
         }
 
@@ -408,9 +459,13 @@ class ToolExecutor:
         name, call_id = context.tool_name, context.tool_call_id
         record = context.context.results[call_id]
         scope = stage_context.get()
+        tool = self.tools.get(name)
+        # An unlisted tool cannot prove it is safe, so it keeps the strongest
+        # protection instead of silently skipping its receipt.
+        protected = tool is None or tool_effect(tool) == "protected"
         operation_id = None
-        if scope is not None and tool_effect(self.tools[name]) == "protected":
-            operation_id = digest((DBOS.workflow_id, name, call_id))
+        if scope is not None and protected:
+            operation_id = self.operation_id(record)
             try:
                 _, cancelled = await owned_io(
                     start_operation,
@@ -444,7 +499,11 @@ class ToolExecutor:
             try:
                 await scope.observe(
                     "tool",
-                    dict(metadata, status="started", **self._increment(name)),
+                    dict(
+                        metadata,
+                        status="started",
+                        **budget_from_tool_calls([{"name": name}], self.tools),
+                    ),
                     call_id=call_id + ":started",
                 )
             except BaseException as exc:

@@ -1,12 +1,10 @@
-# 实现 Tavily 并发搜索、原始结果收集和网页摘要生成。
+# 实现 Tavily 并发搜索与网页摘要生成。
 """Tavily search tools and webpage summarization."""
 
 import asyncio
-import json
 import logging
 import os
 import time
-from datetime import datetime
 from typing import Annotated, Any, List, Literal
 
 from agents.tool_context import ToolContext
@@ -270,56 +268,6 @@ async def _tavily_search(
     )
 
 
-# 保留 Tavily 原始结果，跳过逐网页摘要，供研究图生产流程使用。
-async def _tavily_search_raw(
-    queries: List[str],
-    max_results: Annotated[int, InjectedToolArg] = 5,
-    topic: Annotated[
-        Literal["general", "news", "finance"], InjectedToolArg
-    ] = "general",
-    config: RunnableConfig = None,
-) -> str:
-    """Fetch raw Tavily results without the standard per-URL summary fan-out."""
-    search_results = await tavily_search_async(
-        queries,
-        max_results=max_results,
-        topic=topic,
-        include_raw_content=True,
-        config=config,
-    )
-    configurable = Configuration.from_runnable_config(config)
-    unique_results: dict[str, dict[str, Any]] = {}
-    for response in search_results:
-        for result in response.get("results", []):
-            url = str(result.get("url") or "").strip()
-            if not url or url in unique_results:
-                continue
-            raw_content = result.get("raw_content") or result.get("content") or ""
-            unique_results[url] = {
-                "url": url,
-                "title": result.get("title") or "",
-                "content": str(raw_content)[: configurable.max_content_length],
-                "query": response.get("query") or "",
-                "source_type": "web_search",
-                "retrieved_at": datetime.utcnow().isoformat() + "Z",
-            }
-    if not unique_results:
-        return json.dumps(
-            {"type": "research_raw_search", "results": []},
-            ensure_ascii=False,
-        )
-    return json.dumps(
-        {"type": "research_raw_search", "results": list(unique_results.values())},
-        ensure_ascii=False,
-    )
-
-
-TAVILY_RAW_DESCRIPTION = (
-    "Fetch raw, source-bound Tavily results for Research Graph extraction. "
-    "This path does not call a per-page summarization model."
-)
-
-
 # 运行配置须在受保护操作登记后读取，因此业务函数在 Executor 验参后自行取用。
 @business_tool(
     domain="web_search",
@@ -332,24 +280,9 @@ async def web_search(context: ToolContext, queries: list[str]) -> str:
     return await _tavily_search(queries, config=config)
 
 
-@business_tool(
-    domain="web_search",
-    effect="read",
-    name_override="web_search",
-    description_override=TAVILY_RAW_DESCRIPTION,
-)
-async def web_search_raw(context: ToolContext, queries: list[str]) -> str:
-    """Return raw, source-bound results without per-page summarization."""
-    config = context.context.tool_executor.tool_config(context)
-    return await _tavily_search_raw(queries, config=config)
-
-
 # Direct LangChain callers use the same functions and their existing signatures.
 tavily_search = tool(
     "tavily_search", _tavily_search, description=TAVILY_SEARCH_DESCRIPTION
-)
-tavily_search_raw = tool(
-    "tavily_search_raw", _tavily_search_raw, description=TAVILY_RAW_DESCRIPTION
 )
 
 

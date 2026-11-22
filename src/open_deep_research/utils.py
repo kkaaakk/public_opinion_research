@@ -26,15 +26,11 @@ from open_deep_research.search.tavily import (
     summarize_webpage,
     tavily_search,
     tavily_search_async,
-    tavily_search_raw,
 )
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.tools.registry import (
     build_dynamic_tool_prompt,
     get_all_tools,
-    get_notes_from_tool_calls,
-    get_raw_search_tool,
-    get_research_tool_prompt,
     get_retrieval_tools,
     get_search_tool,
     has_external_research_tool,

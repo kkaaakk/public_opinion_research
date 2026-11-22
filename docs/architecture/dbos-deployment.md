@@ -86,6 +86,8 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 
 `por-call-ledger-v1` 统一调用记录：模型用量取自 `model_attempts`，工具与搜索次数取自 `tool_calls`，外部效果取自 `operations`，阶段事件只提供告警与降级原因。本轮不改变 DBOS journal 命令序列，但改变了 Run 用量的汇总口径与工具准入的写库条件，因此旧版仍在执行的 Run 必须由 `por-agent-context-v1` 的 API 与 Executor 排空后再切换；旧版已完成的 Run 仍可读取。`--initialize-only` 负责字段与外键升级，不需要重建数据库，也不删除 History。 [调用记录与预算收敛](../audits/call-ledger-convergence.md)
 
+工具执行层简化沿用 `por-call-ledger-v1`，不升版本：`por.agent_tool` 的 Step 名称、边界、持久化载荷、命令顺序和恢复协议未变，数据库结构未变，因此不需要 `--migration-check`，也不需要额外排空。行为变化只有两处：工具准入返回 `admitted` / `duplicate` / `rejected`，重复准入追加一条 `budget_warnings`；非 `BusinessTool` 的托管检索声明在 `ToolManager.discover()` 阶段即被拒绝。未提交 Step 的恢复按 effect 处理：`read` / `idempotent` 重跑（额度不重复扣、重复请求记入告警），`protected` 命中已有回执即 fail closed。 [工具执行层与恢复](../audits/tool-execution-recovery.md)
+
 `por-agent-context-v1` 精简 `por.agent_context` 和 `por.agent_settlement` 的检查点。Agent 模型预算拒绝发生在 DBOSRunner 的模型 Step。切换前使用匹配的 API 和 Executor 排空 `por-inline-report-v1` 的 journal、人工交互与归档。已有 PostgreSQL 业务 schema、History 和调用回执继续使用。
 
 `por-inline-report-v1` 将终稿的模型 Step 和事件移入 `por.research`，改变了原生 journal 命令序列。切换前，使用 `por-research-agents-v1` 对应的 API 和 Executor 排空其 journal、人工交互及归档。`por-sdk-models-v1` 和 `por-vertical-v1` 也须由匹配的发行版排空。
