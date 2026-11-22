@@ -36,7 +36,7 @@ from open_deep_research.runtime.sdk_context import (
     _ReasoningStopped,
 )
 from open_deep_research.runtime.tool_executor import ToolExecutor, tool_usage
-from open_deep_research.tools import tool_result_text
+from open_deep_research.tools import BusinessTool, tool_result_text
 from open_deep_research.tools.manager import ToolManager
 from open_deep_research.workflow.dbos_config import native_client, settings
 from open_deep_research.workflow.execution import (
@@ -151,7 +151,7 @@ class SDKAgentRuntime:
         runtime_config: Mapping[str, Any],
         model: Model,
         system_prompt: str,
-        tools: list[Any],
+        tools: Iterable[BusinessTool],
         initial_budget: Mapping[str, Any],
         compress_report: CompressionCallback,
     ) -> None:
@@ -167,7 +167,6 @@ class SDKAgentRuntime:
         self.tools = tools
         self.initial_budget = dict(initial_budget or {})
         self.compress_report = compress_report
-
     def _report_messages(
         self, task: str, items: Iterable[TResponseInputItem]
     ) -> list[BaseMessage]:
@@ -248,7 +247,10 @@ class SDKAgentRuntime:
             runtime_config=self.runtime_config,
         )
         manager = ToolManager(self.role, self.spec, self.runtime_config)
-        tools = manager.index(self.tools)
+        # ``ToolManager.discover`` already proved these declarations are unique
+        # BusinessTools inside the role's domains. This index is the executor's
+        # authority lookup, not a second admission check.
+        tools = {tool.name: tool for tool in self.tools}
         self.harness.tool_executor = ToolExecutor(
             self.role,
             self.spec.allowed_domains,

@@ -6,6 +6,7 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from test_sdk_runtime import _runtime, _tool
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.runtime.sdk_context import ObservedToolResult
 from open_deep_research.runtime.sdk_runtime import _RunBudget
 from open_deep_research.runtime.tool_executor import ToolExecutor
 
@@ -59,7 +60,18 @@ def test_exhausted_model_budget_does_not_reject_tool_admission():
         {tool.name: tool},
     )
 
-    asyncio.run(executor._admit("web_search", "call-1"))
+    asyncio.run(
+        executor._admit(
+            ObservedToolResult(
+                sdk_run_id="SDK_run",
+                tool_call_id="call-1",
+                tool_name="web_search",
+                arguments_json='{"query":"q"}',
+                args={"query": "q"},
+                model_turn=0,
+            )
+        )
+    )
 
     assert executor.budget.delta["tool_calls"] == 1
     assert executor.budget.delta["search_calls"] == 1

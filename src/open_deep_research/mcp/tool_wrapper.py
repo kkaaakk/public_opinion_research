@@ -119,6 +119,13 @@ def _mcp_tool_invoker(
     mcp_tool_name: str,
     schema: dict[str, Any],
 ) -> Callable[[ToolContext[Any], str], Any]:
+    """Validate one MCP argument object, then enter the shared executor.
+
+    ``build_mcp_tool`` replaces the SDK invocation callback, so the SDK's own
+    argument validation no longer runs. The service Schema is therefore checked
+    here once at declaration time and applied to every call: MCP tools keep the
+    same "validate, then admit" order as local business tools.
+    """
     validator_class = validator_for(schema)
     validator_class.check_schema(schema)
     validator = validator_class(schema)

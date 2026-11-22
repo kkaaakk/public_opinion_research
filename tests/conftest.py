@@ -53,5 +53,5 @@ def memory_ledger(monkeypatch):
     """
     from open_deep_research.runtime import tool_executor
 
-    monkeypatch.setattr(tool_executor, "admit_tool_call", lambda *_args: True)
+    monkeypatch.setattr(tool_executor, "admit_tool_call", lambda *_args: "admitted")
     monkeypatch.setattr(tool_executor, "finish_tool_call", lambda *_args: True)

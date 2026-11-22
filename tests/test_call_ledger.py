@@ -94,7 +94,7 @@ def test_admission_records_a_call_when_budget_checks_are_off(monkeypatch):
         _config(budget_enabled=False), "run", "wf", "executor", "call-1", "web_search", True
     )
 
-    assert admitted is True
+    assert admitted == "admitted"
     assert db.insert("tool_calls") == {
         "r": "run",
         "id": "call-1",
@@ -116,11 +116,11 @@ def test_a_rejected_call_is_never_recorded_as_admitted(monkeypatch):
         False,
     )
 
-    assert admitted is False
+    assert admitted == "rejected"
     assert not any("INSERT INTO por_domain.tool_calls" in sql for sql, _ in db.statements)
 
 
-def test_a_repeated_call_identity_is_not_charged_again(monkeypatch):
+def test_a_repeated_call_identity_is_reported_without_charging_again(monkeypatch):
     db = _install(monkeypatch, _DB(exists=1))
 
     admitted = execution.admit_tool_call(
@@ -133,7 +133,9 @@ def test_a_repeated_call_identity_is_not_charged_again(monkeypatch):
         True,
     )
 
-    assert admitted is True
+    # ``duplicate`` is the only durable evidence that an earlier attempt ran
+    # this call; the executor turns it into the duplicate-request warning.
+    assert admitted == "duplicate"
     assert not any("count(*)" in sql for sql, _ in db.statements)
 
 

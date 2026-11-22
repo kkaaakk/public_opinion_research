@@ -13,7 +13,7 @@
 
 ## 1. 模块定位
 
-`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。`tools/manager.py:ToolManager` 是四个业务角色唯一的装配入口：`discover()` 收集本地工具、全局 MCP 与插件工具并按角色领域筛选；`bind()` 把筛选结果交给该 Run 的 `ToolExecutor`。`runtime/business_agent.py:_business_agent_tools` 只是 `ToolManager.discover()` 的入口，`por.role_tools` 仍在 Executor 创建前持久化并校验目录。
+`tools/registry.py` 装配 SDK FunctionTool 声明和已配置的 MCP 工具。`tools/manager.py:ToolManager` 是四个业务角色唯一的装配入口：`discover()` 收集本地工具、全局 MCP 与插件工具，证明它们是 `BusinessTool` 声明、名称唯一且领域获准，再按角色领域筛选；`bind()` 把筛选结果交给该 Run 的 `ToolExecutor`。`runtime/business_agent.py:_business_agent_tools` 只是 `ToolManager.discover()` 的入口，`por.role_tools` 仍在 Executor 创建前持久化并校验目录。`SDKAgentRuntime` 不再做第二次类型/重名/领域校验，只把已准入列表转成执行器需要的按名索引。
 
 普通 Python 工具用 `tools/__init__.py:business_tool` 声明：它调用官方 `@function_tool` 生成名称、描述、JSON Schema、参数校验和默认值，并自动把业务函数交给 `ToolExecutor.execute`，业务函数不再显式编排执行器。`register_tool` 仍可为已有声明只附加 domain、effect 与取消排空策略。MCP 工具由官方 `MCPServerStdio` / `MCPServerStreamableHttp` 与 `MCPUtil.to_function_tool()` 生成同等声明，并进入同一执行层。
 
@@ -78,7 +78,7 @@ Local RAG search failed: ...
 
 当 `search_api=anthropic` 时，返回 Anthropic native web search tool schema。
 
-这两个 provider-native 声明保留给兼容调用。业务 SDK Runtime 只接收本地可观测工具，遇到这些声明会拒绝运行。
+这两个 provider-native 声明保留给兼容调用。业务 SDK Runtime 只接收本地可观测工具：这类声明没有本地领域、Effect 与持久调用，`ToolManager.discover()` 会在装配阶段以 `TypeError` 拒绝，而不是在 Runtime 里才失败。
 
 ### 2.4 Agent Loop 结束
 
@@ -178,11 +178,20 @@ class MCPConfig(BaseModel):
 
 ## 6. 业务 Agent 中的工具执行
 
-1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect。已有 `dbos-events-v1` 的目录可缺少 effect；此时当前工具声明（包括插件 Apify MCP 的 `protected`）保持不变。
-2. `SDKAgentRuntime._register_tool` 把 `BusinessTool.sdk_tool` 交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具与本地工具一样以 `BusinessTool` 装配，其声明来自 `MCPUtil.to_function_tool()`。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
+1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect。目录缺少 effect 时不视为定义变更，当前工具声明（包括插件 Apify MCP 的 `protected`）保持不变。
+2. `ToolManager.bind()` 把 `BusinessTool.sdk_tool` 交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具与本地工具一样以 `BusinessTool` 装配，其声明来自 `MCPUtil.to_function_tool()`。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
 3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。预算预占之后才进入业务函数及外部效果边界。
-4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。已有操作缺少对应的 Step 结果时，恢复会停止并要求核对。
+4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。`idempotent` 工具不写回执，调用配置携带同一个派生值作为 `idempotency_key`。
 5. `ToolExecutor` 以 Tool Call ID 共享在途结果，并在取消时等待已启动的同步工具及其回执。已提交的 Step 恢复原输出、状态、工具身份、操作 ID 和局部用量；Harness 只接收恢复后的记录。成功结果由 Harness 记录并保留在 SDK 会话历史中。 [执行架构](agent-loop.md) · [DBOS Step](https://docs.dbos.dev/python/tutorials/step-tutorial)
+
+### 未提交 Step 的恢复
+
+`por.agent_tool` 已提交时直接重放结果，不执行业务函数。Step 未提交时按 effect 处理：
+
+- `read` / `idempotent`：重新执行。`tool_calls` 只有一行，额度不重复扣；`ToolExecutor` 追加一条 `budget_warnings`，说明供应商可能收到两次请求。
+- `protected`：`start_operation` 命中已有回执即 `unconfirmed`，Run 停止并要求人工核对。回执只证明外部效果被登记，不包含响应体，因此不能用来伪造结果。
+
+外部请求已发出、`por.agent_tool` 尚未提交时崩溃，是唯一无法用现有表消除的重复调用窗口；本轮不新增结果缓存表或分布式事务。完整分析见 [工具执行层与恢复审计](../audits/tool-execution-recovery.md)。
 
 普通工具失败形成与调用配对的错误输出，供模型继续处理。取消和执行控制故障沿原生执行链传播。
 
@@ -204,7 +213,7 @@ class MCPConfig(BaseModel):
 
 动态说明要求模型根据已检索证据判断是否继续检索，并在证据足够时用普通最终回复结束；只有实际列表包含 `rag_search` 时，才加入基于 SOURCE 引用作出本地知识或记忆声明的约束。允许 RAG 的角色若没有取得 `rag_search`，`_role_tool_prompt` 会说明内部资料或审批依据缺失时应明确标记，避免编造。
 
-[`get_research_tool_prompt(configurable)`](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/src/open_deep_research/tools/registry.py#L213) 是已标记弃用的静态兼容 helper，仍经 `utils.py` 导出；当前四角色运行链使用上述动态入口。`retrieval_mode` 控制前置工具装配，提示词最终以角色过滤后的实际工具集合为准。
+第五轮删除了已弃用且无调用方的静态 helper `get_research_tool_prompt(configurable)`：四角色运行链只使用上述动态入口，静态模板会与实际绑定工具集合脱节。`retrieval_mode` 控制前置工具装配，提示词最终以角色过滤后的实际工具集合为准。
 
 现有契约验证可参见 [角色工具隔离测试](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/test_public_opinion_tool_permissions.py#L53)、[角色 prompt 契约测试](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/test_public_opinion_agents.py#L59) 和 [无 RAG 图消费测试](https://github.com/kkaaakk/public_opinion_research/blob/534c74a6ccab829fcca0bc8947df3a949665f8c4/tests/test_graph_consumer_without_rag.py#L27)；后者验证缺失 RAG 提示及实际工具白名单进入模型上下文。
 

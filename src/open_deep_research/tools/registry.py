@@ -1,15 +1,13 @@
-# 根据检索模式与实际可用服务装配研究工具，并生成一致的动态工具说明。
 """Assemble the tools visible to a research agent and describe them."""
 
 from typing import Any
 
-from langchain_core.messages import MessageLikeRepresentation, filter_messages
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
 from open_deep_research.config_values import get_config_value
 from open_deep_research.configuration import Configuration, RetrievalMode, SearchAPI
-from open_deep_research.search.tavily import web_search, web_search_raw
+from open_deep_research.search.tavily import web_search
 from open_deep_research.tools import BusinessTool, ToolEffect
 
 
@@ -47,14 +45,6 @@ async def get_search_tool(search_api: SearchAPI):
     return []
 
 
-async def get_raw_search_tool(search_api: SearchAPI):
-    """Select source-bound Tavily results for Graph Producers."""
-    if search_api == SearchAPI.TAVILY:
-        return [web_search_raw]
-    return await get_search_tool(search_api)
-
-
-# 判断当前检索模式是否要求启用本地 RAG。
 def rag_requested(configurable: Configuration) -> bool:
     """Determine whether the current configuration wants local RAG retrieval enabled."""
     retrieval_mode = RetrievalMode(get_config_value(configurable.retrieval_mode))
@@ -116,41 +106,6 @@ def has_external_research_tool(tools: list[Any]) -> bool:
     return False
 
 
-# 生成旧版静态工具说明，保留兼容入口。
-def get_research_tool_prompt(configurable: Configuration) -> str:
-    """Create a short, mode-aware tool summary for the researcher prompt.
-
-    .. deprecated::
-        Prefer :func:`build_dynamic_tool_prompt` which reflects the **actual**
-        tool list bound for the current invocation rather than a static
-        template.  Kept for backward compatibility with callers that don't
-        have access to the concrete tool list.
-    """
-    retrieval_mode = RetrievalMode(get_config_value(configurable.retrieval_mode))
-    prompt_lines = []
-    line_number = 1
-
-    if retrieval_mode in {RetrievalMode.WEB_ONLY, RetrievalMode.HYBRID}:
-        search_api = SearchAPI(get_config_value(configurable.search_api))
-        if search_api != SearchAPI.NONE:
-            prompt_lines.append(
-                f"{line_number}. **web_search**: Search the live web for external or up-to-date information."
-            )
-            line_number += 1
-
-    if rag_requested(configurable):
-        prompt_lines.append(
-            f"{line_number}. **rag_search**: Search the configured enterprise knowledge base and return grounded excerpts with citations. Use only cited excerpts for internal-knowledge claims."
-        )
-
-    if retrieval_mode == RetrievalMode.HYBRID and rag_requested(configurable):
-        prompt_lines.append(
-            "When local documents need external confirmation or missing context, use both `rag_search` and `web_search` and then compare the findings."
-        )
-
-    return "\n".join(prompt_lines)
-
-
 # 检查实际绑定的工具并按领域生成说明，反映当前权限与可用能力。
 def build_dynamic_tool_prompt(
     tools: list,
@@ -160,8 +115,7 @@ def build_dynamic_tool_prompt(
 ) -> str:
     """Build a tool prompt that reflects the **actual** tools bound for this call.
 
-    Unlike :func:`get_research_tool_prompt` which outputs a static template,
-    this function inspects the concrete tool list and groups tools by their
+    This function inspects the concrete tool list and groups tools by their
     domain, giving the LLM an accurate picture of what is (and isn't)
     available for the current invocation.
 
@@ -255,16 +209,3 @@ def build_dynamic_tool_prompt(
         )
 
     return "\n".join(lines)
-
-
-# 从工具调用消息中提取研究笔记。
-def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):
-    """Extract notes from tool call messages."""
-    return [
-        tool_msg.content for tool_msg in filter_messages(messages, include_types="tool")
-    ]
-
-
-##########################
-# Model Provider Native Websearch Utils
-##########################

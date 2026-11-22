@@ -30,6 +30,7 @@ from open_deep_research.workflow.execution import (
     ExecutionControlError,
     StageContext,
     stage_context,
+    unconfirmed,
 )
 
 
@@ -66,6 +67,48 @@ def _context(
         tool_call_id=call_id,
         tool_arguments=arguments,
     )
+
+
+# 在一次 Run 的 StageContext 下调用工具，模拟恢复后新建的进程。
+def _invoke(
+    tool: BusinessTool,
+    executor: ToolExecutor,
+    harness: SDKContextHarness,
+    *,
+    stage: str = "stage-1",
+    call_id: str = "call-1",
+) -> Any:
+    scope = StageContext("run", stage, "fixture", 0, {"configurable": {}}, {})
+    token = stage_context.set(scope)
+    try:
+        return asyncio.run(
+            executor.invoke(
+                tool.sdk_tool,
+                _context(harness, tool.name, '{"query":"q"}', call_id),
+                '{"query":"q"}',
+            )
+        )
+    finally:
+        stage_context.reset(token)
+
+
+class _UncommittedStep:
+    """A ``por.agent_tool`` Step that never commits, so each attempt re-runs."""
+
+    workflow_id = "replay-workflow"
+    executor_id = "replay-executor"
+
+    @classmethod
+    async def run_step_async(cls, _options, function):
+        return await function()
+
+
+# 只保留执行语义，不向 SSE/存储发布观察事件。
+def _silence_observations(monkeypatch) -> None:
+    async def observe(_self, _kind, _payload, *, call_id=None):
+        return None
+
+    monkeypatch.setattr(StageContext, "observe", observe)
 
 
 # 声明一个携带默认值的业务工具，用于 Schema 与执行契约。
@@ -399,34 +442,38 @@ def test_tool_manager_rejects_duplicate_tool_names(monkeypatch) -> None:
         asyncio.run(manager.discover())
 
 
-# 验证绑定阶段再次执行权限校验，并生成 SDK 可直接使用的声明。
-def test_tool_manager_index_and_bind_keep_role_policy() -> None:
+# 验证绑定阶段只替换调用回调，SDK 声明保持不变。
+def test_tool_manager_binds_the_admitted_declaration_unchanged() -> None:
     tool = _search_tool()
     manager = ToolManager(
-        "internal_knowledge",
-        get_public_opinion_agent_spec("internal_knowledge"),
-        {"configurable": {}},
-    )
-
-    with pytest.raises(TypeError, match="BusinessTool"):
-        manager.index([{"type": "web_search_preview"}])
-    with pytest.raises(ValueError, match="outside"):
-        manager.index([tool])
-
-    public_manager = ToolManager(
         "public_signal",
         get_public_opinion_agent_spec("public_signal"),
         {"configurable": {}},
     )
-    indexed = public_manager.index([tool])
-    assert indexed == {tool.name: tool}
-    with pytest.raises(ValueError, match="Duplicate business tool name"):
-        public_manager.index([tool, tool])
 
     harness, executor = _executor(tool)
-    bound = public_manager.bind(indexed.values(), executor)
+    bound = manager.bind([tool], executor)
+
     assert [item.name for item in bound] == [tool.name]
     assert bound[0].params_json_schema == tool.sdk_tool.params_json_schema
+    assert bound[0].strict_json_schema is tool.sdk_tool.strict_json_schema
+    assert bound[0] is not tool.sdk_tool
+
+
+# 验证装配阶段拒绝非 BusinessTool 的托管检索声明，而不是留到执行期。
+def test_tool_manager_rejects_hosted_search_declarations(monkeypatch) -> None:
+    async def fake_get_all_tools(_config):
+        return [{"type": "web_search_preview"}]
+
+    monkeypatch.setattr(tool_manager, "get_all_tools", fake_get_all_tools)
+
+    manager = ToolManager(
+        "public_signal",
+        get_public_opinion_agent_spec("public_signal"),
+        {"configurable": {}},
+    )
+    with pytest.raises(TypeError, match="BusinessTool"):
+        asyncio.run(manager.discover())
 
 
 # 验证 Tavily、RAG 声明保留目录身份，并在 Executor 边界读取运行配置。
@@ -453,10 +500,6 @@ def test_retrieval_tools_keep_catalog_identity_and_read_run_config(
         "web_search",
         "read",
     )
-    assert (tavily.web_search_raw.name, tavily.web_search_raw.effect) == (
-        "web_search",
-        "read",
-    )
     assert (
         rag_tool.rag_search_tool.name,
         rag_tool.rag_search_tool.domain,
@@ -474,6 +517,7 @@ def test_retrieval_tools_keep_catalog_identity_and_read_run_config(
         )
         == "web-evidence"
     )
+    # A read tool keeps the caller's config untouched.
     assert seen["web"] == (["a"], {"configurable": {"fixture": "run"}})
 
     rag_harness, rag_executor = _executor(
@@ -491,7 +535,11 @@ def test_retrieval_tools_keep_catalog_identity_and_read_run_config(
         )
         == "rag-evidence"
     )
-    assert seen["rag"] == ("rag", {"configurable": {"fixture": "run"}})
+    # An idempotent tool adds only the derived key; the run config stays intact.
+    rag_query, rag_config = seen["rag"]
+    assert rag_query == "rag"
+    assert rag_config["configurable"] == {"fixture": "run"}
+    assert rag_config["metadata"]["idempotency_key"]
 
 
 # 验证新声明进入 por.role_tools 目录后可按当前与旧格式恢复。
@@ -506,5 +554,133 @@ def test_role_catalog_round_trip_accepts_new_declarations() -> None:
     )
     assert business_agent._restore_role_tools(catalog, [tool]) == [tool]
 
-    legacy = [{key: value for key, value in catalog[0].items() if key != "effect"}]
-    assert business_agent._restore_role_tools(legacy, [tool]) == [tool]
+
+# ---------------------------------------------------------------------------
+# Recovery: an uncommitted Step follows the declared effect
+# ---------------------------------------------------------------------------
+
+
+# 验证 read 工具在未提交 Step 后重跑，并明确记录重复请求风险。
+def test_read_tool_reruns_after_an_uncommitted_step_and_warns(monkeypatch) -> None:
+    from open_deep_research.runtime import tool_executor
+
+    invocations: list[str] = []
+    admissions: list[str] = []
+
+    @business_tool(domain="web_search", effect="read")
+    async def web_search(context: ToolContext, query: str) -> str:
+        invocations.append(query)
+        return "evidence:" + query
+
+    def admit(_config, _run, _workflow, _executor, call_id, _name, _search):
+        admissions.append(call_id)
+        # The ledger keeps one row: the second attempt is the same logical call.
+        return "admitted" if len(admissions) == 1 else "duplicate"
+
+    _silence_observations(monkeypatch)
+    monkeypatch.setattr(tool_executor, "DBOS", _UncommittedStep)
+    monkeypatch.setattr(tool_executor, "native_step_available", lambda: True)
+    monkeypatch.setattr(tool_executor, "admit_tool_call", admit)
+    monkeypatch.setattr(tool_executor, "finish_tool_call", lambda *_args: True)
+
+    attempts = []
+    for attempt in range(2):
+        harness, executor = _executor(web_search)
+        output = _invoke(web_search, executor, harness, stage=f"stage-{attempt}")
+        attempts.append((output, executor.budget.delta))
+
+    # The tool ran twice because no committed Step could supply its result...
+    assert [output for output, _ in attempts] == ["evidence:q", "evidence:q"]
+    assert invocations == ["q", "q"]
+    assert len(admissions) == 2 and admissions[0] == admissions[1]
+    # ...but each attempt charged exactly one logical call.
+    assert [delta["tool_calls"] for _, delta in attempts] == [1, 1]
+    assert not attempts[0][1]["budget_warnings"]
+    assert "re-ran after an uncommitted tool step" in " ".join(
+        attempts[1][1]["budget_warnings"]
+    )
+
+
+# 验证 protected 工具在未提交 Step 后拒绝重跑，保留原回执等待核对。
+def test_protected_tool_never_reruns_after_an_uncommitted_step(monkeypatch) -> None:
+    from open_deep_research.runtime import tool_executor
+
+    invocations: list[str] = []
+    receipts: dict[str, str | None] = {}
+
+    @business_tool(domain="web_search", effect="protected")
+    async def publish(context: ToolContext, query: str) -> str:
+        invocations.append(query)
+        return "published:" + query
+
+    def start_operation(
+        _run, _workflow, _executor, operation_id, _call, _name, _fingerprint
+    ):
+        # Mirrors por_domain.operations: the earlier attempt's receipt exists,
+        # but its response was never journaled.
+        if operation_id in receipts:
+            raise unconfirmed("External tool already ran for this call")
+        receipts[operation_id] = None
+
+    def finish_operation(_run, operation_id, outcome):
+        receipts[operation_id] = outcome
+
+    async def commit(write, *args):
+        await asyncio.to_thread(write, *args)
+
+    _silence_observations(monkeypatch)
+    monkeypatch.setattr(tool_executor, "DBOS", _UncommittedStep)
+    monkeypatch.setattr(tool_executor, "native_step_available", lambda: True)
+    monkeypatch.setattr(tool_executor, "admit_tool_call", lambda *_args: "duplicate")
+    monkeypatch.setattr(tool_executor, "finish_tool_call", lambda *_args: True)
+    monkeypatch.setattr(tool_executor, "start_operation", start_operation)
+    monkeypatch.setattr(tool_executor, "finish_operation", finish_operation)
+    monkeypatch.setattr(tool_executor, "commit_receipt", commit)
+
+    first_harness, first_executor = _executor(publish)
+    assert _invoke(publish, first_executor, first_harness, stage="stage-1") == (
+        "published:q"
+    )
+    receipt = tool_executor.ToolExecutor.operation_id(first_harness.results["call-1"])
+
+    second_harness, second_executor = _executor(publish)
+    with pytest.raises(ExecutionControlError):
+        _invoke(publish, second_executor, second_harness, stage="stage-2")
+
+    assert invocations == ["q"]
+    assert receipts == {receipt: "returned"}
+    assert second_harness.results["call-1"].status == "failed"
+    assert second_harness.results["call-1"].error_type == "ExecutionControlError"
+
+
+# 验证 idempotent 工具取得稳定的幂等键，且不伪造 Operation 身份。
+def test_idempotent_tool_receives_a_stable_idempotency_key(monkeypatch) -> None:
+    from open_deep_research.runtime import tool_executor
+
+    seen: list[dict[str, Any]] = []
+
+    @business_tool(domain="rag", effect="idempotent")
+    async def rag_search(context: ToolContext, query: str) -> str:
+        seen.append(
+            dict(context.context.tool_executor.tool_config(context).get("metadata", {}))
+        )
+        return "cited:" + query
+
+    _silence_observations(monkeypatch)
+    monkeypatch.setattr(tool_executor, "DBOS", _UncommittedStep)
+    monkeypatch.setattr(tool_executor, "native_step_available", lambda: False)
+    monkeypatch.setattr(tool_executor, "admit_tool_call", lambda *_args: "admitted")
+    monkeypatch.setattr(tool_executor, "finish_tool_call", lambda *_args: True)
+
+    harness, executor = _executor(
+        rag_search, role="internal_knowledge", domains=frozenset({"rag"})
+    )
+    assert _invoke(rag_search, executor, harness) == "cited:q"
+
+    assert seen == [
+        {
+            "idempotency_key": tool_executor.digest(
+                (_UncommittedStep.workflow_id, "rag_search", "call-1")
+            )
+        }
+    ]

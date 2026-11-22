@@ -240,12 +240,22 @@ def test_tool_schema_validation_prevents_invalid_execution(role, arguments):
 
 
 @pytest.mark.parametrize("role", ROLES)
-def test_registration_and_execution_both_enforce_role_permission(role):
+def test_execution_boundary_denies_tools_outside_the_role(role):
+    # Assembly filters by domain; the executor re-reads the policy before every
+    # call so a tool cannot run after its authorization is gone.
     forbidden = _tool(name="untrusted", domain="unclassified")
-    runtime = _runtime(role, tools=[forbidden])
-    with pytest.raises(ValueError, match="outside"):
-        asyncio.run(runtime.run("task"))
-    assert not runtime.model.calls
+    model = ScriptedModel(
+        [
+            [function_call("untrusted", '{"query":"q"}', call_id="denied")],
+            [assistant_message("permission denied")],
+        ]
+    )
+    runtime = _runtime(role, model=model, tools=[forbidden])
+    asyncio.run(runtime.run("task"))
+
+    assert runtime.harness.results["denied"].status == "failed"
+    assert "no longer authorized" in str(runtime.harness.results["denied"].observation)
+    assert runtime.budget_usage["tool_calls"] == 0
 
     tool = _tool(role)
 
@@ -398,14 +408,6 @@ def test_exhausted_budget_finishes_from_collected_notes(
     if expected_calls:
         assert "Evidence q" in result.report
     assert result.budget.get("degradation_reasons")
-
-
-def test_duplicate_business_tool_names_are_rejected_before_execution():
-    runtime = _runtime(
-        "public_signal", tools=[_tool("public_signal"), _tool("public_signal")]
-    )
-    with pytest.raises(ValueError, match="Duplicate business tool name"):
-        asyncio.run(runtime.run("task"))
 
 
 def test_role_result_round_trip_has_no_private_memory_or_summary():

@@ -361,7 +361,7 @@ def install(directory, scenario):
 
     def admit_tool_call(*args):
         admitted = old_admit_tool_call(*args)
-        if scenario == "tool-admitted" and admitted:
+        if scenario == "tool-admitted" and admitted == "admitted":
             gate(scenario)
         return admitted
 
