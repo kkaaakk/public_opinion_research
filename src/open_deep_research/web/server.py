@@ -13,7 +13,6 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
 
 from open_deep_research.env import load_environment
 
@@ -45,18 +44,6 @@ LOGGER = logging.getLogger(__name__)
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_TOPIC_LENGTH = 12_000
 MAX_ORG_CONTEXT_LENGTH = 8_000
-ALLOWED_RESEARCH_MODELS = frozenset(
-    {
-        "deepseek:deepseek-chat",
-        "deepseek:deepseek-v4-flash",
-        "deepseek:deepseek-flash",
-        "openai:gpt-4.1",
-        "openai:gpt-4o",
-        "anthropic:claude-sonnet-4-20250514",
-        "anthropic:claude-opus-4-20250514",
-        "google:gemini-2.5-pro",
-    }
-)
 WEB_API_TOKEN = (
     os.environ.get("PUBLIC_OPINION_API_TOKEN") or os.environ.get("WEB_API_TOKEN") or ""
 ).strip()
@@ -110,9 +97,15 @@ if (STUDIO_DIR / "assets").is_dir():
     )
 
 
-# 校验前端研究主题、模型及数量等受限输入。
+# 校验前端研究主题、组织背景及单次 Run 的 RAG 开关。
 class ResearchRequest(BaseModel):
-    """Validate bounded research inputs from the web frontend."""
+    """Validate the business input of one research Run.
+
+    Models, research depth, search API, budgets, approval and clarification
+    policy stay in ``config.yaml``. The only request-level setting that really
+    changes execution is ``rag_enabled``; see
+    :func:`open_deep_research.config_file.run_configuration`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -127,13 +120,8 @@ class ResearchRequest(BaseModel):
         )
 
     topic: str = Field(min_length=1, max_length=MAX_TOPIC_LENGTH)
-    model: str = "deepseek:deepseek-flash"
-    search_api: Literal["tavily", "openai", "anthropic"] = "tavily"
-    mode: Literal["fast", "normal", "deep"] = "normal"
     org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
-    rag_enabled: bool = False
-    require_approval: bool = False
-    allow_clarification: bool = True
+    rag_enabled: bool = Field(default=False, strict=True)
     research_session_id: str | None = Field(default=None, max_length=64)
 
     # 去除主题两端空白，并拒绝空主题。
@@ -143,15 +131,6 @@ class ResearchRequest(BaseModel):
         """Reject blank topics after trimming whitespace."""
         if not value.strip():
             raise ValueError("topic must not be blank")
-        return value
-
-    # 只接受服务端策略允许的模型标识。
-    @field_validator("model")
-    @classmethod
-    def validate_model(cls, value: str) -> str:
-        """Allow only models selected by the server-side policy."""
-        if value not in ALLOWED_RESEARCH_MODELS:
-            raise ValueError("model is not allowed")
         return value
 
 

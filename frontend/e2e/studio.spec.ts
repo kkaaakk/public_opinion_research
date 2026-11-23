@@ -14,10 +14,13 @@ async function authenticate(page: Page) {
   await page.getByLabel('API 访问令牌').fill('studio-browser-test-only');
   await page.getByRole('button', { name: '应用并连接' }).click();
 }
-async function create(page: Page, topic: string, approval = false) {
+// The test server derives its policy from the submitted topic: a topic carrying
+// 'browser-approval' requests plan approval. The RAG checkbox is the only
+// execution switch a user still controls, and it selects the two-Producer Run.
+async function create(page: Page, topic: string, rag = false) {
   await page.getByRole('button', { name: '新建研究', exact: true }).click();
   await page.getByLabel('研究主题').fill(topic);
-  await page.getByLabel('执行前审批计划').setChecked(approval);
+  if (rag) await page.getByLabel('RAG 内部知识检索').setChecked(true);
   await page.getByRole('button', { name: '创建持久 Run' }).click();
   await expect(page.locator('.run-identity strong')).toHaveText(/^[a-f0-9]{32}$/);
   return (await page.locator('.run-identity strong').textContent())!;
@@ -68,7 +71,7 @@ test('actual FastAPI → DBOS → SDK: approval, trace, replay, refresh, report 
   await expect(page).toHaveTitle(/Agent Execution Studio/);
   await expect(page.getByRole('heading', { name: '研究执行观测台' })).toBeVisible();
   await authenticate(page);
-  const id = await create(page, 'Studio controlled real-chain research', true);
+  const id = await create(page, 'browser-approval Studio controlled real-chain research', true);
   await expect(page.getByRole('button', { name: '批准执行', exact: true })).toBeVisible();
   await expect(page.locator('.inspector h3')).toHaveText('Approval');
   await expect(page.locator('.state-waiting').filter({ hasText: 'Risk Assessment' })).toBeVisible();
@@ -223,7 +226,7 @@ test('manual node selection survives updates and followup invocations navigate t
 }) => {
   await page.goto('/studio');
   await authenticate(page);
-  await create(page, 'followup-once', true);
+  await create(page, 'browser-approval followup-once');
   await expect(page.locator('.inspector h3')).toHaveText('Approval');
   await page.locator('.react-flow__node').filter({ hasText: 'Intake' }).click();
   await page.getByRole('button', { name: '批准执行', exact: true }).click();

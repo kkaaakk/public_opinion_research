@@ -31,9 +31,6 @@ const resultsPanel = document.getElementById('results-panel');
 const reportEl = document.getElementById('report-content');
 const usageBar = document.getElementById('usage-bar');
 const emptyState = document.getElementById('empty-state');
-const modelSelect = document.getElementById('model');
-const searchSelect = document.getElementById('search');
-const modeSelect = document.getElementById('mode');
 const apiToken = document.getElementById('api-token');
 const reportMeta = document.getElementById('report-meta');
 const resultsTitle = document.getElementById('results-title');
@@ -96,18 +93,10 @@ async function startResearch(resumeDurable = false) {
     reportRequestVersion += 1;
     activeResearchRequest = {
         topic,
-        model: modelSelect.value,
-        search_api: searchSelect.value,
-        mode: modeSelect.value,
         org_context: document.getElementById('org-context').value,
-        rag_enabled: document.getElementById('rag-enabled')?.checked || false,
+        rag_enabled: document.getElementById('rag-enabled')?.checked === true,
     };
     if (resumeDurable && durableRun) activeResearchRequest = durableRun.request;
-    else {
-        Object.assign(activeResearchRequest, {
-            require_approval: document.getElementById('require-approval').checked,
-        });
-    }
     setHistorySelection(null);
     setHistoryActionsDisabled();
     reportMeta.textContent = truncate(topic, 180);
@@ -265,7 +254,13 @@ function readDurableRun() {
         if (typeof key === 'string' && typeof request?.topic === 'string'
             && Number.isSafeInteger(cursor) && cursor >= 0
             && (runId === null || /^[a-f0-9]{32}$/.test(runId))) {
-            return {key, request, runId, cursor, finished};
+            // Rebuild the body from accepted fields only: a request stored by an
+            // older build still carries technical settings this API no longer takes.
+            return {key, runId, cursor, finished, request: {
+                topic: request.topic,
+                org_context: typeof request.org_context === 'string' ? request.org_context : '',
+                rag_enabled: request.rag_enabled === true,
+            }};
         }
     } catch { /* Missing/invalid tab-local data never starts a request. */ }
     return null;
@@ -371,6 +366,14 @@ async function followDurableRun(request) {
             saveDurableRun();
         } catch (error) {
             if ([400, 401].includes(error.httpStatus)) { durableRun = null; saveDurableRun(); }
+            if (error.httpStatus === 409) {
+                // This key already belongs to another request, possibly the body
+                // stored before the input protocol changed. Replaying it can
+                // never create this Run, so keep no stale identity and say so.
+                durableRun = null;
+                saveDurableRun();
+                addLog('error', '⚠ 创建未获确认：原请求可能已创建为 Run，请先按历史归档或 Run ID 核对。');
+            }
             throw error;
         }
     }
@@ -685,22 +688,16 @@ function historyMarkdown(record) {
     return parts.join('\n\n');
 }
 
-// 将选中归档的研究参数填回表单；历史模型不再可选时提示用户重新选择。
+// 将选中归档的研究参数填回表单；模型等系统配置不再由用户选择。
 function reuseHistoryParameters() {
     if (!selectedHistoryRecord || isResearchRunning) return;
     const request = selectedHistoryRecord.request;
     topicInput.value = request.topic || '';
-    let missingModel = false;
-    for (const [select, value] of [[modelSelect, request.model], [searchSelect, request.search_api], [modeSelect, request.mode]]) {
-        // 逐项检查历史值是否仍在当前下拉选项中，避免写入已移除的模型或模式。
-        if (value && Array.from(select.options).some(option => option.value === value)) select.value = value;
-        else if (select === modelSelect && value) missingModel = true;
-    }
     document.getElementById('org-context').value = request.org_context || '';
     document.getElementById('rag-enabled').checked = request.rag_enabled === true;
     topicInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
     topicInput.focus({ preventScroll: true });
-    toast(missingModel ? '已填入研究参数，请选择当前可用的模型。' : '已填入研究参数，可修改后开始新的分析。');
+    toast('已填入研究参数，可修改后开始新的分析。');
 }
 
 // 导入 LangSmith 既有运行，并在结束时刷新列表及恢复按钮状态。
@@ -754,12 +751,8 @@ const initialHistoryId = new URL(window.location.href).searchParams.get('history
 if (initialHistoryId) openHistory(initialHistoryId);
 if (durableRun) {
     topicInput.value = durableRun.request.topic;
-    modelSelect.value = durableRun.request.model;
-    searchSelect.value = durableRun.request.search_api;
-    modeSelect.value = durableRun.request.mode;
-    document.getElementById('org-context').value = durableRun.request.org_context;
-    document.getElementById('rag-enabled').checked = durableRun.request.rag_enabled;
-    document.getElementById('require-approval').checked = durableRun.request.require_approval;
+    document.getElementById('org-context').value = durableRun.request.org_context || '';
+    document.getElementById('rag-enabled').checked = durableRun.request.rag_enabled === true;
     document.getElementById('resume-run-btn').classList.remove('hidden');
     startBtn.disabled = !durableRun.finished;
     statusBar.classList.remove('hidden');

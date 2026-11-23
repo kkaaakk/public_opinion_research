@@ -16,7 +16,9 @@ test('same Run survives clarification and AI revision reloads, then Brief approv
   await expect(page).toHaveTitle(/Agent Execution Studio/);
   await authenticateStudio(page);
   await page.getByRole('button', { name: '新建研究', exact: true }).click();
-  await page.getByLabel('研究主题').fill('browser-clarify-multi brand risk with evidence');
+  await page
+    .getByLabel('研究主题')
+    .fill('browser-approval browser-clarify-multi brand risk with evidence');
   await page.getByRole('button', { name: '创建持久 Run' }).click();
   await expect(page.getByRole('heading', { name: '补充研究需求' })).toBeVisible();
   await expect(page.getByText(/澄清第 1\/3 轮/)).toBeVisible();
@@ -128,11 +130,10 @@ for (const surface of ['studio', 'classic'] as const) {
       await authenticate();
       if (studio) {
         await page.getByRole('button', { name: '新建研究', exact: true }).click();
-        await page.getByLabel('研究主题').fill('brand risk with evidence');
+        await page.getByLabel('研究主题').fill('browser-approval brand risk with evidence');
         await page.getByRole('button', { name: '创建持久 Run' }).click();
       } else {
-        await page.locator('#topic').fill('brand risk with evidence');
-        await page.getByLabel('开始研究前审批计划').check();
+        await page.locator('#topic').fill('browser-approval brand risk with evidence');
         await page.getByRole('button', { name: '开始舆情分析' }).click();
       }
       const version = page.locator(studio ? '.approval .mono' : '#approval-version').first();

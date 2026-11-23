@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, StudioApi } from './api';
 import { RunObserver, type Connection } from './observer';
 import type { HumanCommand, RunEvent, RunRequest, RunSnapshot } from './protocol';
-import { persist, restore, type PendingCreate, type PendingRetry } from './session';
+import {
+  persist,
+  restore,
+  createRequest,
+  type PendingCreate,
+  type PendingRetry,
+} from './session';
 
 /** Owns tab-local request identity and the subscriber; DBOS owns execution. */
 export function useRunSession() {
@@ -73,17 +79,18 @@ export function useRunSession() {
     }
   }
   async function createRun(request?: RunRequest): Promise<boolean> {
-    if (busyRef.current) return false;
+    if (busyRef.current || (!request && !session.create)) return false;
     busyRef.current = true;
     setBusy(true);
     setMessage('');
     let savedIdentity = false;
     try {
+      // The stored identity wins: a retry resends the exact admitted body.
+      // A fresh body is rebuilt from accepted fields only.
       const pending: PendingCreate = session.create ?? {
         key: crypto.randomUUID(),
-        request: request!,
+        request: createRequest(request!),
       };
-      if (!pending.request) return false;
       commit({ ...session, create: pending });
       savedIdentity = true;
       const result = await api.create(pending.request, pending.key);
@@ -91,7 +98,15 @@ export function useRunSession() {
       refresh();
       return true;
     } catch (error) {
-      if (error instanceof ApiError && [400, 413, 422].includes(error.status)) {
+      if (error instanceof ApiError && error.status === 409) {
+        // The server already owns this key for another request, possibly the
+        // pre-upgrade body, so no further replay can create this Run. Drop the
+        // identity instead of retrying it, and leave verification to the user.
+        commit({ ...session, create: undefined });
+        setMessage(
+          `${error.message} · 创建未获确认：原创建请求可能已创建为 Run；请按 Run ID 或历史归档核对后再重新创建。`,
+        );
+      } else if (error instanceof ApiError && [400, 413, 422].includes(error.status)) {
         commit({ ...session, create: undefined });
         setMessage(`${error.message} · 请求被拒绝，可修改参数后再次创建。`);
       } else

@@ -20,8 +20,9 @@ from open_deep_research.config_file import (
     load_configuration,
     non_sensitive_config,
     request_payload,
+    run_configuration,
 )
-from open_deep_research.configuration import Configuration
+from open_deep_research.configuration import Configuration, RetrievalMode
 from open_deep_research.preflight import (
     ERROR,
     READY,
@@ -303,6 +304,88 @@ def test_fingerprint_input_excludes_credentials():
         request_payload("brand", base), digest(effective)
     ) == request_fingerprint(
         request_payload("brand", base), _fingerprint_digest(base)
+    )
+
+
+def test_run_rag_switch_derives_a_consistent_run_configuration():
+    """Only the RAG-dependent fields move; the shared configuration is untouched."""
+    base = load_configuration(DEFAULT_CONFIG_FILE)
+    without_knowledge = [
+        role
+        for role in base.enabled_business_agents
+        if role != "internal_knowledge"
+    ]
+    web_only = base.model_copy(
+        update={
+            "rag_enabled": False,
+            "retrieval_mode": RetrievalMode.WEB_ONLY,
+            "enabled_business_agents": without_knowledge,
+        }
+    )
+
+    off = run_configuration(base, rag_enabled=False)
+    assert (off.rag_enabled, off.retrieval_mode) == (False, RetrievalMode.WEB_ONLY)
+    assert off.research_model == base.research_model
+    assert off.allow_plan_feedback == base.allow_plan_feedback
+    assert off.allow_clarification == base.allow_clarification
+    assert off.max_research_rounds == base.max_research_rounds
+    assert (base.rag_enabled, base.retrieval_mode) == (True, RetrievalMode.HYBRID)
+    # RAG-only roles cannot run without the knowledge base; other roles stay.
+    assert "internal_knowledge" in base.enabled_business_agents
+    assert "internal_knowledge" not in off.enabled_business_agents
+    assert set(off.enabled_business_agents) == set(base.enabled_business_agents) - {
+        "internal_knowledge"
+    }
+
+    promoted = run_configuration(web_only, rag_enabled=True)
+    assert (promoted.rag_enabled, promoted.retrieval_mode) == (True, RetrievalMode.HYBRID)
+    # Enabling RAG never adds a role the operator did not enable.
+    assert promoted.enabled_business_agents == web_only.enabled_business_agents
+
+    rag_only = base.model_copy(update={"retrieval_mode": RetrievalMode.RAG_ONLY})
+    assert run_configuration(rag_only, rag_enabled=True) is rag_only
+    assert run_configuration(web_only, rag_enabled=False) is web_only
+    for configuration in (off, promoted, rag_only):
+        assert not (
+            configuration.rag_enabled
+            and configuration.retrieval_mode == RetrievalMode.WEB_ONLY
+        )
+        assert not (
+            not configuration.rag_enabled
+            and configuration.retrieval_mode != RetrievalMode.WEB_ONLY
+        )
+
+
+def test_rag_switch_reaches_the_snapshot_and_the_idempotency_fingerprint():
+    """Two RAG states are two different admissions, never one replay."""
+    base = load_configuration(DEFAULT_CONFIG_FILE)
+    on = run_configuration(base, rag_enabled=True)
+    off = run_configuration(base, rag_enabled=False)
+    request_on = request_payload("brand risk", on)
+    request_off = request_payload("brand risk", off)
+    assert request_on["rag_enabled"] is True
+    assert request_off["rag_enabled"] is False
+    assert frozen_config(on)["configurable"]["retrieval_mode"] == "hybrid"
+    assert frozen_config(off)["configurable"]["retrieval_mode"] == "web_only"
+    assert frozen_config(off)["configurable"]["rag_enabled"] is False
+
+    fingerprint_off = _fingerprint_digest(off)
+    fingerprint_on = _fingerprint_digest(on)
+    stored = {
+        "fingerprint": request_fingerprint(request_off, fingerprint_off),
+        "configuration": _effective_digest(off),
+    }
+    assert matches_stored_request(
+        stored,
+        request=request_off,
+        fingerprint_configuration=fingerprint_off,
+        configuration=_effective_digest(off),
+    )
+    assert not matches_stored_request(
+        stored,
+        request=request_on,
+        fingerprint_configuration=fingerprint_on,
+        configuration=_effective_digest(on),
     )
 
 

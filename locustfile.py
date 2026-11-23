@@ -70,19 +70,6 @@ ORG_CONTEXTS = [
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Model / search-api pools — rotated per-request to spread provider load
-# ═══════════════════════════════════════════════════════════════════════════
-
-MODELS = [
-    "deepseek:deepseek-flash",
-    "openai:gpt-4o",
-    "openai:gpt-4.1",
-]
-
-SEARCH_APIS = ["tavily"]  # Admitted SDK profile; no legacy fallback
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Research profile — a complete parameter set for one request
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -94,15 +81,16 @@ class Scenario(str, Enum):
 
 # 构造企业舆情风险场景的实际请求载荷。
 def _build_profile(scenario: Scenario, mode: str) -> dict:
-    """Build a realistic request payload for public_opinion_risk scenario."""
+    """Build the business input of one public_opinion_risk request.
+
+    ``mode`` only labels the load-test task; models, research depth and the
+    search API are fixed by the server's config.yaml and are not request fields.
+    """
     topic = random.choice(PUBLIC_OPINION_TOPICS)
     org_context = random.choice(ORG_CONTEXTS)
 
     return {
         "topic": topic,
-        "model": random.choice(MODELS),
-        "search_api": random.choice(SEARCH_APIS),
-        "mode": mode,
         "org_context": org_context,
         "rag_enabled": False,  # requires local infra — opt-in via env if needed
     }

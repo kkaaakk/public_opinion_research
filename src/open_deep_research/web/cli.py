@@ -24,11 +24,16 @@ def main(argv=None):
     create.add_argument(
         "--key", required=True, help="Reuse this key only for the same request"
     )
-    create.add_argument("--model", default="deepseek:deepseek-flash")
-    create.add_argument("--mode", choices=["fast", "normal", "deep"], default="normal")
-    create.add_argument("--rag", action="store_true")
-    create.add_argument("--approval", action="store_true")
-    create.add_argument("--no-clarification", action="store_true")
+    create.add_argument(
+        "--rag",
+        action="store_true",
+        help="Let this Run query the local enterprise knowledge base.",
+    )
+    create.add_argument(
+        "--org-context",
+        default="",
+        help="Optional enterprise, product or industry background.",
+    )
     for name in ("get", "events", "cancel", "approve", "retry", "clarify"):
         sub = commands.add_parser(name)
         sub.add_argument("run_id")
@@ -61,11 +66,8 @@ def main(argv=None):
         headers["Idempotency-Key"] = args.key
         body = dict(
             topic=args.topic,
-            model=args.model,
-            mode=args.mode,
+            org_context=args.org_context,
             rag_enabled=args.rag,
-            require_approval=args.approval,
-            allow_clarification=not args.no_clarification,
         )
     else:
         path += "/" + args.run_id

@@ -17,7 +17,7 @@ import yaml
 from pydantic import ValidationError
 
 from open_deep_research.config_values import without_retired_execution_selectors
-from open_deep_research.configuration import Configuration
+from open_deep_research.configuration import Configuration, RetrievalMode
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_FILE = PROJECT_ROOT / "config.yaml"
@@ -32,6 +32,9 @@ SENSITIVE_CONFIG_FIELDS = frozenset(
         "rag_milvus_token",
     }
 )
+
+# Roles whose only external research capability is the local RAG pipeline.
+RAG_REQUIRED_ROLES = frozenset({"internal_knowledge"})
 
 
 class ConfigFileError(ValueError):
@@ -53,6 +56,49 @@ def load_configuration(path: str | Path | None = None) -> Configuration:
         return Configuration(**data)
     except ValidationError as exc:
         raise ConfigFileError(_format_validation_error(config_path, exc)) from None
+
+
+def run_configuration(
+    configuration: Configuration, *, rag_enabled: bool
+) -> Configuration:
+    """Derive the effective configuration of one Run from the server settings.
+
+    The Web entry point lets the user decide whether this single Run may query
+    the local enterprise knowledge base. ``rag_enabled`` is the only user-level
+    switch; every other field keeps the value ``config.yaml`` declares, and the
+    shared ``Configuration`` object is never mutated.
+
+    Two dependent fields move with it, because leaving them behind would produce
+    a configuration the rest of the runtime contradicts:
+
+    * ``retrieval_mode`` — tool assembly reads it together with ``rag_enabled``.
+      Turning RAG off returns to ``web_only`` so web search keeps working.
+      Turning RAG on promotes a ``web_only`` Run to ``hybrid``; an already
+      RAG-capable mode stays as configured.
+    * ``enabled_business_agents`` — ``internal_knowledge`` may only use
+      ``rag_search``, so an RAG-off Run drops that role instead of failing it
+      for a capability the user turned off. Enabling RAG never adds a role the
+      operator did not enable.
+    """
+    mode = configuration.retrieval_mode
+    if not rag_enabled:
+        mode = RetrievalMode.WEB_ONLY
+    elif mode == RetrievalMode.WEB_ONLY:
+        mode = RetrievalMode.HYBRID
+    agents = list(configuration.enabled_business_agents or [])
+    if not rag_enabled:
+        agents = [role for role in agents if role not in RAG_REQUIRED_ROLES]
+    updates = {"rag_enabled": rag_enabled, "retrieval_mode": mode}
+    if agents != list(configuration.enabled_business_agents or []):
+        updates["enabled_business_agents"] = agents
+    updates = {
+        name: value
+        for name, value in updates.items()
+        if getattr(configuration, name) != value
+    }
+    if not updates:
+        return configuration
+    return configuration.model_copy(update=updates)
 
 
 def frozen_config(configuration: Configuration) -> dict[str, Any]:
@@ -221,4 +267,5 @@ __all__ = [
     "load_configuration",
     "non_sensitive_config",
     "request_payload",
+    "run_configuration",
 ]

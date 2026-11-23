@@ -2,13 +2,6 @@ import { useState, type FormEvent } from 'react';
 import { Play } from 'lucide-react';
 import type { RunRequest } from '../protocol';
 import { Modal } from './common';
-export const MODELS = [
-  'deepseek:deepseek-flash',
-  'deepseek:deepseek-chat',
-  'deepseek:deepseek-v4-flash',
-  'openai:gpt-4.1',
-  'openai:gpt-4o',
-];
 export function CreateDialog({
   onClose,
   onCreate,
@@ -20,17 +13,18 @@ export function CreateDialog({
 }) {
   const [request, setRequest] = useState<RunRequest>({
     topic: '',
-    model: MODELS[0],
-    mode: 'normal',
-    search_api: 'tavily',
     org_context: '',
-    rag_enabled: true,
-    require_approval: true,
-    allow_clarification: true,
+    rag_enabled: false,
   });
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (request.topic.trim()) onCreate({ ...request, topic: request.topic.trim() });
+    if (request.topic.trim()) {
+      onCreate({
+        topic: request.topic.trim(),
+        org_context: request.org_context ?? '',
+        rag_enabled: request.rag_enabled === true,
+      });
+    }
   }
   return (
     <Modal title="新建研究" onClose={onClose}>
@@ -47,38 +41,12 @@ export function CreateDialog({
             placeholder="描述要调查的品牌、企业、产品或舆情事件"
           />
         </label>
-        <div className="form-grid">
-          <label>
-            研究模型
-            <select
-              value={request.model}
-              onChange={(e) => setRequest({ ...request, model: e.target.value })}
-            >
-              {MODELS.map((m) => (
-                <option key={m}>{m}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            研究深度
-            <select
-              value={request.mode}
-              onChange={(e) =>
-                setRequest({ ...request, mode: e.target.value as RunRequest['mode'] })
-              }
-            >
-              <option value="fast">Fast · 有界快速研究</option>
-              <option value="normal">Normal · 标准研究</option>
-              <option value="deep">Deep · 深度研究</option>
-            </select>
-          </label>
-        </div>
         <label>
           组织背景（可选）
           <textarea
             rows={2}
             maxLength={8000}
-            value={request.org_context}
+            value={request.org_context ?? ''}
             onChange={(e) => setRequest({ ...request, org_context: e.target.value })}
           />
         </label>
@@ -86,31 +54,15 @@ export function CreateDialog({
           <label>
             <input
               type="checkbox"
-              checked={request.rag_enabled}
+              checked={request.rag_enabled === true}
               onChange={(e) => setRequest({ ...request, rag_enabled: e.target.checked })}
             />
             RAG 内部知识检索
           </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={request.require_approval}
-              onChange={(e) => setRequest({ ...request, require_approval: e.target.checked })}
-            />
-            执行前审批计划
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={request.allow_clarification ?? true}
-              onChange={(e) => setRequest({ ...request, allow_clarification: e.target.checked })}
-            />
-            必要时澄清研究需求
-          </label>
         </div>
         <p className="note">
-          搜索使用受保护 API 支持的 Tavily 工具。服务端可能强制计划审批。模型与工具调用由现有 DBOS /
-          SDK 链路执行。
+          模型、研究深度、检索方式、预算与审批策略由服务端 config.yaml 管理，不随单次研究改变。
+          时间范围与重点关注问题请直接写进研究主题。
         </p>
         <div className="form-actions">
           <button type="button" className="button" onClick={onClose}>

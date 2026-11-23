@@ -387,7 +387,11 @@ export default function App() {
           )}
           {session.create && (
             <div className="notice">
-              <span>存在未确认的创建请求；重发使用原幂等键与原参数。</span>
+              <span>
+                {session.create.upgraded
+                  ? '存在旧版本未确认的创建请求；参数已按新协议升级，重发与原请求并不相同，若原请求已创建请先核对。'
+                  : '存在未确认的创建请求；重发使用原幂等键与原参数。'}
+              </span>
               <button className="button small" disabled={busy} onClick={() => void createRun()}>
                 确认原创建请求
               </button>

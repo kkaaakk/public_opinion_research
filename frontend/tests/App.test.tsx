@@ -39,8 +39,76 @@ it('stores the create identity before POST and reuses its exact body after respo
   await user.click(screen.getByRole('button', { name: '确认原创建请求' }));
   await waitFor(() => expect(requests).toHaveLength(2));
   expect(requests[1]).toEqual(requests[0]);
+  // The create body carries business input only; RAG defaults to off.
+  expect(JSON.parse(String(requests[0].body))).toEqual({
+    topic: 'Brand research',
+    org_context: '',
+    rag_enabled: false,
+  });
   await waitFor(() => expect(restore().runId).toBe(ID));
   expect(restore().create).toBeUndefined();
+});
+it('retries a request persisted with removed technical settings using accepted fields only', async () => {
+  const bodies: unknown[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === '/api/runs') {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(snapshot({ status: 'completed', events_complete: true }));
+      }
+      return json(snapshot({ status: 'completed', events_complete: true }));
+    }),
+  );
+  sessionStorage.setItem(
+    'por-studio-session-v2',
+    JSON.stringify({
+      create: {
+        key: 'stored-key',
+        request: {
+          topic: 'Legacy topic',
+          model: 'deepseek:deepseek-flash',
+          mode: 'deep',
+          search_api: 'tavily',
+          require_approval: true,
+          allow_clarification: true,
+          org_context: '',
+          rag_enabled: true,
+        },
+      },
+    }),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  // An upgraded body is not the request that key may already own; say so first.
+  await screen.findByText(/参数已按新协议升级/);
+  await user.click(screen.getByRole('button', { name: '确认原创建请求' }));
+  await waitFor(() => expect(bodies).toHaveLength(1));
+  expect(bodies[0]).toEqual({
+    topic: 'Legacy topic',
+    org_context: '',
+    rag_enabled: true,
+  });
+});
+it('stops retrying an identity whose key already owns another request', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>(async (input) =>
+      String(input) === '/api/runs'
+        ? json({ detail: 'Idempotency key was used for another request' }, 409)
+        : json(snapshot({ status: 'completed', events_complete: true })),
+    ),
+  );
+  persist({ create: { key: 'taken-key', request: { topic: 'Topic', org_context: '', rag_enabled: false } } });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: '确认原创建请求' }));
+  await screen.findByText(/原创建请求可能已创建为 Run；请按 Run ID 或历史归档核对/);
+  // The rejected identity is dropped, so it can never be replayed silently.
+  await waitFor(() => expect(restore().create).toBeUndefined());
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: '确认原创建请求' })).toBeNull(),
+  );
 });
 it('binds approval to the exact plan and keeps the token out of persistent storage', async () => {
   persist({ runId: ID });
