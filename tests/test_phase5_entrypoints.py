@@ -57,8 +57,7 @@ def test_retired_engine_rejected_in_configuration_and_environment(
         Configuration.from_runnable_config({"metadata": {"accepted_run": True}})
 
 
-@pytest.mark.parametrize("path", ["/api/runs", "/api/research"])
-def test_default_admission_uses_durable_client(monkeypatch, path):
+def test_default_admission_uses_durable_client(monkeypatch):
     received = []
     monkeypatch.setattr(server, "WEB_API_TOKEN", "phase5-test-token")
 
@@ -68,17 +67,17 @@ def test_default_admission_uses_durable_client(monkeypatch, path):
             return {"run_id": "r", "status": "queued"}, True
 
     monkeypatch.setattr(runs, "_store", Store)
-    monkeypatch.setattr(runs, "subscription", lambda *a: {"run_id": "r"})
     with TestClient(server.app) as client:
         response = client.post(
-            path,
+            "/api/runs",
             json={"topic": "brand"},
             headers={
                 "Authorization": "Bearer phase5-test-token",
                 "Idempotency-Key": "same-request",
             },
         )
-    assert response.status_code == (202 if path == "/api/runs" else 200)
+    assert response.status_code == 202
+    assert response.headers["location"] == "/api/runs/r"
     assert len(received) == 1
     owner, key, data, config, state = received[0]
     assert (owner, key) == ("operator", "same-request")
@@ -88,8 +87,7 @@ def test_default_admission_uses_durable_client(monkeypatch, path):
     assert "business_agent_runtime" not in config["configurable"]
 
 
-@pytest.mark.parametrize("path", ["/api/runs", "/api/research"])
-def test_default_admission_requires_operator_and_request_identity(monkeypatch, path):
+def test_default_admission_requires_operator_and_request_identity(monkeypatch):
     monkeypatch.setattr(server, "WEB_API_TOKEN", "phase5-test-token")
     monkeypatch.setattr(
         runs,
@@ -97,13 +95,36 @@ def test_default_admission_requires_operator_and_request_identity(monkeypatch, p
         lambda: (_ for _ in ()).throw(AssertionError("must reject before storage")),
     )
     with TestClient(server.app) as client:
-        assert client.post(path, json={"topic": "brand"}).status_code == 401
+        assert client.post("/api/runs", json={"topic": "brand"}).status_code == 401
         response = client.post(
-            path,
+            "/api/runs",
             json={"topic": "brand"},
             headers={"Authorization": "Bearer phase5-test-token"},
         )
         assert response.status_code == 400
+
+
+def test_research_creation_has_one_http_entrypoint(monkeypatch):
+    """The streaming create alias is gone; only POST /api/runs creates a Run."""
+    monkeypatch.setattr(server, "WEB_API_TOKEN", "single-entry-token")
+    monkeypatch.setattr(
+        runs,
+        "_store",
+        lambda: (_ for _ in ()).throw(AssertionError("must not create a Run")),
+    )
+    paths = server.app.openapi()["paths"]
+    assert "/api/research" not in paths
+    assert "/api/runs" in paths
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/research",
+            json={"topic": "brand"},
+            headers={
+                "Authorization": "Bearer single-entry-token",
+                "Idempotency-Key": "single-entry",
+            },
+        )
+    assert response.status_code == 404
 
 
 def test_cli_sends_default_run_and_stable_key(monkeypatch, capsys):
@@ -130,15 +151,14 @@ def test_cli_sends_default_run_and_stable_key(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("terminal", [None, "completed"])
-def test_stress_client_uses_native_identity_and_requires_terminal_event(
-    monkeypatch, terminal
-):
+def test_stress_client_creates_a_run_then_reads_its_events(monkeypatch, terminal):
     from contextlib import contextmanager
     from types import SimpleNamespace
 
     import agent_stress
 
-    sent = []
+    created = []
+    streamed = []
     frames = [
         {"type": "step_started", "step": "generate_final_report"},
         {"type": "report", "content": "fixture report"},
@@ -147,23 +167,40 @@ def test_stress_client_uses_native_identity_and_requires_terminal_event(
     if terminal:
         frames.append({"type": "done", "status": terminal})
 
+    class Created:
+        status_code = 202
+
+        @staticmethod
+        def json():
+            return {"run_id": "run-1"}
+
     @contextmanager
     def stream(*args, **kwargs):
-        sent.append(kwargs)
+        streamed.append((args, kwargs))
         yield SimpleNamespace(
             status_code=200,
-            iter_lines=lambda: ["data: " + json.dumps(e) for e in frames],
+            iter_lines=lambda: ["id: 1"] + ["data: " + json.dumps(e) for e in frames],
         )
 
+    def post(url, **kwargs):
+        created.append((url, kwargs))
+        return Created()
+
     monkeypatch.setenv("PUBLIC_OPINION_API_TOKEN", "stress-test-token")
+    monkeypatch.setattr(agent_stress.httpx, "post", post)
     monkeypatch.setattr(agent_stress.httpx, "stream", stream)
     result = agent_stress.AgentStressTester().run_one("public_opinion_risk", "fast")
     assert result.success is (terminal == "completed")
     assert result.nodes_visited == ["generate_final_report"]
     assert result.total_tokens == 12
-    assert "scenario" not in sent[0]["json"]
-    assert sent[0]["headers"]["Authorization"] == "Bearer stress-test-token"
-    assert len(sent[0]["headers"]["Idempotency-Key"]) == 32
+    url, kwargs = created[0]
+    assert url.endswith("/api/runs")
+    assert "scenario" not in kwargs["json"]
+    assert kwargs["headers"]["Authorization"] == "Bearer stress-test-token"
+    assert len(kwargs["headers"]["Idempotency-Key"]) == 32
+    (method, events_url), stream_kwargs = streamed[0]
+    assert method == "GET" and events_url.endswith("/api/runs/run-1/events")
+    assert stream_kwargs["headers"]["Authorization"] == "Bearer stress-test-token"
 
 
 def test_mcp_oauth_exchange_does_not_depend_on_engine_store_or_share_tokens(
@@ -225,11 +262,10 @@ def test_authenticated_mcp_is_not_connected_when_exchange_fails(monkeypatch):
     assert result is None
 
 
-@pytest.mark.parametrize("path", ["/api/runs", "/api/research"])
 @pytest.mark.parametrize("field", ["workflow_backend", "business_agent_runtime"])
 @pytest.mark.parametrize("value", [[], {}])
 def test_selector_containers_return_validation_error_before_storage(
-    monkeypatch, path, field, value
+    monkeypatch, field, value
 ):
     monkeypatch.setattr(server, "WEB_API_TOKEN", "invalid-selector-test-token")
     monkeypatch.setattr(
@@ -241,7 +277,7 @@ def test_selector_containers_return_validation_error_before_storage(
     )
     with TestClient(server.app, raise_server_exceptions=False) as client:
         response = client.post(
-            path,
+            "/api/runs",
             json={"topic": "brand", field: value},
             headers={
                 "Authorization": "Bearer invalid-selector-test-token",
@@ -252,8 +288,7 @@ def test_selector_containers_return_validation_error_before_storage(
     assert response.json()["detail"] == "Invalid research request."
 
 
-@pytest.mark.parametrize("path", ["/api/runs", "/api/research"])
-def test_retired_operator_environment_rejects_before_storage(monkeypatch, path):
+def test_retired_operator_environment_rejects_before_storage(monkeypatch):
     monkeypatch.setattr(server, "WEB_API_TOKEN", "migration-test-token")
     monkeypatch.setenv("BUSINESS_AGENT_RUNTIME", "legacy")
     monkeypatch.setattr(
@@ -265,7 +300,7 @@ def test_retired_operator_environment_rejects_before_storage(monkeypatch, path):
     )
     with TestClient(server.app) as client:
         response = client.post(
-            path,
+            "/api/runs",
             json={"topic": "brand"},
             headers={
                 "Authorization": "Bearer migration-test-token",

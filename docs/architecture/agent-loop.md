@@ -97,7 +97,7 @@ flowchart TD
 
 | 节点 | 输入、输出及持久边界 |
 | --- | --- |
-| 1. 提交 | Studio、Classic 或 `deep-research` 调用 `POST /api/runs`，旧 `POST /api/research` 复用提交和订阅入口。`ResearchRequest` 只接收主题、组织背景和本次 Run 的 `rag_enabled` 开关；模型、深度、搜索 API、预算与审批澄清策略仍由 `config.yaml` 决定，服务端据此构造有效配置副本和初始 `HumanMessage`。 |
+| 1. 提交 | Studio、Classic 或 `deep-research` 只调用 `POST /api/runs` 创建 Run，再用 `GET /api/runs/{run_id}/events` 单独订阅事件；创建与订阅是两个 HTTP 入口，没有流式创建别名。`ResearchRequest` 只接收主题、组织背景和本次 Run 的 `rag_enabled` 开关；模型、深度、搜索 API、预算与审批澄清策略仍由 `config.yaml` 决定，服务端据此构造有效配置副本和初始 `HumanMessage`。 |
 | 2. 准入 | `RunClient.create` 在事务内创建 Run ID，复用合规 Session 或创建新 Session，固定请求、配置指纹、初始 State 和版本，原子写请求、入队三个 Workflow 并发送排队消息。成功创建返回 `202`，相同请求重投返回原 Run。 |
 | 3. 启动 | `run_workflow` 调用 `load_request` Step 核对冻结配置与版本。根为各轮规划和研究设置稳定子 ID，通过原生结果句柄获取下一段 State。 |
 | 4. 图片与 Plan | `planning_workflow` 第一轮调用 `intake.enrich_query_images`，有图片时将理解结果纳入消息。`intake.plan_research` 根据消息、图像和配置返回 `ask_user` 或带 Markdown Brief 的 `ready`。模型调用使用 `por.llm` / `por.llm_sync`（有独立 Step 边界时），`por.stage_result` 在 patch 有消息时固定其 ID。 |

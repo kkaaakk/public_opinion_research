@@ -216,36 +216,52 @@ class ResearchPublicOpinion:
     # 执行较低开销的快速舆情场景。
     @task(2)
     def public_opinion_fast(self):
-        self._run(mode="fast", name="POST /api/research [public_opinion_risk / fast]")
+        self._run(mode="fast", name="POST /api/runs [public_opinion_risk / fast]")
 
     # 执行常规舆情研究场景。
     @task(1)
     def public_opinion_normal(self):
         self._run(
-            mode="normal", name="POST /api/research [public_opinion_risk / normal]"
+            mode="normal", name="POST /api/runs [public_opinion_risk / normal]"
         )
 
-    # 发送研究请求，消费 SSE 并按预期节点和结束状态判定成功。
+    # 创建 Run 后订阅它的 SSE 事件，并按预期节点和结束状态判定成功。
     def _run(self, mode: str, name: str):
         payload = _build_profile(Scenario.PUBLIC_OPINION, mode)
         validator = SSEValidator()
+        headers = {
+            "Authorization": "Bearer "
+            + (
+                os.environ.get("PUBLIC_OPINION_API_TOKEN")
+                or os.environ.get("WEB_API_TOKEN")
+                or ""
+            ),
+            "Idempotency-Key": uuid4().hex,
+        }
 
         with self.client.post(
-            "/api/research",
+            "/api/runs",
             json=payload,
-            headers={
-                "Authorization": "Bearer "
-                + (
-                    os.environ.get("PUBLIC_OPINION_API_TOKEN")
-                    or os.environ.get("WEB_API_TOKEN")
-                    or ""
-                ),
-                "Idempotency-Key": uuid4().hex,
-            },
+            headers=headers,
+            catch_response=True,
+            timeout=RESEARCH_TIMEOUT,
+            name=name,
+        ) as created:
+            if created.status_code not in (200, 202):
+                created.failure(f"HTTP {created.status_code}: {created.text[:200]}")
+                return
+            run_id = created.json().get("run_id")
+            if not run_id:
+                created.failure("create response carried no run_id")
+                return
+
+        with self.client.get(
+            f"/api/runs/{run_id}/events",
+            headers={"Authorization": headers["Authorization"]},
             catch_response=True,
             stream=True,
             timeout=RESEARCH_TIMEOUT,
-            name=name,
+            name=name + " [events]",
         ) as resp:
             if resp.status_code != 200:
                 resp.failure(f"HTTP {resp.status_code}: {resp.text[:200]}")

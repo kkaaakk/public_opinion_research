@@ -116,20 +116,30 @@ class AgentStressTester:
 
         t0 = time.time()
         done_status = None
+        auth = {
+            "Authorization": "Bearer "
+            + (
+                os.environ.get("PUBLIC_OPINION_API_TOKEN")
+                or os.environ.get("WEB_API_TOKEN")
+                or ""
+            )
+        }
         try:
-            with httpx.stream(
-                "POST",
-                f"{self.base_url}/api/research",
+            created = httpx.post(
+                f"{self.base_url}/api/runs",
                 json=payload,
-                headers={
-                    "Authorization": "Bearer "
-                    + (
-                        os.environ.get("PUBLIC_OPINION_API_TOKEN")
-                        or os.environ.get("WEB_API_TOKEN")
-                        or ""
-                    ),
-                    "Idempotency-Key": uuid4().hex,
-                },
+                headers={**auth, "Idempotency-Key": uuid4().hex},
+                timeout=self.timeout,
+            )
+            if created.status_code not in (200, 202):
+                result.error = f"HTTP {created.status_code}"
+                result.duration_s = time.time() - t0
+                return result
+            run_id = created.json()["run_id"]
+            with httpx.stream(
+                "GET",
+                f"{self.base_url}/api/runs/{run_id}/events",
+                headers=auth,
                 timeout=self.timeout,
             ) as resp:
                 if resp.status_code != 200:

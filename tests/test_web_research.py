@@ -175,29 +175,24 @@ def test_retrieval_tools_follow_the_run_rag_switch(monkeypatch, rag_enabled):
     assert names == ({"web_search", "rag_search"} if rag_enabled else {"web_search"})
 
 
-def test_research_stream_reuses_the_durable_create(monkeypatch):
-    """The legacy /api/research entry point keeps its streaming reply."""
+def test_event_subscription_streams_the_durable_events(monkeypatch):
+    """Creating a Run and subscribing to its events stay separate HTTP calls."""
     store = RecordingStore()
     monkeypatch.setattr(server, "WEB_API_TOKEN", "rag-test-token")
     monkeypatch.setattr(runs, "_store", lambda: store)
     with TestClient(server.app) as client:
-        response = client.post(
-            "/api/research",
-            json={"topic": "Analyze a customer-service incident", "rag_enabled": True},
-            headers={
-                "Authorization": "Bearer rag-test-token",
-                "Idempotency-Key": "rag-test",
-            },
+        response = client.get(
+            "/api/runs/run/events",
+            headers={"Authorization": "Bearer rag-test-token"},
         )
     assert response.status_code == 200
+    assert response.headers["x-run-id"] == "run"
     delivered = [
         json.loads(line[6:])
         for line in response.text.splitlines()
         if line.startswith("data: ")
     ]
     assert delivered == store.events
-    assert response.headers["x-run-id"] == "run"
-    assert store.created[0][2]["rag_enabled"] is True
 
 
 def test_disabled_role_still_returns_no_patch(monkeypatch):

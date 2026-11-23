@@ -27,14 +27,13 @@ ensure_langsmith_configuration()
 
 from fastapi import FastAPI, HTTPException, Query, Request  # noqa: E402, I001
 from fastapi.exceptions import RequestValidationError  # noqa: E402
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from open_deep_research.web.history import (  # noqa: E402, I001
     HistoryUnavailable,
     get_history_store,
 )
-from open_deep_research.web.runs import ResearchRequest  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
 STUDIO_DIR = Path(__file__).parent / "studio"
@@ -243,18 +242,6 @@ def read_history(history_id: str, raw: Request) -> JSONResponse:
     return JSONResponse(
         content=public_payload(record), headers={"Cache-Control": "no-store"}
     )
-
-
-# 启动研究图，并以 SSE 流推送阶段进度、报告及归档状态。
-@app.post("/api/research")
-async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
-    """Run deep research with real-time streaming via SSE."""
-    if not _request_is_authorized(raw):
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    from open_deep_research.web.runs import create_run, subscription
-
-    run, _ = await asyncio.to_thread(create_run, request, raw)
-    return subscription(raw, run["run_id"])
 
 
 # 读取服务启动配置并运行本地 Uvicorn 服务。

@@ -733,7 +733,7 @@ def test_tool_operation_identity_never_authorizes_unknown_replay(
         execution.finish_operation(run_id, op, "unknown")
 
 
-@pytest.mark.parametrize("entrypoint", ["/api/runs", "/api/research", "cli"])
+@pytest.mark.parametrize("entrypoint", ["/api/runs", "cli"])
 def test_api_contract_create_auth_cancel_and_sse(
     native_case, monkeypatch, entrypoint, capsys
 ):
@@ -839,15 +839,8 @@ def test_api_contract_create_auth_cancel_and_sse(
             assert accepted == [202]
         else:
             response = http.post(entrypoint, json=body, headers=headers)
-            assert response.status_code == (
-                202 if entrypoint == "/api/runs" else 200
-            ), response.text
-            if entrypoint == "/api/research":
-                assert '"type": "done"' in response.text
-                assert '"type": "report"' in response.text
-                run = case.client.get(response.headers["x-run-id"], "operator")
-            else:
-                run = response.json()
+            assert response.status_code == 202, response.text
+            run = response.json()
         repeated = http.post("/api/runs", json=body, headers=headers)
         assert repeated.status_code == 200
         assert repeated.json()["run_id"] == run["run_id"]
