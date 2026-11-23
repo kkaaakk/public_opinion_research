@@ -1,4 +1,4 @@
-import { integer, record, string, type RunRequest } from './protocol';
+import { boolean, integer, record, string, type RunRequest } from './protocol';
 export type PendingCreate = { key: string; request: RunRequest };
 export type PendingRetry = {
   key: string;
@@ -8,6 +8,15 @@ export type PendingRetry = {
 };
 type Session = { runId?: string; create?: PendingCreate; retry?: PendingRetry };
 const KEY = 'por-studio-session-v2';
+/** Keep only the fields the create endpoint still accepts and validates. */
+export function createRequest(value: unknown): RunRequest {
+  const r = record(value);
+  return {
+    topic: string(r.topic),
+    org_context: r.org_context === undefined ? '' : string(r.org_context),
+    rag_enabled: r.rag_enabled === undefined ? false : boolean(r.rag_enabled),
+  };
+}
 export function restore(): Session {
   try {
     const raw = sessionStorage.getItem(KEY);
@@ -17,10 +26,9 @@ export function restore(): Session {
     if (v.runId !== undefined) s.runId = string(v.runId);
     if (v.create) {
       const c = record(v.create);
-      const r = record(c.request);
-      string(r.topic);
-      string(r.model);
-      s.create = { key: string(c.key), request: r as RunRequest };
+      // Rebuilds the body from accepted fields only, so a request persisted by
+      // an older build cannot be retried with removed technical settings.
+      s.create = { key: string(c.key), request: createRequest(c.request) };
     }
     if (v.retry) {
       const r = record(v.retry);

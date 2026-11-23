@@ -74,7 +74,6 @@ class AgentResult:
 
     scenario: str
     mode: str
-    model: str
     topic: str
     success: bool
     error: str | None = None
@@ -106,19 +105,14 @@ class AgentStressTester:
     def run_one(self, scenario: str, mode: str) -> AgentResult:
         """Synchronous — callable from ThreadPoolExecutor for concurrency testing."""
         topic = TOPICS[scenario][0]
-        model = "deepseek:deepseek-flash"
+        # Business input only: models and depth come from the server config.
         payload = {
             "topic": topic,
-            "model": model,
-            "search_api": "tavily",
-            "mode": mode,
             "org_context": ORG_CONTEXT,
             "rag_enabled": False,
         }
 
-        result = AgentResult(
-            scenario=scenario, mode=mode, model=model, topic=topic, success=False
-        )
+        result = AgentResult(scenario=scenario, mode=mode, topic=topic, success=False)
 
         t0 = time.time()
         done_status = None

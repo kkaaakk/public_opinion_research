@@ -17,14 +17,21 @@ export type RunStatus =
   | 'cancelled'
   | 'interrupted';
 export const TERMINAL = new Set<RunStatus>(['completed', 'failed', 'cancelled', 'interrupted']);
+/** The create body: business input only, everything else lives in config.yaml. */
 export type RunRequest = {
   topic: string;
-  model: string;
-  mode: 'fast' | 'normal' | 'deep';
-  search_api: 'tavily';
-  org_context: string;
-  rag_enabled: boolean;
-  require_approval: boolean;
+  org_context?: string;
+  rag_enabled?: boolean;
+};
+/** The request a Run froze on the server; kept for read-only display and reuse. */
+export type RunRequestSnapshot = {
+  topic?: string;
+  model?: string;
+  mode?: 'fast' | 'normal' | 'deep';
+  search_api?: string;
+  org_context?: string;
+  rag_enabled?: boolean;
+  require_approval?: boolean;
   allow_clarification?: boolean;
 };
 export type RoleReport = {
@@ -91,7 +98,7 @@ export type RunSnapshot = {
   role_reports: RoleReport[];
   plan: Plan | null;
   clarification?: Clarification | null;
-  request?: Partial<RunRequest>;
+  request?: RunRequestSnapshot;
   approval_required?: boolean;
   archive_status?: string;
   history_id?: string | null;
@@ -234,10 +241,10 @@ export function parseRoleReports(v: unknown): RoleReport[] {
     };
   });
 }
-function parseRequest(v: unknown): Partial<RunRequest> | undefined {
+function parseRequest(v: unknown): RunRequestSnapshot | undefined {
   if (v == null) return undefined;
   const r = record(v);
-  const request: Partial<RunRequest> = {};
+  const request: RunRequestSnapshot = {};
   if (r.topic !== undefined) request.topic = string(r.topic);
   if (r.model !== undefined) request.model = string(r.model);
   if (r.rag_enabled !== undefined) request.rag_enabled = boolean(r.rag_enabled);

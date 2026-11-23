@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, StudioApi } from './api';
 import { RunObserver, type Connection } from './observer';
 import type { HumanCommand, RunEvent, RunRequest, RunSnapshot } from './protocol';
-import { persist, restore, type PendingCreate, type PendingRetry } from './session';
+import {
+  persist,
+  restore,
+  createRequest,
+  type PendingCreate,
+  type PendingRetry,
+} from './session';
 
 /** Owns tab-local request identity and the subscriber; DBOS owns execution. */
 export function useRunSession() {
@@ -73,17 +79,18 @@ export function useRunSession() {
     }
   }
   async function createRun(request?: RunRequest): Promise<boolean> {
-    if (busyRef.current) return false;
+    if (busyRef.current || (!request && !session.create)) return false;
     busyRef.current = true;
     setBusy(true);
     setMessage('');
     let savedIdentity = false;
     try {
+      // The stored identity wins: a retry resends the exact admitted body.
+      // A fresh body is rebuilt from accepted fields only.
       const pending: PendingCreate = session.create ?? {
         key: crypto.randomUUID(),
-        request: request!,
+        request: createRequest(request!),
       };
-      if (!pending.request) return false;
       commit({ ...session, create: pending });
       savedIdentity = true;
       const result = await api.create(pending.request, pending.key);

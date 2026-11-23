@@ -65,9 +65,11 @@ def _key(raw: Request) -> str:
 def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
     """Validate a durable create, then atomically persist the queue delivery.
 
-    The Web request is a legacy secondary entry point. Business settings come
-    only from ``config.yaml``; body fields such as ``model`` or ``rag_enabled``
-    are accepted for old clients but never override the frozen configuration.
+    The Web request submits business input only: the topic, an optional
+    organization context and the per-Run RAG switch. Research models, depth,
+    search API, budgets and approval policy stay in ``config.yaml``. The server
+    configuration is copied once so the RAG switch cannot mutate the shared
+    object, and that copy is what the Run freezes and resumes from.
     """
     from open_deep_research.config_file import (
         DEFAULT_CONFIG_FILE,
@@ -75,6 +77,7 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
         frozen_config,
         load_configuration,
         request_payload,
+        run_configuration,
     )
     from open_deep_research.web.server import ResearchRequest
 
@@ -82,16 +85,13 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
     key = _key(raw)
     permitted = {
         "topic",
-        "model",
-        "search_api",
-        "mode",
         "org_context",
         "rag_enabled",
+        "research_session_id",
+        # Retired runtime selectors stay accepted and discarded as input
+        # aliases; the request model decides that, not this allow-list.
         "workflow_backend",
         "business_agent_runtime",
-        "require_approval",
-        "allow_clarification",
-        "research_session_id",
     }
     if set(body) - permitted:
         raise HTTPException(400, "Unsupported research parameter.")
@@ -103,7 +103,9 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
     if session_id is not None and not re.fullmatch(r"[a-f0-9]{32}", str(session_id)):
         raise HTTPException(400, "Invalid research Session.")
     try:
-        configuration = load_configuration(DEFAULT_CONFIG_FILE)
+        configuration = run_configuration(
+            load_configuration(DEFAULT_CONFIG_FILE), rag_enabled=request.rag_enabled
+        )
     except (ConfigFileError, ValueError):
         raise HTTPException(
             503,

@@ -43,7 +43,7 @@
         </aside>
 
         <main class="research-workspace">
-        <!-- 研究表单：收集主题、模型、搜索方式、深度和内部知识开关。 -->
+        <!-- 研究表单：收集主题、组织背景和本次运行的内部知识检索开关。 -->
         <section class="input-panel">
             <label for="topic" class="input-label">请输入需要分析的品牌、企业、产品或舆情事件</label>
             <textarea id="topic" class="topic-input"
@@ -51,35 +51,6 @@
                 rows="3" autofocus></textarea>
 
             <div class="controls">
-                <div class="control-group">
-                    <label for="model">Model</label>
-                    <select id="model">
-                        <option value="deepseek:deepseek-flash" selected>DeepSeek V4.1 Flash</option>
-                        <option value="deepseek:deepseek-v4-flash">DeepSeek V4 Flash</option>
-                        <option value="deepseek:deepseek-chat">DeepSeek Chat</option>
-                        <option value="openai:gpt-4.1">GPT-4.1</option>
-                        <option value="openai:gpt-4o">GPT-4o</option>
-                        <option value="anthropic:claude-sonnet-4-20250514">Claude Sonnet 4</option>
-                        <option value="anthropic:claude-opus-4-20250514">Claude Opus 4</option>
-                        <option value="google:gemini-2.5-pro">Gemini 2.5 Pro</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label for="search">Search</label>
-                    <select id="search">
-                        <option value="tavily">Tavily</option>
-                        <option value="openai">OpenAI Web Search</option>
-                        <option value="anthropic">Anthropic Web Search</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label for="mode">Mode</label>
-                    <select id="mode">
-                        <option value="fast">Fast</option>
-                        <option value="normal" selected>Normal</option>
-                        <option value="deep">Deep</option>
-                    </select>
-                </div>
                 <div class="research-actions">
                     <button id="start-btn" class="btn-start" onclick="startResearch()">
                         开始舆情分析
@@ -91,8 +62,7 @@
                 </div>
             </div>
             <div class="durable-controls">
-                <span>后台研究，刷新后可恢复进度</span>
-                <label><input id="require-approval" type="checkbox"> 开始研究前审批计划</label>
+                <span>后台研究，刷新后可恢复进度。模型、搜索方式与审批策略由服务端 config.yaml 管理。</span>
                 <span>后台研究需要配置运行存储及访问令牌。</span>
             </div>
             <div id="po-extra" style="margin-top:12px;padding:14px 16px;background:#f6f8fa;border-radius:8px;border:1px solid var(--border);">
@@ -102,7 +72,7 @@
                         placeholder="e.g., Acme Corp — consumer electronics, US market">
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <input type="checkbox" id="rag-enabled" checked style="accent-color:var(--accent);">
+                    <input type="checkbox" id="rag-enabled" style="accent-color:var(--accent);">
                     <label for="rag-enabled" style="font-size:0.85rem;">Enable RAG (local knowledge base)</label>
                 </div>
                 <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;margin-left:24px;">
