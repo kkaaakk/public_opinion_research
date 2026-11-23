@@ -1,6 +1,6 @@
 # 🔬 Public Opinion Research
 
-> 当前应用版本为 `por-agent-context-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，ResearchWorkflow 依次生成风险评估、应对策略和一份综合 Markdown 报告。 [Brief 合同](docs/architecture/research-brief.md)
+> 当前应用版本为 `por-call-ledger-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，ResearchWorkflow 依次生成风险评估、应对策略和一份综合 Markdown 报告。 [Brief 合同](docs/architecture/research-brief.md)
 
 基于 DBOS、OpenAI Agents SDK、RAG 和 MCP 的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了企业知识 RAG、舆情分析、社交媒体监控和可追溯来源记录等能力。
 
@@ -142,6 +142,41 @@ por retry <run-id>
 `config.smoke.yaml`，但仍然走完整的 RunClient → DBOS → Executor → Agents SDK 链路。
 `run`/`smoke` 只接受研究主题、Run ID、审批和澄清内容等业务数据，不接受
 `--model`、`--rag`、`--mode` 等配置覆盖参数。
+
+### 5. 本地基线验证（第六轮验收路径）
+
+提交真实研究前先做环境自检；`doctor` 只读配置与凭据，不写数据库：
+
+```powershell
+uv run por doctor --config config.smoke.yaml
+```
+
+如需初始化数据库，先确认 `DBOS_DATABASE_URL` 指向隔离实例，再执行：
+
+```powershell
+uv run python -m open_deep_research.web.executor --initialize-only
+uv run python -m open_deep_research.web.executor --executor-id workstation-1
+```
+
+Smoke 的结论以最终结果为准，`CLI 提交成功 ≠ 研究成功`。拿到 Run ID 后依次核对：
+
+```powershell
+uv run por status <run_id>     # status 是否 completed、settlement 是否 settled
+uv run por inspect <run_id>    # 模型尝试 / 工具调用 / 操作回执是否入账
+uv run por report <run_id>     # Final Report 是否存在且完整
+```
+
+验收要点：Final Report 非空且带来源；Public Signal 实际调用了检索工具；Risk /
+Strategy 真实完成；Usage 完整或明确标记 `usage_complete=false`；History 归档为
+`saved` 且与 Run 终态一致；没有未确认的外部副作用。失败时用 `por inspect` 加
+Executor 日志定位环节，不要为跑通而无限制放宽预算。完整链路与故障诊断命令见
+[执行架构](docs/architecture/agent-loop.md) 与 [部署说明](docs/architecture/dbos-deployment.md)。
+
+第六轮已用上述路径完成两次真实端到端验收（隔离 PostgreSQL、`config.smoke.yaml`、
+真实 DeepSeek 与 Tavily）：Run `b3321ea7…` 与 `d3375523…` 均达到 `completed`，
+`settlement=settled`，History `saved`，Plan → 公开信号检索 → Review → Risk →
+Strategy → Final Report 全部真实执行；账本 61 次模型尝试 / 6 次工具调用与
+PostgreSQL 完全一致。已知限制见 [执行架构](docs/architecture/agent-loop.md#已知限制)。
 
 ## 🔭 可观测性与预算
 

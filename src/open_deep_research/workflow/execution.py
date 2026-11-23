@@ -494,7 +494,7 @@ async def commit_receipt(write, *args):
 
 @asynccontextmanager
 async def execution_effect():
-    """Serialize Graph and Memory commits with application cancellation."""
+    """Serialize one external commit against application cancellation."""
     scope = stage_context.get()
     if scope is None:
         yield

@@ -12,7 +12,11 @@ from open_deep_research.budget import (
     model_budget_admission,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.llm.generation import generate_structured, generate_text
+from open_deep_research.llm.generation import (
+    ModelOutputError,
+    generate_structured,
+    generate_text,
+)
 from open_deep_research.prompts import (
     research_review_prompt,
     response_strategy_prompt,
@@ -259,6 +263,17 @@ async def _generate_analysis(
         report = (
             f"{role.replace('_', ' ').capitalize()} unavailable because the "
             "research model budget was exhausted."
+        )
+        usage = budget_usage_with_reason(report)
+    except ModelOutputError as exc:
+        if not exc.retryable:
+            raise
+        # A provider truncation of one bounded analysis call degrades that
+        # analysis instead of discarding the whole research stage; the gap note
+        # stays visible in the report and History.
+        report = (
+            f"{role.replace('_', ' ').capitalize()} unavailable because the "
+            "research model output was truncated."
         )
         usage = budget_usage_with_reason(report)
     return {"agents": {role: {"report": report}}, "runtime": {"budget": usage}}

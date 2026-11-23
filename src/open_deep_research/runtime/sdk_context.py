@@ -62,6 +62,11 @@ LOGGER = logging.getLogger(__name__)
 
 ToolStatus = Literal["running", "succeeded", "failed", "cancelled", "unobserved"]
 
+# The fixed reason recorded for a call the SDK observed but never handed to
+# ToolExecutor. Nothing ran, so there is no result and no external effect to
+# report; the call is terminal without being a tool failure.
+NOT_INVOKED = "NotInvoked"
+
 
 class SDKContextLimitExceeded(RuntimeError):
     """The protected SDK input cannot fit safely after compaction."""
@@ -140,6 +145,10 @@ class SDKContextHarness(RunHooks):
         self.last_settlement: BatchSettlement | None = None
         self._response_starts: list[str] = []
         self._compacted_turns: set[int] = set()
+        # Call IDs whose tool body the executor has entered. A record outside
+        # this set was observed by a hook only: no tool ran, so no result,
+        # allowance or external effect can exist for it.
+        self._executing: set[str] = set()
         self.rolling_summary = ""
         self.estimated_input_tokens: int | None = None
         self.tool_executor: Any | None = None
@@ -249,8 +258,38 @@ class SDKContextHarness(RunHooks):
             args=args,
             model_turn=self.model_turn,
         )
+        if self._closing:
+            # The invocation already began its exit settlement, and the executor
+            # refuses new bodies from that point on. A call the SDK announces now
+            # cannot run, so it is born terminal instead of appearing as a live
+            # record after settlement has reported success.
+            self.close_unexecuted(result)
         self.results[call_id] = result
         return result
+
+    def mark_executing(self, call_id: str) -> None:
+        """Record that this call reached the executor and its body may run."""
+        self._executing.add(call_id)
+
+    def close_unexecuted(
+        self, record: ObservedToolResult, error_type: str = NOT_INVOKED
+    ) -> bool:
+        """Give a call the executor never entered its only truthful terminal state.
+
+        The executor is the only path that can run a business tool, so such a
+        call has no result, no admitted allowance and no external operation.
+        Leaving it ``running`` either makes settlement wait for an invocation
+        that no longer exists or lets settlement report success over a record
+        that never reached a terminal state.
+        """
+        if record.status != "running" or record.tool_call_id in self._executing:
+            return False
+        record.status, record.observation, record.error_type = (
+            "cancelled",
+            None,
+            error_type,
+        )
+        return True
 
     def restore_tool(self, saved: dict[str, Any]) -> None:
         """Restore one committed ``por.agent_tool`` record into this collector."""
@@ -633,11 +672,16 @@ class SDKContextHarness(RunHooks):
     async def settle(self, reason: str) -> BatchSettlement:
         """Drain observed tools without replaying any business tool.
 
-        A late, cancellation-resistant tool can outlive the bounded drain. Its
-        record stays live and callers may explicitly settle again once it ends.
+        A late, cancellation-resistant tool can outlive the bounded drain; it
+        reached the executor, so its record stays live and callers may explicitly
+        settle again once it ends. A call the executor never entered cannot end
+        that way: it is closed as cancelled before the status is reported, so
+        ``succeeded`` always means every observed call reached a terminal state.
         """
         error_type = None
         cancellation = None
+        # Exit settlement is the point after which no new tool body may start.
+        self._closing = True
         try:
             if self.tool_executor is not None and not await self.tool_executor.drain(
                 self.settlement_timeout
@@ -647,6 +691,13 @@ class SDKContextHarness(RunHooks):
             error_type, cancellation = "CancelledError", exc
         except Exception as exc:
             error_type = type(exc).__name__
+        # Only the executor can start a tool body, and it always records a
+        # terminal state once it does. Anything still unentered here never ran.
+        unexecuted = sum(
+            1
+            for record in self.results.values()
+            if self.close_unexecuted(record)
+        )
         settlement = BatchSettlement(
             reason=reason,
             in_flight_call_ids=tuple(
@@ -663,6 +714,7 @@ class SDKContextHarness(RunHooks):
             reason=reason,
             status="settled" if settlement.succeeded else "unresolved",
             in_flight_calls=len(settlement.in_flight_call_ids),
+            unexecuted_calls=unexecuted,
             **({"error_type": settlement.error_type} if settlement.error_type else {}),
         )
         if cancellation is not None:
@@ -678,6 +730,8 @@ class SDKContextHarness(RunHooks):
             return {
                 "settlement": asdict(result),
                 # A Tool Step that raises has no committed tool record to replay.
+                # A ``NotInvoked`` record is not a tool outcome: it never reached
+                # the executor, so it is re-derived rather than journaled here.
                 "failed_tools": {
                     call_id: {
                         "status": record.status,
@@ -686,7 +740,9 @@ class SDKContextHarness(RunHooks):
                         "effect_status": record.effect_status,
                     }
                     for call_id, record in self.results.items()
-                    if record.status in {"failed", "cancelled"} and record.observation is None
+                    if record.status in {"failed", "cancelled"}
+                    and record.observation is None
+                    and record.error_type != NOT_INVOKED
                 },
             }
 
@@ -699,6 +755,11 @@ class SDKContextHarness(RunHooks):
             record.error_type = failed["error_type"]
             record.operation_id = failed["operation_id"]
             record.effect_status = failed["effect_status"]
+        # Replayed or executed, the journal cannot describe a call that never
+        # reached the executor; close any such record the replay re-observed so
+        # this attempt and the journaled settlement agree on every status.
+        for record in self.results.values():
+            self.close_unexecuted(record)
         value = saved["settlement"]
         value["in_flight_call_ids"] = tuple(value["in_flight_call_ids"])
         self.last_settlement = BatchSettlement(**value)

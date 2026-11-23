@@ -226,7 +226,7 @@ async def research_brief_step(
     """Transform user messages into a structured brief for the research phase.
 
     This function analyzes the user's messages and generates a focused research brief
-    that will guide the public-opinion multi-agent subgraph.
+    that will guide the public-opinion research workflow.
 
     Args:
         state: Current agent state containing user messages

@@ -761,7 +761,11 @@ def test_restart_reuses_both_committed_analysis_model_steps(pg_database, tmp_pat
         assert result["status"] == "completed", result["error"]
         assert result["usage"]["model_calls"] == running["usage"]["model_calls"] + 1
         assert result["usage"]["total_tokens"] == running["usage"]["total_tokens"] + 10
-        assert analysis_steps() == committed
+        # The two committed analysis steps are reused verbatim; the final report
+        # appends one more bounded ``por.llm`` step in the same workflow.
+        after = analysis_steps()
+        assert after[: len(committed)] == committed
+        assert len(after) == len(committed) + 1 and all(step["output"] for step in after)
         assert analysis_calls.read_text(encoding="utf-8").splitlines() == expected
         assert effect_count(tmp_path) == 2
         assert {role["role"] for role in result["role_reports"]} == {

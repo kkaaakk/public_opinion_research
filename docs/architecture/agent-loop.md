@@ -125,6 +125,8 @@ flowchart TD
 
 `por.agent_context` 保存滚动摘要、已压缩轮次、摘要调用增量和已改写的输入窗口。SDK 用重放的响应重建轮次边界及角色用量投影。工具输出及局部用量来自 `por.agent_tool`。若 Tool Step 抛出异常，其错误回执保留局部用量，`por.agent_settlement` 补齐终态。可选 SQLite transcript 供排查，SDK 恢复数据来自 DBOS journal。
 
+SDK 并行工具在兄弟调用失败或取消时，可能有调用只被钩子观察而从未进入 `ToolExecutor`。这类调用没有工具体、没有额度、没有外部效果，第六轮起由结算统一收敛为 `cancelled`（`NotInvoked`）：结算开始后新观察到的调用天生终态，`por.agent_settlement` 只记录真正的工具失败。因此 `settlement.succeeded` 表示「已观察到的调用全部到达终态」，不表示「全部成功」。 [工具观察记录终态](tools.md#观察记录的终态)
+
 原生取消会沿 child Workflow 级联，根可能先进入终态。Finalizer 再检查仍活跃的业务子 Workflow，并等待已发起调用结算。人工重试需要新键、观测到的 `state_version`、当前代次终态已交付以及安全失败。`RunClient.retry` 只写授权和消息；`por.finalize` 验证授权绑定的实际失败版本和外部回执，按失败叶子到根逐个 `rewind_workflow` 并等待子结果。安全目标限于可重试的 Plan、Review 或 Report 后缀。旧键只能确认原授权。 [DBOS 取消与 rewind](https://docs.dbos.dev/python/tutorials/workflow-management)
 
 ### 外部调用可靠性
@@ -134,6 +136,13 @@ Step 执行体与外部服务返回之间存在提交窗口。宕机发生在原
 已知只读工具可以在缺失 Tool Step 结果时重新执行。History 写入使用稳定业务键，效果检查结合请求取消意图和原生 Workflow/Executor 归属。PostgreSQL 的事务覆盖本库请求、原生队列和报告归档，远端 provider 独立提交。操作员确认 Executor 已停止并核对外部记录后，可以记录 reconciliation 以解除 Session 准入隔离，原记录继续保留。 [数据库与运维](dbos-deployment.md)
 
 `start_model_attempt` 持请求锁检查并行调用共享的 Run 级预算，保留最终报告额度后才登记物理调用。`model_attempts` 按 `(run_id, id)` 唯一写入，返回或失败有用量时以同键更新。`por_domain.tool_calls` 记录每一次准入的工具调用（无论预算是否开启），`por_domain.operations` 通过 `tool_call_id` 外键归属到发起它的工具调用。`RunClient` 按字段归属汇总用量：模型次数与 Token 来自 `model_attempts`，工具与搜索次数来自 `tool_calls`，阶段事件只提供告警和降级原因，因此同一次调用不会被重复相加。已提交的模型响应重放、客户端重连和归档补偿各自复用记录。缺少真实 Token 时保留已知调用数并标记 `usage_complete=false`；一次未报告用量的尝试不会永久阻断后续调用。有 Token 上限时，在途账单按有限等待结算，超时后按预算不足结束。公开用量来自 provider 回执，实际货币费用由 provider 账单确认。
+
+History 归档以「新执行版本整体替换，否则只补全缺失内容」合并。第六轮补了一条反向规则：迟到的旧版本保存不能把它的失败阶段重新挂到已完成的记录上——合并后状态为 `completed` 时 `failed_stage` 必须为空，失败记录仍保留能解释它的阶段名。
+
+## 已知限制
+
+- **deepseek-flash 会间歇地把工具调用以 DSML 文本写入 `content`**，而不是 API `tool_calls`。后果有两层：研究循环把该轮当作普通回复，提前耗尽 `max_react_tool_calls`；角色报告压缩模型看到转录里的调用文本后也可能原样复述。第六轮真实 Smoke 中两次复现（Run `14aeb718…`、`3d626b20…` 以 `insufficient tool messages` 或空证据报告结束）。这是模型适配层问题，轮次预算调到 10 后两次完整成功（`b3321ea7…`、`d3375523…`），但报告证据深度仍受其影响。后续轮次应在 chat-completions 适配层识别 DSML 文本并回放为结构化调用，而不是扩大预算。
+- **压缩投影的调用配对**已由第六轮修复：转录在早停、取消的兄弟调用或缩减之后结束，投影会为没有回应的 `function_call` 原位补一条 `function_call_output`，避免 DeepSeek 以 `insufficient tool messages` 拒绝整次请求。
 
 ## 交付与执行状态
 

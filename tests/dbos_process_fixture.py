@@ -9,7 +9,6 @@ import socket
 import sqlite3
 import time
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from pathlib import Path
 from threading import Barrier
 from typing import Annotated
@@ -48,7 +47,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import Field
 from sqlalchemy.exc import SQLAlchemyError
 from test_python_workflow_sdk import install_sdk
-from test_sdk_runtime import TOKENS, _tool
+from test_sdk_runtime import TOKENS
 
 from open_deep_research import budget
 from open_deep_research.configuration import Configuration
@@ -167,21 +166,6 @@ def install(directory, scenario):
             patch.setattr(
                 engine.research, role + "_agent", partial(legacy_producer, role=role)
             )
-
-    legacy_catalog = (
-        scenario == "runner-legacy-catalog"
-        and not (directory / (scenario + ".release")).exists()
-    )
-    if legacy_catalog:
-        catalog = business_agent._tool_catalog
-
-        def catalog_without_effect(available):
-            return [
-                {key: value for key, value in entry.items() if key != "effect"}
-                for entry in catalog(available)
-            ]
-
-        patch.setattr(business_agent, "_tool_catalog", catalog_without_effect)
 
     old_publish = engine._publish_stage
     old_announce = engine._announce_stage
@@ -415,10 +399,7 @@ def install(directory, scenario):
             await asyncio.to_thread(gate, "runner-second")
 
     async def tool_end(self, *args, **kwargs):
-        if (
-            scenario in {"runner-tool", "runner-legacy-catalog"}
-            and self.role == "public_signal"
-        ):
+        if scenario == "runner-tool" and self.role == "public_signal":
             await asyncio.to_thread(gate, scenario)
         await original_tool_end(self, *args, **kwargs)
 
@@ -513,14 +494,6 @@ def install(directory, scenario):
                     (op, role),
                 )
             return f"Official brand recall evidence for {role}."
-
-        if legacy_catalog:
-
-            async def legacy_effect(context, query, limit=3):
-                return await effect(context.context.tool_executor.tool_config(context))
-
-            tool = _tool(role, with_context=legacy_effect)
-            return [replace(tool, effect="protected")]
 
         public = role == "public_signal"
 

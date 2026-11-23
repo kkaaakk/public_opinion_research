@@ -31,6 +31,11 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
     calls = []
     receipts = []
     attempts = 0
+    # The sibling must have committed its Tool Step before the failing call
+    # fails, whatever order the event loop schedules the two Steps in. The
+    # sibling's ``tool_result`` observation is published after its Step has
+    # committed, so this is a fact of the fixture instead of a bet on ``sleep``.
+    second_finished = asyncio.Event()
 
     async def begin():
         assert DBOS.step_id is not None
@@ -47,6 +52,8 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
             calls.append(payload["name"])
         if kind == "tool_result":
             assert call_id == payload["tool_call_id"]
+            if payload["tool_call_id"] == "call-2" and payload["status"] == "succeeded":
+                second_finished.set()
 
     monkeypatch.setattr(generation, "begin_model_call", begin)
     monkeypatch.setattr(generation, "end_model_call", end)
@@ -60,11 +67,14 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
     async def search(query: str, limit: int = 3):
         # Two calls in one response exercise the SDK's parallel Tool Steps.
         if query == "first":
-            await asyncio.sleep(0.05)
+            # Bounded so a serial SDK loop fails loudly instead of hanging.
+            await asyncio.wait_for(second_finished.wait(), timeout=10)
+            calls.append(query)
+            if ending == "tool-budget-error":
+                await generation.generate_text("openai:fixture", query, max_tokens=64)
+                raise ModelBudgetExceeded("Tool summary ran out of allowance")
+            return f"evidence {query}"
         calls.append(query)
-        if ending == "tool-budget-error" and query == "first":
-            await generation.generate_text("openai:fixture", query, max_tokens=64)
-            raise ModelBudgetExceeded("Tool summary ran out of allowance")
         return f"evidence {query}"
 
     def final(call):

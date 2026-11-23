@@ -1,5 +1,5 @@
 # 汇总研究工作流节点与入口，保留对外稳定导出。
-"""Workflow composition helpers for the public-opinion research graph."""
+"""Workflow state helpers shared by the durable public-opinion workflows."""
 
 from open_deep_research.workflow.state_utils import (
     agents_state,

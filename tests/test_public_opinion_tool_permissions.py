@@ -232,7 +232,7 @@ def test_prompts_do_not_reference_retired_control_tools() -> None:
         assert "normal assistant message" in rendered
 
 
-def test_native_catalog_fences_definition_changes_and_restores_legacy_catalog():
+def test_native_catalog_fences_definition_changes():
     from dataclasses import replace
 
     from agents import function_tool
@@ -260,11 +260,11 @@ def test_native_catalog_fences_definition_changes_and_restores_legacy_catalog():
             catalog, [replace(available[0], effect="read")]
         )
 
-    # Existing journals stored the same catalog without the effect field.
-    old_catalog = [{key: value for key, value in catalog[0].items() if key != "effect"}]
-    restored = business_agent_module._restore_role_tools(old_catalog, available)
-    assert restored[0].sdk_tool is available[0].sdk_tool
-    assert restored[0].effect == "protected"
-    old_catalog[0]["schema"] = {}
-    with pytest.raises(ValueError, match="definitions changed"):
-        business_agent_module._restore_role_tools(old_catalog, available)
+    # A catalog without the effect cannot come from a recoverable journal: the
+    # field predates the DBOS Application Version this Executor recovers.
+    for old_catalog in (
+        [{key: value for key, value in catalog[0].items() if key != "effect"}],
+        [{**catalog[0], "schema": {}}],
+    ):
+        with pytest.raises(ValueError, match="definitions changed"):
+            business_agent_module._restore_role_tools(old_catalog, available)

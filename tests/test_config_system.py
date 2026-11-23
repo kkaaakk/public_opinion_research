@@ -456,7 +456,7 @@ def test_cli_smoke_reads_smoke_config(monkeypatch, ready_preflight):
     assert cli.main(["smoke", "brand risk"]) == 0
     assert seen and seen[0].name == "config.smoke.yaml"
     assert client.created[0][3]["configurable"]["rag_enabled"] is False
-    assert client.created[0][3]["configurable"]["max_model_calls"] == 24
+    assert client.created[0][3]["configurable"]["max_model_calls"] == 96
 
 
 def test_cli_run_and_smoke_do_not_modify_global_configuration(

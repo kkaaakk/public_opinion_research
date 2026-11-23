@@ -178,11 +178,22 @@ class MCPConfig(BaseModel):
 
 ## 6. 业务 Agent 中的工具执行
 
-1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect。目录缺少 effect 时不视为定义变更，当前工具声明（包括插件 Apify MCP 的 `protected`）保持不变。
+1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect，目录必须与当前声明完全一致才允许重放。第六轮删除了「目录缺少 `effect` 字段也算一致」的宽松分支：带 `effect` 的目录从 `dbos-events-v1` 起写入，而 DBOS 只恢复同 Application Version 的 journal（当前为 `por-call-ledger-v1`），因此无 `effect` 的目录只能来自本 Executor 永不恢复的旧版本，属于真实定义变更。
 2. `ToolManager.bind()` 把 `BusinessTool.sdk_tool` 交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具与本地工具一样以 `BusinessTool` 装配，其声明来自 `MCPUtil.to_function_tool()`。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
 3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。预算预占之后才进入业务函数及外部效果边界。
 4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。`idempotent` 工具不写回执，调用配置携带同一个派生值作为 `idempotency_key`。
 5. `ToolExecutor` 以 Tool Call ID 共享在途结果，并在取消时等待已启动的同步工具及其回执。已提交的 Step 恢复原输出、状态、工具身份、操作 ID 和局部用量；Harness 只接收恢复后的记录。成功结果由 Harness 记录并保留在 SDK 会话历史中。 [执行架构](agent-loop.md) · [DBOS Step](https://docs.dbos.dev/python/tutorials/step-tutorial)
+
+### 观察记录的终态
+
+Harness 只有两类记录会停留在 `running`：执行器已进入、工具体仍在执行中的调用；以及 SDK 钩子已观察但从未交给 `ToolExecutor` 的调用。第六轮补齐了第二类的终态规则：
+
+- `ToolExecutor._perform` 进入即标记「该调用可能执行工具体」，此后它的记录只能由 `_perform` 自己收敛，结算不再代写。
+- `por.agent_tool` Step 在进入工具体之前被取消或失败时，执行器立即把该记录落为 `cancelled` 并携带真实错误类型：工具体没跑，因此没有结果、没有额度、没有外部效果。
+- `settle()` 排空后，把仍未进入执行器的 `running` 记录统一收敛为 `cancelled`（`error_type="NotInvoked"`）。这类记录不写入 `por.agent_settlement` 的 `failed_tools`，恢复重放时重新派生。
+- 结算开始后 SDK 迟到的 `on_tool_start` 不再制造新的 `running` 记录：结算边界之后被观察的调用只能天生终态。
+
+因此 `BatchSettlement.succeeded` 的含义是「每一个已观察到的工具调用都已到达终态」，而不是「全部成功」；被取消的兄弟工具计入终态、不计入成功。已进入执行器但未在排空超时内结束的调用仍保持 `running`，结算判为未解决，Run 按 `ExecutionControlError` 停止而不是冒充成功。
 
 ### 未提交 Step 的恢复
 
@@ -195,7 +206,7 @@ class MCPConfig(BaseModel):
 
 普通工具失败形成与调用配对的错误输出，供模型继续处理。取消和执行控制故障沿原生执行链传播。
 
-回滚到旧 Executor 前，由支持 effect 的版本处理完已经写入带 effect 目录的活跃 Run。旧 Executor 的目录比较要求原有字段集合。
+带 `effect` 的目录从 `dbos-events-v1` 起写入；旧 Executor 的在途 Run 由其原始发行版排空，当前目录围栏不再为更早的目录格式保留分支。
 
 ## 7. Budget Guard 对工具的影响
 

@@ -290,14 +290,19 @@ def _merge_record(
             for stage in incoming.role_reports
         }
     )
+    status = incoming.status if (not existing.report and incoming.report) else existing.status
     return existing.model_copy(
         update={
             "report": existing.report or incoming.report,
-            "status": incoming.status if (not existing.report and incoming.report) else existing.status,
+            "status": status,
             "completed_at": incoming.completed_at if (not existing.report and incoming.report) else existing.completed_at,
             "usage": existing.usage or incoming.usage,
             "langsmith_run_id": existing.langsmith_run_id or incoming.langsmith_run_id,
-            "failed_stage": existing.failed_stage or incoming.failed_stage,
+            # A delayed save of an older attempt must not attach its failure to a
+            # record that has since completed.
+            "failed_stage": ""
+            if status == "completed"
+            else existing.failed_stage or incoming.failed_stage,
             "role_reports": sorted(stages.values(), key=lambda stage: stage.completed_at),
         }
     )
