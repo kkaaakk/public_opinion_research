@@ -131,12 +131,12 @@ def test_compression_prompt_answers_every_emitted_tool_call(monkeypatch) -> None
 # 验证 Web 请求的模型白名单和主题长度限制。
 def test_web_request_model_and_prompt_limits() -> None:
     """The Demo API rejects arbitrary models and oversized prompts."""
-    from open_deep_research.web import server
+    from open_deep_research.web import runs
 
     with pytest.raises(ValidationError):
-        server.ResearchRequest(topic="brand risk", model="provider:untrusted-model")
+        runs.ResearchRequest(topic="brand risk", model="provider:untrusted-model")
     with pytest.raises(ValidationError):
-        server.ResearchRequest(topic="x" * (server.MAX_TOPIC_LENGTH + 1))
+        runs.ResearchRequest(topic="x" * (runs.MAX_TOPIC_LENGTH + 1))
 
 
 # 验证令牌可选，但配置后所有受保护请求必须校验。

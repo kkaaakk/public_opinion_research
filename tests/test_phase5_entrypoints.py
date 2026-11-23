@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.web import cli, runs, server
@@ -18,12 +19,24 @@ from open_deep_research.web import cli, runs, server
         {"workflow_backend": "dbos"},
     ],
 )
-def test_selectors_are_input_aliases_and_never_persisted_switches(values):
-    cfg = Configuration(**values)
-    request = server.ResearchRequest(topic="brand", **values)
-    for data in (cfg.model_dump(), request.model_dump()):
-        assert "workflow_backend" not in data
-        assert "business_agent_runtime" not in data
+def test_selectors_stay_configuration_aliases_and_never_persisted_switches(values):
+    data = Configuration(**values).model_dump()
+    assert "workflow_backend" not in data
+    assert "business_agent_runtime" not in data
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"workflow_backend": "python"},
+        {"workflow_backend": "dbos"},
+        {"business_agent_runtime": "openai_agents"},
+    ],
+)
+def test_create_request_rejects_retired_execution_selectors(values):
+    """The create body carries business input only; selectors are not accepted."""
+    with pytest.raises(ValidationError):
+        runs.ResearchRequest(topic="brand", **values)
 
 
 @pytest.mark.parametrize(
@@ -34,13 +47,11 @@ def test_selectors_are_input_aliases_and_never_persisted_switches(values):
         ("business_agent_runtime", "legacy"),
     ],
 )
-def test_retired_engine_rejected_in_config_request_and_environment(
+def test_retired_engine_rejected_in_configuration_and_environment(
     monkeypatch, name, value
 ):
     with pytest.raises(ValueError, match=name):
         Configuration(**{name: value})
-    with pytest.raises(ValueError, match=name):
-        server.ResearchRequest(topic="brand", **{name: value})
     monkeypatch.setenv(name.upper(), value)
     with pytest.raises(ValueError, match=name):
         Configuration.from_runnable_config({"metadata": {"accepted_run": True}})

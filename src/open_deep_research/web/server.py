@@ -29,21 +29,18 @@ from fastapi import FastAPI, HTTPException, Query, Request  # noqa: E402, I001
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator  # noqa: E402
 
-from open_deep_research.config_values import without_retired_execution_selectors  # noqa: E402
 from open_deep_research.web.history import (  # noqa: E402, I001
     HistoryUnavailable,
     get_history_store,
 )
+from open_deep_research.web.runs import ResearchRequest  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
 STUDIO_DIR = Path(__file__).parent / "studio"
 LOGGER = logging.getLogger(__name__)
 
 MAX_REQUEST_BYTES = 64 * 1024
-MAX_TOPIC_LENGTH = 12_000
-MAX_ORG_CONTEXT_LENGTH = 8_000
 WEB_API_TOKEN = (
     os.environ.get("PUBLIC_OPINION_API_TOKEN") or os.environ.get("WEB_API_TOKEN") or ""
 ).strip()
@@ -95,43 +92,6 @@ if (STUDIO_DIR / "assets").is_dir():
         StaticFiles(directory=str(STUDIO_DIR / "assets")),
         name="studio-assets",
     )
-
-
-# 校验前端研究主题、组织背景及单次 Run 的 RAG 开关。
-class ResearchRequest(BaseModel):
-    """Validate the business input of one research Run.
-
-    Models, research depth, search API, budgets, approval and clarification
-    policy stay in ``config.yaml``. The only request-level setting that really
-    changes execution is ``rag_enabled``; see
-    :func:`open_deep_research.config_file.run_configuration`.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    @model_validator(mode="before")
-    @classmethod
-    def migration_aliases(cls, values):
-        """Discard old SDK/DBOS input aliases; reject retired engine selections."""
-        return (
-            without_retired_execution_selectors(values)
-            if isinstance(values, dict)
-            else values
-        )
-
-    topic: str = Field(min_length=1, max_length=MAX_TOPIC_LENGTH)
-    org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
-    rag_enabled: bool = Field(default=False, strict=True)
-    research_session_id: str | None = Field(default=None, max_length=64)
-
-    # 去除主题两端空白，并拒绝空主题。
-    @field_validator("topic")
-    @classmethod
-    def validate_topic(cls, value: str) -> str:
-        """Reject blank topics after trimming whitespace."""
-        if not value.strip():
-            raise ValueError("topic must not be blank")
-        return value
 
 
 # 在模型校验前拒绝过大的 HTTP 请求体。
@@ -293,7 +253,7 @@ async def research(request: ResearchRequest, raw: Request) -> StreamingResponse:
         raise HTTPException(status_code=401, detail="Authentication required.")
     from open_deep_research.web.runs import create_run, subscription
 
-    run, _ = await asyncio.to_thread(create_run, request.model_dump(), raw)
+    run, _ = await asyncio.to_thread(create_run, request, raw)
     return subscription(raw, run["run_id"])
 
 
