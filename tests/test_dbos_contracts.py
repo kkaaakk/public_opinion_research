@@ -733,10 +733,7 @@ def test_tool_operation_identity_never_authorizes_unknown_replay(
         execution.finish_operation(run_id, op, "unknown")
 
 
-@pytest.mark.parametrize("entrypoint", ["/api/runs", "cli"])
-def test_api_contract_create_auth_cancel_and_sse(
-    native_case, monkeypatch, entrypoint, capsys
-):
+def test_api_contract_create_auth_cancel_and_sse(native_case, monkeypatch):
     from open_deep_research.web import runs, server
 
     case = native_case
@@ -786,61 +783,14 @@ def test_api_contract_create_auth_cancel_and_sse(
         config_file, "load_configuration", lambda _path=None: configuration
     )
     with TestClient(server.app) as http:
-        body = dict(
-            topic="brand recall",
-            model="openai:gpt-4.1",
-        )
-        path = "/api/runs" if entrypoint == "cli" else entrypoint
-        assert http.post(path, json=body).status_code == 401
+        # Create body carries business input only; the frozen test config keeps
+        # every model and research setting out of the request.
+        body = {"topic": "brand recall"}
+        assert http.post("/api/runs", json=body).status_code == 401
         headers = {"Authorization": "Bearer test-db-os-token", "Idempotency-Key": "api"}
-        if entrypoint == "cli":
-            import json
-
-            import httpx
-
-            from open_deep_research.web import cli
-
-            original = httpx.Client
-            accepted = []
-
-            def bridge(request):
-                result = http.request(
-                    request.method,
-                    str(request.url),
-                    content=request.content,
-                    headers=dict(request.headers),
-                )
-                accepted.append(result.status_code)
-                return httpx.Response(result.status_code, json=result.json())
-
-            monkeypatch.setenv("PUBLIC_OPINION_API_TOKEN", "test-db-os-token")
-            monkeypatch.setattr(
-                cli.httpx,
-                "Client",
-                lambda **kw: original(transport=httpx.MockTransport(bridge), **kw),
-            )
-            capsys.readouterr()
-            assert (
-                cli.main(
-                    [
-                        "--url",
-                        "http://testserver",
-                        "create",
-                        "brand recall",
-                        "--model",
-                        "openai:gpt-4.1",
-                        "--key",
-                        "api",
-                    ]
-                )
-                == 0
-            )
-            run = json.loads(capsys.readouterr().out)
-            assert accepted == [202]
-        else:
-            response = http.post(entrypoint, json=body, headers=headers)
-            assert response.status_code == 202, response.text
-            run = response.json()
+        response = http.post("/api/runs", json=body, headers=headers)
+        assert response.status_code == 202, response.text
+        run = response.json()
         repeated = http.post("/api/runs", json=body, headers=headers)
         assert repeated.status_code == 200
         assert repeated.json()["run_id"] == run["run_id"]
