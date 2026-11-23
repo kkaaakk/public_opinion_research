@@ -131,24 +131,24 @@ def test_compression_prompt_answers_every_emitted_tool_call(monkeypatch) -> None
 # 验证 Web 请求的模型白名单和主题长度限制。
 def test_web_request_model_and_prompt_limits() -> None:
     """The Demo API rejects arbitrary models and oversized prompts."""
-    from open_deep_research.web import server
+    from open_deep_research.web import runs
 
     with pytest.raises(ValidationError):
-        server.ResearchRequest(topic="brand risk", model="provider:untrusted-model")
+        runs.ResearchRequest(topic="brand risk", model="provider:untrusted-model")
     with pytest.raises(ValidationError):
-        server.ResearchRequest(topic="x" * (server.MAX_TOPIC_LENGTH + 1))
+        runs.ResearchRequest(topic="x" * (runs.MAX_TOPIC_LENGTH + 1))
 
 
 # 验证令牌可选，但配置后所有受保护请求必须校验。
 def test_web_api_token_is_optional_but_enforced_when_configured(monkeypatch) -> None:
-    """Configured API tokens protect the research endpoint without OAuth complexity."""
+    """Configured API tokens protect the Run endpoint without OAuth complexity."""
     from open_deep_research.web import server
 
     request = Request(
         {
             "type": "http",
             "method": "POST",
-            "path": "/api/research",
+            "path": "/api/runs",
             "headers": [(b"authorization", b"Bearer correct")],
         }
     )
@@ -159,15 +159,15 @@ def test_web_api_token_is_optional_but_enforced_when_configured(monkeypatch) -> 
         {
             "type": "http",
             "method": "POST",
-            "path": "/api/research",
+            "path": "/api/runs",
             "headers": [(b"authorization", b"Bearer wrong")],
         }
     )
     assert server._request_is_authorized(wrong_request) is False
 
 
-# 验证流错误对用户脱敏且服务端保留诊断日志。
-def test_web_stream_error_is_sanitized_and_logged(monkeypatch):
+# 验证创建失败对用户脱敏且服务端保留诊断日志。
+def test_web_create_error_is_sanitized_and_logged(monkeypatch):
     from fastapi.testclient import TestClient
     from sqlalchemy.exc import SQLAlchemyError
 
@@ -180,7 +180,7 @@ def test_web_stream_error_is_sanitized_and_logged(monkeypatch):
     monkeypatch.setattr(runs, "get_run_client", fail)
     with TestClient(server.app) as client:
         response = client.post(
-            "/api/research",
+            "/api/runs",
             json={"topic": "brand risk"},
             headers={
                 "Authorization": "Bearer error-test-token",

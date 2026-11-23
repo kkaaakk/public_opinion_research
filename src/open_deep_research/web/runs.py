@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.web.durable import get_run_client
@@ -22,7 +21,36 @@ from open_deep_research.web.run_data import (
 )
 from open_deep_research.workflow.brief import MAX_BRIEF_FEEDBACK_CHARS
 
+MAX_TOPIC_LENGTH = 12_000
+MAX_ORG_CONTEXT_LENGTH = 8_000
+
 router = APIRouter(prefix="/api/runs")
+
+
+class ResearchRequest(BaseModel):
+    """Validate the business input of one research Run.
+
+    Models, research depth, search API, budgets, approval and clarification
+    policy stay in ``config.yaml``. The request carries the topic, an optional
+    organization context, the Run-scoped RAG switch and the research Session to
+    continue; see :func:`open_deep_research.config_file.run_configuration`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = Field(min_length=1, max_length=MAX_TOPIC_LENGTH)
+    org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
+    rag_enabled: bool = Field(default=False, strict=True)
+    research_session_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+
+    # 去除主题两端空白，并拒绝空主题。
+    @field_validator("topic")
+    @classmethod
+    def validate_topic(cls, value: str) -> str:
+        """Reject blank topics after trimming whitespace."""
+        if not value.strip():
+            raise ValueError("topic must not be blank")
+        return value
 
 
 def trusted_owner(request: Request) -> str:
@@ -62,14 +90,15 @@ def _key(raw: Request) -> str:
     return key
 
 
-def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
-    """Validate a durable create, then atomically persist the queue delivery.
+def create_run(body: ResearchRequest, raw: Request) -> tuple[dict, bool]:
+    """Create one durable Run from an already validated business request.
 
     The Web request submits business input only: the topic, an optional
-    organization context and the per-Run RAG switch. Research models, depth,
-    search API, budgets and approval policy stay in ``config.yaml``. The server
-    configuration is copied once so the RAG switch cannot mutate the shared
-    object, and that copy is what the Run freezes and resumes from.
+    organization context, the per-Run RAG switch and an existing research
+    Session. Research models, depth, search API, budgets and approval policy
+    stay in ``config.yaml``. The server configuration is copied once so the RAG
+    switch cannot mutate the shared object, and that copy is what the Run
+    freezes and resumes from.
     """
     from open_deep_research.config_file import (
         DEFAULT_CONFIG_FILE,
@@ -79,32 +108,12 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
         request_payload,
         run_configuration,
     )
-    from open_deep_research.web.server import ResearchRequest
 
     owner = trusted_owner(raw)
     key = _key(raw)
-    permitted = {
-        "topic",
-        "org_context",
-        "rag_enabled",
-        "research_session_id",
-        # Retired runtime selectors stay accepted and discarded as input
-        # aliases; the request model decides that, not this allow-list.
-        "workflow_backend",
-        "business_agent_runtime",
-    }
-    if set(body) - permitted:
-        raise HTTPException(400, "Unsupported research parameter.")
-    try:
-        request = ResearchRequest.model_validate(body)
-    except ValidationError:
-        raise HTTPException(400, "Invalid research request.") from None
-    session_id = body.get("research_session_id")
-    if session_id is not None and not re.fullmatch(r"[a-f0-9]{32}", str(session_id)):
-        raise HTTPException(400, "Invalid research Session.")
     try:
         configuration = run_configuration(
-            load_configuration(DEFAULT_CONFIG_FILE), rag_enabled=request.rag_enabled
+            load_configuration(DEFAULT_CONFIG_FILE), rag_enabled=body.rag_enabled
         )
     except (ConfigFileError, ValueError):
         raise HTTPException(
@@ -112,9 +121,9 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
             "Research configuration is unavailable; migrate retired runtime settings to DBOS/SDK.",
         ) from None
     data = request_payload(
-        request.topic,
+        body.topic,
         configuration,
-        org_context=request.org_context or None,
+        org_context=body.org_context or None,
     )
     return _call(
         _store().create,
@@ -122,14 +131,14 @@ def create_run(body: dict, raw: Request) -> tuple[dict, bool]:
         key,
         data,
         frozen_config(configuration),
-        {"messages": [HumanMessage(content=request.topic)]},
-        session_id=session_id,
+        {"messages": [HumanMessage(content=body.topic)]},
+        session_id=body.research_session_id,
         config_source=str(DEFAULT_CONFIG_FILE),
     )
 
 
 @router.post("")
-def create(body: dict, raw: Request) -> JSONResponse:
+def create(body: ResearchRequest, raw: Request) -> JSONResponse:
     """Create one background Run; a repeated identical key returns the same Run."""
     run, created = create_run(body, raw)
     return JSONResponse(

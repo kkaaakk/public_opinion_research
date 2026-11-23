@@ -112,7 +112,7 @@ def main():
 
         def browser_configuration(_path=None):
             body = current_request.get()
-            topic = str(body.get("topic") or "")
+            topic = str(getattr(body, "topic", "") or "")
             values = deepcopy(cfg)
             values["configurable"].update(
                 allow_plan_feedback=APPROVAL_MARKER in topic,

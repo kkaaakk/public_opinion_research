@@ -99,9 +99,9 @@ export function useRunSession() {
       return true;
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        // The server already owns this key for another request, possibly the
-        // pre-upgrade body, so no further replay can create this Run. Drop the
-        // identity instead of retrying it, and leave verification to the user.
+        // The server already owns this key for another request, so no further
+        // replay can create this Run. Drop the identity instead of retrying it,
+        // and leave verification to the user.
         commit({ ...session, create: undefined });
         setMessage(
           `${error.message} · 创建未获确认：原创建请求可能已创建为 Run；请按 Run ID 或历史归档核对后再重新创建。`,

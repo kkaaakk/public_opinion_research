@@ -133,7 +133,34 @@ def test_removed_technical_settings_are_rejected_instead_of_ignored(
     """Removed user-level settings must not be silently accepted."""
     store, response = _post_run(monkeypatch, {"topic": "brand", field: value})
     assert response.status_code == 400
-    assert response.json()["detail"] == "Unsupported research parameter."
+    assert response.json()["detail"] == "Invalid research request."
+    assert store.created == []
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["0123456789abcdef0123456789abcdef", "f" * 32],
+)
+def test_wellformed_session_id_continues_that_session(monkeypatch, session_id):
+    """A 32-character lowercase hex Session ID is forwarded to RunClient."""
+    store, response = _post_run(
+        monkeypatch, {"topic": "brand", "research_session_id": session_id}
+    )
+    assert response.status_code == 202
+    assert store.created[0][5]["session_id"] == session_id
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["../foreign", "0123456789ABCDEF0123456789ABCDEF", "a" * 31, "g" * 32, 7],
+)
+def test_malformed_session_id_is_rejected_before_storage(monkeypatch, session_id):
+    """The Session ID keeps its exact shape without a hand-written check."""
+    store, response = _post_run(
+        monkeypatch, {"topic": "brand", "research_session_id": session_id}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid research request."
     assert store.created == []
 
 
@@ -148,29 +175,24 @@ def test_retrieval_tools_follow_the_run_rag_switch(monkeypatch, rag_enabled):
     assert names == ({"web_search", "rag_search"} if rag_enabled else {"web_search"})
 
 
-def test_research_stream_reuses_the_durable_create(monkeypatch):
-    """The legacy /api/research entry point keeps its streaming reply."""
+def test_event_subscription_streams_the_durable_events(monkeypatch):
+    """Creating a Run and subscribing to its events stay separate HTTP calls."""
     store = RecordingStore()
     monkeypatch.setattr(server, "WEB_API_TOKEN", "rag-test-token")
     monkeypatch.setattr(runs, "_store", lambda: store)
     with TestClient(server.app) as client:
-        response = client.post(
-            "/api/research",
-            json={"topic": "Analyze a customer-service incident", "rag_enabled": True},
-            headers={
-                "Authorization": "Bearer rag-test-token",
-                "Idempotency-Key": "rag-test",
-            },
+        response = client.get(
+            "/api/runs/run/events",
+            headers={"Authorization": "Bearer rag-test-token"},
         )
     assert response.status_code == 200
+    assert response.headers["x-run-id"] == "run"
     delivered = [
         json.loads(line[6:])
         for line in response.text.splitlines()
         if line.startswith("data: ")
     ]
     assert delivered == store.events
-    assert response.headers["x-run-id"] == "run"
-    assert store.created[0][2]["rag_enabled"] is True
 
 
 def test_disabled_role_still_returns_no_patch(monkeypatch):

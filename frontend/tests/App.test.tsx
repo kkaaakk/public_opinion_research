@@ -48,48 +48,6 @@ it('stores the create identity before POST and reuses its exact body after respo
   await waitFor(() => expect(restore().runId).toBe(ID));
   expect(restore().create).toBeUndefined();
 });
-it('retries a request persisted with removed technical settings using accepted fields only', async () => {
-  const bodies: unknown[] = [];
-  vi.stubGlobal(
-    'fetch',
-    vi.fn<typeof fetch>(async (input, init) => {
-      if (String(input) === '/api/runs') {
-        bodies.push(JSON.parse(String(init?.body)));
-        return json(snapshot({ status: 'completed', events_complete: true }));
-      }
-      return json(snapshot({ status: 'completed', events_complete: true }));
-    }),
-  );
-  sessionStorage.setItem(
-    'por-studio-session-v2',
-    JSON.stringify({
-      create: {
-        key: 'stored-key',
-        request: {
-          topic: 'Legacy topic',
-          model: 'deepseek:deepseek-flash',
-          mode: 'deep',
-          search_api: 'tavily',
-          require_approval: true,
-          allow_clarification: true,
-          org_context: '',
-          rag_enabled: true,
-        },
-      },
-    }),
-  );
-  const user = userEvent.setup();
-  render(<App />);
-  // An upgraded body is not the request that key may already own; say so first.
-  await screen.findByText(/参数已按新协议升级/);
-  await user.click(screen.getByRole('button', { name: '确认原创建请求' }));
-  await waitFor(() => expect(bodies).toHaveLength(1));
-  expect(bodies[0]).toEqual({
-    topic: 'Legacy topic',
-    org_context: '',
-    rag_enabled: true,
-  });
-});
 it('stops retrying an identity whose key already owns another request', async () => {
   vi.stubGlobal(
     'fetch',
