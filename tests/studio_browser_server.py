@@ -63,6 +63,12 @@ from open_deep_research.web.executor import launch
 from open_deep_research.workflow import dbos_workflow
 from open_deep_research.workflow.dbos_config import domain_engine, settings
 
+# The Web API accepts business input only, so a browser fixture selects its
+# server-side policy from the submitted topic. Clarification stays available to
+# every scenario; a topic carrying this marker additionally requests plan
+# approval. The switch belongs to this fixture, never to the public request.
+APPROVAL_MARKER = "browser-approval"
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -99,18 +105,19 @@ def main():
         patch.setattr(server, "get_history_store", lambda: archive)
         patch.setattr(server, "WEB_API_TOKEN", "studio-browser-test-only")
 
-        # Browser scenarios come from the submitted topic and the two dialog
-        # switches. Return a validated Configuration instead of the retired
-        # request-level configuration override.
+        # Browser scenarios come from the submitted topic, the only business
+        # input this API still takes. Return a validated Configuration instead
+        # of a retired request-level configuration override.
         current_request = ContextVar("studio_browser_request", default={})
 
         def browser_configuration(_path=None):
             body = current_request.get()
+            topic = str(body.get("topic") or "")
             values = deepcopy(cfg)
             values["configurable"].update(
-                allow_plan_feedback=bool(body.get("require_approval", False)),
-                allow_clarification=bool(body.get("allow_clarification", True)),
-                organization_context=str(body.get("topic") or ""),
+                allow_plan_feedback=APPROVAL_MARKER in topic,
+                allow_clarification=True,
+                organization_context=topic,
             )
             return Configuration.from_runnable_config(values)
 

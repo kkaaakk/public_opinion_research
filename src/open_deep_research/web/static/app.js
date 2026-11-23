@@ -366,6 +366,14 @@ async function followDurableRun(request) {
             saveDurableRun();
         } catch (error) {
             if ([400, 401].includes(error.httpStatus)) { durableRun = null; saveDurableRun(); }
+            if (error.httpStatus === 409) {
+                // This key already belongs to another request, possibly the body
+                // stored before the input protocol changed. Replaying it can
+                // never create this Run, so keep no stale identity and say so.
+                durableRun = null;
+                saveDurableRun();
+                addLog('error', '⚠ 创建未获确认：原请求可能已创建为 Run，请先按历史归档或 Run ID 核对。');
+            }
             throw error;
         }
     }

@@ -68,4 +68,6 @@ npm run test:e2e
 
 `playwright.config.ts` 启动 `tests/studio_browser_server.py`：真实 HTTP/DBOS/Runner/Harness，推理用官方 `ScriptedModel`，工具为可核对的合成证据。夹具创建并只删除自己的 `por_test_<uuid>` PostgreSQL 数据库。测试服务、截图数值与合成证据不能解释为真实供应商研究或费用。该入口只用于测试，不能替代生产启动方式。
 
+用户输入只包含主题、组织背景和 RAG 开关，因此浏览器用例把场景与该夹具的服务端策略写在主题里：含 `browser-approval` 的主题请求计划审批，RAG 复选框选择需要两个 Producer 的运行。审批与澄清策略仍由服务端配置决定，不由请求字段决定。
+
 `TEST_DBOS_DATABASE_URL`、`TEST_DBOS_NEO4J_URI`、`TEST_DBOS_NEO4J_PASSWORD` 可指向其他明确隔离的本地服务。截图及失败 Trace 写入根 `.tmp/`；不要上传包含真实 operator Token 的浏览器 Trace。CI 的服务和 Token 均为一次性测试配置。

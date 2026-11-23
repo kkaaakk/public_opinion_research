@@ -104,8 +104,23 @@ test('a fresh page always creates a durable Run without execution selectors', as
     const request = JSON.parse(submitted[0].options.body);
     assert.equal(request.workflow_backend, undefined);
     assert.equal(request.business_agent_runtime, undefined);
+    // Only business input travels; server settings stay in config.yaml.
+    assert.deepEqual(Object.keys(request).sort(), ['org_context', 'rag_enabled', 'topic']);
     assert.ok(submitted[0].options.headers['Idempotency-Key']);
     assert.ok(!view.calls.some(call => call.path === '/api/research'));
+});
+
+test('a conflicted create drops an identity it can never replay', async () => {
+    const saved = storage({ key: 'key', request: body, runId: null, cursor: 0 });
+    const view = page(saved, path => path === '/api/runs'
+        ? response({ detail: 'Idempotency key was used for another request' }, 409)
+        : response(state('completed')));
+    await view.call('startResearch(true)');
+    // The server owns this key for another request, possibly the stored body
+    // from before the input protocol changed; it must not be retried forever.
+    assert.equal(saved.getItem(storageKey), null);
+    assert.equal(view.element('status-text').textContent, 'Failed');
+    assert.equal(view.calls.filter(call => call.path === '/api/runs').length, 1);
 });
 
 test('known Run reload only subscribes and deduplicates durable event sequences', async () => {
