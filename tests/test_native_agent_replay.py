@@ -31,6 +31,11 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
     calls = []
     receipts = []
     attempts = 0
+    # The sibling must have committed its Tool Step before the failing call
+    # fails, whatever order the event loop schedules the two Steps in. The
+    # sibling's ``tool_result`` observation is published after its Step has
+    # committed, so this is a fact of the fixture instead of a bet on ``sleep``.
+    second_finished = asyncio.Event()
 
     async def begin():
         assert DBOS.step_id is not None
@@ -47,6 +52,8 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
             calls.append(payload["name"])
         if kind == "tool_result":
             assert call_id == payload["tool_call_id"]
+            if payload["tool_call_id"] == "call-2" and payload["status"] == "succeeded":
+                second_finished.set()
 
     monkeypatch.setattr(generation, "begin_model_call", begin)
     monkeypatch.setattr(generation, "end_model_call", end)
@@ -60,11 +67,14 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
     async def search(query: str, limit: int = 3):
         # Two calls in one response exercise the SDK's parallel Tool Steps.
         if query == "first":
-            await asyncio.sleep(0.05)
+            # Bounded so a serial SDK loop fails loudly instead of hanging.
+            await asyncio.wait_for(second_finished.wait(), timeout=10)
+            calls.append(query)
+            if ending == "tool-budget-error":
+                await generation.generate_text("openai:fixture", query, max_tokens=64)
+                raise ModelBudgetExceeded("Tool summary ran out of allowance")
+            return f"evidence {query}"
         calls.append(query)
-        if ending == "tool-budget-error" and query == "first":
-            await generation.generate_text("openai:fixture", query, max_tokens=64)
-            raise ModelBudgetExceeded("Tool summary ran out of allowance")
         return f"evidence {query}"
 
     def final(call):
@@ -119,18 +129,32 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
                 outcome = await runtime.run("collect evidence")
                 usage, report = outcome.budget, outcome.report
             assert runtime.harness.last_settlement.succeeded
-            assert {
+            statuses = {
                 key: record.status for key, record in runtime.harness.results.items()
-            } == {
-                "call-1": "failed" if ending == "tool-budget-error" else "succeeded",
-                "call-2": "succeeded",
             }
+            assert statuses["call-1"] == (
+                "failed" if ending == "tool-budget-error" else "succeeded"
+            )
+            if attempts == 1 or ending != "tool-budget-error":
+                # Live execution, or a replay whose batch has no sibling failure
+                # to cancel it: the committed result is always consumed.
+                assert statuses["call-2"] == "succeeded"
+            else:
+                # Attempt two replays both Step outcomes without re-running a
+                # body. The sibling's replayed error can surface before this
+                # replay consumes its committed receipt, and the SDK then
+                # abandons the replay: cancelled is this attempt's truthful
+                # terminal state — no body ran and no allowance was added —
+                # while the committed success stays journaled for the next
+                # recovery and is asserted against ``before`` below.
+                assert statuses["call-2"] in {"succeeded", "cancelled"}
+            assert "running" not in statuses.values()
             if attempts == 1:
                 # Stop after the Agent result was built but before the enclosing
                 # Workflow returns it. Recovery must rebuild Python state.
                 raise RuntimeError("simulated executor failure before result")
             assert not model.calls
-            return usage, report
+            return usage, report, statuses
         finally:
             stage_context.reset(token)
 
@@ -177,8 +201,14 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
             workflow_id,
             start_step=max(s["function_id"] for s in before) + 1,
         )
-        usage, report = handle.get_result()
-        assert usage["tool_calls"] == 2
+        usage, report, statuses = handle.get_result()
+        # The replay restores the journaled receipts without re-running a body.
+        # When the sibling's replayed error won the race, its abandoned replay
+        # did not consume the second committed receipt in this attempt's local
+        # projection; the journal below still holds it for the next recovery.
+        consumed = 1 + (statuses["call-2"] == "succeeded")
+        assert usage["tool_calls"] == consumed
+        assert usage["search_calls"] == consumed
         assert usage["model_calls"] == len(receipts) == (1 if ending == "denied" else 2)
         assert usage["total_tokens"] == {
             "completed": 28,
@@ -201,6 +231,16 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
                 and step["error"].budget_usage["tool_calls"] == 1
                 for step in before if step["function_name"] == "por.agent_tool"
             )
+        # Whichever way the replay raced, the journal keeps call-2's committed
+        # success receipt: a recovery never loses a committed result.
+        committed = next(
+            step["output"]
+            for step in before
+            if step["function_name"] == "por.agent_tool"
+            and step["output"]
+            and step["output"]["record"]["tool_call_id"] == "call-2"
+        )
+        assert committed["record"]["status"] == "succeeded"
         assert calls == observed_effects
         assert serializer.serialize(client.list_workflow_steps(workflow_id)) == (
             serializer.serialize(before)

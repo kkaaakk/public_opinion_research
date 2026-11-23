@@ -306,6 +306,19 @@ def _inspect(args) -> int:
     for name, value in view["models"].items():
         if name.endswith("_model"):
             print(f"  {name}: {value}")
+    # Two different authorities: the ledger owns what the provider was asked,
+    # the Stream observations only carry SDK Agent turns and tool results.
+    usage = run.get("usage") or {}
+    print(
+        "Model attempts in ledger: "
+        f"{usage.get('model_calls', 0)} "
+        f"(tokens={usage.get('total_tokens', 0)}, "
+        f"complete={usage.get('usage_complete')})"
+    )
+    print(
+        "Ledger tool calls: "
+        f"{usage.get('tool_calls', 0)} (search={usage.get('search_calls', 0)})"
+    )
     print(f"Model calls observed: {model_calls}")
     if tool_calls:
         print("Tool calls:")

@@ -5,6 +5,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import ValidationError
 from sdk_model_support import Reply, install_sequence
 from starlette.requests import Request
@@ -80,6 +81,51 @@ def test_token_limit_compression_error_keeps_graceful_degradation(monkeypatch) -
     )
 
     assert "Maximum retries exceeded" in result[0]
+
+
+def test_compression_prompt_answers_every_emitted_tool_call(monkeypatch) -> None:
+    """A transcript that ends after tool_calls stays a valid provider request."""
+
+    captured: list[list[dict]] = []
+
+    async def record(model, prompt, **kwargs):
+        captured.append(list(prompt))
+        return "compressed report", {}
+
+    monkeypatch.setattr(business_agent_module, "generate_text", record)
+    messages = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "web_search", "id": "answered", "args": {"query": "a"}},
+                {"name": "web_search", "id": "abandoned", "args": {"query": "b"}},
+            ],
+        ),
+        ToolMessage(content="evidence a", tool_call_id="answered"),
+        HumanMessage(content="summarize"),
+    ]
+
+    result = asyncio.run(
+        business_agent_module._compress_research(
+            messages,
+            {},
+            configurable=Configuration.from_runnable_config({}),
+            config={},
+        )
+    )
+
+    assert result[0] == "compressed report"
+    calls = [item for item in captured[0] if item.get("type") == "function_call"]
+    outputs = [item for item in captured[0] if item.get("type") == "function_call_output"]
+    assert {item["call_id"] for item in calls} == {"answered", "abandoned"}
+    assert {item["call_id"] for item in outputs} == {"answered", "abandoned"}
+    # The unpaired call is answered in place, right after the call it belongs to.
+    abandoned_index = next(
+        index
+        for index, item in enumerate(captured[0])
+        if item.get("call_id") == "abandoned" and item["type"] == "function_call"
+    )
+    assert captured[0][abandoned_index + 1]["call_id"] == "abandoned"
 
 
 # 验证 Web 请求的模型白名单和主题长度限制。

@@ -31,7 +31,7 @@ ANALYSIS_ROLES = ("risk_assessment", "response_strategy")
 
 
 def apply_patch(state: DeepResearchState, patch: Mapping[str, Any]) -> None:
-    """Commit one delta using the shared pure merge rules, without graph channels."""
+    """Commit one delta with the shared pure merge rules, not state channels."""
     unknown = set(patch) - {*_DOMAIN_UPDATES, "messages"}
     if unknown:
         raise ValueError(f"Unknown State domains: {sorted(unknown)}")

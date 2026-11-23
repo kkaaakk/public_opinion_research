@@ -63,7 +63,7 @@ ResearchWorkflow、PlanWorkflow、报告节点、两个研究 Agent 的角色契
 - `discover()` 的领域过滤是**装配边界**（决定模型能看到什么），`_authorize()` 是**执行边界**（决定被撤销授权的工具不能继续跑）。两者输入相似、时机不同，都保留。
 - `_settle_call()` 只写 `tool_calls.status`，不回写工具结果：`por.agent_tool` 提交结果才是权威，账本写失败只告警。
 - `bind()` 保留为独立方法：`discover()` 在 `por.role_tools` 内执行，此时本次 Run 的 `ToolExecutor` 还不存在，装配必须晚一步发生。
-- `_restore_role_tools()` 的目录比较保留。**审查结论**：无 `effect` 的目录来自 `por.role_tools` 引入之前的运行时；DBOS 只恢复同 `application_version` 的 journal，因此它不是跨版本兼容路径，而是目录围栏的宽松分支。删除它需要同时删除进程级场景 `runner-legacy-catalog`，本轮无法离线验证杀进程测试，故保留并在此登记，留待下一轮处理。
+- ~~`_restore_role_tools()` 的目录比较保留。**审查结论**：无 `effect` 的目录来自 `por.role_tools` 引入之前的运行时；DBOS 只恢复同 `application_version` 的 journal，因此它不是跨版本兼容路径，而是目录围栏的宽松分支。~~ **第六轮已删除**：`effect` 从 `dbos-events-v1` 起写入目录，当前 Executor（`por-call-ledger-v1`）按 Application Version 恢复，永远不会重放无 `effect` 的目录；宽松分支已改为严格一致性校验，进程级场景 `runner-legacy-catalog` 同步移除，`runner-tool` 继续覆盖 `por.role_tools` 围栏与 protected 回执恢复。
 
 ## 3. Tool Call 身份只派生一次
 
@@ -142,5 +142,5 @@ DBOS 的语义：**已提交的 Step 直接重放；未提交的 Step 可能重�
 
 ## 9. 遗留问题
 
-- `tests/test_native_agent_replay.py::test_agent_recovery_restores_parallel_tool_results_and_usage[tool-budget-error]` 存在既有抖动：并发施压时在 `main`（`951d4eab`）与本次分支上都各有 2/18 次失败，表现为被取消的兄弟工具记录停在 `running`，而 `last_settlement` 已判成功。原因是该用例依赖 `asyncio.sleep(0.05)` 保证兄弟工具先完成，事件循环被抢占时不成立。本轮未改该用例，也未改结算语义；下一轮应让 `settle()` 在成功排空后把仍为 `running` 的记录落到 `unobserved`/`cancelled`，并补一条并发取消断言。
-- `_restore_role_tools()` 的宽松目录分支（见第 2 节）留待下一轮删除，届时需同步处理进程级场景 `runner-legacy-catalog`。
+- ~~`test_agent_recovery_restores_parallel_tool_results_and_usage[tool-budget-error]` 的并发抖动~~ **第六轮已修复**。根因不是测试睡眠，而是真实窗口：SDK 在兄弟调用失败后取消同级 Tool 任务，被取消的调用可能只被 `on_tool_start` 观察到、从未进入 `ToolExecutor`，其记录停在 `running` 且没有在途 future；若它出现在结算判定之后，`settlement` 已判成功而记录无终态。修复见 [工具观察记录终态](../architecture/tools.md#观察记录的终态)：执行器在工具体之前被取消即落 `cancelled`，`settle()` 收敛从未进入执行器的记录，结算边界之后的新观察天生终态，`succeeded` 只表示「全部到达终态」。用例改用 `asyncio.Event`，另补 3 例终态单测与 20 次并发重复验证。
+- ~~`_restore_role_tools()` 的宽松目录分支~~ **第六轮已删除**，见第 2 节。

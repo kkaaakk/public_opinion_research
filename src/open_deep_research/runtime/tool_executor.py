@@ -252,6 +252,11 @@ class ToolExecutor:
             # the owning call has to restore it from the error receipt.
             if not executed and call.previous is None:
                 self.budget.add(getattr(exc, "budget_usage", {}))
+                # This Step never reached ``_perform``, so the tool body did not
+                # run: no result, no allowance and no external effect. The record
+                # must not stay observed as running, because the SDK cancelled
+                # this invocation and will never finish the call.
+                call.harness.close_unexecuted(call.record, type(exc).__name__)
             raise
         if not executed:
             call.harness.restore_tool(saved["record"])
@@ -263,6 +268,9 @@ class ToolExecutor:
         harness, record = call.harness, call.record
         if call.previous is not None:
             return await asyncio.shield(call.previous)
+        # From here on the call may reach the tool body, so settlement must not
+        # close its record as never executed even if this coroutine is killed.
+        harness.mark_executing(record.tool_call_id)
         admitted = False
         try:
             if harness.closing:

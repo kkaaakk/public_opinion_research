@@ -420,12 +420,14 @@ def test_approved_brief_reaches_two_agents_analysis_report_and_history(
             workflow_id_prefix=run_id + ":", name="por.role"
         )
     } == {f"{run_id}:{role}:1" for role in RESEARCH_ROLES}
+    # Risk, strategy and the final report are the three bounded model steps
+    # inside the research Workflow; each one is checkpointed with its output.
     model_steps = [
         step
         for step in client.list_workflow_steps(run_id + ":research")
         if step["function_name"] == "por.llm"
     ]
-    assert len(model_steps) == 2 and all(step["output"] for step in model_steps)
+    assert len(model_steps) == 3 and all(step["output"] for step in model_steps)
 
     stages = {unit["name"]: unit for unit in stage_observations(run_id)}
     for role in ANALYSIS_ROLES:
@@ -699,12 +701,18 @@ def test_tool_operation_identity_never_authorizes_unknown_replay(
     run = case.create()
     try:
         assert entered.wait(20)
-        run_id, workflow_id, executor, op, name, fingerprint = admitted[0]
-        with pytest.raises(execution.ExecutionControlError, match="already admitted"):
+        run_id, workflow_id, executor, op, ledger_op, name, fingerprint = admitted[0]
+        with pytest.raises(execution.ExecutionControlError, match="already ran for this call"):
             original(*admitted[0])
         with pytest.raises(execution.ExecutionControlError, match="no longer owns"):
             original(
-                run_id, workflow_id, "other-executor", "another-id", name, fingerprint
+                run_id,
+                workflow_id,
+                "other-executor",
+                "another-id",
+                ledger_op,
+                name,
+                fingerprint,
             )
         with domain_engine().connect() as db:
             row = (

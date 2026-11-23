@@ -119,11 +119,11 @@ rag_query_rewrite_max_tokens: 256
 # ---------------------------------------------------------------------------
 # DeepSeek drives reasoning, research compression and the final report.
 research_model: deepseek:deepseek-flash
-research_model_max_tokens: 10000
+research_model_max_tokens: 16384
 compression_model: deepseek:deepseek-flash
-compression_model_max_tokens: 8192
+compression_model_max_tokens: 16384
 final_report_model: deepseek:deepseek-flash
-final_report_model_max_tokens: 10000
+final_report_model_max_tokens: 16384
 # Doubao handles high-frequency auxiliary calls.
 summarization_model: volcengine:doubao-seed-2-0-mini-260428
 summarization_model_max_tokens: 8192

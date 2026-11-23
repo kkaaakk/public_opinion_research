@@ -103,7 +103,6 @@ def test_official_runner_process_reuses_model_and_tool(pg_database, tmp_path, wi
     [
         "runner-model",
         "runner-tool",
-        "runner-legacy-catalog",
         "runner-batch",
         "batch-error-cache",
     ],
@@ -162,13 +161,11 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
 
         steps = native_client().list_workflow_steps(public_id)
         assert any("_model_call_step" in s["function_name"] for s in steps)
-        if window in {"runner-tool", "runner-legacy-catalog"}:
+        if window == "runner-tool":
             catalog = next(
                 s["output"] for s in steps if s["function_name"] == "por.role_tools"
             )
-            assert catalog[0].get("effect") == (
-                None if window == "runner-legacy-catalog" else "protected"
-            )
+            assert catalog[0]["effect"] == "protected"
             tool_step = next(s for s in steps if s["function_name"] == "por.agent_tool")
             receipt = tool_step["output"]
             assert receipt["output"]
@@ -239,7 +236,7 @@ def test_business_runner_process_restores_harness_and_fences_unknown_batch(
             assert after[internal_id].output == committed
             assert after[internal_id].completed_at == before[internal_id].completed_at
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == 2
-        if window in {"runner-tool", "runner-legacy-catalog"}:
+        if window == "runner-tool":
             restored_steps = native_client().list_workflow_steps(public_id)
             assert [
                 s for s in restored_steps if s["function_name"] == "por.agent_tool"

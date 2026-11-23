@@ -29,7 +29,7 @@ from open_deep_research.budget import (
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.context import remove_up_to_last_ai_message
 from open_deep_research.llm.errors import is_token_limit_exceeded
-from open_deep_research.llm.generation import generate_text
+from open_deep_research.llm.generation import ModelOutputError, generate_text
 from open_deep_research.mcp.domain_filter import get_tool_domain
 from open_deep_research.models.sdk import sdk_model
 from open_deep_research.prompts import (
@@ -194,9 +194,20 @@ async def _compress_research(
         # try/finally guarantees the ContextVar is reset on every exit path.
         attempt_token = start_budget_capture()
         token_limit_hit = False
+        retry_unchanged = False
+        truncations = 0
         failure: BaseException | None = None
         try:
             try:
+                # The provider requires every emitted call to be answered, but a
+                # transcript can end after tool_calls (early stop, cancelled
+                # sibling, shrink). Answer the unpaired ones in place so the
+                # request stays valid instead of failing the whole role.
+                answered = {
+                    message.tool_call_id
+                    for message in researcher_messages
+                    if isinstance(message, ToolMessage)
+                }
                 prompt: list[TResponseInputItem] = [{
                     "role": "system",
                     "content": compress_research_system_prompt.format(date=get_today_str(config)),
@@ -217,6 +228,11 @@ async def _compress_research(
                             "name": call["name"],
                             "arguments": json.dumps(call["args"], ensure_ascii=False),
                         } for call in message.tool_calls)
+                        prompt.extend({
+                            "type": "function_call_output",
+                            "call_id": call["id"],
+                            "output": "No tool response was recorded for this call.",
+                        } for call in message.tool_calls if call["id"] not in answered)
                     else:
                         prompt.append({"role": "user", "content": message.text})
                 response, _ = await generate_text(
@@ -227,10 +243,22 @@ async def _compress_research(
                     component="role_report_compression",
                 )
             except Exception as exc:
-                if not is_token_limit_exceeded(exc, configurable.compression_model):
+                retry_unchanged = False
+                truncated = (
+                    isinstance(exc, ModelOutputError) and exc.retryable
+                )
+                if truncated and not truncations:
+                    # The output cap, not the evidence volume, caused this, so
+                    # dropping tool responses would only lose evidence. Retry
+                    # the same transcript once before shrinking.
+                    truncations = 1
+                    retry_unchanged = True
+                if not truncated and not is_token_limit_exceeded(
+                    exc, configurable.compression_model
+                ):
                     LOGGER.exception("Unexpected research compression failure.")
                     raise
-                token_limit_hit = True
+                token_limit_hit = not retry_unchanged
         except BaseException as exc:
             failure = exc
             raise
@@ -241,6 +269,8 @@ async def _compress_research(
             if failure is not None:
                 # Preserve failed report attempts without recounting successes.
                 setattr(failure, "budget_usage", attempt_budget)
+        if retry_unchanged:
+            continue
         if token_limit_hit:
             researcher_messages = remove_up_to_last_ai_message(researcher_messages)
             continue
@@ -275,18 +305,13 @@ def _tool_catalog(tools: Iterable[BusinessTool]) -> list[dict[str, Any]]:
 def _restore_role_tools(admitted, tools):
     """Fence a resumed Run to the tool definitions it was admitted with.
 
-    A journal catalog without ``effect`` predates the field but describes the
-    same declarations; every current tool, including protected MCP servers,
-    states its effect itself. Anything else changed is a real definition change
-    and must not be replayed under the old admission.
+    The catalog carries the declared effect, and every current declaration states
+    one (unclassified declarations fall back to ``protected``). A journal written
+    before ``effect`` existed belongs to an older DBOS Application Version, which
+    this Executor never recovers, so an effect-less catalog is a definition
+    change rather than a format to tolerate.
     """
-    current = _tool_catalog(tools)
-    if admitted == current:
-        return tools
-    if admitted != [
-        {key: value for key, value in entry.items() if key != "effect"}
-        for entry in current
-    ]:
+    if admitted != _tool_catalog(tools):
         raise ValueError("Role tool definitions changed during recovery")
     return tools
 

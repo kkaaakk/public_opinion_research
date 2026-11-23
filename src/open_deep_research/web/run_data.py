@@ -232,6 +232,7 @@ def sdk_observation(payload: dict) -> dict:
         "edges",
         "pending_calls",
         "in_flight_calls",
+        "unexecuted_calls",
         "removed_turns",
     }
     result = {

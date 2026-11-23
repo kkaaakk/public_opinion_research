@@ -36,25 +36,25 @@ __all__ = [
 
 # 复制并返回流程状态域，供节点安全构造更新。
 def workflow_state(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the workflow domain of the graph state."""
+    """Return the workflow domain of the research state."""
     return dict(state.get("workflow", {}) or {})
 
 
 # 复制并返回按角色划分的智能体状态域。
 def agents_state(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the per-role agent domain of the graph state."""
+    """Return the per-role agent domain of the research state."""
     return dict(state.get("agents", {}) or {})
 
 
 # 复制并返回最终报告状态域。
 def report_state(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the report domain of the graph state."""
+    """Return the report domain of the research state."""
     return dict(state.get("report", {}) or {})
 
 
 # 复制并返回预算状态域。
 def runtime_state(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the runtime accounting domain of the graph state."""
+    """Return the runtime accounting domain of the research state."""
     return dict(state.get("runtime", {}) or {})
 
 

@@ -96,7 +96,8 @@ def test_repeated_call_identity_is_not_charged_twice(pg_database, admit):
     config = _configuration(max_tool_calls=1)
 
     assert _admit(config, run_id, "same-call") == "admitted"
-    assert _admit(config, run_id, "same-call") == "admitted"
+    # Same identity: one row and one charge, reported as an uncommitted-step replay.
+    assert _admit(config, run_id, "same-call") == "duplicate"
     assert _admit(config, run_id, "next-call") == "rejected"
     assert tuple(_counts(run_id)) == (1, 0)
 

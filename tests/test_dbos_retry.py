@@ -249,7 +249,9 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
         release[3].set()
         completed = saved(case, run, "completed", 2)
         record, events = assert_consistent(case, run, completed)
-        assert completed["usage"]["model_calls"] == 28
+        # Usage is composed from the model_attempts ledger since por-call-ledger-v1;
+    # the stage-note double count this file once asserted (28) is gone.
+        assert completed["usage"]["model_calls"] == 20
         assert attempts == [1, 2, 3]
         assert len(case.models) == 2
         assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
@@ -535,11 +537,11 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
         final = client.get(run["run_id"], "alice")
         assert effect_count(tmp_path, "reviews") == 3
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == 2
-        assert final["usage"]["model_calls"] == 28
+        assert final["usage"]["model_calls"] == 20
         archive = store.get(final["history_id"], owner="alice")
         assert archive["status"] == "completed"
         assert archive["report"] == final["report"]
-        assert archive["usage"]["model_calls"] == 28
+        assert archive["usage"]["model_calls"] == 20
         assert archive["run_state_version"] == 3
         events = client.read_events(run["run_id"], "alice", 0, 10000)
         assert [e["generation"] for e in events if e["type"] == "retry_started"] == [
@@ -647,7 +649,7 @@ def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeyp
     final = saved(case, run, "completed", 2)
     assert_consistent(case, run, final)
     assert len(attempts) == 3
-    assert final["usage"]["model_calls"] == 28
+    assert final["usage"]["model_calls"] == 20
 
 
 def test_new_retry_requires_delivery_of_the_current_failed_generation(

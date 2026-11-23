@@ -5,12 +5,16 @@ from dataclasses import replace
 
 import pytest
 from agents import Agent, function_tool
-from agents.exceptions import MaxTurnsExceeded
+from agents.exceptions import MaxTurnsExceeded, UserError
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
+from agents.tool_context import ToolContext
+from test_sdk_runtime import TOKENS, _runtime, _tool
 
+from open_deep_research.budget import ModelBudgetExceeded
 from open_deep_research.configuration import Configuration
-from open_deep_research.runtime import sdk_context
+from open_deep_research.runtime import sdk_context, tool_executor
 from open_deep_research.runtime.sdk_context import (
+    NOT_INVOKED,
     BatchSettlement,
     ObservedToolResult,
     SDKContextHarness,
@@ -36,6 +40,28 @@ def _executor(tool, name="search", domain="web_search"):
 def _harness(**kwargs):
     return SDKContextHarness(
         role="public_signal", task_id="task-1", research_round=1, **kwargs
+    )
+
+
+def _declared(name="search"):
+    async def body(query: str = ""):
+        return f"evidence {query}"
+
+    return register_tool(
+        function_tool(
+            body, name_override=name, strict_mode=True, failure_error_function=None
+        ),
+        domain="web_search",
+        effect="read",
+    )
+
+
+def _tool_context(harness, call_id, name="search", arguments='{"query":"q"}'):
+    return ToolContext(
+        context=harness,
+        tool_name=name,
+        tool_call_id=call_id,
+        tool_arguments=arguments,
     )
 
 
@@ -244,11 +270,131 @@ def test_settlement_reports_live_and_pending_calls():
         model_turn=0,
         status="running",
     )
+    # The executor entered this call, so it may still be running a body that
+    # settlement has no right to declare finished.
+    harness.mark_executing("running")
     settlement = asyncio.run(harness.settle("test"))
     assert settlement == BatchSettlement(
         reason="test", in_flight_call_ids=("running",)
     )
     assert not settlement.succeeded
+
+
+def test_settlement_closes_a_call_the_executor_never_entered():
+    """A hook-only observation has no invocation behind it and must not stay live."""
+    tool = _declared()
+    harness = _harness()
+    harness.tool_executor = _executor(tool)
+    context = _tool_context(harness, "ghost")
+
+    asyncio.run(harness.on_tool_start(context, None, tool.sdk_tool))
+    assert harness.results["ghost"].status == "running"
+
+    settlement = asyncio.run(harness.settle("cancelled"))
+    assert settlement.succeeded
+    record = harness.results["ghost"]
+    assert (record.status, record.observation, record.error_type) == (
+        "cancelled",
+        None,
+        NOT_INVOKED,
+    )
+
+
+def test_observation_announced_during_settlement_is_born_terminal():
+    """A late SDK hook must not reintroduce a live record after settlement."""
+    tool = _declared()
+    harness = _harness()
+    harness.tool_executor = _executor(tool)
+    asyncio.run(harness.settle("exception"))
+
+    asyncio.run(harness.on_tool_start(_tool_context(harness, "late"), None, tool.sdk_tool))
+
+    assert harness.results["late"].status == "cancelled"
+    assert harness.results["late"].error_type == NOT_INVOKED
+    assert asyncio.run(harness.settle("exception")).succeeded
+
+
+def test_cancelled_tool_step_closes_its_record_without_running_the_body(monkeypatch):
+    """A Step cancelled before the body ran leaves no live record and no usage."""
+    harness = _harness()
+    ran = []
+
+    async def body(query: str = ""):
+        ran.append(query)
+        return "unexpected"
+
+    tool = register_tool(
+        function_tool(
+            body, name_override="search", strict_mode=True, failure_error_function=None
+        ),
+        domain="web_search",
+        effect="read",
+    )
+    executor = _executor(tool)
+    harness.tool_executor = executor
+
+    async def cancelled_step(options, step):
+        assert options["name"] == "por.agent_tool"
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(tool_executor, "native_step_available", lambda: True)
+    monkeypatch.setattr(tool_executor.DBOS, "run_step_async", cancelled_step)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            executor.invoke(tool.sdk_tool, _tool_context(harness, "call-1"), '{"query":"q"}')
+        )
+
+    assert ran == []
+    record = harness.results["call-1"]
+    assert (record.status, record.observation, record.error_type) == (
+        "cancelled",
+        None,
+        "CancelledError",
+    )
+    assert asyncio.run(harness.settle("cancelled")).succeeded
+
+
+@pytest.mark.parametrize("attempt", range(20))
+def test_parallel_failing_tool_settles_every_record_terminal(attempt):
+    """Repeat the sibling race: no record may stay live, no allowance is refunded."""
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def search(query: str, limit: int = 3):
+        if query == "blocked":
+            started.set()
+            await blocked.wait()
+            return "never returned"
+        # Bounded so a serial SDK loop fails loudly instead of hanging.
+        await asyncio.wait_for(started.wait(), timeout=10)
+        raise ModelBudgetExceeded("Tool summary ran out of allowance")
+
+    tool = _tool(coroutine=search, effect="read")
+    model = ScriptedModel(
+        [
+            [
+                function_call(tool.name, {"query": "blocked"}, call_id="call-blocked"),
+                function_call(tool.name, {"query": "failing"}, call_id="call-failing"),
+            ]
+        ],
+        default_usage=TOKENS,
+    )
+    runtime = _runtime(tools=[tool], model=model)
+
+    with pytest.raises(UserError) as caught:
+        asyncio.run(runtime.run("collect evidence"))
+    assert isinstance(caught.value.__cause__, ModelBudgetExceeded)
+
+    harness = runtime.harness
+    assert harness.last_settlement is not None
+    assert harness.last_settlement.succeeded
+    assert {
+        call_id: record.status for call_id, record in harness.results.items()
+    } == {"call-blocked": "cancelled", "call-failing": "failed"}
+    assert harness.results["call-blocked"].error_type == "CancelledError"
+    # Both calls were admitted before either body ran, so neither is refunded.
+    assert caught.value.budget_usage["tool_calls"] == 2
 
 
 def test_runner_rejects_handoffs_and_tool_guardrails():
