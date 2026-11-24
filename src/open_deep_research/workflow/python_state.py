@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, cast
-from uuid import uuid4
 
 from langchain_core.messages import RemoveMessage, convert_to_messages
 
 from open_deep_research.budget import merge_budget_usage
+from open_deep_research.ids import stable_id
 from open_deep_research.state import (
     DeepResearchState,
     ResearchRoleResult,
@@ -30,8 +30,25 @@ RESEARCH_ROLES = ("public_signal", "internal_knowledge")
 ANALYSIS_ROLES = ("risk_assessment", "response_strategy")
 
 
-def apply_patch(state: DeepResearchState, patch: Mapping[str, Any]) -> None:
-    """Commit one delta with the shared pure merge rules, not state channels."""
+def message_identity(source: str, position: int) -> str:
+    """Name one appended message by its business source and list position.
+
+    ``source`` is the Run-scoped stage identity (Run, stage, role/round/revision,
+    generation) and ``position`` is the message's index in the replayed list, so
+    a recovered execution rebuilds exactly the identifiers the first attempt
+    froze instead of minting fresh random ones.
+    """
+    return stable_id("MSG", source, position, length=32)
+
+
+def apply_patch(
+    state: DeepResearchState, patch: Mapping[str, Any], *, source: str
+) -> None:
+    """Commit one delta with the shared pure merge rules, not state channels.
+
+    ``source`` only names messages the caller did not identify itself; an
+    explicit ID from the caller always wins.
+    """
     unknown = set(patch) - {*_DOMAIN_UPDATES, "messages"}
     if unknown:
         raise ValueError(f"Unknown State domains: {sorted(unknown)}")
@@ -44,7 +61,7 @@ def apply_patch(state: DeepResearchState, patch: Mapping[str, Any]) -> None:
         messages = deepcopy(list(state.get("messages", [])))
         for message in convert_to_messages(deepcopy(patch["messages"])):
             if message.id is None:
-                message.id = str(uuid4())
+                message.id = message_identity(source, len(messages))
             index = next(
                 (i for i, old in enumerate(messages) if old.id == message.id), None
             )
@@ -60,11 +77,11 @@ def apply_patch(state: DeepResearchState, patch: Mapping[str, Any]) -> None:
     state.update(cast(DeepResearchState, updates))
 
 
-def copy_state(value: Mapping[str, Any]) -> DeepResearchState:
+def copy_state(value: Mapping[str, Any], *, source: str) -> DeepResearchState:
     """Copy caller-owned values and normalize the existing message input contract."""
     state = cast(DeepResearchState, {name: {} for name in _DOMAIN_UPDATES})
     state["messages"] = []
-    apply_patch(state, value)
+    apply_patch(state, value, source=source)
     return state
 
 

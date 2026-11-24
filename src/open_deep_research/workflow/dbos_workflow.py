@@ -1,4 +1,10 @@
-"""Native durable business orchestration. SDK Runner owns every Agent loop."""
+"""Native durable business orchestration. SDK Runner owns every Agent loop.
+
+A Workflow moves business control flow, a Step owns one external or
+non-deterministic result, a Datasource transaction owns one business database
+commit, DBOSRunner owns the two Agent loops, and every other function is plain
+Python that recomputes deterministically on replay.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +24,7 @@ from open_deep_research.observability.telemetry import (
     correlation,
     dbos_scope,
 )
-from open_deep_research.state import ResearchReview, ResearchRoleResult
+from open_deep_research.state import ResearchRoleResult
 from open_deep_research.time_utils import get_today_str
 from open_deep_research.web.run_data import (
     RunConflict,
@@ -27,10 +33,8 @@ from open_deep_research.web.run_data import (
     dumps,
     loads,
     public_payload,
-    publish_event,
     read_request,
     retry_generation,
-    role_deliverables,
     stage_budget,
     timestamp,
 )
@@ -42,7 +46,6 @@ from open_deep_research.workflow.dbos_config import (
     VERSION,
     domain_engine,
     native_client,
-    settings,
 )
 from open_deep_research.workflow.execution import (
     StageContext,
@@ -61,12 +64,20 @@ from open_deep_research.workflow.python_state import (
     read_research_result,
     role_snapshot,
 )
+from open_deep_research.workflow.transactions import archive, commit_stage
+
+
+def _interaction_now():
+    with domain_engine().connect() as db:
+        return db_time(db)
 
 
 async def send_event(run_id, event_type, **data):
-    # A replayed send retains its original message and generation.
+    # A replayed send retains its original message, generation and timestamp.
     if "generation" not in data:
         data["generation"] = await asyncio.to_thread(run_generation, run_id)
+    if "observed_at" not in data:
+        data["observed_at"] = timestamp(await asyncio.to_thread(_interaction_now))
     await DBOS.send_async(
         run_id + ":events", dict(type=event_type, **data), topic="events"
     )
@@ -77,44 +88,32 @@ def run_generation(run_id):
         return retry_generation(db, run_id)
 
 
-def stage_event(db, scope, kind, **payload):
-    publish_event(
-        db,
-        scope.run_id,
-        kind,
-        step=scope.name,
-        unit_id=scope.stage_id,
-        execution_id=scope.execution_id,
-        generation=scope.generation,
-        idempotency_key=digest((scope.execution_id, kind, payload.get("role"))),
-        **payload,
+def stage_scope():
+    """Return the stage identity of the code currently running in a Workflow."""
+    scope = stage_context.get()
+    if scope is None:
+        raise RuntimeError("No active stage scope in this Workflow")
+    return scope
+
+
+async def publish_stage(scope, result):
+    """Commit public business output, then publish the native facts reading it.
+
+    The generated report is exposed before its publication is attempted, so a
+    failed or retried stage transaction never makes an existing report
+    unreadable. The completed-stage index stays a native event: it describes
+    delivery progress, never the business outcome itself.
+    """
+    if report := result.get("patch", {}).get("report", {}).get("final"):
+        await DBOS.set_event_async("report", report)
+    await asyncio.to_thread(commit_stage, scope, "completed", result=result)
+    if scope.name.endswith("_agent"):
+        # Role and analysis reports have their own native result.
+        return
+    steps = await DBOS.get_event_async(DBOS.workflow_id, "completed_stages", 0) or {}
+    await DBOS.set_event_async(
+        "completed_stages", steps | {scope.name: stage_budget(result)}
     )
-
-
-@DBOS.step(name="por.stage_started")
-async def announce_stage(scope, research_round):
-    return await asyncio.to_thread(_announce_stage, scope, research_round)
-
-
-def _announce_stage(scope, research_round):
-    with domain_engine().begin() as db:
-        stage_event(db, scope, "step_started", research_round=research_round)
-        stage_event(
-            db, scope, "status", message=f"Running {scope.name}", granularity="stage"
-        )
-    return get_today_str()
-
-
-def publish_failure(scope, error):
-    with domain_engine().begin() as db:
-        stage_event(db, scope, "step_failed", error_kind=error["kind"], error=error)
-
-
-@DBOS.step(name="por.stage_failed")
-async def record_failure(scope, error):
-    # Use the Step's function ID so rewind removes the failure with this Step.
-    await DBOS.set_event_async("failure", error)
-    await asyncio.to_thread(publish_failure, scope, error)
 
 
 @asynccontextmanager
@@ -129,7 +128,7 @@ async def observe_stage(
     reserve_report=True,
     expires_at=None,
 ):
-    """Publish phase observations and apply the existing business deadline."""
+    """Publish stage progress and apply the existing business deadline."""
     round_ = state.get("workflow", {}).get("round", 1)
 
     scope = StageContext(
@@ -141,6 +140,7 @@ async def observe_stage(
         config["initial_budget"],
         reserve_report,
         expires_at,
+        round_,
     )
     token = stage_context.set(scope)
     try:
@@ -153,9 +153,9 @@ async def observe_stage(
             generation=scope.generation,
         ):
             try:
-                date = await announce_stage(scope, round_)
+                await asyncio.to_thread(commit_stage, scope, "running")
                 async with stage_timeout(scope.config.workflow_step_timeout_seconds):
-                    yield {**config, "research_date": date}
+                    yield config
             except dbos_error.DBOSWorkflowConflictIDError:
                 raise
             except BaseException as exc:
@@ -175,81 +175,14 @@ async def observe_stage(
                     retry_safe=retry and not unknown and kind != "cancelled",
                     unknown_outcome=unknown,
                 )
-                if is_cancellation(exc):
-                    # Native cancellation precludes allocating another DBOS Step.
-                    await owned_io(publish_failure, scope, error)
-                else:
-                    await record_failure(scope, error)
+                # A cancelled Workflow cannot allocate another Step, but the
+                # transaction must still finish before the cancellation lands.
+                await owned_io(commit_stage, scope, "failed", error=error)
+                if not is_cancellation(exc):
+                    await DBOS.set_event_async("failure", error)
                 raise
     finally:
         stage_context.reset(token)
-
-
-@DBOS.step(name="por.stage_result")
-async def freeze_messages(result):
-    """Assign missing message IDs once before downstream Workflows receive them."""
-    patch = result["patch"]
-    patch["messages"] = copy_state({"messages": patch["messages"]})["messages"]
-    return result
-
-
-async def stable_result(result):
-    return await freeze_messages(result) if result["patch"].get("messages") else result
-
-
-async def publish_stage(result):
-    scope = stage_context.get()
-    if scope.name.endswith("_agent") or scope.name == "research_review":
-        # Role and Review completion already have their own native result.
-        await publish_stage_step(result)
-        return
-    # Keep the generated report readable while publication is retried.
-    if report := result.get("patch", {}).get("report", {}).get("final"):
-        await DBOS.set_event_async("report", report)
-    await publish_stage_step(result)
-    steps = await DBOS.get_event_async(DBOS.workflow_id, "completed_stages", 0) or {}
-    await DBOS.set_event_async(
-        "completed_stages", steps | {scope.name: stage_budget(result)}
-    )
-
-
-@DBOS.step(
-    name="por.publish_stage", retries_allowed=True, max_attempts=3, interval_seconds=0.5
-)
-async def publish_stage_step(result):
-    """Send only public business output and stage progress, in one transaction."""
-    await asyncio.to_thread(_publish_stage, stage_context.get(), result)
-
-
-def _publish_stage(scope, result):
-    patch = result.get("patch", {})
-    with domain_engine().begin() as db:
-        skipped = result.get("observation", {}).get("skipped")
-        if skipped:
-            stage_event(db, scope, "step_skipped", reason="role_disabled")
-        else:
-            stage_event(db, scope, "step_completed", **stage_budget(result))
-        for role, report in role_deliverables(result).items():
-            stage_event(db, scope, "agent_report", role=role, content=report)
-            stage_event(
-                db,
-                scope,
-                "stream",
-                role=role,
-                node=role + "_agent",
-                content=report,
-                granularity="stage",
-            )
-        review = patch.get("workflow", {}).get("review")
-        if review is not None:
-            stage_event(
-                db,
-                scope,
-                "research_review",
-                review=ResearchReview.model_validate(review).model_dump(mode="json"),
-            )
-        if report := patch.get("report", {}).get("final"):
-            stage_event(db, scope, "report", content=report)
 
 
 def business_config(request):
@@ -258,6 +191,10 @@ def business_config(request):
     config["initial_budget"] = (
         request["data"]["initial"].get("runtime", {}).get("budget", {})
     )
+    # The Run freezes one research date when it is admitted; no stage re-reads
+    # the clock for it. A Run admitted before the freeze falls back rather than
+    # failing to drain.
+    config["research_date"] = request["data"].get("research_date") or get_today_str()
     return config
 
 
@@ -281,35 +218,15 @@ async def role_workflow(run_id, unit_id, role, initial):
                 or ()
             }:
                 artifact["observation"] = {"skipped": True, "reason": "role_disabled"}
-        await publish_stage(artifact)
+        await publish_stage(stage_scope(), artifact)
         return artifact
-
-
-@DBOS.workflow(name="por.review")
-@dbos_scope
-async def review_workflow(run_id, initial):
-    state = copy_state(initial)
-    config = business_config(await load_request(run_id))
-    async with observe_stage(
-        run_id, "research_review", state, config, retry=True
-    ) as cfg:
-        with business_span("research_review"):
-            patch = await research.research_review(state, cfg)
-        saved = await stable_result({"patch": patch})
-        apply_patch(state, saved["patch"])
-        await publish_stage(saved)
-        return {
-            **saved,
-            "followup": research.followup_assignments(
-                state, Configuration.from_runnable_config(cfg)
-            ),
-        }
 
 
 @DBOS.workflow(name="por.plan")
 @dbos_scope
 async def planning_workflow(run_id, initial, round_=1, *, revision_request=None):
-    state = copy_state(initial)
+    source = f"{run_id}:plan:{round_}"
+    state = copy_state(initial, source=source)
     config = business_config(await load_request(run_id))
     if revision_request is not None:
         async with observe_stage(
@@ -323,9 +240,8 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
             revised = await intake.revise_brief(
                 state, cfg, feedback=revision_request["feedback"]
             )
-            revised = await stable_result(revised)
-            await publish_stage(revised)
-            apply_patch(state, revised["patch"])
+            await publish_stage(stage_scope(), revised)
+            apply_patch(state, revised["patch"], source=source)
             return {"state": state, "revision_error": revised["revision_error"]}
     if round_ == 1:
         async with observe_stage(
@@ -337,9 +253,8 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
             retry=True,
         ) as cfg:
             patch = await intake.enrich_query_images(state, cfg)
-            saved = await stable_result({"patch": patch})
-            await publish_stage(saved)
-            apply_patch(state, saved["patch"])
+            await publish_stage(stage_scope(), {"patch": patch})
+            apply_patch(state, patch, source=f"{run_id}:enrich_query_images")
     async with observe_stage(
         run_id,
         "plan_research",
@@ -348,16 +263,37 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
         stage_id=f"{run_id}:plan:{round_}",
         retry=True,
     ) as cfg:
-        planned = await stable_result(await intake.plan_research(state, cfg))
-        await publish_stage(planned)
-        apply_patch(state, planned["patch"])
+        planned = await intake.plan_research(state, cfg)
+        await publish_stage(stage_scope(), planned)
+        apply_patch(state, planned["patch"], source=source)
         return {"state": state, "decision": planned["decision"]}
+
+
+async def review_round(run_id, state, config, round_):
+    """Review one evidence round inside ``por.research``.
+
+    Review is one bounded model call and plain follow-up logic, not a Workflow:
+    it reads the role reports the parallel stages already committed, and its
+    result becomes the next round's packets.
+    """
+    source = f"{run_id}:review:{round_}"
+    async with observe_stage(
+        run_id, "research_review", state, config, stage_id=source, retry=True
+    ) as cfg:
+        with business_span("research_review"):
+            patch = await research.research_review(state, cfg)
+        await publish_stage(stage_scope(), {"patch": patch})
+    apply_patch(state, patch, source=source)
+    return research.followup_assignments(
+        state, Configuration.from_runnable_config(cfg)
+    )
 
 
 @DBOS.workflow(name="por.research")
 @dbos_scope
 async def research_workflow(run_id, initial):
-    state = copy_state(initial)
+    source = f"{run_id}:research"
+    state = copy_state(initial, source=source)
     apply_patch(
         state,
         {
@@ -373,7 +309,9 @@ async def research_workflow(run_id, initial):
             },
             "agents": {"type": "override", "value": {}},
         },
+        source=source,
     )
+    config = business_config(await load_request(run_id))
     packets = {role: state for role in RESEARCH_ROLES}
     while packets:
         handles = {}
@@ -406,12 +344,11 @@ async def research_workflow(run_id, initial):
                     handle.workflow_id, cancel_children=True
                 )
             raise
+        # Only committed role results are joined, so a failed review never
+        # repeats research an Agent already finished.
         assemble_research_results(state, results, packets)
         round_ = state["workflow"]["round"]
-        with SetWorkflowID(f"{run_id}:review:{round_}"):
-            reviewed = await review_workflow(run_id, state)
-        apply_patch(state, reviewed["patch"])
-        packets = reviewed["followup"]
+        packets = await review_round(run_id, state, config, round_)
         if packets:
             await send_event(
                 run_id,
@@ -419,13 +356,12 @@ async def research_workflow(run_id, initial):
                 round=round_ + 1,
                 roles=list(packets),
             )
-    config = business_config(await load_request(run_id))
     for role, analyze in (
         ("risk_assessment", research.risk_assessment),
         ("response_strategy", research.response_strategy),
     ):
         # Keep the public stage ID and the progress/report contract used by Studio
-        # and History. The model call itself is checkpointed by generate_text.
+        # and History. The model call itself is checkpointed by por.llm.
         event = f"analysis:{role}"
         await DBOS.set_event_async(event, {"running": True})
         async with observe_stage(
@@ -436,22 +372,21 @@ async def research_workflow(run_id, initial):
             artifact = {"patch": patch}
             if not patch:
                 artifact["observation"] = {"skipped": True, "reason": "role_disabled"}
-            await publish_stage_step(artifact)
+            await publish_stage(stage_scope(), artifact)
             await DBOS.set_event_async(event, artifact)
-            apply_patch(state, patch)
+            apply_patch(state, patch, source=f"{run_id}:{role}")
     async with observe_stage(
         run_id, "generate_final_report", state, config, retry=True, reserve_report=False
     ) as cfg:
         await DBOS.set_event_async("report_started", True)
         with business_span("report_generation", step="generate_final_report"):
             patch = await reporting.generate_final_report(state, cfg)
-        saved = await stable_result({"patch": patch})
-        await publish_stage(saved)
-        apply_patch(state, saved["patch"])
+        await publish_stage(stage_scope(), {"patch": patch})
+        apply_patch(state, patch, source=f"{run_id}:report")
     return state
 
 
-@DBOS.step()
+@DBOS.step(name="por.load_request")
 async def load_request(run_id):
     from open_deep_research.web.durable import validate_request
 
@@ -460,19 +395,15 @@ async def load_request(run_id):
     return req
 
 
-def _interaction_now():
-    with domain_engine().connect() as db:
-        return db_time(db)
-
-
-@DBOS.step()
-async def approval_deadline():
-    return await asyncio.to_thread(_interaction_now) + settings().approval_seconds
-
-
-@DBOS.step()
-async def interaction_clock():
+@DBOS.step(name="por.clock")
+async def clock():
+    """Return the database clock for every durable interaction deadline."""
     return await asyncio.to_thread(_interaction_now)
+
+
+async def approval_deadline(request):
+    """Extend the frozen approval window from one committed clock reading."""
+    return await clock() + request["data"]["approval_seconds"]
 
 
 async def receive_interaction(topic, owner, interaction):
@@ -482,7 +413,7 @@ async def receive_interaction(topic, owner, interaction):
         # stopped before arming this wait, including after discarding a message.
         remaining = deadline - await asyncio.to_thread(_interaction_now)
         command = await DBOS.recv_async(topic, timeout_seconds=max(0, remaining))
-        if command is None or await interaction_clock() >= deadline:
+        if command is None or await clock() >= deadline:
             return None
         if (
             isinstance(command, dict)
@@ -557,7 +488,7 @@ async def run_workflow(run_id):
             questions=decision["questions"],
             round=round_,
             max_rounds=MAX_CLARIFICATION_ROUNDS,
-            expires_at=await approval_deadline(),
+            expires_at=await approval_deadline(req),
         )
         challenge["version"] = digest(dict(run_id=run_id, **challenge))
         await DBOS.set_event_async("clarification", challenge)
@@ -594,12 +525,13 @@ async def run_workflow(run_id):
                     )
                 ],
             },
+            source=f"{run_id}:clarification:{round_}",
         )
 
     brief = validate_brief(state["workflow"]["brief"])
     plan = dict(
         brief=brief,
-        expires_at=await approval_deadline(),
+        expires_at=await approval_deadline(req),
         **brief_metadata(brief, 1, run_id),
     )
     needs_approval = req["data"]["config"]["configurable"]["allow_plan_feedback"]
@@ -638,7 +570,11 @@ async def run_workflow(run_id):
                 continue
             await DBOS.set_event_async("phase", "revising_brief")
             await send_event(run_id, "run_status", status="running")
-            apply_patch(state, {"workflow": {"brief": plan["brief"]}})
+            apply_patch(
+                state,
+                {"workflow": {"brief": plan["brief"]}},
+                source=f"{run_id}:approval:{plan['version']}",
+            )
             with (
                 SetWorkflowID(f"{run_id}:brief-revision:{key_hash}"),
                 SetEnqueueOptions(queue_partition_key=req["owner"]),
@@ -655,7 +591,7 @@ async def run_workflow(run_id):
                     },
                 )
             revised = await wait_for_revision(handle, plan["expires_at"])
-            if revised is None or await interaction_clock() >= plan["expires_at"]:
+            if revised is None or await clock() >= plan["expires_at"]:
                 return await end_approval(run_id, "expired")
             state = revised["state"]
             error = revised["revision_error"]
@@ -679,6 +615,7 @@ async def run_workflow(run_id):
                 "brief_revision": plan["revision"],
             }
         },
+        source=f"{run_id}:brief",
     )
     await DBOS.set_event_async("brief_locked", plan["version"])
     await DBOS.set_event_async("phase", "research")
@@ -699,16 +636,25 @@ async def run_workflow(run_id):
 async def events_workflow(run_id):
     """Merge native mailboxes into one append-only Stream for all readers."""
     delivery = {"offset": 0, "generation": 0}
-    terminal = archive = None
+    terminal = archive_batch = None
+    # Producers stamp observed_at when they send. The relay never asks the
+    # clock itself: a fallback is resolved once, and only a legacy message
+    # that predates the stamp can ever reach it.
+    fallback_at = timestamp(await asyncio.to_thread(_interaction_now))
 
     async def append(event):
         # DBOS assigns the native offset. This single writer counts its
         # checkpointed appends so GET can expose a delivered-prefix watermark.
-        await DBOS.write_stream_async("events", await public_event(event))
+        await DBOS.write_stream_async("events", _public_event(event))
         delivery["offset"] += 1
 
+    def _public_event(event):
+        return public_payload(
+            dict(event, timestamp=event.get("observed_at") or fallback_at)
+        )
+
     while True:
-        draining = terminal is not None or archive is not None
+        draining = terminal is not None or archive_batch is not None
         event = await DBOS.recv_async(
             "events", timeout_seconds=0 if draining else 86400
         )
@@ -719,24 +665,24 @@ async def events_workflow(run_id):
             # the timestamp tie.
             if not draining:
                 continue
-            for batch in (terminal, archive):
+            for batch in (terminal, archive_batch):
                 if batch is None:
                     continue
-                observed_at = batch.get("observed_at") or await event_timestamp()
+                observed = batch.get("observed_at") or fallback_at
                 for frame in batch["frames"]:
                     await append(
                         dict(
                             frame,
-                            observed_at=observed_at,
+                            observed_at=observed,
                             generation=delivery["generation"],
                         )
                     )
                 delivery.update(batch["receipt"])
             await DBOS.set_event_async("delivery", delivery)
-            if archive and archive["close"]:
+            if archive_batch and archive_batch["close"]:
                 await DBOS.close_stream_async("events")
                 return
-            terminal = archive = None
+            terminal = archive_batch = None
             continue
 
         generation = event["generation"]
@@ -744,13 +690,13 @@ async def events_workflow(run_id):
             continue
         if generation > delivery["generation"]:
             delivery = {"offset": delivery["offset"], "generation": generation}
-            terminal = archive = None
+            terminal = archive_batch = None
         kind = event["type"]
         if kind == "_terminal":
             terminal = event
             continue
         if kind == "_archive_saved":
-            archive = event
+            archive_batch = event
             continue
         if kind == "run_status" and (
             version := event.get("plan_version") or event.get("clarification_version")
@@ -760,17 +706,6 @@ async def events_workflow(run_id):
         await DBOS.set_event_async("delivery", delivery)
 
 
-@DBOS.step(retries_allowed=True, max_attempts=10, interval_seconds=0.5, backoff_rate=1)
-async def event_timestamp():
-    return timestamp(await asyncio.to_thread(_interaction_now))
-
-
-async def public_event(event):
-    return public_payload(
-        dict(event, timestamp=event.get("observed_at") or await event_timestamp())
-    )
-
-
 @DBOS.workflow(name="por.cancel")
 async def cancel_workflow(run_id):
     # Accepted transactionally with the request intent. DBOS recovers this
@@ -778,7 +713,12 @@ async def cancel_workflow(run_id):
     await DBOS.cancel_workflow_async(run_id, cancel_children=True)
 
 
-@DBOS.step(retries_allowed=True, max_attempts=5, interval_seconds=1)
+@DBOS.step(
+    name="por.completion_facts",
+    retries_allowed=True,
+    max_attempts=5,
+    interval_seconds=1,
+)
 async def completion_facts(run_id):
     from open_deep_research.web.durable import get_run_client
 
@@ -787,7 +727,7 @@ async def completion_facts(run_id):
         # A cancelled child can lose ownership without publishing a stage end.
         if native_client().list_workflows(
             workflow_id_prefix=run_id + ":",
-            name=["por.plan", "por.research", "por.role", "por.review"],
+            name=["por.plan", "por.research", "por.role"],
             status=list(ACTIVE),
             load_input=False,
             load_output=False,
@@ -804,101 +744,95 @@ async def wait_for_terminal(run_id):
     await DBOS.wait_first_async([handle])
 
 
-@DBOS.step(retries_allowed=True, max_attempts=3, interval_seconds=1, backoff_rate=2)
-async def archive_step(run_id, result):
-    from open_deep_research.web.history import (
-        HistoryStage,
-        get_history_store,
-        history_record,
-    )
+def commit_status(step):
+    """Read the stage transition a committed ``por.commit_stage`` recorded.
 
-    record = history_record(
-        run_id=run_id,
-        request=result["archive_request"],
-        report=public_payload(result["report"]),
-        usage=result["usage"],
-        started_at=result["created_at"],
-        completed_at=result["terminated_at"],
-        status=result["status"]
-        if result["status"] in {"completed", "failed", "cancelled"}
-        else "incomplete",
-        source="dbos",
-        role_reports=[
-            HistoryStage.model_validate(public_payload(stage))
-            for stage in result["role_reports"]
-        ],
-        error_message="Research requires review." if result["error"] else "",
-        failed_stage=result["current_step"],
-    )
-    record.owner = result["owner"]
-    record.research_session_id = result["research_session_id"]
-    # Archive order follows the business retry generation, not relay latency.
-    record.run_state_version = result["generation"] + 1
-    await asyncio.to_thread(get_history_store().save, [record])
-    return record.id
+    The transaction returns its transition, and that value is journaled with the
+    Step, so one unified transaction stays distinguishable in the journal. A
+    failed transaction recorded no output; it is a target in its own right and
+    never needs to be classified further.
+    """
+    if step.get("function_name") != "por.commit_stage" or step.get("error") is not None:
+        return None
+    output = step.get("output")
+    return output.get("status") if isinstance(output, dict) else None
 
 
 def failure_target(workflow):
-    """Bind a retry to a specific native execution and failed suffix."""
+    """Bind a retry to one native execution and the step that must re-run.
+
+    A rewind never rolls back committed business data, so the target is decided
+    from the current stage's journal suffix, in the order that keeps a retry
+    meaningful:
+
+    * an interrupted ``por.llm`` or ``por.agent_tool`` re-runs that external
+      call, because its recorded error would otherwise be replayed verbatim;
+    * a model answer that failed local validation is re-requested rather than
+      re-parsed from the same invalid text;
+    * a failed ``por.commit_stage`` re-runs only that transaction, so a stage
+      publication failure never repeats the model calls it publishes;
+    * otherwise the stage raised in plain Python after its last committed Step,
+      so only that code re-runs.
+    """
     steps = native_client().list_workflow_steps(workflow.workflow_id)
     stage = next(
-        (
-            step
-            for step in reversed(steps)
-            if step["function_name"] == "por.stage_started"
-        ),
-        None,
+        (step for step in reversed(steps) if commit_status(step) == "running"), None
     )
     suffix = [
         step
         for step in steps
         if stage is None or step["function_id"] > stage["function_id"]
     ]
-    result_steps = {"por.stage_result", "por.publish_stage"}
-    publication = next(
+    calls = [
+        step
+        for step in suffix
+        if step["function_name"] in {"por.llm", "por.agent_tool"}
+    ]
+    last_call = calls[-1] if calls else None
+    output = (last_call or {}).get("output")
+    validated = (
+        isinstance(output, (list, tuple))
+        and len(output) == 3
+        and output[2] is None
+    )
+    last, errors = (steps[-1]["function_id"] if steps else 0), [
+        step["function_id"] for step in suffix if step.get("error") is not None
+    ]
+    rejected = isinstance(output, (list, tuple)) and len(output) == 3 and output[2]
+    if last_call is not None and last_call.get("error") is not None:
+        start = last_call["function_id"]
+    elif last_call is not None and last_call["function_name"] == "por.llm" and rejected:
+        # The provider answered, but the answer failed local validation, so the
+        # request is repeated instead of replaying the same rejected text.
+        start = last_call["function_id"]
+    elif failed := next(
         (
             step["function_id"]
             for step in suffix
-            if step["function_name"] in result_steps
-            and step.get("error")
+            if step["function_name"] == "por.commit_stage" and step.get("error")
         ),
         None,
-    )
-    frozen = next(
+    ):
+        start = failed
+    elif published := next(
         (
             step["function_id"]
             for step in reversed(suffix)
-            if step["function_name"] in result_steps and step.get("error") is None
+            if commit_status(step) == "completed"
         ),
         None,
-    )
-    last = steps[-1]["function_id"] if steps else 0
-    calls = [
-        step for step in suffix if step["function_name"] in {"por.llm", "por.llm_sync"}
-    ]
-    errors = [step["function_id"] for step in suffix if step.get("error") is not None]
-    failed = bool(steps and steps[-1]["function_name"] == "por.stage_failed")
-    failed_start = stage["function_id"] if stage and stage.get("error") else None
-    start = failed_start or publication
-    if start is None:
-        if frozen is not None:
-            start = frozen + 1
-        elif calls:
-            call = calls[-1]
-            start = call["function_id"]
-            output = call.get("output")
-            # The report's por.llm result already contains its text validation.
-            # Plan and Review can still fail validation after a valid model response.
-            if (
-                workflow.name == "por.research"
-                and call.get("error") is None
-                and isinstance(output, (list, tuple))
-                and len(output) == 3
-                and output[2] is None
-            ):
-                start += 1
-        else:
-            start = max(errors, default=last if failed else last + 1)
+    ):
+        # The stage is already published, so only the code after it re-runs.
+        start = published + 1
+    elif last_call is not None:
+        # A model answer is kept only when the research Workflow has nothing
+        # left to validate; a tool result is never requested twice.
+        model = last_call["function_name"] == "por.llm"
+        start = last_call["function_id"] + (
+            1 if (not model or (validated and workflow.name == "por.research")) else 0
+        )
+    else:
+        start = max(errors, default=last + 1)
     return dict(
         workflow_id=workflow.workflow_id,
         queue=CONTROL if workflow.name == "por.run" else BUSINESS,
@@ -940,7 +874,7 @@ def retry_targets(run_id):
         (
             wf
             for wf in candidates
-            if wf.name in {"por.plan", "por.review", "por.research"}
+            if wf.name in {"por.plan", "por.research"}
         ),
         key=lambda wf: wf.completed_at or 0,
         reverse=True,
@@ -961,7 +895,7 @@ def retry_targets(run_id):
     raise RunConflict("No safe failed native Step to rewind")
 
 
-@DBOS.step()
+@DBOS.step(name="por.retry_execution")
 async def retry_execution(run_id, command, index):
     """Apply only the native failure version captured by HTTP admission."""
     from open_deep_research.web.durable import external_effects, validate_request
@@ -1027,6 +961,9 @@ async def retry_execution(run_id, command, index):
                 }
                 if target["queue"] == BUSINESS:
                     options["queue_partition_key"] = req["owner"]
+                # A terminal Workflow already had its transaction checkpoints
+                # deleted, so this rewind re-runs each transaction body and the
+                # business idempotency keys keep the writes single.
                 client.rewind_workflow(target["workflow_id"], **options)
             return {"target": target["workflow_id"], "last": target == root}
 
@@ -1118,8 +1055,8 @@ async def finalize_workflow(run_id):
         while True:
             if not archived:
                 try:
-                    history_id = await archive_step(
-                        run_id, dict(result, generation=generation)
+                    history_id = await asyncio.to_thread(
+                        archive, run_id, dict(result, generation=generation)
                     )
                 except Exception:
                     if not notified:
