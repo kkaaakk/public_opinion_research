@@ -144,9 +144,21 @@ generation，`position` 是该消息在列表中的下标，重放时得到同�
 
 ### 集成与故障场景
 
-`tests/test_dbos_contracts.py`、`tests/test_dbos_process.py`、
-`tests/test_dbos_retry.py`、`tests/test_brief_dbos.py` 等以真实 PostgreSQL 与真实
-Executor 运行。
+`tests/test_dbos_contracts.py` 的 76 条集成用例中，57 条通过。19 条失败里 3 条在本次
+改造之前的 `main` 上同样失败（`test_every_run_api_control_requires_auth[-post]`
+返回 400 而非 401、`test_approval_expiry_gap_before_recv_is_still_enforced`、
+`test_operator_approval_cannot_be_bypassed_or_replanned`），已用基线 worktree 复现，
+不是本次引入。
+
+其余失败多数是测试仍在使用本次删除的内部钩子，已改为新边界并定点复验：
+`_publish_stage`/`_announce_stage` 改为阶段事务，`python_state.uuid4` 改为确定性
+身份，`por.stage_result` 改为读取事务记录。复验通过的场景包括：阶段发布失败后用户
+重试仍复用已提交的模型调用、分析阶段发布失败时按失败关闭且不重复写报告、两个角色
+子 Workflow 的并行归并与发布顺序、取消在事务提交前夺走所有权时不产生 `step_failed`。
+
+**未复验**：`test_native_vision_attempt_and_usage_are_settled_once` 仍超时停在
+`por.plan`，尚未定位；`tests/test_dbos_process.py`、`tests/test_brief_dbos.py` 的
+断言已按新边界改写但未重跑；完整集成套件与完整离线套件在最后一轮改动后没有重跑。
 
 ## 未验证与限制
 

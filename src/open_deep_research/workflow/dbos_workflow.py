@@ -631,6 +631,11 @@ async def run_workflow(run_id):
     return await handle.get_result()
 
 
+def public_event(event, fallback_at):
+    """Shape one relayed message for egress without reading the clock again."""
+    return public_payload(dict(event, timestamp=event.get("observed_at") or fallback_at))
+
+
 @DBOS.workflow(name="por.events")
 @dbos_scope
 async def events_workflow(run_id):
@@ -645,13 +650,8 @@ async def events_workflow(run_id):
     async def append(event):
         # DBOS assigns the native offset. This single writer counts its
         # checkpointed appends so GET can expose a delivered-prefix watermark.
-        await DBOS.write_stream_async("events", _public_event(event))
+        await DBOS.write_stream_async("events", public_event(event, fallback_at))
         delivery["offset"] += 1
-
-    def _public_event(event):
-        return public_payload(
-            dict(event, timestamp=event.get("observed_at") or fallback_at)
-        )
 
     while True:
         draining = terminal is not None or archive_batch is not None

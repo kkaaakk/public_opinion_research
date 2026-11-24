@@ -70,17 +70,11 @@ def test_accepted_brief_config_is_frozen_across_operator_default_changes(
 def test_clarification_same_run_releases_quota_and_resumes(
     native_case, skip, monkeypatch
 ):
-    from dbos import DBOS
-
     from open_deep_research.workflow import python_state
 
-    original_uuid = python_state.uuid4
-
-    def message_identity():
-        assert DBOS.workflow_id is None or DBOS.step_id is not None
-        return original_uuid()
-
-    monkeypatch.setattr(python_state, "uuid4", message_identity)
+    # Message identity is derived from the business source and list position, so
+    # no code path mints a random identifier while a Workflow replays.
+    assert not hasattr(python_state, "uuid4")
     c = native_case
     run = c.create(approval=True)
     pending = c.wait(run, lambda r: r["status"] == "awaiting_clarification")
@@ -748,12 +742,12 @@ def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeyp
     original_save, original_event = c.history.save, engine.public_event
     entered, release, archived = (threading.Event() for _ in range(3))
 
-    def save(records):
-        result = original_save(records)
+    def save(records, **kwargs):
+        result = original_save(records, **kwargs)
         archived.set()
         return result
 
-    async def deliver(event):
+    async def deliver(event, fallback_at):
         if (
             event["type"] == "sdk_event"
             and event.get("event") == "agent_completed"
@@ -764,7 +758,7 @@ def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeyp
             entered.set()
             while not release.is_set():
                 await asyncio.sleep(0.02)
-        return await original_event(event)
+        return original_event(event, fallback_at)
 
     monkeypatch.setattr(c.history, "save", save)
     monkeypatch.setattr(engine, "public_event", deliver)

@@ -22,8 +22,14 @@ from test_python_workflow import config, initial
 from open_deep_research.web.durable import RunClient
 from open_deep_research.web.run_data import RunConflict, digest, read_request
 from open_deep_research.workflow.dbos_config import domain_engine, native_client
+from open_deep_research.workflow.dbos_workflow import commit_status
 
 pytestmark = pytest.mark.integration
+
+
+def stage_status(step):
+    """Read the transition a stage transaction recorded, if it committed one."""
+    return commit_status(step)
 
 
 def test_archive_outage_keeps_report_and_retries_without_sdk_replay(
@@ -254,12 +260,11 @@ def test_process_kill_journal_recovery_never_replays_unknown_tool(
                 for report in reports.values()
             )
             if scenario == "legacy-artifact":
-                # The public event committed before the native Step could acknowledge it.
+                # The public event committed before the transaction could acknowledge it.
                 public_id = run["run_id"] + ":public_signal:1"
                 assert client.native(public_id).status == "PENDING"
                 assert not any(
-                    step["function_name"] == "por.publish_stage"
-                    and step["completed_at_epoch_ms"] is not None
+                    stage_status(step) == "completed"
                     for step in client.client.list_workflow_steps(public_id)
                 )
             assert effect_count(directory, "models") == 4
@@ -938,7 +943,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             saved_results = [
                 step
                 for step in client.client.list_workflow_steps(child_id)
-                if step["function_name"] == "por.publish_stage"
+                if stage_status(step) == "completed"
             ]
             assert not saved_results
         else:
@@ -1065,7 +1070,7 @@ def test_planning_recovers_before_waiting_for_clarification(
             assert client.native(planning_id).status == "PENDING"
             assert holds_business_slot(run_id)
             assert any(
-                step["function_name"] == "por.publish_stage"
+                stage_status(step) == "completed"
                 and step["completed_at_epoch_ms"] is not None
                 for step in client.client.list_workflow_steps(planning_id)
             )
