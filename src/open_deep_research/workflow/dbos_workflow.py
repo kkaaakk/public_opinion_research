@@ -831,6 +831,11 @@ def failure_target(workflow):
         start = last_call["function_id"] + (
             1 if (not model or (validated and workflow.name == "por.research")) else 0
         )
+    elif commit_status(suffix[-1] if suffix else {}) == "failed":
+        # The stage raised in plain Python and already recorded its failure.
+        # Replaying from after that marker would resume a body that never runs,
+        # so the retry starts at the stage transition that began it.
+        start = stage["function_id"] if stage is not None else last + 1
     else:
         start = max(errors, default=last + 1)
     return dict(
