@@ -64,9 +64,17 @@ async def measure(kind):
     start = time.perf_counter()
     with budget_capture():
         if kind == "plan":
-            apply_patch(state, (await intake.plan_research(state, cfg))["patch"])
+            apply_patch(
+                state,
+                (await intake.plan_research(state, cfg))["patch"],
+                source="plan_research",
+            )
         else:
-            apply_patch(state, await reporting.generate_final_report(state, cfg))
+            apply_patch(
+                state,
+                await reporting.generate_final_report(state, cfg),
+                source="generate_final_report",
+            )
     return dict(
         seconds=time.perf_counter() - start,
         usage=state.get("runtime", {}).get("budget", {}),

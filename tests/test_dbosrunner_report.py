@@ -15,6 +15,7 @@ from open_deep_research.llm.generation import ModelOutputError
 from open_deep_research.state import ResearchReview, ResearchRoleResult
 from open_deep_research.web.observations import stage_errors, stage_results
 from open_deep_research.workflow import dbos_workflow as engine
+from open_deep_research.workflow import transactions
 
 
 @pytest.mark.parametrize("finish", ["stop", "length"])
@@ -78,35 +79,39 @@ def test_research_workflow_publishes_inline_report(monkeypatch, finish):
             return_value={"data": {"config": {"configurable": {}}, "initial": {}}}
         ),
     )
+    # Review is a bounded model call inside por.research, not its own Workflow.
     monkeypatch.setattr(
-        engine,
-        "review_workflow",
+        engine.research,
+        "research_review",
         AsyncMock(
             return_value={
-                "patch": {
-                    "workflow": {
-                        "review": ResearchReview(
-                            research_complete=True,
-                            unresolved_claims=["Unverified date"],
-                        )
-                    }
+                "workflow": {
+                    "review": ResearchReview(
+                        research_complete=True,
+                        unresolved_claims=["Unverified date"],
+                    )
                 },
-                "followup": {},
+                "runtime": {"budget": {}},
             }
         ),
     )
-    for name in (
-        "announce_stage",
-        "freeze_messages",
-        "publish_stage_step",
-        "record_failure",
-    ):
-        monkeypatch.setattr(engine, name, unwrap(getattr(engine, name)))
     monkeypatch.setattr(
         engine, "domain_engine", lambda: SimpleNamespace(begin=nullcontext)
     )
+    # Execute each stage transaction's business logic, not its database plumbing:
+    # the checkpoint and commit semantics are covered by the native contracts.
     monkeypatch.setattr(
-        engine,
+        transactions,
+        "run_transaction",
+        lambda _name, call, *args: call(*args),
+    )
+    monkeypatch.setattr(
+        transactions,
+        "business_datasource",
+        lambda: SimpleNamespace(sql_session=lambda: None),
+    )
+    monkeypatch.setattr(
+        transactions,
         "stage_event",
         lambda _db, scope, kind, **payload: frames.append((scope.name, kind, payload)),
     )
@@ -168,6 +173,7 @@ def test_research_workflow_publishes_inline_report(monkeypatch, finish):
         assert view["completed_steps"] == [
             "risk_assessment_agent",
             "response_strategy_agent",
+            "research_review",
             report_step,
         ]
         report_frames = [

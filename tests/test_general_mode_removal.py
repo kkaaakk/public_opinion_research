@@ -135,7 +135,7 @@ class TestGraphStructure:
             encoding="utf-8"
         )
         assert "for role in RESEARCH_ROLES:" in source
-        assert 'packets = reviewed["followup"]' in source
+        assert "packets = await review_round(run_id, state, config, round_)" in source
         assert "research.risk_assessment" in source
         assert "research.response_strategy" in source
         assert "dispatch_followup_research" not in source

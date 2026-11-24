@@ -78,6 +78,6 @@ def merge_research_patches(
             if "final" in replacements and replacements["final"] != report["final"]:
                 raise ValueError("Conflicting parallel report replacement: final")
             replacements["final"] = report["final"]
-        apply_patch(candidate, patch)
+        apply_patch(candidate, patch, source=f"research:{role}")
     state.clear()
     state.update(candidate)

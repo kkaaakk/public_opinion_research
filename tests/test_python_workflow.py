@@ -405,13 +405,17 @@ def test_parallel_merges_are_completion_order_independent_and_preserve_contracts
         }
         for role in ROLES[:2]
     }
-    left, right = copy_state(initial()), copy_state(initial())
+    left, right = copy_state(initial(), source="initial"), copy_state(initial(), source="initial")
     merge_research_patches(left, patches)
     merge_research_patches(right, dict(reversed(list(patches.items()))))
     assert left == right
     assert len(left["workflow"]["completed_tasks"]) == 2
     assert left["runtime"]["budget"]["model_calls"] == 11
-    apply_patch(left, {"agents": {"public_signal": {"report": "additional"}}})
+    apply_patch(
+        left,
+        {"agents": {"public_signal": {"report": "additional"}}},
+        source="follow-up",
+    )
     assert (
         "Additional role research report" in left["agents"]["public_signal"]["report"]
     )
@@ -429,7 +433,7 @@ def test_parallel_merges_are_completion_order_independent_and_preserve_contracts
     ],
 )
 def test_invalid_parallel_writes_are_rejected_atomically(bad_patch):
-    state = copy_state(initial())
+    state = copy_state(initial(), source="initial")
     saved = deepcopy(state)
     with pytest.raises(ValueError):
         merge_research_patches(state, {"public_signal": bad_patch})
@@ -437,7 +441,7 @@ def test_invalid_parallel_writes_are_rejected_atomically(bad_patch):
 
 
 def test_conflicting_shared_report_replacements_fail_atomically():
-    state = copy_state(initial())
+    state = copy_state(initial(), source="initial")
     with pytest.raises(ValueError, match="Conflicting"):
         merge_research_patches(
             state, {role: {"report": {"final": role}} for role in ROLES[:2]}
@@ -446,15 +450,23 @@ def test_conflicting_shared_report_replacements_fail_atomically():
 
 
 def test_message_identity_and_snapshot_isolation():
-    state = copy_state(initial())
-    apply_patch(state, {"messages": [HumanMessage(content="edited", id="input")]})
+    state = copy_state(initial(), source="initial")
+    apply_patch(
+        state,
+        {"messages": [HumanMessage(content="edited", id="input")]},
+        source="edit",
+    )
     assert len(state["messages"]) == 1
     assert state["messages"][0].content == "edited"
-    apply_patch(state, {"agents": {"public_signal": {"report": "original"}}})
+    apply_patch(
+        state,
+        {"agents": {"public_signal": {"report": "original"}}},
+        source="research",
+    )
     snapshot = role_snapshot(state, "public_signal")
     snapshot["agents"]["public_signal"]["report"] = "changed"
     assert state["agents"]["public_signal"]["report"] == "original"
-    apply_patch(state, {"messages": [RemoveMessage(id="input")]})
+    apply_patch(state, {"messages": [RemoveMessage(id="input")]}, source="remove")
     assert state["messages"] == []
 
 

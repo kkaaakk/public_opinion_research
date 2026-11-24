@@ -27,7 +27,6 @@ def test_main_graph_contract():
         "por.plan",
         "por.research",
         "por.role",
-        "por.review",
         "por.events",
         "por.finalize",
         "por.cancel",
@@ -47,7 +46,7 @@ def test_research_subgraph_contract():
     assert ANALYSIS_ROLES == ("risk_assessment", "response_strategy")
     source = (SOURCE_ROOT / "workflow/dbos_workflow.py").read_text(encoding="utf-8")
     assert (
-        source.index('packets = reviewed["followup"]')
+        source.index("packets = await review_round(run_id, state, config, round_)")
         < source.index("research.risk_assessment")
         < source.index("research.response_strategy")
         < source.index("await reporting.generate_final_report(")
@@ -59,6 +58,9 @@ def test_research_subgraph_contract():
     assert "await intake.revise_brief(" in source
     assert "await research.research_review(" in source
     assert "await publish_stage(" in source
+    # Review is a bounded model call inside por.research, not its own Workflow.
+    assert "def review_round(" in source
+    assert "por.review" not in source
     assert "stage_receipts" not in source
     assert not (SOURCE_ROOT / "workflow/run_facts.py").exists()
     assert "DBOS.wait_first_async" in source

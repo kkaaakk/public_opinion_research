@@ -838,16 +838,18 @@ def test_configuration_and_sdk_drift_fail_before_external_work(
     case = native_case
     run = case.create(approval=True)
     plan = case.wait(run, lambda r: r["status"] == "awaiting_approval")["plan"]
-    if changed == "MAX_MODEL_CALLS":
-        monkeypatch.setenv("MAX_MODEL_CALLS", "101")
-    else:
-        with domain_engine().begin() as db:
-            req = read_request(run["run_id"], db=db)
+    # Business settings come only from the frozen snapshot, never the process
+    # environment, so drift is simulated by editing that snapshot.
+    with domain_engine().begin() as db:
+        req = read_request(run["run_id"], db=db)
+        if changed == "MAX_MODEL_CALLS":
+            req["data"]["config"]["configurable"]["max_model_calls"] = 101
+        else:
             req["data"]["sdk"] = "unsupported-sdk"
-            db.execute(
-                text("UPDATE por_domain.requests SET value=:v WHERE id=:id"),
-                {"id": run["run_id"], "v": dumps(req["data"])},
-            )
+        db.execute(
+            text("UPDATE por_domain.requests SET value=:v WHERE id=:id"),
+            {"id": run["run_id"], "v": dumps(req["data"])},
+        )
     # New human-control admission rejects drift before a continuation is even sent.
     with pytest.raises(RunConflict, match="Accepted configuration/version changed"):
         case.client.approve(run["run_id"], "alice", plan["version"], "approve")

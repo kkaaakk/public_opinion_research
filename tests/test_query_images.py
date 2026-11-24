@@ -305,9 +305,10 @@ def test_context_reaches_clarification_and_brief_without_rag_enabled(
     )
     assert update["messages"][0].additional_kwargs["rag_query_image_context"] is True
     state = {
-        "messages": copy_state({"messages": [*original_messages, *update["messages"]]})[
-            "messages"
-        ]
+        "messages": copy_state(
+            {"messages": [*original_messages, *update["messages"]]},
+            source="enrich_query_images",
+        )["messages"]
     }
     assert asyncio.run(intake.enrich_query_images(state, config)) == {}
     clarification = asyncio.run(intake.clarification_step(state, config))

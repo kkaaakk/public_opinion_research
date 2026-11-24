@@ -183,7 +183,7 @@ def test_intake_vision_delta_reaches_success_patch_once(monkeypatch, outcome):
         0 if outcome in {"provider_failure", "no_usage"} else 15
     )
     assert bool(patch.get("messages")) == (outcome in {"success", "no_usage"})
-    apply_patch(state, patch)
+    apply_patch(state, patch, source="enrich_query_images")
     assert state["runtime"]["budget"]["model_calls"] == 3
 
 
