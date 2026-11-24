@@ -136,9 +136,9 @@ flowchart TD
 
 匹配应用版本和 Executor 身份重启后，DBOS 从持久输入重新进入 Workflow，读取已提交的 Step 结果。SDK 的 `_model_call_step` 返回已保存的模型响应，`ToolExecutor` 调度的 `por.agent_tool` 返回已保存的工具输出及局部用量，Context Step 补齐 Harness 所需状态。已完成的 Step 命中 journal 时不会进入 provider 函数或业务工具。子 Workflow 使用稳定 ID，可恢复一侧 Producer 的未完成部分并读取另一侧结果。父 Workflow 在两侧齐备后用同一 reducer 和固定顺序合并。 [DBOS 恢复](https://docs.dbos.dev/architecture#how-workflow-recovery-works) · [官方 DBOSRunner 集成](https://docs.dbos.dev/integrations/openai-agents) 独立推理的 `por.llm` 保存已结算文本、用量和输出验收信息。恢复用同一结果完成 Pydantic 解析或决定是否重试。只有新的请求尝试才登记新的模型回执。
 
-`por.agent_context` 保存滚动摘要、已压缩轮次、摘要调用增量和已改写的输入窗口。SDK 用重放的响应重建轮次边界及角色用量投影。工具输出及局部用量来自 `por.agent_tool`。若 Tool Step 抛出异常，其错误回执保留局部用量，`por.agent_settlement` 补齐终态。可选 SQLite transcript 供排查，SDK 恢复数据来自 DBOS journal。
+`por.agent_context` 保存滚动摘要、已压缩轮次、摘要调用增量和已改写的输入窗口。SDK 用重放的响应重建轮次边界及角色用量投影。工具输出及局部用量来自 `por.agent_tool`。若 Tool Step 抛出异常，其错误回执保留局部用量；退出结算在进程内补齐终态，不再是独立的 DBOS Step。可选 SQLite transcript 供排查，SDK 恢复数据来自 DBOS journal。
 
-SDK 并行工具在兄弟调用失败或取消时，可能有调用只被钩子观察而从未进入 `ToolExecutor`。这类调用没有工具体、没有额度、没有外部效果，第六轮起由结算统一收敛为 `cancelled`（`NotInvoked`）：结算开始后新观察到的调用天生终态，`por.agent_settlement` 只记录真正的工具失败。因此 `settlement.succeeded` 表示「已观察到的调用全部到达终态」，不表示「全部成功」。 [工具观察记录终态](tools.md#观察记录的终态)
+SDK 并行工具在兄弟调用失败或取消时，可能有调用只被钩子观察而从未进入 `ToolExecutor`。这类调用没有工具体、没有额度、没有外部效果，由结算统一收敛为 `cancelled`（`NotInvoked`）：结算开始后新观察到的调用天生终态，不再启动新的工具执行。因此 `settlement.succeeded` 表示「已观察到的调用全部到达终态」，不表示「全部成功」。结算记录只存在于本次调用内，harness 内部观察状态不做精确恢复。 [工具观察记录终态](tools.md#观察记录的终态)
 
 原生取消会沿 child Workflow 级联，根可能先进入终态。Finalizer 再检查仍活跃的业务子 Workflow，并等待已发起调用结算。人工重试需要新键、观测到的 `state_version`、当前代次终态已交付以及安全失败。`RunClient.retry` 只写授权和消息；`por.finalize` 验证授权绑定的实际失败版本和外部回执，按失败叶子到根逐个 `rewind_workflow` 并等待子结果。安全目标限于可重试的 Plan 或 Research 后缀（含其中的 Review、风险、策略与报告阶段）。旧键只能确认原授权。 [DBOS 取消与 rewind](https://docs.dbos.dev/python/tutorials/workflow-management)
 

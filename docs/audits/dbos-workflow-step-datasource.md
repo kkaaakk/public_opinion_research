@@ -40,7 +40,7 @@ Datasource Transaction，基线为本次改造起点。
 `por.research` 内的 `review_round`。它只读取已提交的角色报告，失败时只重跑本轮
 评审，不会重复已经完成的研究。
 
-### Step：19 → 11（编排 8 + SDK Harness 3）
+### Step：19 → 10（编排 8 + SDK Harness 2）
 
 | 改造前 | 改造后 |
 | --- | --- |
@@ -51,10 +51,11 @@ Datasource Transaction，基线为本次改造起点。
 | `approval_deadline` + `interaction_clock` | 合并为 `por.clock` |
 | `archive_step` | 改为 Datasource Transaction `por.archive` |
 | `por.llm` / `por.llm_sync` 两个名字 | 统一为 `por.llm` |
+| `por.agent_settlement` | 删除；退出结算是普通异步业务处理，不再持久化 `BatchSettlement` 与失败工具快照 |
 | `por.load_request`、`por.completion_facts`、`por.retry_execution`、`por.wait_for_revision` | 保留 |
 
-`por.agent_context`、`por.agent_settlement`、`por.sdk_transcript` 属于 SDK Context
-Harness，本次改造范围外，保持不变。`por.wait_for_revision` 条件保留，原因见下文。
+`por.agent_context`、`por.sdk_transcript` 属于 SDK Context Harness，本次改造范围外，
+保持不变。`por.wait_for_revision` 条件保留，原因见下文。
 
 ### Datasource Transaction：0 → 2
 
@@ -63,9 +64,9 @@ Harness，本次改造范围外，保持不变。`por.wait_for_revision` 条件�
 
 ### 代码量
 
-`src` 下相对本次改造起点净增 52 行 SLOC（`workflow/transactions.py` +133，
-`workflow/dbos_workflow.py` −96，其余为小幅增删）。相对 Phase 4 冻结基线仍为
-−6300 SLOC。
+`src` 下相对本次改造起点净增 15 行 SLOC（`workflow/transactions.py` +133、
+`workflow/dbos_workflow.py` −98、`runtime/sdk_context.py` −35，其余为小幅增删）。
+相对 Phase 4 冻结基线为 −6332 SLOC。
 
 ## 关键实现
 
@@ -126,6 +127,19 @@ generation，`position` 是该消息在列表中的下标，重放时得到同�
 `retry_targets` 的叶子集合改为 `por.plan` 与 `por.research`（Review 不再是叶子）。
 崩溃自动恢复与用户主动重试的区别保持不变：前者由 DBOS 从 journal 继续，后者必须
 经过准入事务、失败版本校验与 `rewind_workflow`。
+
+### 工具退出结算
+
+`SDKContextHarness.run()` 在 Agent Loop 返回、抛出执行控制异常或被取消时直接调用
+`_settle_owned(reason)`，由它带取消保护地执行 `settle()`：设置 `_closing` 禁止新的
+工具执行、`ToolExecutor.drain(timeout)` 有界等待在途调用、把从未进入执行器的调用收敛
+为 `cancelled`（`NotInvoked`），并记录 `BatchSettlement` 供调用方判断。
+
+删除 `por.agent_settlement` 后不再持久化结算快照与失败工具状态。因此：结算完成表示
+“已观察到的调用全部到达终态”，不表示“全部成功”；已提交的 `por.agent_tool` 结果仍由
+journal 恢复，未提交的模型/工具调用仍按原意图与回执规则处理；harness 内部的观察状态
+在恢复时重新派生，不承诺精确还原。崩溃发生在结算之前时，恢复的是一次新的结算，
+`ToolExecutor` 的在途记录与外部回执仍是唯一事实来源。
 
 ## 验证结果
 

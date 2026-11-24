@@ -59,7 +59,10 @@ shared SDK path for inference.
 Unknown model aliases use a 32,768-token
 application window unless explicitly configured; this is not a provider claim.
 DBOSRunner owns SDK model checkpoints; explicit tool and bounded Context Steps
-rebuild the Harness. Plan/Review/Report use native dynamic model Steps inside
+rebuild the Harness. Exit settlement is ordinary in-process business handling,
+not a Step: it drains observed tool calls and never claims their results are
+recoverable, so Harness observation state is re-derived rather than restored.
+Plan/Review/Report use native dynamic model Steps inside
 their owning Workflow; Review is no longer a Workflow. A new
 workflow engine, multi-tenant identity and cross-service exactly-once guarantees
 remain outside this migration. Read `docs/architecture/agent-loop.md` and the historical

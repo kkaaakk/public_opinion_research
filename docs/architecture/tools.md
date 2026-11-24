@@ -190,7 +190,7 @@ Harness 只有两类记录会停留在 `running`：执行器已进入、工具�
 
 - `ToolExecutor._perform` 进入即标记「该调用可能执行工具体」，此后它的记录只能由 `_perform` 自己收敛，结算不再代写。
 - `por.agent_tool` Step 在进入工具体之前被取消或失败时，执行器立即把该记录落为 `cancelled` 并携带真实错误类型：工具体没跑，因此没有结果、没有额度、没有外部效果。
-- `settle()` 排空后，把仍未进入执行器的 `running` 记录统一收敛为 `cancelled`（`error_type="NotInvoked"`）。这类记录不写入 `por.agent_settlement` 的 `failed_tools`，恢复重放时重新派生。
+- `settle()` 排空后，把仍未进入执行器的 `running` 记录统一收敛为 `cancelled`（`error_type="NotInvoked"`）。这类记录没有工具体、额度或外部效果，重放时重新派生。退出结算是进程内的普通异步处理，不是 DBOS Step。
 - 结算开始后 SDK 迟到的 `on_tool_start` 不再制造新的 `running` 记录：结算边界之后被观察的调用只能天生终态。
 
 因此 `BatchSettlement.succeeded` 的含义是「每一个已观察到的工具调用都已到达终态」，而不是「全部成功」；被取消的兄弟工具计入终态、不计入成功。已进入执行器但未在排空超时内结束的调用仍保持 `running`，结算判为未解决，Run 按 `ExecutionControlError` 停止而不是冒充成功。
