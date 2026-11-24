@@ -289,7 +289,13 @@ async def _compress_research(
 
 # 将模型与工具目录表示为可比较的持久化快照。
 def _tool_catalog(tools: Iterable[BusinessTool]) -> list[dict[str, Any]]:
-    """Render the admitted declarations as the comparable ``por.role_tools`` catalog."""
+    """Render the admitted declarations as the comparable ``por.role_tools`` catalog.
+
+    Discovery order follows the local registry, the configured MCP servers and
+    the enabled plugins, so it can legitimately differ between the original
+    execution and a recovery. The catalog is the fence that proves the Run kept
+    the definitions it was admitted with, so it names them in one stable order.
+    """
     return [
         {
             "name": tool.name,
@@ -298,7 +304,7 @@ def _tool_catalog(tools: Iterable[BusinessTool]) -> list[dict[str, Any]]:
             "schema": tool.sdk_tool.params_json_schema,
             "effect": tool_effect(tool),
         }
-        for tool in tools
+        for tool in sorted(tools, key=lambda tool: tool.name)
     ]
 
 

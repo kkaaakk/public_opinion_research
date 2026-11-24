@@ -82,7 +82,7 @@ def stage_errors(client, run_id):
     failed = client.list_workflows(
         workflow_id_prefix=run_id + ":",
         status="ERROR",
-        name=["por.plan", "por.research", "por.review", "por.role"],
+        name=["por.plan", "por.research", "por.role"],
         load_input=False,
         load_output=False,
     )
@@ -103,13 +103,12 @@ def stage_results(client, run_id):
     usage = {}
     for workflow in client.list_workflows(
         workflow_id_prefix=run_id + ":",
-        name=["por.role", "por.review"],
+        name=["por.role"],
         load_input=False,
         load_output=True,
     ):
-        is_role = workflow.name == "por.role"
         role = workflow.workflow_id[len(run_id) + 1 :].split(":")[0]
-        step = role + "_agent" if is_role else "research_review"
+        step = role + "_agent"
         if workflow.status == "PENDING":
             active.append((workflow.updated_at or 0, step))
         if workflow.status != "SUCCESS" or not workflow.output:

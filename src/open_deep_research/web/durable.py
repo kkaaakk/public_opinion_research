@@ -25,6 +25,7 @@ from open_deep_research.observability.telemetry import (
     enqueue_context,
 )
 from open_deep_research.runtime.sdk_runtime import SDK_RUNTIME_VERSION
+from open_deep_research.time_utils import get_today_str
 from open_deep_research.web.observations import stage_errors, stage_results
 from open_deep_research.web.run_data import (
     IDEMPOTENCY_KEY_PATTERN,
@@ -68,6 +69,7 @@ NATIVE_TERMINAL = {"SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEE
 HUMAN_PHASES = {"awaiting_approval", "awaiting_clarification"}
 NATIVE_RESULT_VERSIONS = {
     VERSION,
+    "por-call-ledger-v1",
     "por-agent-context-v1",
     "por-research-agents-v1",
     "por-sdk-models-v1",
@@ -261,7 +263,7 @@ class RunClient:
                     research_run_id=run_id, thread_id=session_id, user_id=owner
                 )
                 # Assign missing message identities before entering a Workflow.
-                state = copy_state(state)
+                state = copy_state(state, source=f"{run_id}:request")
                 data = {
                     "request": request,
                     "fingerprint": fingerprint,
@@ -273,6 +275,8 @@ class RunClient:
                     "sdk": SDK_VERSION,
                     "runtime": SDK_RUNTIME_VERSION,
                     "created": db_time(db),
+                    # One frozen research date for every stage of this Run.
+                    "research_date": get_today_str(),
                     "approval_seconds": settings().approval_seconds,
                     "run_seconds": settings().run_seconds,
                 }

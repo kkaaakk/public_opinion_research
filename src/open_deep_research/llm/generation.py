@@ -165,7 +165,6 @@ async def _generate(
     api_key: str | None = None,
     attempts: int = 1,
     extra_body: dict[str, Any] | None = None,
-    step_name: str = "por.llm",
 ) -> tuple[Any, dict[str, Any]]:
     from open_deep_research.workflow.execution import native_step_available
 
@@ -272,7 +271,7 @@ async def _generate(
             try:
                 text, delta, invalid = (
                     await DBOS.run_step_async(
-                        {"name": step_name, "preemptible": True}, execute
+                        {"name": "por.llm", "preemptible": True}, execute
                     )
                     if native_step_available()
                     else await execute()
@@ -377,7 +376,6 @@ def generate_text_sync(
                 api_key=api_key,
                 max_tokens=max_tokens,
                 component=component,
-                step_name="por.llm_sync",
             )
         )
 
