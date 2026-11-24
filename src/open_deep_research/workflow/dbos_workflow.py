@@ -799,6 +799,16 @@ def failure_target(workflow):
         step["function_id"] for step in suffix if step.get("error") is not None
     ]
     rejected = isinstance(output, (list, tuple)) and len(output) == 3 and output[2]
+    # The last stage transition the suffix recorded decides whether the stage
+    # published or reported a failure; later bookkeeping Steps do not change it.
+    last_commit = next(
+        (
+            step
+            for step in reversed(suffix)
+            if step["function_name"] == "por.commit_stage" and not step.get("error")
+        ),
+        None,
+    )
     if last_call is not None and last_call.get("error") is not None:
         start = last_call["function_id"]
     elif last_call is not None and last_call["function_name"] == "por.llm" and rejected:
@@ -814,16 +824,9 @@ def failure_target(workflow):
         None,
     ):
         start = failed
-    elif published := next(
-        (
-            step["function_id"]
-            for step in reversed(suffix)
-            if commit_status(step) == "completed"
-        ),
-        None,
-    ):
+    elif (commit := last_commit) is not None and commit_status(commit) == "completed":
         # The stage is already published, so only the code after it re-runs.
-        start = published + 1
+        start = commit["function_id"] + 1
     elif last_call is not None:
         # A model answer is kept only when the research Workflow has nothing
         # left to validate; a tool result is never requested twice.
@@ -831,7 +834,7 @@ def failure_target(workflow):
         start = last_call["function_id"] + (
             1 if (not model or (validated and workflow.name == "por.research")) else 0
         )
-    elif commit_status(suffix[-1] if suffix else {}) == "failed":
+    elif (commit := last_commit) is not None and commit_status(commit) == "failed":
         # The stage raised in plain Python and already recorded its failure.
         # Replaying from after that marker would resume a body that never runs,
         # so the retry starts at the stage transition that began it.
