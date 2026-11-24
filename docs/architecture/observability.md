@@ -57,8 +57,7 @@ run_submit                                API; only for a newly accepted Run
 │  └─ por.research                        native queue
 │     ├─ por.role(public_signal) ── sdk_invocation
 │     ├─ por.role(internal_knowledge) ── sdk_invocation
-│     ├─ por.review ── research_review
-│     ├─ additional Producer rounds / review, when actually scheduled
+│     ├─ research_review ── additional Producer rounds, when scheduled
 │     ├─ risk_assessment ── por.llm
 │     ├─ response_strategy ── por.llm
 │     └─ report_generation ── por.llm
@@ -191,7 +190,7 @@ auth or baggage is propagated. Retries/recovery emit fresh span identities under
 the persisted caller. A killed process cannot finish/export its in-flight spans.
 Unknown effects remain quarantined; completed tools are never replayed for traces.
 
-Current application and SDK Runtime versions are `por-call-ledger-v1` and
+Current application and SDK Runtime versions are `por-datasource-stage-v1` and
 `sdk-vertical-v1`. When a matching-version journal lacks the optional OTel carrier,
 the Run ID still groups its observations. Earlier journals use their matching
 Executor for drain. [Deployment](dbos-deployment.md)

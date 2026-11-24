@@ -24,9 +24,11 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `por-call-ledger-v1`. Drain `por-agent-context-v1`,
-`por-inline-report-v1`, `por-research-agents-v1`, `por-sdk-models-v1` and
-`por-vertical-v1` with their matching releases before cutover.
+Application version is `por-datasource-stage-v1`. Drain `por-call-ledger-v1`,
+`por-agent-context-v1`, `por-inline-report-v1`, `por-research-agents-v1`,
+`por-sdk-models-v1` and `por-vertical-v1` with their matching releases before
+cutover: the stage journal now commits through one Datasource transaction and
+Review is no longer its own Workflow.
 Pending `dbos-events-v1` and earlier
 journals must drain with their matching release before cutover. Native Stream offsets
 drive SSE resume. The single writer records one delivery Event per published
@@ -57,7 +59,8 @@ shared SDK path for inference.
 Unknown model aliases use a 32,768-token
 application window unless explicitly configured; this is not a provider claim.
 DBOSRunner owns SDK model checkpoints; explicit tool and bounded Context Steps
-rebuild the Harness. Plan/Review/Report use native dynamic model Steps. A new
+rebuild the Harness. Plan/Review/Report use native dynamic model Steps inside
+their owning Workflow; Review is no longer a Workflow. A new
 workflow engine, multi-tenant identity and cross-service exactly-once guarantees
 remain outside this migration. Read `docs/architecture/agent-loop.md` and the historical
 `docs/architecture/dbosrunner-unification.md` before changing these boundaries; domain report projections must never resume work.
