@@ -114,10 +114,9 @@ class _Invocation:
 
 
 def _result_text(name: str, output: Any) -> str:
-    # Only explicitly defined protocol and business error envelopes affect status.
-    envelope = (
-        output.get("structured_content", output) if isinstance(output, dict) else output
-    )
+    # MCP result errors are checked by the MCP wrapper. Its structured_content
+    # contains business data, such as the state of an already started Actor.
+    envelope = output
     if isinstance(output, str):
         try:
             envelope = json.loads(output)
