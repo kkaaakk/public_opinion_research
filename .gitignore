@@ -97,4 +97,5 @@ data/indexes/rag/*
 
 # Research workbench dependencies and build output
 frontend/node_modules/
+!/frontend/src/lib/
 src/open_deep_research/web/ui/
