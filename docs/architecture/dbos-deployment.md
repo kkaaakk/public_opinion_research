@@ -13,7 +13,7 @@ $env:DBOS_DATABASE_URL = 'postgresql+psycopg://por_execution:local-dbos-developm
 .venv/Scripts/python.exe -m open_deep_research.web.executor --initialize-only
 ```
 
-初始化账号需有 schema 安装权限。命令先使用 DBOS 公共 `DBOS.migrate(..., schema="por_dbos")`，再安装 `por_domain` 表和共享策略。常规数据库角色需访问两个 schema 及其表、序列和原生队列所需对象。迁移前在隔离副本验证角色授权。Compose 项目名和 `por-integration=dbos-phase4` 标签也供隔离停启夹具定位。
+初始化账号需有 schema 安装权限。命令先使用 DBOS 公共 `DBOS.migrate(..., schema="por_dbos")`，再安装 `por_domain` 表和共享策略。已有部署升级到 Web 工作台时，先用同一数据库执行一次 `--initialize-only` 安装 `por_domain.request_images`。将接收研究任务的 Executor 更新到本次代码后，再开放新 Web 的图片提交。已有请求和 DBOS 应用版本继续使用。常规数据库角色需访问两个 schema 及其表、序列和原生队列所需对象。Compose 项目名和 `por-integration=dbos-phase4` 标签也供隔离停启夹具定位。
 
 在独立终端运行 Executor；CLI 是主要准入入口，Web 是可选入口。每个进程提供同一逻辑数据库的 `DBOS_DATABASE_URL`。业务设置只来自仓库根目录的 `config.yaml`（`por smoke` 使用 `config.smoke.yaml`）；`.env` 只提供凭据和部署连接。Executor 为每个 Run 读取其冻结快照，不重新读取修改后的配置文件。Langfuse/OTel 默认由 `config.yaml` 的 `tracing_enabled` 决定；它是进程级初始化，`POR_TRACING_ENABLED` 不再覆盖业务配置。正式 Run 与 smoke Run 共用一个 Executor 时共享该进程级追踪状态，逐 Run 快照不会重新初始化追踪。 [业务配置](../../README.md) · [可观测性配置](observability.md)
 
@@ -23,7 +23,9 @@ $env:DBOS_DATABASE_URL = 'postgresql+psycopg://por_execution:local-dbos-developm
 # CLI（主要入口）
 por doctor
 por run "调研某品牌近期舆情"
-# 可选 Web / API
+# 可选 Web / API（由仓库根目录运行）
+npm --prefix frontend ci
+npm --prefix frontend run build
 .venv/Scripts/python.exe -m open_deep_research.web.server
 # PostgreSQL 连接和原生目录读检查
 .venv/Scripts/python.exe -m open_deep_research.web.executor --health
@@ -31,7 +33,7 @@ por run "调研某品牌近期舆情"
 
 `/api/health` 可检查 Web 入口，Executor `--health` 只检查数据库及原生目录可读。进程存活由运行环境监督。
 `por doctor` 复用同一套启动前检查，覆盖配置、模型凭据、检索、RAG、插件/MCP、预算/超时和
-PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，业务设置同样来自 `config.yaml`。
+PostgreSQL/DBOS。Web 准入可接受本次 Run 的 RAG 开关，模型、预算及其他业务设置来自 `config.yaml`。
 旧输入别名 `workflow_backend=python/dbos` 和 `business_agent_runtime=openai_agents` 校验后丢弃，
 退役值（包括环境配置）会被拒绝。历史与 Run API 都需要配置令牌，并在同一个可信 owner 范围内读取。
 
@@ -78,15 +80,15 @@ PostgreSQL/DBOS。Web 的 SDK 准入也不再接受模型或 RAG 覆盖字段，
 
 ## 历史查询与数据保留
 
-`GET /api/history?limit=10&offset=0` 使用 DBOS 3.3.0 `list_workflows` 按已认证用户、`por.run` 和原生终态筛选，按创建时间倒序分页。返回 `items`、`next_offset`、`has_more`。每项包含 `run_id`、`topic`、`status`、`started_at` 和 `completed_at`。主题与当前重试代次从业务库批量读取。列表根据 `delivery` 的终态游标定点读取 `done`，直接使用 Finalizer 的业务状态。清算未完成或当前代次尚未交付时，该 Run 等待进入历史列表。偏移按 DBOS 查询候选项推进，所以一页可能少于 `limit`。
+`GET /api/history?limit=10&offset=0` 使用 DBOS 3.3.0 `list_workflows` 按已认证用户、`por.run` 和原生终态筛选，按创建时间倒序读取。可提供 `q` 做主题包含搜索，或提供 `status` 筛选实际业务终态。每项包含 Run ID、会话 ID、主题、状态、RAG 开关和起止时间。列表按 `delivery` 的终态游标定点读取当前代次的 `done`，再组装符合条件的页面。客户端使用接口返回的 `next_offset` 继续查询。
 
-`GET /api/history/{run_id}` 使用与 `GET /api/runs/{run_id}` 相同的响应。已完成的终态可读取冻结请求、原生报告及阶段输出、账本用量与错误。研究过程继续通过 `/api/runs/{run_id}/event-page` 或 `/events` 读取原生 Stream。列表和详情均为只读查询，使用 Run ID 作为标识。 [Studio 查询协议](agent-execution-studio.md)
+`GET /api/history/{run_id}` 使用与 `GET /api/runs/{run_id}` 相同的响应。已交付终态可读取冻结请求、原生报告及阶段输出、账本用量与错误。研究过程继续通过 `/api/runs/{run_id}/event-page` 或 `/events` 读取原生 Stream。列表和详情均为只读查询。 [工作台查询协议](agent-execution-studio.md)
 
 仓库的 Executor、Compose、CI 和运维脚本没有为持久数据库配置 DBOS 历史清理。部署时核对外部维护任务和 Conductor 的保留策略。所需历史窗口内须保留根 `por.run`、业务子 Workflow 及其输出和 Events、`por.events` 的 Stream 和交付 Event、`por.finalize` 的重试回执，以及关联业务表。备份与恢复应覆盖同一时间点的 `por_dbos` 和 `por_domain`。已经清除原生记录、只剩旧表副本的 Run 无法通过新接口查询。 [DBOS 系统表](https://docs.dbos.dev/explanations/system-tables) · [Conductor 数据保留](https://docs.dbos.dev/faq#when-should-i-use-the-dbos-conductor)
 
 ## 应用版本切换
 
-`por-native-history-v1` 更改了 `por.finalize` 和 `por.events` 的 journal。先使用 `por-datasource-stage-v1` 对应的 API 和 Executor 排空。已完成的上一版本 Run 沿用原生阶段结果、`delivery` 和调用账本的读取路径。`por.commit_stage` 继续提交阶段事件；安装器只管理当前六张业务表，现存的旧 `por_domain.history` 数据原地保留。
+`por-native-history-v1` 更改了 `por.finalize` 和 `por.events` 的 journal。先使用 `por-datasource-stage-v1` 对应的 API 和 Executor 排空。已完成的上一版本 Run 沿用原生阶段结果、`delivery` 和调用账本的读取路径。`por.commit_stage` 继续提交阶段事件。现存的旧 `por_domain.history` 数据原地保留。
 
 1. 停止旧版新建 Run，保留原版的控制入口与匹配的 Executor。处理排队、执行、澄清、审批、AI 修改、已授权重试、未知效果及待归档的旧 Run。先确认业务和 History 已结算，再停止仅剩等待旧消息的 `por.events` / `por.finalize`。
 2. 保存同一切换点的 `por_dbos`、`por_domain` 与业务数据备份，包括需要保留的原生 Stream。运行新版 `python -m open_deep_research.web.executor --migration-check`。其输出为 JSON；上线前确认盘点为空，包含超出恢复尝试次数的旧 journal 也需核查。

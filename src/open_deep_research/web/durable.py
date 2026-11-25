@@ -40,6 +40,7 @@ from open_deep_research.web.run_data import (
     public_payload,
     publish_event,
     read_request,
+    read_request_images,
     retry_generation,
     timestamp,
 )
@@ -49,6 +50,7 @@ from open_deep_research.workflow.brief import (
 )
 from open_deep_research.workflow.dbos_config import (
     ACTIVE,
+    APP,
     CONTROL,
     FINALIZE,
     SDK_VERSION,
@@ -77,6 +79,7 @@ NATIVE_RESULT_VERSIONS = {
     "por-sdk-models-v1",
 }
 DOMAIN_LEDGER_VERSIONS = NATIVE_RESULT_VERSIONS | {"dbos-domain-v1"}
+KNOWLEDGE_MAINTENANCE_LOCK = 7240432
 
 
 def validate_request(request):
@@ -163,41 +166,16 @@ class RunClient:
         self.client = native_client()
 
     def _admit(self, db, owner, session_id, *, excluding=None):
-        if session_id:
-            requests = db.execute(
-                text("""
-                SELECT id, owner, reconciliation FROM por_domain.requests WHERE session=:s
-                """),
-                {"s": session_id},
-            ).all()
-            if not requests or any(row.owner != owner for row in requests):
-                raise RunNotFound("Session not found")
-            ids = [row.id for row in requests if row.id != excluding]
-            statuses = (
-                {
-                    wf.workflow_id: wf
-                    for wf in self.client.list_workflows(
-                        workflow_ids=ids, load_input=False, load_output=False
-                    )
-                }
-                if ids
-                else {}
+        if (
+            db.scalar(
+                text("SELECT pg_try_advisory_xact_lock_shared(:lock)"),
+                {"lock": KNOWLEDGE_MAINTENANCE_LOCK},
             )
-            if any(wf.status in ACTIVE for wf in statuses.values()):
-                raise RunConflict("Session already has an active research Run")
-            for run_id, _, reconciliation in requests:
-                if run_id == excluding or reconciliation:
-                    continue
-                if (
-                    retry_generation(db, run_id)
-                    > self._retry_receipt(run_id)["generation"]
-                    or any(external_effects(db, run_id))
-                    or model_bill(db, run_id)[1]
-                    or self._unconfirmed_stage(statuses.get(run_id))
-                ):
-                    raise RunConflict(
-                        "Session has a retry or external effect awaiting settlement"
-                    )
+            is False
+        ):
+            raise RunConflict("Knowledge index maintenance is in progress.")
+        if session_id:
+            self._check_session(db, owner, session_id, excluding=excluding)
         if (
             len(
                 self.client.list_workflows(
@@ -212,6 +190,67 @@ class RunClient:
         ):
             raise RunConflict("Research queue is full")
 
+    def _check_session(self, db, owner, session_id, *, excluding=None):
+        requests = db.execute(
+            text(
+                "SELECT id, owner, reconciliation FROM por_domain.requests WHERE session=:s"
+            ),
+            {"s": session_id},
+        ).all()
+        if not requests or any(row.owner != owner for row in requests):
+            raise RunNotFound("Session not found")
+        ids = [row.id for row in requests if row.id != excluding]
+        statuses = (
+            {
+                wf.workflow_id: wf
+                for wf in self.client.list_workflows(
+                    workflow_ids=ids, load_input=False, load_output=False
+                )
+            }
+            if ids
+            else {}
+        )
+        if any(wf.status in ACTIVE for wf in statuses.values()):
+            raise RunConflict("Session already has an active research Run")
+        for run_id, _, reconciliation in requests:
+            if run_id == excluding or reconciliation:
+                continue
+            if (
+                retry_generation(db, run_id) > self._retry_receipt(run_id)["generation"]
+                or any(external_effects(db, run_id))
+                or model_bill(db, run_id)[1]
+                or self._unconfirmed_stage(statuses.get(run_id))
+            ):
+                raise RunConflict(
+                    "Session has a retry or external effect awaiting settlement"
+                )
+
+    def check_index_maintenance(self, db):
+        """Fence maintenance against new Runs and accepted but unapplied retries."""
+        if not db.scalar(
+            text("SELECT pg_try_advisory_xact_lock(:lock)"),
+            {"lock": KNOWLEDGE_MAINTENANCE_LOCK},
+        ):
+            raise RunConflict(
+                "Another knowledge operation or Run admission is in progress."
+            )
+        if self.client.list_workflows(
+            application_name=APP,
+            name=["por.run", "por.plan", "por.research", "por.role"],
+            status=list(ACTIVE),
+            load_input=False,
+            load_output=False,
+            limit=1,
+        ):
+            raise RunConflict("Knowledge maintenance requires idle research workflows.")
+        for run_id, generation in db.execute(
+            text(
+                "SELECT run_id, max(generation) FROM por_domain.retries GROUP BY run_id"
+            )
+        ):
+            if generation > self._retry_receipt(run_id)["generation"]:
+                raise RunConflict("A research retry is pending.")
+
     def _retry_receipt(self, run_id):
         receipt = self.client.get_event(
             run_id + ":finalize", "retry_applied", timeout_seconds=0
@@ -219,7 +258,16 @@ class RunClient:
         return receipt if isinstance(receipt, dict) else {"generation": receipt or 0}
 
     def create(
-        self, owner, key, request, config, state, *, session_id=None, config_source=None
+        self,
+        owner,
+        key,
+        request,
+        config,
+        state,
+        *,
+        session_id=None,
+        config_source=None,
+        images=(),
     ):
         if not owner or len(owner) > 128 or not key or len(key) > 128:
             raise RunConflict("Owner and idempotency key are required")
@@ -294,6 +342,22 @@ class RunClient:
                         "v": dumps(data),
                     },
                 )
+                if images:
+                    db.execute(
+                        text("""
+                            INSERT INTO por_domain.request_images(run_id,position,media_type,content)
+                            VALUES (:run_id,:position,:media_type,:content)
+                            """),
+                        [
+                            dict(
+                                run_id=run_id,
+                                position=position,
+                                media_type=media_type,
+                                content=content,
+                            )
+                            for position, media_type, content in images
+                        ],
+                    )
                 with correlation(run_id=run_id), business_span("run_submit"):
                     for suffix, name, queue in [
                         (":events", "por.events", CONTROL),
@@ -324,56 +388,212 @@ class RunClient:
             raise RunNotFound("Native workflow not found")
         return values[0]
 
-    def list_history(self, owner, limit, offset):
-        """Page terminal roots and read only their delivered business status."""
-        workflows = self.client.list_workflows(
-            name="por.run",
-            has_parent=False,
-            user=owner,
-            status=sorted(NATIVE_TERMINAL),
-            load_input=False,
-            load_output=False,
-            sort_desc=True,
-            limit=limit + 1,
-            offset=offset,
-        )
-        page = workflows[:limit]
-        requests = {}
-        if page:
+    def image(self, run_id, owner, position):
+        request = read_request(run_id, owner)["data"]["request"]
+        if not any(
+            image["position"] == position for image in request.get("images", [])
+        ):
+            raise RunNotFound("Run image not found")
+        rows = read_request_images(run_id, position)
+        if not rows:
+            raise RunNotFound("Run image not found")
+        return rows[0]
+
+    def by_submission_key(self, owner, key):
+        with self.engine.connect() as db:
+            run_id = db.scalar(
+                text(
+                    "SELECT id FROM por_domain.requests WHERE owner=:owner AND request_key=:key"
+                ),
+                {"owner": owner, "key": key},
+            )
+        if run_id is None:
+            raise RunNotFound("Submission not found")
+        return self.get(run_id, owner)
+
+    def list_history(self, owner, limit, offset, *, query="", status=None):
+        """Fill pages from matching, delivered terminal roots using the native scan cursor."""
+        items = []
+        cursor = offset
+        next_offset = offset
+        batch_size = max(50, limit + 1)
+        while True:
+            workflows = self.client.list_workflows(
+                name="por.run",
+                has_parent=False,
+                user=owner,
+                status=sorted(NATIVE_TERMINAL),
+                load_input=False,
+                load_output=False,
+                sort_desc=True,
+                limit=batch_size,
+                offset=cursor,
+            )
+            if not workflows:
+                break
             with self.engine.connect() as db:
                 requests = {
                     row.id: row
                     for row in db.execute(
                         text("""
-                        SELECT r.id, CAST(r.value AS jsonb)->'request'->>'topic' AS topic,
-                               CAST(r.value AS jsonb)->>'version' AS version,
-                               (SELECT coalesce(max(generation), 0) FROM por_domain.retries
-                                WHERE run_id = r.id) AS generation
-                        FROM por_domain.requests r WHERE r.owner = :owner AND r.id IN :ids
+                        SELECT candidate.*, (SELECT coalesce(max(generation), 0)
+                            FROM por_domain.retries WHERE run_id = candidate.id) AS generation
+                        FROM (
+                            SELECT r.id, r.session, CAST(r.value AS jsonb)->>'version' AS version,
+                                   CAST(r.value AS jsonb)->'request'->>'topic' AS topic,
+                                   CAST(r.value AS jsonb)->'request'->'rag_enabled' AS rag_enabled
+                            FROM por_domain.requests r WHERE r.owner = :owner AND r.id IN :ids
+                        ) candidate WHERE strpos(lower(coalesce(topic, '')), lower(:query)) > 0
+                            OR :query = ''
                         """).bindparams(bindparam("ids", expanding=True)),
-                        {"owner": owner, "ids": [wf.workflow_id for wf in page]},
+                        {
+                            "owner": owner,
+                            "ids": [wf.workflow_id for wf in workflows],
+                            "query": query,
+                        },
                     )
                 }
-        items = []
-        for wf in page:
-            run_id = wf.workflow_id
-            request = requests.get(run_id)
-            if request is None:
-                continue
-            status = self._delivered_status(run_id, request.version, request.generation)
-            if status is None:
-                continue
-            items.append(
-                dict(
-                    run_id=run_id,
-                    topic=request.topic or "",
-                    status=status,
-                    started_at=timestamp((wf.created_at or 0) / 1000),
-                    completed_at=timestamp((wf.completed_at or wf.updated_at or 0) / 1000),
+            for wf in workflows:
+                cursor += 1
+                request = requests.get(wf.workflow_id)
+                if request is None:
+                    continue
+                delivered = self._delivered_status(
+                    wf.workflow_id, request.version, request.generation
+                )
+                if delivered is None or (status is not None and delivered != status):
+                    continue
+                if len(items) == limit:
+                    return dict(items=items, next_offset=next_offset, has_more=True)
+                items.append(
+                    dict(
+                        run_id=wf.workflow_id,
+                        research_session_id=request.session,
+                        topic=request.topic or "",
+                        rag_enabled=request.rag_enabled,
+                        status=delivered,
+                        started_at=timestamp(wf.created_at / 1000)
+                        if wf.created_at
+                        else None,
+                        completed_at=timestamp(
+                            (wf.completed_at or wf.updated_at) / 1000
+                        )
+                        if wf.completed_at or wf.updated_at
+                        else None,
+                    )
+                )
+                next_offset = cursor
+            if len(workflows) < batch_size:
+                break
+        return dict(items=items, next_offset=cursor, has_more=False)
+
+    def list_sessions(self, owner, limit, offset):
+        with self.engine.connect() as db:
+            rows = (
+                db.execute(
+                    text("""
+                    SELECT session AS research_session_id, id AS latest_run_id, topic, created,
+                           run_count
+                    FROM (
+                        SELECT session, id, CAST(value AS jsonb)->'request'->>'topic' AS topic,
+                               CAST(CAST(value AS jsonb)->>'created' AS double precision) AS created,
+                               count(*) OVER (PARTITION BY session) AS run_count,
+                               row_number() OVER (PARTITION BY session ORDER BY
+                                   CAST(CAST(value AS jsonb)->>'created' AS double precision) DESC, id DESC) AS rank
+                        FROM por_domain.requests WHERE owner = :owner
+                    ) sessions WHERE rank = 1
+                    ORDER BY created DESC, id DESC LIMIT :limit OFFSET :offset
+                    """),
+                    {"owner": owner, "limit": limit + 1, "offset": offset},
+                )
+                .mappings()
+                .all()
+            )
+        items = [
+            dict(
+                research_session_id=row["research_session_id"],
+                latest_run_id=row["latest_run_id"],
+                topic=row["topic"] or "",
+                run_count=row["run_count"],
+                updated_at=timestamp(row["created"]),
+            )
+            for row in rows[:limit]
+        ]
+        return dict(
+            items=items, next_offset=offset + len(items), has_more=len(rows) > limit
+        )
+
+    def session(self, session_id, owner, limit, offset):
+        with self.engine.connect() as db:
+            params = {
+                "owner": owner,
+                "session": session_id,
+                "limit": limit + 1,
+                "offset": offset,
+            }
+            rows = (
+                db.execute(
+                    text("""
+                    SELECT id, CAST(value AS jsonb)->'request'->>'topic' AS topic,
+                           CAST(value AS jsonb)->'request'->'rag_enabled' AS rag_enabled,
+                           CAST(CAST(value AS jsonb)->>'created' AS double precision) AS created,
+                           count(*) OVER () AS run_count
+                    FROM por_domain.requests WHERE owner = :owner AND session = :session
+                    ORDER BY created DESC, id DESC LIMIT :limit OFFSET :offset
+                    """),
+                    params,
+                )
+                .mappings()
+                .all()
+            )
+            count = (
+                rows[0]["run_count"]
+                if rows
+                else db.scalar(
+                    text(
+                        "SELECT count(*) FROM por_domain.requests WHERE owner=:owner AND session=:session"
+                    ),
+                    params,
                 )
             )
+            if not count:
+                raise RunNotFound("Session not found")
+            try:
+                self._check_session(db, owner, session_id)
+            except RunConflict:
+                can_continue = False
+            else:
+                can_continue = True
+        page = rows[:limit]
+        native = (
+            {
+                wf.workflow_id: wf.status
+                for wf in self.client.list_workflows(
+                    workflow_ids=[row["id"] for row in page],
+                    load_input=False,
+                    load_output=False,
+                )
+            }
+            if page
+            else {}
+        )
+        items = [
+            dict(
+                run_id=row["id"],
+                topic=row["topic"] or "",
+                rag_enabled=row["rag_enabled"],
+                native_status=native.get(row["id"]),
+                created_at=timestamp(row["created"]),
+            )
+            for row in page
+        ]
         return dict(
-            items=items, next_offset=offset + len(page), has_more=len(workflows) > limit
+            research_session_id=session_id,
+            run_count=count,
+            items=items,
+            can_continue=can_continue,
+            next_offset=offset + len(items),
+            has_more=len(rows) > limit,
         )
 
     def _unconfirmed_stage(self, workflow):
@@ -603,18 +823,49 @@ class RunClient:
         if result["status"] == "running" and phase in HUMAN_PHASES:
             result["status"] = phase
         clarification = None
+        can_approve = False
         if result["status"] == "awaiting_clarification":
             clarification = self.client.get_event(run_id, "clarification", 0)
             if clarification:
                 with self.engine.connect() as db:
                     if db_time(db) >= clarification["expires_at"]:
                         clarification = None
+        elif result["status"] == "awaiting_approval" and plan:
+            with self.engine.connect() as db:
+                can_approve = version == VERSION and db_time(db) < plan["expires_at"]
         request = req["data"]["request"]
+        config = req["data"]["config"]["configurable"]
+        images = [
+            {key: value for key, value in image.items() if key != "sha256"}
+            for image in request.get("images", [])
+        ]
         return dict(
             result,
-            approval_required=bool(
-                req["data"]["config"]["configurable"].get("allow_plan_feedback")
-            ),
+            approval_required=bool(config.get("allow_plan_feedback")),
+            can_approve=can_approve,
+            can_clarify=version == VERSION and clarification is not None,
+            can_cancel=version == VERSION
+            and not req["cancel_requested"]
+            and (native.status not in NATIVE_TERMINAL or result["retry_requested"]),
+            enabled_roles=config.get("enabled_business_agents") or [],
+            budget_limits={
+                name: config[name]
+                for name in (
+                    "budget_enabled",
+                    "max_model_calls",
+                    "max_tool_calls",
+                    "max_search_calls",
+                    "max_input_tokens",
+                    "max_output_tokens",
+                )
+                if name in config
+            },
+            images=images,
+            image_context=self.client.get_event(
+                run_id + ":planning:1", "query_image_context", 0
+            )
+            if images
+            else None,
             request={
                 key: request[key]
                 for key in (

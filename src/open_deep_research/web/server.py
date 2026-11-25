@@ -27,14 +27,15 @@ ensure_langsmith_configuration()
 
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402, I001
 from fastapi.exceptions import RequestValidationError  # noqa: E402
-from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
+from starlette.requests import ClientDisconnect  # noqa: E402
 
-STATIC_DIR = Path(__file__).parent / "static"
-STUDIO_DIR = Path(__file__).parent / "studio"
+from open_deep_research.web.images import MAX_REQUEST_BYTES, create_body_limit  # noqa: E402
+
+UI_DIR = Path(__file__).parent / "ui"
 LOGGER = logging.getLogger(__name__)
 
-MAX_REQUEST_BYTES = 64 * 1024
 WEB_API_TOKEN = (
     os.environ.get("PUBLIC_OPINION_API_TOKEN") or os.environ.get("WEB_API_TOKEN") or ""
 ).strip()
@@ -78,13 +79,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-if STATIC_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-if (STUDIO_DIR / "assets").is_dir():
+if (UI_DIR / "assets").is_dir():
     app.mount(
-        "/studio/assets",
-        StaticFiles(directory=str(STUDIO_DIR / "assets")),
-        name="studio-assets",
+        "/assets",
+        StaticFiles(directory=UI_DIR / "assets"),
+        name="research-assets",
     )
 
 
@@ -92,26 +91,56 @@ if (STUDIO_DIR / "assets").is_dir():
 @app.middleware("http")
 async def enforce_request_size(request: Request, call_next):
     """Reject oversized HTTP bodies before they reach request validation."""
-    content_length = request.headers.get("content-length")
-    try:
-        request_size = int(content_length) if content_length else 0
-    except ValueError:
-        request_size = MAX_REQUEST_BYTES + 1
-    if request_size > MAX_REQUEST_BYTES or request_size < 0:
+    create_run = request.method == "POST" and request.url.path == "/api/runs"
+    limit = MAX_REQUEST_BYTES
+
+    async def upload_limit():
+        try:
+            runs.trusted_owner(request)
+            configuration = await asyncio.to_thread(runs.web_configuration)
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code, content={"detail": exc.detail}
+            )
+        request.state.upload_configuration = configuration
+        return create_body_limit(configuration)
+
+    def too_large():
         return JSONResponse(
             status_code=413,
             content={"detail": "Request payload exceeds the allowed size."},
         )
-    chunks = []
-    actual_bytes = 0
-    async for chunk in request.stream():
-        actual_bytes += len(chunk)
-        if actual_bytes > MAX_REQUEST_BYTES:
-            return JSONResponse(
-                status_code=413,
-                content={"detail": "Request payload exceeds the allowed size."},
-            )
-        chunks.append(chunk)
+
+    content_length = request.headers.get("content-length")
+    try:
+        request_size = int(content_length) if content_length else 0
+    except ValueError:
+        return too_large()
+    if create_run and request_size > limit:
+        limit = await upload_limit()
+        if isinstance(limit, JSONResponse):
+            return limit
+    if request_size > limit or request_size < 0:
+        return too_large()
+    chunks, actual_bytes = [], 0
+    try:
+        async for chunk in request.stream():
+            actual_bytes += len(chunk)
+            if (
+                create_run
+                and actual_bytes > limit
+                and not hasattr(request.state, "upload_configuration")
+            ):
+                limit = await upload_limit()
+                if isinstance(limit, JSONResponse):
+                    return limit
+            if actual_bytes > limit:
+                return too_large()
+            chunks.append(chunk)
+    except ClientDisconnect:
+        return JSONResponse(
+            status_code=400, content={"detail": "Incomplete request payload."}
+        )
     # Starlette's cached Request replays this bounded body to validation, even
     # when Content-Length was absent, false, or the request used chunked framing.
     request._body = b"".join(chunks)
@@ -153,27 +182,7 @@ def _request_is_authorized(request: Request) -> bool:
         provided_token = authorization[1]
     else:
         provided_token = request.headers.get("x-api-token", "")
-    return secrets.compare_digest(provided_token, WEB_API_TOKEN)
-
-
-# 返回研究仪表盘 HTML 页面。
-@app.get("/", response_class=HTMLResponse)
-@app.get("/studio", response_class=HTMLResponse)
-async def index() -> str:
-    """Prefer the built Execution Studio; preserve the existing dashboard as fallback."""
-    studio_path = STUDIO_DIR / "index.html"
-    if studio_path.is_file():
-        return studio_path.read_text(encoding="utf-8")
-    return await classic_index()
-
-
-@app.get("/classic", response_class=HTMLResponse)
-async def classic_index() -> str:
-    """Serve the existing static dashboard for compatibility and rollback."""
-    index_path = STATIC_DIR / "index.html"
-    if index_path.is_file():
-        return index_path.read_text(encoding="utf-8")
-    return "<h1>Open Deep Research</h1><p>Frontend not found.</p>"
+    return secrets.compare_digest(provided_token.encode(), WEB_API_TOKEN.encode())
 
 
 # 返回服务存活状态，供本地健康检查使用。
@@ -215,10 +224,33 @@ def main():
     )
 
 
-from open_deep_research.web import runs  # noqa: E402
+from open_deep_research.web import knowledge, runs, settings  # noqa: E402
 
 app.include_router(runs.router)
 app.include_router(runs.history_router)
+app.include_router(runs.session_router)
+app.include_router(knowledge.router)
+app.include_router(settings.router)
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/runs/{run_id}", include_in_schema=False)
+@app.get("/runs/{run_id}/execution", include_in_schema=False)
+@app.get("/sessions", include_in_schema=False)
+@app.get("/sessions/{session_id}", include_in_schema=False)
+@app.get("/history", include_in_schema=False)
+@app.get("/history/{run_id}", include_in_schema=False)
+@app.get("/knowledge", include_in_schema=False)
+@app.get("/settings", include_in_schema=False)
+def index():
+    """Serve the SPA at its routes, leaving API and missing assets to FastAPI."""
+    index_path = UI_DIR / "index.html"
+    if index_path.is_file():
+        return FileResponse(index_path, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(
+        "<h1>舆情研究工作台</h1><p>请在 frontend 目录运行 npm ci 和 npm run build。</p>",
+        status_code=503,
+    )
 
 
 if __name__ == "__main__":

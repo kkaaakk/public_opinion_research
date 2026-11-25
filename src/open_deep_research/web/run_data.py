@@ -200,7 +200,13 @@ class RunJSON(Serializer):
 
 
 def public_run(run: dict) -> dict:
-    return public_payload({k: v for k, v in run.items() if k not in {"owner", "seq"}})
+    return public_payload(
+        {
+            key: value
+            for key, value in run.items()
+            if key not in {"owner", "seq", "configuration_source"}
+        }
+    )
 
 
 def sdk_observation(payload: dict) -> dict:
@@ -278,6 +284,21 @@ def read_request(run_id, owner=None, *, db=None, lock=False):
     if row is None or (owner is not None and row["owner"] != owner):
         raise RunNotFound("Run or Session not found")
     return dict(row) | {"data": loads(row["value"])}
+
+
+def read_request_images(run_id, position=None):
+    """Load immutable image bytes only on demand, outside normal Run/status reads."""
+    from open_deep_research.workflow.dbos_config import domain_engine
+
+    with domain_engine().connect() as db:
+        return db.execute(
+            text("""
+                SELECT media_type, content FROM por_domain.request_images
+                WHERE run_id = :run_id AND (CAST(:position AS int) IS NULL OR position = :position)
+                ORDER BY position
+                """),
+            {"run_id": run_id, "position": position},
+        ).all()
 
 
 def publish_event(db, run_id, kind, *, idempotency_key=None, **payload):

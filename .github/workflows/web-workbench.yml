@@ -1,0 +1,50 @@
+name: Web Workbench
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "src/open_deep_research/web/**"
+      - "src/open_deep_research/workflow/**"
+      - "scripts/export_web_openapi.py"
+      - "pyproject.toml"
+      - ".github/workflows/web-workbench.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "src/open_deep_research/web/**"
+      - "src/open_deep_research/workflow/**"
+      - "scripts/export_web_openapi.py"
+      - "pyproject.toml"
+      - ".github/workflows/web-workbench.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+      - name: Validate FastAPI assets
+        run: |
+          test -f ../src/open_deep_research/web/ui/index.html
+          test -n "$(find ../src/open_deep_research/web/ui/assets -name '*.js' -print -quit)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-workbench-dist
+          path: src/open_deep_research/web/ui/

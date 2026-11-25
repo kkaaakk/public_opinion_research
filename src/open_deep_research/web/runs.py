@@ -7,13 +7,16 @@ import json
 from typing import Literal
 
 from dbos import error as dbos_error
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Security
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.security import HTTPBearer
 from langchain_core.messages import HumanMessage
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 
+from open_deep_research.web import contracts
 from open_deep_research.web.durable import get_run_client
+from open_deep_research.web.images import QueryImage, validate_images
 from open_deep_research.web.run_data import (
     IDEMPOTENCY_KEY_PATTERN,
     TERMINAL,
@@ -26,9 +29,19 @@ from open_deep_research.workflow.brief import MAX_BRIEF_FEEDBACK_CHARS
 
 MAX_TOPIC_LENGTH = 12_000
 MAX_ORG_CONTEXT_LENGTH = 8_000
+IDEMPOTENCY_HEADER = {
+    "name": "Idempotency-Key",
+    "in": "header",
+    "required": True,
+    "schema": {"type": "string", "pattern": IDEMPOTENCY_KEY_PATTERN.pattern},
+}
+IDEMPOTENT = {"parameters": [IDEMPOTENCY_HEADER]}
 
-router = APIRouter(prefix="/api/runs")
-history_router = APIRouter(prefix="/api/history")
+# Keep the existing auth/error behavior while advertising Bearer auth in OpenAPI.
+bearer = Security(HTTPBearer(auto_error=False))
+router = APIRouter(prefix="/api/runs", dependencies=[bearer])
+history_router = APIRouter(prefix="/api/history", dependencies=[bearer])
+session_router = APIRouter(prefix="/api/sessions", dependencies=[bearer])
 
 
 class ResearchRequest(BaseModel):
@@ -46,6 +59,7 @@ class ResearchRequest(BaseModel):
     org_context: str = Field(default="", max_length=MAX_ORG_CONTEXT_LENGTH)
     rag_enabled: bool = Field(default=False, strict=True)
     research_session_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    images: list[QueryImage] = Field(default_factory=list)
 
     # 去除主题两端空白，并拒绝空主题。
     @field_validator("topic")
@@ -94,6 +108,15 @@ def _key(raw: Request) -> str:
     return key
 
 
+def web_configuration():
+    from open_deep_research.config_file import ConfigFileError, load_configuration
+
+    try:
+        return load_configuration()
+    except (ConfigFileError, ValueError):
+        raise HTTPException(503, "Research configuration is unavailable.") from None
+
+
 def create_run(body: ResearchRequest, raw: Request) -> tuple[dict, bool]:
     """Create one durable Run from an already validated business request.
 
@@ -106,42 +129,55 @@ def create_run(body: ResearchRequest, raw: Request) -> tuple[dict, bool]:
     """
     from open_deep_research.config_file import (
         DEFAULT_CONFIG_FILE,
-        ConfigFileError,
         frozen_config,
-        load_configuration,
         request_payload,
         run_configuration,
     )
 
     owner = trusted_owner(raw)
     key = _key(raw)
-    try:
-        configuration = run_configuration(
-            load_configuration(DEFAULT_CONFIG_FILE), rag_enabled=body.rag_enabled
+    configuration = run_configuration(
+        getattr(raw.state, "upload_configuration", None) or web_configuration(),
+        rag_enabled=body.rag_enabled,
+    )
+    if body.org_context:
+        configuration = configuration.model_copy(
+            update={"organization_context": body.org_context}
         )
-    except (ConfigFileError, ValueError):
-        raise HTTPException(
-            503,
-            "Research configuration is unavailable; migrate retired runtime settings to DBOS/SDK.",
-        ) from None
+    metadata, images = validate_images(body.images, configuration)
     data = request_payload(
         body.topic,
         configuration,
         org_context=body.org_context or None,
     )
+    if metadata:
+        data["images"] = metadata
     return _call(
         _store().create,
         owner,
         key,
         data,
         frozen_config(configuration),
-        {"messages": [HumanMessage(content=body.topic)]},
+        {
+            "messages": [
+                HumanMessage(
+                    content=body.topic, additional_kwargs={"web_research_input": True}
+                )
+            ]
+        },
         session_id=body.research_session_id,
         config_source=str(DEFAULT_CONFIG_FILE),
+        **({"images": images} if images else {}),
     )
 
 
-@router.post("")
+@router.post(
+    "",
+    status_code=202,
+    response_model=contracts.RunSnapshot,
+    responses={200: {"model": contracts.RunSnapshot}},
+    openapi_extra=IDEMPOTENT,
+)
 def create(body: ResearchRequest, raw: Request) -> JSONResponse:
     """Create one background Run; a repeated identical key returns the same Run."""
     run, created = create_run(body, raw)
@@ -152,7 +188,18 @@ def create(body: ResearchRequest, raw: Request) -> JSONResponse:
     )
 
 
-@router.get("/{run_id}")
+@router.get(
+    "/submission", response_model=contracts.RunSnapshot, openapi_extra=IDEMPOTENT
+)
+def submission(raw: Request) -> JSONResponse:
+    """Look up an accepted creation after an ambiguous response using its original key."""
+    owner = trusted_owner(raw)
+    key = _key(raw)
+    run = _call(_store().by_submission_key, owner, key)
+    return JSONResponse(public_run(run), headers={"Cache-Control": "no-store"})
+
+
+@router.get("/{run_id}", response_model=contracts.RunSnapshot)
 def read(run_id: str, raw: Request) -> JSONResponse:
     """Read current progress and retained reports within the trusted owner scope."""
     owner = trusted_owner(raw)
@@ -160,19 +207,43 @@ def read(run_id: str, raw: Request) -> JSONResponse:
     return JSONResponse(public_run(run), headers={"Cache-Control": "no-store"})
 
 
-@history_router.get("")
+@router.get(
+    "/{run_id}/images/{position}",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {mime: {} for mime in ("image/jpeg", "image/png", "image/webp")}
+        }
+    },
+)
+def run_image(run_id: str, raw: Request, position: int = Path(ge=0)) -> Response:
+    """Read a retained image within its Run's owner scope."""
+    owner = trusted_owner(raw)
+    mime, content = _call(_store().image, run_id, owner, position)
+    return Response(
+        content,
+        media_type=mime,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@history_router.get("", response_model=contracts.OffsetPage[contracts.HistoryItem])
 def list_history(
     raw: Request,
     limit: int = Query(default=10, ge=1, le=100),
-    offset: int = Query(default=0, ge=0, le=100_000),
+    offset: int = Query(default=0, ge=0, le=2_147_483_647),
+    q: str = Query(default="", max_length=200),
+    status: contracts.TerminalStatus | None = None,
 ) -> JSONResponse:
     """List the authenticated owner's delivered terminal Runs."""
     owner = trusted_owner(raw)
-    page = _call(_store().list_history, owner, limit, offset)
+    page = _call(
+        _store().list_history, owner, limit, offset, query=q.strip(), status=status
+    )
     return JSONResponse(public_payload(page), headers={"Cache-Control": "no-store"})
 
 
-@history_router.get("/{run_id}")
+@history_router.get("/{run_id}", response_model=contracts.RunSnapshot)
 def read_history(run_id: str, raw: Request) -> JSONResponse:
     """Open a terminal Run with the same read model as the live Run API."""
     owner = trusted_owner(raw)
@@ -187,11 +258,39 @@ def read_history(run_id: str, raw: Request) -> JSONResponse:
     return JSONResponse(public_run(run), headers={"Cache-Control": "no-store"})
 
 
-@router.post("/{run_id}/cancel")
-def cancel(run_id: str, raw: Request) -> dict:
+@session_router.get("", response_model=contracts.OffsetPage[contracts.SessionItem])
+def list_sessions(
+    raw: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100_000),
+) -> JSONResponse:
+    """Page research sessions from the owner's admitted Runs."""
+    owner = trusted_owner(raw)
+    page = _call(_store().list_sessions, owner, limit, offset)
+    return JSONResponse(public_payload(page), headers={"Cache-Control": "no-store"})
+
+
+@session_router.get("/{session_id}", response_model=contracts.SessionDetail)
+def session_detail(
+    raw: Request,
+    session_id: str = Path(pattern=r"^[a-f0-9]{32}$"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100_000),
+) -> JSONResponse:
+    """Page the retained Runs in one research Session."""
+    owner = trusted_owner(raw)
+    page = _call(_store().session, session_id, owner, limit, offset)
+    return JSONResponse(public_payload(page), headers={"Cache-Control": "no-store"})
+
+
+@router.post("/{run_id}/cancel", response_model=contracts.RunSnapshot)
+def cancel(run_id: str, raw: Request) -> JSONResponse:
     """Request cancellation without treating an HTTP disconnect as a stop."""
     owner = trusted_owner(raw)
-    return public_run(_call(_store().cancel, run_id, owner))
+    return JSONResponse(
+        public_run(_call(_store().cancel, run_id, owner)),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 class Approval(BaseModel):
@@ -209,22 +308,37 @@ class Approval(BaseModel):
     )
 
 
-@router.post("/{run_id}/approval")
-def approve(run_id: str, body: Approval, raw: Request) -> dict:
+@router.post(
+    "/{run_id}/approval",
+    response_model=contracts.RunSnapshot,
+    openapi_extra={
+        "parameters": [
+            IDEMPOTENCY_HEADER
+            | {
+                "required": False,
+                "description": "Required for revise.",
+            }
+        ]
+    },
+)
+def approve(run_id: str, body: Approval, raw: Request) -> JSONResponse:
     """Submit a version-bound decision and return the current Run snapshot."""
     owner = trusted_owner(raw)
     key = _key(raw) if body.decision == "revise" else raw.headers.get("idempotency-key")
-    return public_run(
-        _call(
-            _store().approve,
-            run_id,
-            owner,
-            body.version,
-            body.decision,
-            body.brief_md,
-            feedback=body.feedback,
-            key=key,
-        )
+    return JSONResponse(
+        public_run(
+            _call(
+                _store().approve,
+                run_id,
+                owner,
+                body.version,
+                body.decision,
+                body.brief_md,
+                feedback=body.feedback,
+                key=key,
+            )
+        ),
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -235,13 +349,18 @@ class Retry(BaseModel):
     state_version: int = Field(ge=1)
 
 
-@router.post("/{run_id}/retry")
-@router.post("/{run_id}/resume")
-def retry(run_id: str, body: Retry, raw: Request) -> dict:
+@router.post(
+    "/{run_id}/retry", response_model=contracts.RunSnapshot, openapi_extra=IDEMPOTENT
+)
+@router.post(
+    "/{run_id}/resume", response_model=contracts.RunSnapshot, openapi_extra=IDEMPOTENT
+)
+def retry(run_id: str, body: Retry, raw: Request) -> JSONResponse:
     """Continue only a verified safe checkpoint or a settled side-effect-free step."""
     owner = trusted_owner(raw)
-    return public_run(
-        _call(_store().retry, run_id, owner, _key(raw), body.state_version)
+    return JSONResponse(
+        public_run(_call(_store().retry, run_id, owner, _key(raw), body.state_version)),
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -287,7 +406,22 @@ def subscription(raw: Request, run_id: str, after: int = 0) -> StreamingResponse
     )
 
 
-@router.get("/{run_id}/events")
+@router.get(
+    "/{run_id}/events",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}}},
+    openapi_extra={
+        "parameters": [
+            {
+                "name": "Last-Event-ID",
+                "in": "header",
+                "required": False,
+                "schema": {"type": "string", "pattern": "^[0-9]{1,18}$"},
+                "description": "Overrides the after query cursor.",
+            }
+        ]
+    },
+)
 def events(
     run_id: str, raw: Request, after: int = Query(default=0, ge=0)
 ) -> StreamingResponse:
@@ -295,7 +429,7 @@ def events(
     return subscription(raw, run_id, after)
 
 
-@router.get("/{run_id}/event-page")
+@router.get("/{run_id}/event-page", response_model=contracts.EventPage)
 def event_page(
     run_id: str,
     raw: Request,
@@ -316,13 +450,14 @@ def event_page(
     )
 
 
-@router.get("/{run_id}/execution")
+@router.get("/{run_id}/execution", response_model=contracts.ExecutionPage)
 def execution(
     run_id: str,
     raw: Request,
     workflow_id: str = Query(default="", max_length=256),
     offset: int = Query(default=0, ge=0),
     workflow_offset: int = Query(default=0, ge=0),
+    call_offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> JSONResponse:
     from open_deep_research.web.observations import execution_view
@@ -337,6 +472,7 @@ def execution(
         offset,
         limit,
         workflow_offset,
+        call_offset,
     )
     return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
@@ -348,10 +484,15 @@ class ClarificationAnswer(BaseModel):
     answers: dict[str, str | list[str]] = Field(default_factory=dict, max_length=4)
 
 
-@router.post("/{run_id}/clarification")
-def clarify(run_id: str, body: ClarificationAnswer, raw: Request) -> dict:
+@router.post("/{run_id}/clarification", response_model=contracts.RunSnapshot)
+def clarify(run_id: str, body: ClarificationAnswer, raw: Request) -> JSONResponse:
     """Continue this same Run using a durable, version-bound answer or explicit skip."""
     owner = trusted_owner(raw)
-    return public_run(
-        _call(_store().clarify, run_id, owner, body.version, body.answers, body.skip)
+    return JSONResponse(
+        public_run(
+            _call(
+                _store().clarify, run_id, owner, body.version, body.answers, body.skip
+            )
+        ),
+        headers={"Cache-Control": "no-store"},
     )

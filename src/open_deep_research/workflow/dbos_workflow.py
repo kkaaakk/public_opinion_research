@@ -227,7 +227,8 @@ async def role_workflow(run_id, unit_id, role, initial):
 async def planning_workflow(run_id, initial, round_=1, *, revision_request=None):
     source = f"{run_id}:plan:{round_}"
     state = copy_state(initial, source=source)
-    config = business_config(await load_request(run_id))
+    request = await load_request(run_id)
+    config = business_config(request)
     if revision_request is not None:
         async with observe_stage(
             run_id,
@@ -244,6 +245,7 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
             apply_patch(state, revised["patch"], source=source)
             return {"state": state, "revision_error": revised["revision_error"]}
     if round_ == 1:
+        has_uploads = bool(request["data"]["request"].get("images"))
         async with observe_stage(
             run_id,
             "enrich_query_images",
@@ -252,8 +254,16 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
             stage_id=run_id + ":enrich_query_images",
             retry=True,
         ) as cfg:
-            patch = await intake.enrich_query_images(state, cfg)
+            image_state = (
+                {**state, "messages": [await uploaded_query_message(run_id)]}
+                if has_uploads else state
+            )
+            patch = await intake.enrich_query_images(image_state, cfg)
             await publish_stage(stage_scope(), {"patch": patch})
+            if has_uploads and patch.get("messages"):
+                await DBOS.set_event_async(
+                    "query_image_context", patch["messages"][0].content
+                )
             apply_patch(state, patch, source=f"{run_id}:enrich_query_images")
     async with observe_stage(
         run_id,
@@ -267,6 +277,28 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
         await publish_stage(stage_scope(), planned)
         apply_patch(state, planned["patch"], source=source)
         return {"state": state, "decision": planned["decision"]}
+
+
+async def uploaded_query_message(run_id):
+    """Read the admitted image bytes for the intake stage without journaling them."""
+    from base64 import b64encode
+
+    from langchain_core.messages import HumanMessage
+
+    from open_deep_research.web.run_data import read_request_images
+
+    images = await asyncio.to_thread(read_request_images, run_id)
+    if not images:
+        raise RuntimeError("Accepted query images are unavailable")
+    return HumanMessage(
+        content=[
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64encode(content).decode('ascii')}"},
+            }
+            for mime, content in images
+        ],
+    )
 
 
 async def review_round(run_id, state, config, round_):

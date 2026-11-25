@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     CLI["por CLI · cli.py"] --> RC["RunClient · web/durable.py"]
-    UI["可选 Studio / Classic"] --> API["FastAPI · web/runs.py"]
+    UI["Web 研究工作台"] --> API["FastAPI · web/runs.py"]
     API --> RC
     RC --> Client["DBOSClient"]
     RC --> Domain[("PostgreSQL · por_domain")]
@@ -94,7 +94,7 @@ flowchart TD
 
 | 节点 | 输入、输出及持久边界 |
 | --- | --- |
-| 1. 提交 | Studio、Classic 或 `deep-research` 只调用 `POST /api/runs` 创建 Run，再用 `GET /api/runs/{run_id}/events` 单独订阅事件；创建与订阅是两个 HTTP 入口，没有流式创建别名。`ResearchRequest` 只接收主题、组织背景和本次 Run 的 `rag_enabled` 开关；模型、深度、搜索 API、预算与审批澄清策略仍由 `config.yaml` 决定，服务端据此构造有效配置副本和初始 `HumanMessage`。 |
+| 1. 提交 | Web 经 `POST /api/runs` 创建，再单独订阅 `GET /api/runs/{run_id}/events`。CLI 直调同一 RunClient。Web 请求可携带主题、组织背景、本次 RAG 开关、会话 ID 和图片。服务端冻结有效配置并构造初始 `HumanMessage`。 |
 | 2. 准入 | `RunClient.create` 在事务内创建 Run ID，复用合规 Session 或创建新 Session，固定请求、配置指纹、初始 State 和版本，原子写请求、入队三个 Workflow 并发送排队消息。成功创建返回 `202`，相同请求重投返回原 Run。 |
 | 3. 启动 | `run_workflow` 调用 `load_request` Step 核对冻结配置与版本。根为各轮规划和研究设置稳定子 ID，通过原生结果句柄获取下一段 State。 |
 | 4. 图片与 Plan | `planning_workflow` 第一轮调用 `intake.enrich_query_images`，有图片时将理解结果纳入消息。`intake.plan_research` 根据消息、图像和配置返回 `ask_user` 或带 Markdown Brief 的 `ready`。模型调用在有独立 Step 边界时使用 `por.llm`。消息 ID 由 `python_state.message_identity` 按 Run、阶段与列表位置确定性生成，不再需要单独的固定 Step。 |
@@ -154,4 +154,4 @@ Step 执行体与外部服务返回之间存在提交窗口。宕机发生在原
 
 ## 交付与执行状态
 
-`native_status` 表示 DBOS 根 Workflow 状态，`status` 加入人工等待和业务结果解释，`settlement` 表示回执结算。`event_cursor` 是已交付的前缀，`events_complete` 表示当前代次已交付终态。relay 收到 `_terminal` 后排空已提交的邮箱前缀，追加一次 `done`，并通过 `delivery` 记录代次和终态游标。SSE 可以在人工等待前缀或终态前缀交付后结束。可安全重试的失败保留原生 Stream，供后续代次继续交付。 [Studio 协议](agent-execution-studio.md)
+`native_status` 表示 DBOS 根 Workflow 状态，`status` 加入人工等待和业务结果解释，`settlement` 表示回执结算。`event_cursor` 是已交付的前缀，`events_complete` 表示当前代次已交付终态。relay 收到 `_terminal` 后排空已提交的邮箱前缀，追加一次 `done`，并通过 `delivery` 记录代次和终态游标。SSE 可以在人工等待前缀或终态前缀交付后结束。可安全重试的失败保留原生 Stream，供后续代次继续交付。 [工作台协议](agent-execution-studio.md)

@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint';
 import hooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 export default tseslint.config(
-  { ignores: ['node_modules/**', 'playwright-report/**', 'test-results/**'] },
+  { ignores: ['node_modules/**', 'src/api/schema.d.ts'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

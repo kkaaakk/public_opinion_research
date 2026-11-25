@@ -53,13 +53,19 @@ def test_history_page_reads_only_delivered_terminal_status(history_views):
     ]
     db.execute.return_value = [
         SimpleNamespace(
-            id=run_id, topic=f"Topic {run_id}", version=version, generation=gen
+            id=run_id,
+            topic=f"Topic {run_id}",
+            version=version,
+            generation=gen,
+            session="a" * 32,
+            rag_enabled=True,
         )
         for run_id, version, gen in (
             ("previous", PREVIOUS_VERSION, 0),
             ("unknown", dbos_config.VERSION, 0),
             ("settling", dbos_config.VERSION, 0),
             ("retrying", dbos_config.VERSION, 1),
+            ("next-page", dbos_config.VERSION, 0),
         )
     ]
     receipts = {
@@ -67,6 +73,7 @@ def test_history_page_reads_only_delivered_terminal_status(history_views):
         "unknown:events": {"offset": 7, "terminal": 6, "generation": 0},
         "settling:events": {"offset": 2, "generation": 0},
         "retrying:events": {"offset": 5, "terminal": 5, "generation": 0},
+        "next-page:events": {"offset": 2, "terminal": 2, "generation": 0},
     }
     native.get_event.side_effect = (
         lambda wf, key, _: receipts[wf] if key == "delivery" else None
@@ -74,10 +81,11 @@ def test_history_page_reads_only_delivered_terminal_status(history_views):
     native.read_stream_offset.side_effect = [
         {"type": "done", "status": "cancelled", "generation": 0},
         {"type": "done", "status": "interrupted", "generation": 0},
+        {"type": "done", "status": "completed", "generation": 0},
     ]
 
     http = TestClient(server.app)
-    response = http.get("/api/history?limit=5&offset=10", headers=HEADERS)
+    response = http.get("/api/history?limit=2&offset=10&q=Topic", headers=HEADERS)
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.json() == {
@@ -85,6 +93,8 @@ def test_history_page_reads_only_delivered_terminal_status(history_views):
             {
                 "run_id": run_id,
                 "topic": f"Topic {run_id}",
+                "research_session_id": "a" * 32,
+                "rag_enabled": True,
                 "status": status,
                 "started_at": "1970-01-01T00:00:01+00:00",
                 "completed_at": "1970-01-01T00:00:02+00:00",
@@ -95,7 +105,7 @@ def test_history_page_reads_only_delivered_terminal_status(history_views):
             )
         ],
         "has_more": True,
-        "next_offset": 15,
+        "next_offset": 12,
     }
     native.list_workflows.assert_called_once_with(
         name="por.run",
@@ -105,7 +115,7 @@ def test_history_page_reads_only_delivered_terminal_status(history_views):
         load_input=False,
         load_output=False,
         sort_desc=True,
-        limit=6,
+        limit=50,
         offset=10,
     )
     db.execute.assert_called_once()
@@ -113,7 +123,15 @@ def test_history_page_reads_only_delivered_terminal_status(history_views):
     assert "r.owner = :owner" in str(query)
     assert params == {
         "owner": "operator",
-        "ids": ["previous", "unknown", "settling", "retrying", "other-owner"],
+        "ids": [
+            "previous",
+            "unknown",
+            "settling",
+            "retrying",
+            "other-owner",
+            "next-page",
+        ],
+        "query": "Topic",
     }
     assert native.get_event.call_args_list == [
         call(wf, "delivery", 0) for wf in receipts
@@ -121,12 +139,14 @@ def test_history_page_reads_only_delivered_terminal_status(history_views):
     assert native.read_stream_offset.call_args_list == [
         call("previous:events", "events", 3, timeout_seconds=0),
         call("unknown:events", "events", 5, timeout_seconds=0),
+        call("next-page:events", "events", 1, timeout_seconds=0),
     ]
     native.read_stream.assert_not_called()
     native.retrieve_workflow.assert_not_called()
 
     assert http.get("/api/history?limit=0", headers=HEADERS).status_code == 400
     assert http.get("/api/history?offset=-1", headers=HEADERS).status_code == 400
+    assert http.get("/api/history?status=running", headers=HEADERS).status_code == 400
     native.list_workflows.side_effect = dbos_error.DBOSQueryTimeoutError(3)
     assert http.get("/api/history", headers=HEADERS).status_code == 503
 
