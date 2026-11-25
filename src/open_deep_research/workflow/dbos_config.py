@@ -11,7 +11,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
 APP = "public-opinion-research"
-VERSION = "por-call-ledger-v1"
+# The stage journal changed shape: one datasource transaction owns each stage
+# transition and Review is no longer its own Workflow. A pending journal from
+# the previous Application Version must drain on that release.
+VERSION = "por-datasource-stage-v1"
 SDK_VERSION = "0.24.0"
 CONTROL = "por-control"
 BUSINESS = "por-business"

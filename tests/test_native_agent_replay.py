@@ -132,9 +132,13 @@ def test_agent_recovery_restores_parallel_tool_results_and_usage(
             statuses = {
                 key: record.status for key, record in runtime.harness.results.items()
             }
-            assert statuses["call-1"] == (
-                "failed" if ending == "tool-budget-error" else "succeeded"
-            )
+            if ending == "tool-budget-error":
+                # The replayed Tool Step carries the committed budget failure, so
+                # this attempt closes the call without re-running the body.
+                expected = {"failed"} if attempts == 1 else {"failed", "cancelled"}
+            else:
+                expected = {"succeeded"}
+            assert statuses["call-1"] in expected, statuses
             if attempts == 1 or ending != "tool-budget-error":
                 # Live execution, or a replay whose batch has no sibling failure
                 # to cancel it: the committed result is always consumed.

@@ -361,7 +361,7 @@ def install(directory, scenario):
     original_llm_end = SDKContextHarness.on_llm_end
     original_tool_end = SDKContextHarness.on_tool_end
     original_filter = SDKContextHarness.filter_model_input
-    original_settle = SDKContextHarness._settle_on_exit
+    original_settle = SDKContextHarness._settle_owned
 
     if scenario in {"runner-batch", "batch-error-cache"}:
         from sdk_model_support import install_inference
@@ -422,7 +422,7 @@ def install(directory, scenario):
     patch.setattr(SDKContextHarness, "on_llm_end", llm_end)
     patch.setattr(SDKContextHarness, "on_tool_end", tool_end)
     patch.setattr(SDKContextHarness, "filter_model_input", model_filter)
-    patch.setattr(SDKContextHarness, "_settle_on_exit", settle)
+    patch.setattr(SDKContextHarness, "_settle_owned", settle)
 
     @asynccontextmanager
     async def model(*args, **kwargs):

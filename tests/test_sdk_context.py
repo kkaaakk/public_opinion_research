@@ -1,7 +1,6 @@
 """Exercise the SDK context harness without any Research Graph dependency."""
 
 import asyncio
-from dataclasses import replace
 
 import pytest
 from agents import Agent, function_tool
@@ -12,7 +11,7 @@ from test_sdk_runtime import TOKENS, _runtime, _tool
 
 from open_deep_research.budget import ModelBudgetExceeded
 from open_deep_research.configuration import Configuration
-from open_deep_research.runtime import sdk_context, tool_executor
+from open_deep_research.runtime import tool_executor
 from open_deep_research.runtime.sdk_context import (
     NOT_INVOKED,
     BatchSettlement,
@@ -22,7 +21,7 @@ from open_deep_research.runtime.sdk_context import (
 from open_deep_research.runtime.sdk_runtime import _RunBudget
 from open_deep_research.runtime.tool_executor import ToolExecutor
 from open_deep_research.tools import register_tool
-from open_deep_research.web.run_data import RunJSON, digest
+from open_deep_research.web.run_data import digest
 from open_deep_research.workflow.execution import ExecutionControlError
 
 
@@ -204,50 +203,6 @@ def test_tool_records_are_restored_and_conflicts_rejected():
                 "model_turn": 1,
             }
         )
-
-
-def test_settlement_checkpoint_only_restores_tools_without_a_committed_output(
-    monkeypatch,
-):
-    serializer = RunJSON()
-    snapshot = None
-
-    async def step(options, settle):
-        nonlocal snapshot
-        assert options["name"] == "por.agent_settlement"
-        if snapshot is None:
-            snapshot = serializer.serialize(await settle())
-        return serializer.deserialize(snapshot)
-
-    monkeypatch.setattr(sdk_context, "native_step_available", lambda: True)
-    monkeypatch.setattr(sdk_context.DBOS, "run_step_async", step)
-    harness = _harness()
-    completed = ObservedToolResult(
-        sdk_run_id="sdk-run",
-        tool_call_id="call-1",
-        tool_name="search",
-        arguments_json='{"query":"secret"}',
-        args={"query": "secret"},
-        model_turn=0,
-        status="succeeded",
-        observation={"raw": "large payload"},
-    )
-    pending = replace(completed, tool_call_id="call-2", status="running", observation=None)
-    failed = replace(
-        pending, status="failed", error_type="ExecutionControlError",
-        operation_id="op-2", effect_status="uncertain",
-    )
-    harness.results = {"call-1": completed, "call-2": failed}
-    expected = asyncio.run(harness._settle_on_exit("exception"))
-    assert expected.succeeded
-    assert set(serializer.deserialize(snapshot)["failed_tools"]) == {"call-2"}
-    assert "raw" not in snapshot and "secret" not in snapshot
-
-    replayed = _harness()
-    replayed.results = {"call-1": replace(completed), "call-2": pending}
-    assert asyncio.run(replayed._settle_on_exit("exception")) == expected
-    assert replayed.results["call-1"] == completed
-    assert replayed.results["call-2"] == failed
 
 
 def test_settlement_reports_live_and_pending_calls():

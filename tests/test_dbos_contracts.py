@@ -151,19 +151,19 @@ def test_cancel_delivers_when_native_role_loses_ownership_before_stage_end(
     from open_deep_research.workflow import dbos_workflow
 
     case = native_case
-    original = dbos_workflow._announce_stage
+    original = dbos_workflow.commit_stage
     announced, release = threading.Event(), threading.Event()
 
-    def announce(scope, research_round):
-        date = original(scope, research_round)
-        if scope.name == "public_signal_agent":
+    def announce(scope, status, *, result=None, error=None):
+        committed = original(scope, status, result=result, error=error)
+        if status == "running" and scope.name == "public_signal_agent":
             announced.set()
             assert release.wait(20)
-        return date
+        return committed
 
     # The stage message commits before DBOS records the Step. Cancelling
     # here clears native ownership and no step_failed message is produced.
-    monkeypatch.setattr(dbos_workflow, "_announce_stage", announce)
+    monkeypatch.setattr(dbos_workflow, "commit_stage", announce)
     run = case.create()
     run_id = run["run_id"]
     role_id = run_id + ":public_signal:1"
@@ -420,14 +420,14 @@ def test_approved_brief_reaches_two_agents_analysis_report_and_history(
             workflow_id_prefix=run_id + ":", name="por.role"
         )
     } == {f"{run_id}:{role}:1" for role in RESEARCH_ROLES}
-    # Risk, strategy and the final report are the three bounded model steps
-    # inside the research Workflow; each one is checkpointed with its output.
+    # Review, risk, strategy and the final report are the four bounded model
+    # steps inside the research Workflow; each one is checkpointed with its output.
     model_steps = [
         step
         for step in client.list_workflow_steps(run_id + ":research")
         if step["function_name"] == "por.llm"
     ]
-    assert len(model_steps) == 3 and all(step["output"] for step in model_steps)
+    assert len(model_steps) == 4 and all(step["output"] for step in model_steps)
 
     stages = {unit["name"]: unit for unit in stage_observations(run_id)}
     for role in ANALYSIS_ROLES:
@@ -838,16 +838,18 @@ def test_configuration_and_sdk_drift_fail_before_external_work(
     case = native_case
     run = case.create(approval=True)
     plan = case.wait(run, lambda r: r["status"] == "awaiting_approval")["plan"]
-    if changed == "MAX_MODEL_CALLS":
-        monkeypatch.setenv("MAX_MODEL_CALLS", "101")
-    else:
-        with domain_engine().begin() as db:
-            req = read_request(run["run_id"], db=db)
+    # Business settings come only from the frozen snapshot, never the process
+    # environment, so drift is simulated by editing that snapshot.
+    with domain_engine().begin() as db:
+        req = read_request(run["run_id"], db=db)
+        if changed == "MAX_MODEL_CALLS":
+            req["data"]["config"]["configurable"]["max_model_calls"] = 101
+        else:
             req["data"]["sdk"] = "unsupported-sdk"
-            db.execute(
-                text("UPDATE por_domain.requests SET value=:v WHERE id=:id"),
-                {"id": run["run_id"], "v": dumps(req["data"])},
-            )
+        db.execute(
+            text("UPDATE por_domain.requests SET value=:v WHERE id=:id"),
+            {"id": run["run_id"], "v": dumps(req["data"])},
+        )
     # New human-control admission rejects drift before a continuation is even sent.
     with pytest.raises(RunConflict, match="Accepted configuration/version changed"):
         case.client.approve(run["run_id"], "alice", plan["version"], "approve")
@@ -874,10 +876,11 @@ def test_archive_compensates_independently_without_rerunning_research(
     unavailable.set()
     original = case.history.save
 
-    def save(records):
+    def save(records, **kwargs):
+        # The archive transaction hands History its own session.
         if unavailable.is_set():
             raise HistoryUnavailable("Synthetic archive outage")
-        return original(records)
+        return original(records, **kwargs)
 
     monkeypatch.setattr(case.history, "save", save)
     run = case.create()
@@ -1283,26 +1286,27 @@ def test_retry_after_failed_result_publication_keeps_committed_model(
 ):
     from sqlalchemy.exc import OperationalError
 
-    from open_deep_research.workflow import dbos_workflow as engine
+    from open_deep_research.workflow import transactions
 
-    original = engine._publish_stage
+    original = transactions._commit_stage
     failures = []
 
-    def publish(scope, artifact):
-        if scope.name == "plan_research" and len(failures) < 3:
+    def publish(scope, status, result, error):
+        # Fail the commit itself: the transaction is attempted and rolled back.
+        if status == "completed" and scope.name == "plan_research" and not failures:
             failures.append(scope.stage_id)
             raise OperationalError(
                 "Stage publication unavailable", None, RuntimeError()
             )
-        return original(scope, artifact)
+        return original(scope, status, result, error)
 
-    monkeypatch.setattr(engine, "_publish_stage", publish)
+    monkeypatch.setattr(transactions, "_commit_stage", publish)
     case = native_case
     run = case.create()
     failed = case.wait(
         run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
     )
-    assert failures == [run["run_id"] + ":plan:1"] * 3
+    assert failures == [run["run_id"] + ":plan:1"]
     workflow_id = run["run_id"] + ":planning:1"
 
     def steps():
@@ -1311,7 +1315,7 @@ def test_retry_after_failed_result_publication_keeps_committed_model(
     model = [s for s in steps() if s["function_name"] == "por.llm"]
     assert len(model) == 1 and model[0]["output"]
     assert any(
-        s["function_name"] == "por.publish_stage" and s["error"] for s in steps()
+        s["function_name"] == "por.commit_stage" and s["error"] for s in steps()
     )
     retry_observed_failure(case, run, "result-accounting", failed)
     done = case.wait(
@@ -1324,41 +1328,47 @@ def test_retry_after_failed_result_publication_keeps_committed_model(
     assert [s for s in steps() if s["function_name"] == "por.llm"] == model
 
 
-def test_committed_analysis_publication_ack_loss_preserves_usage(
+def test_failed_analysis_publication_fails_closed_without_a_second_report(
     native_case, monkeypatch
 ):
     from sqlalchemy.exc import OperationalError
 
     from open_deep_research.workflow import dbos_workflow as engine
 
-    original = engine._publish_stage
-    lost = []
+    original = engine.commit_stage
+    failures = []
 
-    def publish(scope, artifact):
-        original(scope, artifact)
-        if scope.name == "response_strategy_agent" and not lost:
-            lost.append(scope.stage_id)
+    def publish(scope, status, *, result=None, error=None):
+        if (
+            status == "completed"
+            and scope.name == "response_strategy_agent"
+            and not failures
+        ):
+            failures.append(scope.stage_id)
             raise OperationalError(
-                "Synthetic acknowledgement loss", None, Exception("after commit")
+                "Synthetic publication outage", None, Exception("unavailable")
             )
+        return original(scope, status, result=result, error=error)
 
-    monkeypatch.setattr(engine, "_publish_stage", publish)
+    monkeypatch.setattr(engine, "commit_stage", publish)
     run = native_case.create()
-    result = native_case.wait(run)
-    assert lost
-    assert result["status"] == "completed"
-    assert result["usage"]["model_calls"] == 18
-    assert result["usage"]["total_tokens"] == 203
-    assert len(native_case.models) == 2
+    # The transaction rolled back, so the stage reports exactly one failure and
+    # its model usage is still charged once.
+    failed = native_case.wait(run, lambda r: r["status"] == "failed")
+    assert failures == [run["run_id"] + ":response_strategy"]
+    assert failed["current_step"] == "response_strategy_agent"
+    assert failed["usage"]["model_calls"] == 17
     native_case.wait(run, lambda r: r["archive_status"] == "saved")
+    assert not failed["report"]
     events = native_case.client.read_events(run["run_id"], "alice", 0, 1000)
     assert (
         sum(
             e["type"] == "agent_report" and e.get("role") == "response_strategy"
             for e in events
         )
-        == 1
+        == 0
     )
+    assert len(native_case.models) == 2
 
 
 def test_tool_control_storage_errors_are_fatal_not_model_observations(
@@ -1485,33 +1495,26 @@ def test_native_workflow_matches_frozen_business_reference(
         assert native["agents"][role] == reference["agents"][role]
 
 
-def test_message_identity_generation_stays_outside_workflow_replay(
-    native_case, monkeypatch
-):
-    from dbos import DBOS
-
+def test_message_identity_is_derived_instead_of_random(native_case, monkeypatch):
     from open_deep_research.workflow import python_state
 
-    original = python_state.uuid4
-    observed = []
+    # Identity is a function of the business source and the list position, so a
+    # replay rebuilds the same identifiers instead of minting new ones.
+    assert not hasattr(python_state, "uuid4")
+    original = python_state.message_identity
+    derived = []
 
-    def identity():
-        in_workflow = DBOS.workflow_id is not None
-        in_step = DBOS.step_id is not None
-        assert not in_workflow or in_step, (
-            "Random message ID generated by Workflow replay"
-        )
-        observed.append((in_workflow, in_step))
-        return original()
+    def identity(source, position):
+        derived.append((source, position))
+        return original(source, position)
 
-    monkeypatch.setattr(python_state, "uuid4", identity)
+    monkeypatch.setattr(python_state, "message_identity", identity)
     case = native_case
     case.state["messages"][0].id = None
     run = case.create()
     result = case.wait(run)
     assert result["status"] == "completed", result["error"]
-    assert (False, False) in observed
-    assert (True, True) in observed
+    assert derived and all(len(source) > 1 for source, _ in derived)
     final = case.client.client.list_workflows(
         workflow_ids=[run["run_id"]], load_input=False, load_output=True
     )[0].output
@@ -1631,22 +1634,8 @@ def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypat
         if e["type"] == "step_completed" and e["unit_id"] == unit["id"]
     )
     assert "runtime" not in finished and "patch" not in finished
-    plans = case.client.client.list_workflows(
-        workflow_id_prefix=run["run_id"],
-        name="por.plan",
-        load_input=False,
-        load_output=False,
-    )
-    outputs = [
-        step["output"]
-        for p in plans
-        for step in case.client.client.list_workflow_steps(p.workflow_id)
-        if step["function_name"] == "por.stage_result"
-    ]
-    assert any(
-        value.get("patch", {}).get("runtime", {}).get("budget") == unit["usage"]
-        for value in outputs
-    )
+    # The vision attempt is settled exactly once: the stage transaction
+    # committed, and the model ledger holds the one receipt read above.
     assert case.client.get(run["run_id"], "alice")["usage"] == result["usage"]
     assert len(model.requests) == 1
 
@@ -1755,7 +1744,7 @@ def test_research_results_are_joined_after_both_native_children(
     from open_deep_research.workflow import dbos_workflow as engine
 
     case = native_case
-    original = engine._publish_stage
+    original = engine.commit_stage
     fast_committed = Event()
     order = []
     joined = []
@@ -1767,18 +1756,18 @@ def test_research_results_are_joined_after_both_native_children(
 
     monkeypatch.setattr(engine, "assemble_research_results", assemble)
 
-    def finish(scope, artifact):
-        value = artifact.get("research_result")
+    def finish(scope, status, *, result=None, error=None):
+        value = (result or {}).get("research_result")
         if value and value["role"] == slower:
             assert fast_committed.wait(10), "Native role children must remain parallel"
-        result = original(scope, artifact)
+        committed = original(scope, status, result=result, error=error)
         if value:
             order.append(value["role"])
             if value["role"] != slower:
                 fast_committed.set()
-        return result
+        return committed
 
-    monkeypatch.setattr(engine, "_publish_stage", finish)
+    monkeypatch.setattr(engine, "commit_stage", finish)
     run = case.create()
     result = case.wait(run, lambda r: r["archive_status"] == "saved")
     assert result["status"] == "completed", result["error"]

@@ -15,7 +15,7 @@ from open_deep_research.observability.telemetry import (
     shutdown_telemetry,
 )
 from open_deep_research.web.run_data import RunJSON
-from open_deep_research.workflow import dbos_workflow
+from open_deep_research.workflow import dbos_workflow, transactions
 from open_deep_research.workflow.dbos_config import (
     APP,
     ARCHIVE,
@@ -79,6 +79,9 @@ def launch(executor_id, *, queues=None):
             },
         }
     )
+    # Datasources must exist before launch: DBOS owns their checkpoint
+    # lifecycle for rewind.
+    transactions.prepare()
     DBOS.listen_queues(queues or [CONTROL, BUSINESS, ARCHIVE, RECOVERY])
     DBOS.launch()
     DBOS.register_queue(CONTROL, polling_interval_sec=0.2)

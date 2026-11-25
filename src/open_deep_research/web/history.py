@@ -126,22 +126,31 @@ class HistoryStore:
         self.engine = engine
 
     # 幂等写入归档和阶段输出，避免重复导入覆盖已有报告。
-    def save(self, records: list[HistoryRecord]) -> int:
-        """Upsert archives idempotently without replacing existing reports."""
+    def save(self, records: list[HistoryRecord], *, db=None) -> int:
+        """Upsert archives idempotently without replacing existing reports.
+
+        ``db`` is the caller's transaction — a DBOS Datasource session for the
+        Run archive, so this repository never commits a transaction of its own.
+        """
         if not records:
             return 0
-        unique = _preferred_records(records)
-        imported = 0
         try:
-            with self.engine.begin() as db:
-                for record in unique.values():
-                    existing = _read_row(db, record.id, lock=True)
-                    merged = _merge_record(existing, record)
-                    _write_row(db, merged)
-                    if existing is None:
-                        imported += 1
+            if db is not None:
+                return self._save_with(db, records)
+            with self.engine.begin() as owned:
+                return self._save_with(owned, records)
         except SQLAlchemyError as exc:
             raise HistoryUnavailable("研究历史暂时无法写入，请检查业务数据库连接。") from exc
+
+    def _save_with(self, db, records: list[HistoryRecord]) -> int:
+        unique = _preferred_records(records)
+        imported = 0
+        for record in unique.values():
+            existing = _read_row(db, record.id, lock=True)
+            merged = _merge_record(existing, record)
+            _write_row(db, merged)
+            if existing is None:
+                imported += 1
         return imported
 
     # 按搜索词和分页返回运行摘要，不加载完整报告正文。

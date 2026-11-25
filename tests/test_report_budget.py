@@ -66,7 +66,7 @@ def test_reporting_uses_the_reserved_call_and_remaining_output_budget(monkeypatc
     [request] = requests
     assert request.max_tokens == 100
     assert "collected public evidence" in request.prompt
-    apply_patch(state, result)
+    apply_patch(state, result, source="generate_final_report")
     assert state["report"]["final"].startswith("# Final report")
     assert state["runtime"]["budget"]["model_calls"] == 10
     assert state["runtime"]["budget"]["output_tokens"] == 27

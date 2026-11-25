@@ -134,10 +134,13 @@ def _account_failure(
                 apply_patch(
                     state,
                     {"runtime": {"budget": patch.get("runtime", {}).get("budget", {})}},
+                    source="account_failure",
                 )
     for failure in failures.values():
         apply_patch(
-            state, {"runtime": {"budget": getattr(failure, "budget_usage", {})}}
+            state,
+            {"runtime": {"budget": getattr(failure, "budget_usage", {})}},
+            source="account_failure",
         )
     return failures
 
@@ -199,7 +202,7 @@ class PythonWorkflow:
             )
         if start_at not in {"intake", "research"}:
             raise ValueError("start_at must be intake or research")
-        state = copy_state(input)
+        state = copy_state(input, source="reference:input")
         if resume is not None and (
             resume.get("version") != WORKFLOW_VERSION
             or resume.get("cursor") not in RESUME_CURSORS
@@ -236,12 +239,16 @@ class PythonWorkflow:
         try:
             if cursor == "enrich_query_images":
                 apply_patch(
-                    state, await call("enrich_query_images", intake.enrich_query_images)
+                    state,
+                    await call("enrich_query_images", intake.enrich_query_images),
+                    source="enrich_query_images",
                 )
                 await commit("enrich_query_images", "clarify_with_user")
             if cursor == "clarify_with_user":
                 decision = await call("clarify_with_user", intake.clarification_step)
-                apply_patch(state, decision.update or {})
+                apply_patch(
+                    state, decision.update or {}, source="clarify_with_user"
+                )
                 await commit(
                     "clarify_with_user",
                     "done" if decision.goto == "__end__" else "write_research_brief",
@@ -252,7 +259,9 @@ class PythonWorkflow:
                 decision = await call(
                     "write_research_brief", intake.research_brief_step
                 )
-                apply_patch(state, decision.update or {})
+                apply_patch(
+                    state, decision.update or {}, source="write_research_brief"
+                )
                 await commit("write_research_brief", "approval")
             if cursor == "approval":
                 if settings.allow_plan_feedback:
@@ -279,6 +288,7 @@ class PythonWorkflow:
                         },
                         "agents": {"type": "override", "value": {}},
                     },
+                    source="research_init",
                 )
                 await commit("research_init", "research_agents")
             # A recovered cursor never repeats this destructive new-run boundary.
@@ -310,7 +320,9 @@ class PythonWorkflow:
                     await commit("research_agents", "research_review")
                 if cursor == "research_review":
                     apply_patch(
-                        state, await call("research_review", research.research_review)
+                        state,
+                        await call("research_review", research.research_review),
+                        source="research_review",
                     )
                     await commit("research_review", "followup")
                 if cursor == "followup":
@@ -336,11 +348,11 @@ class PythonWorkflow:
                     config,
                     timeout,
                 )
-                apply_patch(state, patch)
+                apply_patch(state, patch, source=f"{role}_agent")
                 await commit(f"{role}_agent", next_cursor)
             if cursor == "generate_final_report":
                 patch = await call("generate_final_report", reporting.generate_final_report)
-                apply_patch(state, patch)
+                apply_patch(state, patch, source="generate_final_report")
                 await commit("generate_final_report", "done")
             return state
         except PlanApprovalRequired:

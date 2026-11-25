@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import logging
 import time
 from collections.abc import Coroutine, Mapping
 from contextlib import asynccontextmanager
@@ -32,6 +33,8 @@ from open_deep_research.workflow.dbos_config import (
 # The SDK may finish already owned I/O and evidence after its Workflow is
 # cancelled. That cleanup cannot submit more native commands.
 owned_cleanup: ContextVar[bool] = ContextVar("owned_cleanup", default=False)
+
+LOGGER = logging.getLogger(__name__)
 
 # Outcomes the tool ledger stores after admission; a call keeps its allowance.
 TOOL_CALL_OUTCOMES = frozenset({"returned", "failed", "cancelled"})
@@ -272,6 +275,7 @@ class StageContext:
     initial_usage: dict
     reserve_report: bool = True
     expires_at: float | None = None
+    research_round: int = 1
     ordinals: dict = field(default_factory=dict)
 
     @property
@@ -283,11 +287,22 @@ class StageContext:
         ordinal = next(self.ordinals.setdefault(slot, count(1)))
         return digest((slot, ordinal, self.generation))
 
+    def observation_id(self, kind, payload):
+        """Name one observation by the business facts it reports.
+
+        The identity must not depend on a Step that no longer exists, so it is
+        derived from the stage execution and the reported facts. An identical
+        report inside one stage execution is the same fact, and the native
+        message idempotency key makes the second write a no-op.
+        """
+        return digest((self.execution_id, kind, sdk_observation(payload)))
+
     async def observe(self, kind, payload, *, call_id=None):
+        detail = sdk_observation(payload)
         event_id = (
             digest((self.execution_id, kind, call_id))
             if call_id is not None
-            else self.call_id("observation")
+            else self.observation_id(kind, detail)
         )
 
         def publish():
@@ -302,13 +317,16 @@ class StageContext:
                     unit_id=self.stage_id,
                     execution_id=self.execution_id,
                     generation=self.generation,
-                    **sdk_observation(payload),
+                    **detail,
                 )
 
-        if native_step_available() and call_id is None:
-            await DBOS.run_step_async({"name": "por.sdk_observation"}, publish)
-        else:
+        # Observations are progress, not business facts: the model, tool and
+        # operation ledgers stay authoritative, so a storage blip must not fail
+        # the Agent loop. The idempotency key makes the retry harmless.
+        try:
             await asyncio.to_thread(publish)
+        except SQLAlchemyError:
+            LOGGER.warning("Could not publish an SDK observation.", exc_info=True)
 
 
 stage_context: ContextVar[StageContext | None] = ContextVar(

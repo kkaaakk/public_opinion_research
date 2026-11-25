@@ -2,8 +2,10 @@
 
 The SDK owns the agent loop and ToolExecutor owns the durable tool lifecycle.
 This harness records the tool results the executor hands back, keeps the native
-protocol pairing intact, and provides the single durable seam for bounded
-history compaction.
+protocol pairing intact, checkpoints bounded history compaction, and drains the
+tool calls it observed when the invocation exits. Exit settlement is ordinary
+in-process business handling: it is not a DBOS Step, and its record of which
+observed calls were still live is not restored by a replay.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import json
 import logging
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -721,50 +723,6 @@ class SDKContextHarness(RunHooks):
             raise cancellation
         return settlement
 
-    async def _settle_on_exit(self, reason: str) -> BatchSettlement:
-        if not native_step_available():
-            return await self._settle_owned(reason)
-
-        async def settle():
-            result = await self._settle_owned(reason)
-            return {
-                "settlement": asdict(result),
-                # A Tool Step that raises has no committed tool record to replay.
-                # A ``NotInvoked`` record is not a tool outcome: it never reached
-                # the executor, so it is re-derived rather than journaled here.
-                "failed_tools": {
-                    call_id: {
-                        "status": record.status,
-                        "error_type": record.error_type,
-                        "operation_id": record.operation_id,
-                        "effect_status": record.effect_status,
-                    }
-                    for call_id, record in self.results.items()
-                    if record.status in {"failed", "cancelled"}
-                    and record.observation is None
-                    and record.error_type != NOT_INVOKED
-                },
-            }
-
-        saved = await DBOS.run_step_async(
-            {"name": "por.agent_settlement", "preemptible": True}, settle
-        )
-        for call_id, failed in saved["failed_tools"].items():
-            record = self.results[call_id]
-            record.status = failed["status"]
-            record.error_type = failed["error_type"]
-            record.operation_id = failed["operation_id"]
-            record.effect_status = failed["effect_status"]
-        # Replayed or executed, the journal cannot describe a call that never
-        # reached the executor; close any such record the replay re-observed so
-        # this attempt and the journaled settlement agree on every status.
-        for record in self.results.values():
-            self.close_unexecuted(record)
-        value = saved["settlement"]
-        value["in_flight_call_ids"] = tuple(value["in_flight_call_ids"])
-        self.last_settlement = BatchSettlement(**value)
-        return self.last_settlement
-
     async def _settle_owned(self, reason: str) -> BatchSettlement:
         cleanup = asyncio.create_task(self.settle(reason))
         cancelled = False
@@ -841,7 +799,7 @@ class SDKContextHarness(RunHooks):
                 session=session,
             )
             self._closing = True
-            settlement = await self._settle_on_exit("completed")
+            settlement = await self._settle_owned("completed")
             if not settlement.succeeded:
                 raise ExecutionControlError(
                     f"Unsettled SDK tool results: {settlement}"
@@ -862,7 +820,7 @@ class SDKContextHarness(RunHooks):
             if cancelled or isinstance(exc, ExecutionControlError):
                 cleanup_token = owned_cleanup.set(True)
             try:
-                await self._settle_on_exit(reason)
+                await self._settle_owned(reason)
             except BaseException as cleanup_error:
                 if hasattr(exc, "add_note"):
                     exc.add_note(
