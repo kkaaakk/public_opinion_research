@@ -1,0 +1,41 @@
+{
+  "title": "东湾事件对外披露证据清单",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "法务合规组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-BAT-2411",
+    "opened": "2024-11-18",
+    "vehicle_model": "LZ-A17",
+    "name": "东湾体验站驻车冒烟"
+  },
+  "release_gate": {
+    "owner": "法务合规组",
+    "co_signer": "产品安全组",
+    "hold_if": [
+      "身份信息未遮蔽",
+      "拆检结论无编号"
+    ]
+  },
+  "required_items": [
+    {
+      "id": "B-01",
+      "name": "现场影像取证编号",
+      "external": "仅披露经核实的时间描述"
+    },
+    {
+      "id": "B-02",
+      "name": "拆检签批单",
+      "external": "可披露已确认影响批次"
+    },
+    {
+      "id": "B-03",
+      "name": "受控样品登记",
+      "external": "样本移交链内部可查"
+    }
+  ],
+  "retention": "事件关闭后保留 18 个月"
+}

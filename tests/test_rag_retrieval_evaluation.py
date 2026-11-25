@@ -1,10 +1,11 @@
 # 验证检索评估指标、漏召诊断、真实模型约束和纯文本输出。
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import tests.evaluate_rag_retrieval as evaluator
+from open_deep_research.config_file import load_configuration
+from open_deep_research.rag.service import build_rag_pipeline_config
 from tests.evaluate_rag_retrieval import (
     add_miss_diagnostics,
     average_metric,
@@ -325,22 +326,17 @@ def test_build_pipeline_rejects_hash_embedding_for_retrieval_metrics():
         )
 
 
-# 验证命令行默认选用真实语义模型栈。
+# 验证命令行默认采用生产 YAML 的完整配置。
 def test_parse_args_defaults_to_real_model_stack(monkeypatch):
     monkeypatch.setattr("sys.argv", ["evaluate_rag_retrieval.py"])
 
     args = parse_args()
 
-    assert args.embedding_provider == "sentence_transformers"
-    assert "paraphrase-multilingual-MiniLM-L12-v2" in args.embedding_model
-    assert args.vectorstore_provider == "milvus"
-    assert args.vectorstore_path == "data/indexes/rag"
-    assert str(Path(args.milvus_uri).parent).replace("\\", "/") == "data/indexes/rag"
-    assert Path(args.milvus_uri).name.startswith("odr_milvus_eval_")
-    assert Path(args.milvus_uri).suffix == ".db"
-    assert args.milvus_metric_type == "COSINE"
-    assert args.reranker_provider == "cross_encoder"
-    assert args.reranker_model == ".rag_models/cross-encoder-ms-marco-MiniLM-L6-v2"
+    assert args.command == "run" and args.split == "dev" and args.scope == "pipeline"
+    actual = evaluator.resolve_eval_config(args)
+    expected = load_configuration()
+    assert build_rag_pipeline_config(actual) == build_rag_pipeline_config(expected)
+    assert actual.rag_query_rewrite_enabled == expected.rag_query_rewrite_enabled
 
 
 # 验证命令行参数校验拒绝非语义嵌入评估。

@@ -1,0 +1,43 @@
+{
+  "title": "V09 服务预约导出字段字典",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "数据运营组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-PII-2506",
+    "opened": "2025-06-03",
+    "vehicle_model": "LZ-V09",
+    "name": "预约报表越权共享"
+  },
+  "schema_id": "RSV-V09-18",
+  "source": "服务预约列表",
+  "fields": [
+    {
+      "key": "order_alias",
+      "label": "预约别名",
+      "sensitivity": "仅内部"
+    },
+    {
+      "key": "phone_suffix",
+      "label": "手机号后四位",
+      "sensitivity": "受限"
+    },
+    {
+      "key": "city_code",
+      "label": "城市代码",
+      "sensitivity": "与别名联用受限"
+    },
+    {
+      "key": "appointment_slot",
+      "label": "预约窗口",
+      "sensitivity": "仅内部"
+    }
+  ],
+  "distribution": {
+    "default": "团队内短期共享",
+    "external_share": "requires DPO review"
+  }
+}

@@ -2,6 +2,72 @@
 
 本文档用于持续记录 RAG 检索评估结果。后续每次更改检索技术、知识库、评估集或参数后，都在这里新增记录。
 
+## POR dataset-v1 检索评测
+
+本节适用于新能源汽车舆情题集。下方旧实验的题集、知识库和评分口径不同，保留原记录以便追溯。
+
+<!-- POR RAG RUNS START -->
+
+| 评测记录 | 技术版本及范围 | 数据版本 | Recall@K | MRR@K | 完整证据率 | P95 (ms) | 备注 |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 待测 | V0 原始基线 | dataset-v1 | 待测 | 待测 | 待测 | 待测 | 待测 |
+
+<!-- POR RAG RUNS END -->
+
+### 运行方式
+
+从仓库根目录运行，使用锁定依赖的根虚拟环境。下面的全量命令供后续正式实验使用。评测默认读取 `config.yaml`，支持现有 YAML `extends`、`--config` 和可重复的 `--set rag_FIELD=YAML`。配置中的知识路径、分块、模型和设备、向量库、关键词后端、RRF、结构化加权、重排、Authority、K、OCR/Vision 和 Query Rewrite 开关都随运行记录保存。每次新运行在 `.tmp/rag-evaluation/indexes/` 使用独立目录，远程 Milvus Collection 与 Elasticsearch Index 使用独立名字。
+
+```powershell
+.venv/Scripts/python.exe scripts/validate_por_dataset.py --check-loader
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py dataset-fingerprint
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py fingerprint --split dev --scope pipeline
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py find --split dev --scope pipeline
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py run --split dev --scope pipeline --title "V0 dev"
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py run --split test --scope tool --title "V0 tool"
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py run --split test --scope tool --set rag_query_rewrite_enabled=false --force --title "V0 tool without rewrite"
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py compare $beforeRunId $afterRunId
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py history
+```
+
+- `pipeline` 对实际文档处理、索引、检索、重排、筛选及引用格式化计分。`tool` 调用 `rag_search` 使用的同一查询函数，按配置包含 Query Rewrite 和已有的回退。比较改写开关用相同题集、K 和 `--scope tool` 分别运行。Vision 在配置开启时可用于两种范围的索引构建。
+- `--smoke` 允许用 `--limit` 或重复 `--question-id` 选择少量开发题。它也允许显式指定哈希向量。以下示例通过真实 Loader、索引和工具入口运行，使用本地确定性后端并关闭 OCR/Vision 和远程改写。测试集运行要求完整评测。
+- `--cases` 供原文件名/关键词题集复跑，模型参数从同一生产配置或显式覆盖取得。POR 的两个题集通过 `--split` 运行。
+
+```powershell
+$env:PYTHON_DOTENV_DISABLED = '1'
+$env:LANGSMITH_TRACING = 'false'
+$env:OPENAI_AGENTS_DISABLE_TRACING = '1'
+.venv/Scripts/python.exe tests/evaluate_rag_retrieval.py run --scope tool --split dev --smoke --question-id D001 --question-id D004 --question-id D006 --question-id D008 --question-id D025 --set rag_embedding_provider=hash --set rag_vectorstore_provider=memory --set rag_reranker_provider=simple --set rag_multimodal_enabled=false --set rag_query_rewrite_enabled=false
+```
+
+### 证据与指标
+
+同一题分别按内部选中 Chunk 和最终工具正文中可见的引用打分。最终层仅使用实际可见摘录，Chunk ID 仅用于关联同一次运行的内部与外部记录。文档路径精确映射到清单的 `doc_id`。Markdown 核对标题路径，PDF 核对一基页码，TXT 核对行号重叠，JSON 核对 JSON Pointer 和相应字段内的实际值。JSON 复合值按各叶字段完整覆盖。图片和带区域的 PDF 优先核对可用区域，当前 Loader 缺少区域时只按同来源的可验证文本打分并标记 `text_only_region`。表格使用实际返回文本，页内表结构与像素级定位精度有限。空白和换行折叠，字符采用 Unicode NFKC 和 casefold。跨块证据仅在同文件同定位下，按连续的来源字符位置拼接，重叠字符须一致。
+
+| 指标 | 每题口径 |
+| --- | --- |
+| Hit Rate@K | 前 K 位至少完成一个目标的题记 1，否则为 0 |
+| Recall@K | 完成的不同目标数除以该题不同目标总数 |
+| Precision@K | 支持目标的返回 Chunk 数除以实际返回数，空返回为 0。跨块命中计入最早完整覆盖所用的各 Chunk，独立包含目标的 Chunk 也计入 |
+| MRR@K | 首次完整命中所在排名的倒数。跨块证据以最后一个必需 Chunk 的排名计时，空命中为 0 |
+| NDCG@K | 按 `(2^relevance - 1) / log2(rank + 1)` 累加。每排名只取首次完成目标的最高增益，理想排序按不同目标的相关等级降序排列 |
+| Complete Evidence Rate@K | 该题全部不同目标均在前 K 位完成时为 1，否则为 0 |
+| Excluded Source Rate@K | 至少命中一个该题显式排除来源时为 1。分母为成功执行的所有问题，并另外报告无答案子集 |
+| Mean / P95 Latency | 在索引就绪之后，成功查询延迟均值和 nearest-rank P95。首次查询纳入整体，并单列首题耗时和其余查询的延迟分布 |
+
+文档级以不同金标准 `doc_id` 为目标，相关等级为 1。证据级目标用文档 ID、定位和规范化证据文本去重，采用题集的相关等级。重复结果仍是实际返回位置，召回、MRR 和 NDCG 不重复增加。资料状态随结果保存。历史材料是否计分取决于该题的金标准和排除清单。按题型和难度做题级宏平均，成功执行但无结果的有答案题以零计入。没有可评分题的指标为 `null`。
+
+无答案题保留返回与否、各结果分数、数量、排除来源和原有无结果机制，并单独统计。检索输出及空结果只度量检索，无法验证生成层是否正确拒答。评测计时与天级模型服务状态均可能影响复测。
+
+### 指纹、持久化与复用
+
+- `dataset-fingerprint` 计算冻结资料、清单和两个题集的文件 SHA-256，再按排序的相对路径序列化为 JSON 并计算合成摘要。评测指纹另计算所选题集、按有效路径枚举的实际语料、相关 RAG 和工具源码、有效配置、评测与规则源码、范围、Python/依赖及可获得的模型修订。Git Commit 随记录保存。模型服务未提供 revision、远程搜索服务版本及服务端行情或负载变化可通过 `--force` 重测。
+- `docs/evaluation/runs/<run_id>.json` 是详细记录和复用依据。结果包含时间、状态、分项指纹、实际配置、索引初始化和构建耗时、文件/Loader 记录/Chunk/向量数量、整体和分类指标、逐题原问题、实际返回片段和分数、漏召与排除来源、无答案机制、SDK 可见模型用量及异常类别。凭据和 URL 用户信息、路径明文或查询参数不进入记录。成本缺失时为 `null`。索引、缓存和本地 JSON 结果由 Git 忽略。
+- 每次新运行使用唯一 ID。正常完成后原子写入带校验摘要的结果。失败和中断记录保留，外部强行终止时可能只有 `running` 记录。复用要求版本、完整数据、范围和评测指纹一致，且文件摘要、逐题数量和状态均验证通过。Smoke、部分运行和供应商失败后的降级记录不参与正式复用。
+- `compare` 仅接受完整成功、相同数据/题集/范围/K 和评分口径的记录。返回整体、分类、延迟、建索引与可用模型用量的数值差，以及按最终可见证据判定的新增和已修复失败样本。`history` 从完整 JSON 生成本节总表，保留下面的历史实验。
+- 后续调用可直接导入 `tests.evaluate_rag_retrieval.evaluation_inputs` 和 `run_evaluation`，以及 `tests.rag_eval_records.dataset_fingerprint`、`build_fingerprint`、`find_reusable_record`、`load_record` 和 `compare_records`。CLI 的 `find` 有结果时退出 0，无匹配时输出 JSON `null` 并退出 1。
+
 ## 本页速览
 
 | 项目     | 内容                                                                                         |

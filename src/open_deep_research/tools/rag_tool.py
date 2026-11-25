@@ -16,6 +16,7 @@ from open_deep_research.rag.service import (
     build_rag_pipeline_config,
     get_or_create_rag_pipeline,
 )
+from open_deep_research.rag.types import AnswerReadyContext
 from open_deep_research.tools import business_tool
 
 RAG_SEARCH_DESCRIPTION = (
@@ -37,11 +38,16 @@ async def _rag_search(query: str, config: RunnableConfig = None) -> str:
     to build the index or retrieve from it raises instead of pretending the
     search returned no evidence.
     """
+    return (await search_rag_context(query, config=config)).context
+
+
+async def search_rag_context(query: str, config: RunnableConfig = None) -> AnswerReadyContext:
+    """Run the tool's query processing and retain the structured retrieval result."""
     configurable = Configuration.from_runnable_config(config)
     if not configurable.rag_enabled:
-        return "Local RAG retrieval is disabled in configuration."
+        return AnswerReadyContext(query=query, context="Local RAG retrieval is disabled in configuration.")
     if not configurable.rag_knowledge_base_paths:
-        return "No local RAG document paths are configured."
+        return AnswerReadyContext(query=query, context="No local RAG document paths are configured.")
 
     try:
         pipeline_config = build_rag_pipeline_config(configurable)
@@ -57,12 +63,11 @@ async def _rag_search(query: str, config: RunnableConfig = None) -> str:
             ),
             config=config,
         )
-        answer_ready_context = await asyncio.to_thread(
+        return await asyncio.to_thread(
             pipeline.query,
             retrieval_query,
             original_query=query,
         )
-        return answer_ready_context.context
     except Exception as exc:
         raise RAGRetrievalError(
             f"Local RAG search failed ({type(exc).__name__}); "

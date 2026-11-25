@@ -1,0 +1,47 @@
+{
+  "title": "LZ-C42 引航传播合规检查员规则",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "法务合规组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-ADAS-2502",
+    "opened": "2025-02-12",
+    "vehicle_model": "LZ-C42",
+    "name": "引航功能状态短视频"
+  },
+  "checks": [
+    {
+      "id": "ADAS-CL-1",
+      "applies_to": [
+        "经销商直播",
+        "交付视频"
+      ],
+      "requirement": "明确为驾驶辅助并标示驾驶员监督"
+    },
+    {
+      "id": "ADAS-CL-2",
+      "applies_to": [
+        "配图",
+        "短视频"
+      ],
+      "requirement": "标明演示版本及适用道路情境"
+    },
+    {
+      "id": "ADAS-CL-3",
+      "applies_to": [
+        "纠错声明"
+      ],
+      "requirement": "链接同版本功能说明"
+    }
+  ],
+  "approval": {
+    "required_teams": [
+      "驾驶辅助组",
+      "法务合规组"
+    ],
+    "asset_state": "signed"
+  }
+}

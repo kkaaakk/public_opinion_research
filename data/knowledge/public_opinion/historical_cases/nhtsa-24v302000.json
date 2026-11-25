@@ -1,0 +1,44 @@
+{
+  "title": "NHTSA 24V302000 — BMW of North America, LLC (COOPER SE)",
+  "campaign": {
+    "Manufacturer": "BMW of North America, LLC",
+    "NHTSACampaignNumber": "24V302000",
+    "parkIt": false,
+    "parkOutSide": false,
+    "overTheAirUpdate": false,
+    "ReportReceivedDate": "29/04/2024",
+    "Component": "ELECTRICAL SYSTEM:PROPULSION SYSTEM:TRACTION BATTERY",
+    "PotentialNumberofUnitsAffected": 145,
+    "Summary": "BMW of North America, LLC (BMW) is recalling certain 2020-2024 MINI Hardtop 2 Door (Cooper SE) vehicles.  The high voltage battery housing may not have been sealed properly, allowing water to enter the battery.",
+    "Consequence": "A high voltage battery with water damage can cause a fire or a vehicle stall, increasing the risk of injury or a crash.",
+    "Remedy": "Dealers will inspect and leak test the high voltage battery, and repair the battery as necessary, free of charge.  Letters informing owners of the safety risk were mailed June 28, 2024.  Owner notification letters were mailed October 30, 2024.  Owners may contact BMW customer service at 1-866-825-1525.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153), or go to www.nhtsa.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2020",
+      "Make": "MINI",
+      "Model": "COOPER SE"
+    },
+    {
+      "ModelYear": "2021",
+      "Make": "MINI",
+      "Model": "COOPER SE"
+    },
+    {
+      "ModelYear": "2022",
+      "Make": "MINI",
+      "Model": "COOPER SE"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "MINI",
+      "Model": "COOPER SE"
+    },
+    {
+      "ModelYear": "2024",
+      "Make": "MINI",
+      "Model": "COOPER SE"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "title": "NHTSA 24V200000 — Kia America, Inc. (EV6)",
+  "campaign": {
+    "Manufacturer": "Kia America, Inc.",
+    "NHTSACampaignNumber": "24V200000",
+    "parkIt": false,
+    "parkOutSide": false,
+    "overTheAirUpdate": false,
+    "NHTSAActionNumber": "PE23012",
+    "ReportReceivedDate": "14/03/2024",
+    "Component": "ELECTRICAL SYSTEM:12V/24V/48V BATTERY",
+    "PotentialNumberofUnitsAffected": 48232,
+    "Summary": "Kia America, Inc. (Kia) is recalling certain 2022-2024 EV6 vehicles.  The Integrated Charging Control Unit (ICCU) may become damaged and stop charging the 12-Volt battery, which can result in a loss of drive power.",
+    "Consequence": "A loss of drive power increases the risk of a crash.",
+    "Remedy": "Dealers will inspect and replace the ICCU and its fuse, as necessary.  In addition, dealers will update the ICCU software.  All repairs will be performed free of charge.  Owner notification letters are expected to be mailed April 29, 2024.  Owners may contact Kia customer service at 1-800-333-4542.  Kia's number for this recall is SC302.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153), or go to www.nhtsa.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2022",
+      "Make": "KIA",
+      "Model": "EV6"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "KIA",
+      "Model": "EV6"
+    },
+    {
+      "ModelYear": "2024",
+      "Make": "KIA",
+      "Model": "EV6"
+    }
+  ]
+}

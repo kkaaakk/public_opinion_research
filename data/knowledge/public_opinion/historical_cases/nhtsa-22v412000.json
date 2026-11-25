@@ -1,0 +1,29 @@
+{
+  "title": "NHTSA 22V412000 — Ford Motor Company (MUSTANG MACH E)",
+  "campaign": {
+    "Manufacturer": "Ford Motor Company",
+    "NHTSACampaignNumber": "22V412000",
+    "parkIt": false,
+    "parkOutSide": false,
+    "overTheAirUpdate": false,
+    "ReportReceivedDate": "10/06/2022",
+    "Component": "ELECTRICAL SYSTEM:PROPULSION SYSTEM:TRACTION BATTERY:MANAGEMENT SYSTEM/ENERGY CONTROL MODULE (BMS/BECM):SOFTWARE",
+    "PotentialNumberofUnitsAffected": 48924,
+    "Summary": "Ford Motor Company (Ford) is recalling certain 2021-2022 Mustang Mach-E vehicles.  The high voltage battery main contactors may overheat.",
+    "Consequence": "An overheated high voltage battery contactor may cause the vehicle to lose drive power, increasing the risk of a crash.",
+    "Remedy": "Dealers will update the on-board software, free of charge.  Owner notification letters were mailed on July 8, 2022.  Owners may contact Ford customer service at 1-866-436-7332.  Ford's number for this recall is 22S41.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153), or go to www.nhtsa.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2021",
+      "Make": "FORD",
+      "Model": "MUSTANG MACH E"
+    },
+    {
+      "ModelYear": "2022",
+      "Make": "FORD",
+      "Model": "MUSTANG MACH E"
+    }
+  ]
+}

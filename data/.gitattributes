@@ -1,0 +1,7 @@
+# Metadata hashes describe the bytes checked out on every supported OS.
+*.md text eol=lf
+*.txt text eol=lf
+*.json -text
+*.jsonl text eol=lf
+*.pdf binary
+*.png binary

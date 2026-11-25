@@ -1,0 +1,175 @@
+{
+  "title": "NHTSA 23V838000 — Tesla, Inc. (MODEL 3 / MODEL S / MODEL X / MODEL Y)",
+  "campaign": {
+    "Manufacturer": "Tesla, Inc.",
+    "NHTSACampaignNumber": "23V838000",
+    "parkIt": false,
+    "parkOutSide": false,
+    "overTheAirUpdate": true,
+    "NHTSAActionNumber": "EA22002",
+    "ReportReceivedDate": "12/12/2023",
+    "Component": "ELECTRICAL SYSTEM:ADAS:AUTONOMOUS/SELF DRIVING:SOFTWARE",
+    "PotentialNumberofUnitsAffected": 2031220,
+    "Summary": "Tesla, Inc. (Tesla) is recalling 2012-2023 Model S, 2016-2023 Model X, 2017-2023 Model 3, and 2020-2023 Model Y vehicles equipped with all versions of Autosteer leading up to the version(s) that contains the recall remedy.  In certain circumstances when Autosteer is engaged, the prominence and scope of the feature's controls may not be sufficient to prevent driver misuse of the SAE Level 2 advanced driver-assistance feature.",
+    "Consequence": "In certain circumstances when Autosteer is engaged, and the driver does not maintain responsibility for vehicle operation and is unprepared to intervene as necessary or fails to recognize when Autosteer is canceled or not engaged, there may be an increased risk of a crash.",
+    "Remedy": "Tesla will release an over-the-air (OTA) software update, free of charge.  Owner notification letters were mailed February 10, 2024.  Owners may contact Tesla customer service at 1-877-798-3752.  Tesla's number for this recall is SB-23-00-008.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153), or go to www.nhtsa.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2017",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2018",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2019",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2020",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2021",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2022",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2012",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2013",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2014",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2015",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2016",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2017",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2018",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2019",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2020",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2021",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2022",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2016",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2017",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2018",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2019",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2020",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2021",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2022",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2020",
+      "Make": "TESLA",
+      "Model": "MODEL Y"
+    },
+    {
+      "ModelYear": "2021",
+      "Make": "TESLA",
+      "Model": "MODEL Y"
+    },
+    {
+      "ModelYear": "2022",
+      "Make": "TESLA",
+      "Model": "MODEL Y"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "TESLA",
+      "Model": "MODEL Y"
+    }
+  ]
+}

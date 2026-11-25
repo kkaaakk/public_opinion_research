@@ -1,0 +1,34 @@
+{
+  "title": "RSV-EX-0603 审计校验与通知触发记录",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "数据保护办公室",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-PII-2506",
+    "opened": "2025-06-03",
+    "vehicle_model": "LZ-V09",
+    "name": "预约报表越权共享"
+  },
+  "confirmed_export": {
+    "id": "RSV-EX-0603",
+    "fields": [
+      "order_alias",
+      "phone_suffix",
+      "city_code"
+    ],
+    "deduplicated_appointments": 84,
+    "download_confirmed": null
+  },
+  "excluded": {
+    "id": "RSV-EX-0603B",
+    "reason": "工单记录证明仅向授权接收者共享"
+  },
+  "notice_gate": {
+    "applies_to": "经确认的受影响预约",
+    "approval": "DPO-0604-02",
+    "issued_at": "2025-06-04T14:35:00+08:00"
+  }
+}

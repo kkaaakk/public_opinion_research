@@ -1,0 +1,41 @@
+{
+  "title": "A17 诊断费用稽核抽样清单",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "法务合规组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-SVC-2505",
+    "opened": "2025-05-15",
+    "vehicle_model": "LZ-A17",
+    "name": "诊断单收费争议"
+  },
+  "review": {
+    "sample_size": 10,
+    "retrieved_by": "法务合规组",
+    "period": "2025-05-17/2025-05-19"
+  },
+  "controls": [
+    {
+      "code": "SC-F1",
+      "requires": "独立报价确认页",
+      "failed": 2
+    },
+    {
+      "code": "SC-F2",
+      "requires": "费用项和金额匹配",
+      "failed": 0
+    },
+    {
+      "code": "SC-F3",
+      "requires": "取车交接完成",
+      "failed": 0
+    }
+  ],
+  "remediation": {
+    "failed_records": "开工前退回",
+    "owner": "门店主管"
+  }
+}
