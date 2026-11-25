@@ -2,6 +2,8 @@
 
 本批提交用于人工验收。资料与来源核验截点为 **2026 年 11 月 25 日（北京时间）**。基线代码来自 GitHub `main` 的 [`2066fe21`](https://github.com/kkaaakk/public_opinion_research/commit/2066fe21a097bdddd565d655bed591ff8a4edab7)。数据维护分支为 [`codex/por-dataset`](https://github.com/kkaaakk/public_opinion_research/tree/codex/por-dataset)。
 
+验收入口为 [Draft PR #68](https://github.com/kkaaakk/public_opinion_research/pull/68)，知识库、清单和评测集见 [数据提交 `3a2286f7`](https://github.com/kkaaakk/public_opinion_research/commit/3a2286f79c8f9567694edb3525548b7c6e157320)。
+
 ## 交付文件
 
 | 路径 | 用途 |
@@ -134,7 +136,7 @@ $env:OPENAI_AGENTS_DISABLE_TRACING = '1'
 - 文件清单、路径一一对应、文件格式、SHA-256、唯一 ID、唯一引用文件名、公开来源、模拟标记、版本衔接和冲突链接通过校验。检查了相同哈希及规范化后的重复全文。
 - 30 份 PDF 的 286 页完成实际渲染。人工检查全部 9 张模拟 PNG、7 页模拟 PDF、所有有坐标的图像证据和代表性的公开表格。
 - 逐题验证证据与实际页码、标题、行号、字段路径或图像区域一致。跨集合问题的规范化文本和近重复检查通过，并对主题、事件迹线与证据重叠做了人工复核。15 道无答案题对全文和可用原件按关键词、实体和时间范围复查，结果保存在各题 `absence_check`。
-- Ruff 和 `compileall` 通过。带 socket guard 的全仓测试结果为 **981 通过、2 跳过、206 未选中、1 失败**。失败为 `test_abrupt_process_kill_loses_only_unexported_memory`，Windows `taskkill /T /F` 返回 1，针对性复跑仍复现。同一轮的 72 个 RAG 相关用例通过。
+- Ruff 和 `compileall` 通过。带 socket guard 的全仓测试结果为 **981 通过、2 跳过、206 未选中、1 失败**。失败为 `test_abrupt_process_kill_loses_only_unexported_memory`，Windows `taskkill /T /F` 返回 1。在本分支及独立解压的基线提交上均可复现。同一轮的 72 个 RAG 相关用例通过。
 
 ## Loader 与评测器兼容性
 
