@@ -1,0 +1,36 @@
+{
+  "title": "泊青版发布素材审批台账",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "法务合规组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-ADS-2504",
+    "opened": "2025-04-08",
+    "vehicle_model": "LZ-C42",
+    "name": "门店续航海报纠错"
+  },
+  "claims": [
+    {
+      "asset": "HQ-C42-0410",
+      "state": "approved",
+      "ref": "RG-710",
+      "mandatory_labels": [
+        "CLTC",
+        "C42-LR-S"
+      ]
+    },
+    {
+      "asset": "NS-APR-08",
+      "state": "rejected",
+      "reason": "以高速实测口径展示台架数字"
+    }
+  ],
+  "checks": {
+    "publish_only": "approved",
+    "evidence_owner": "整车验证组",
+    "approver": "法务合规组"
+  }
+}

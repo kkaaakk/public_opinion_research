@@ -1,0 +1,35 @@
+{
+  "title": "NHTSA 21V560000 — General Motors, LLC (BOLT EV)",
+  "campaign": {
+    "Manufacturer": "General Motors, LLC",
+    "NHTSACampaignNumber": "21V560000",
+    "parkIt": false,
+    "parkOutSide": true,
+    "overTheAirUpdate": false,
+    "NHTSAActionNumber": "PE20016",
+    "ReportReceivedDate": "23/07/2021",
+    "Component": "ELECTRICAL SYSTEM:PROPULSION SYSTEM:TRACTION BATTERY",
+    "PotentialNumberofUnitsAffected": 57414,
+    "Summary": "General Motors LLC (GM) is recalling certain 2017-2019 Chevrolet Bolt EV vehicles previously recalled under NHTSA recall number 20V-701.  The high voltage battery could catch fire when charged to full or nearly full capacity.",
+    "Consequence": "A battery fire increases the risk of injury.",
+    "Remedy": "Owners are advised to take the following interim steps: Activate either the Hill Top Reserve (2017 and 2018 models) or Target Charge Level (2019 models) feature in their vehicle to limit the charge level to 90%, charge their vehicle more frequently, avoid depleting the battery to 70 miles range remaining, park outside after charging, and do not charge the vehicle indoors overnight.  Defective battery modules will be replaced by GM, free of charge.  Interim notification letters notifying owners of the safety risk were mailed on August 13, 2021.  Owner notification letters were mailed on August 13, 2021.  Owners may contact the Bolt EV Concierge Team at 1-833-382-4389.  GM's number for this recall is N212343880.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153), or go to www.nhtsa.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2017",
+      "Make": "CHEVROLET",
+      "Model": "BOLT EV"
+    },
+    {
+      "ModelYear": "2018",
+      "Make": "CHEVROLET",
+      "Model": "BOLT EV"
+    },
+    {
+      "ModelYear": "2019",
+      "Make": "CHEVROLET",
+      "Model": "BOLT EV"
+    }
+  ]
+}

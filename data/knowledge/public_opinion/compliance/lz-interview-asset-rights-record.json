@@ -1,0 +1,36 @@
+{
+  "title": "V09 访谈原片二次发布审批单",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "法务合规组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-EXE-2509",
+    "opened": "2025-09-06",
+    "vehicle_model": "LZ-V09",
+    "name": "区域访谈字幕争议"
+  },
+  "primary": {
+    "asset_id": "TALK-0906-FULL",
+    "role": "可审核原片",
+    "external_allowed": true,
+    "excerpt_window": "00:41–00:53"
+  },
+  "redaction": {
+    "mask": [
+      "观众名牌",
+      "后台订单截图"
+    ],
+    "keep": [
+      "提问原声",
+      "展车台卡"
+    ]
+  },
+  "approval": {
+    "owner": "品牌活动组",
+    "co_signer": "法务合规组",
+    "scope": "线上原片更正"
+  }
+}

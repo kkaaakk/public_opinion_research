@@ -1,0 +1,24 @@
+{
+  "title": "NHTSA 24V633000 — Jaguar Land Rover North America, LLC (I-PACE)",
+  "campaign": {
+    "Manufacturer": "Jaguar Land Rover North America, LLC",
+    "NHTSACampaignNumber": "24V633000",
+    "parkIt": false,
+    "parkOutSide": false,
+    "overTheAirUpdate": false,
+    "ReportReceivedDate": "23/08/2024",
+    "Component": "ELECTRICAL SYSTEM:PROPULSION SYSTEM:TRACTION BATTERY",
+    "PotentialNumberofUnitsAffected": 2760,
+    "Summary": "Jaguar Land Rover North America, LLC (Jaguar) is recalling certain 2019 Jaguar I-PACE vehicles.  The high-voltage battery may overheat.",
+    "Consequence": "A high-voltage battery that overheats increases the risk of a fire.",
+    "Remedy": "Owners are advised to park and charge their vehicle outside and away from structures and limit their charge to a maximum of 80% until the recall repair is complete.  As an interim repair, dealers will update the battery energy control module software, free of charge.  Owner letters were mailed March 5, 2025.  JLR will repurchase the vehicles.  Owners may contact Jaguar customer service at 1-800-452-4827.  Jaguar's numbers for this recall are H514 and H536.  These vehicles were previously recalled for this same issue under one or more recall numbers 24V-085 (H471), 23V-709 (H459), or 23V-369 (H441) and will need to have the new interim remedy performed before the vehicle is repurchased.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153), or go to www.safercar.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2019",
+      "Make": "JAGUAR",
+      "Model": "I-PACE"
+    }
+  ]
+}

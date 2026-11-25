@@ -1,0 +1,41 @@
+{
+  "title": "A17 八月价保调整发布记录",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "渠道运营组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-PRC-2508",
+    "opened": "2025-08-13",
+    "vehicle_model": "LZ-A17",
+    "name": "订单价保调整"
+  },
+  "snapshot": "2025-08-14T14:00:00+08:00",
+  "published": {
+    "release": "PR-815A",
+    "channel": "砾舟 App 订单消息",
+    "state": "approved",
+    "announced": "2025-08-13"
+  },
+  "stale_preview": {
+    "release": "PR-815-PRE",
+    "state": "rejected",
+    "reason": "优惠测算稿误用适用范围"
+  },
+  "inquiries": [
+    {
+      "kind": "已交付差价",
+      "count": 72
+    },
+    {
+      "kind": "原权益是否叠加",
+      "count": 41
+    },
+    {
+      "kind": "改色后报价",
+      "count": 13
+    }
+  ]
+}

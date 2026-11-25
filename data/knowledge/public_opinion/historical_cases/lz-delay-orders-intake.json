@@ -1,0 +1,38 @@
+{
+  "title": "泊青版延期订单与新窗口复盘",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "交付运营组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-ETA-2507",
+    "opened": "2025-07-18",
+    "vehicle_model": "LZ-C42",
+    "name": "泊青版延期交付"
+  },
+  "incident": {
+    "original_due": "2025-07-20",
+    "reported": "2025-07-18",
+    "material_ref": "QTR-17"
+  },
+  "cohorts": [
+    {
+      "label": "东湾已排产",
+      "new_window": "2025-07-28/2025-07-31",
+      "contact_mode": "App 私信"
+    },
+    {
+      "label": "北岸转运等待",
+      "new_window": "2025-08-02/2025-08-05",
+      "contact_mode": "交付专员回电"
+    },
+    {
+      "label": "配色待确认",
+      "new_window": null,
+      "contact_mode": "确认配色后另约"
+    }
+  ],
+  "warehouse_check": "已保留原交付承诺回执"
+}

@@ -1,0 +1,35 @@
+{
+  "title": "NHTSA 20V701000 — General Motors LLC (BOLT EV)",
+  "campaign": {
+    "Manufacturer": "General Motors LLC",
+    "NHTSACampaignNumber": "20V701000",
+    "parkIt": false,
+    "parkOutSide": true,
+    "overTheAirUpdate": false,
+    "NHTSAActionNumber": "PE20016",
+    "ReportReceivedDate": "13/11/2020",
+    "Component": "ELECTRICAL SYSTEM:PROPULSION SYSTEM:TRACTION BATTERY",
+    "PotentialNumberofUnitsAffected": 50932,
+    "Summary": "General Motors LLC (GM) is recalling all 2017-2018 and certain 2019 Chevrolet Bolt EV vehicles.  The high voltage battery could catch fire when charged to full or nearly full capacity.",
+    "Consequence": "A battery fire increases the risk of injury.",
+    "Remedy": "This recall has been superseded by recall number 21V-560.  Vehicles previously repaired under 20V-701 will still need to have the new remedy under recall 21V-560.  GM will notify owners, and as an interim repair, beginning on November 17, 2020, dealers will reprogram the hybrid propulsion control module 2 (HPCM2) to limit the full charge to 90%, free of charge.  Owners are advised to activate either the Hill Top Reserve (2017 and 2018 models) or Target Charge Level (2019 models) feature in their vehicle to limit the charge level to 90%, or park outside, until the software update is completed.  Owners were notified of the interim repair beginning November 17, 2020.  The second notice was mailed on May 11, 2021.  Owners may contact the Bolt EV Concierge Team at 1-833-382-4389.  GM's number for this recall is N202311730.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153), or go to www.safercar.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2017",
+      "Make": "CHEVROLET",
+      "Model": "BOLT EV"
+    },
+    {
+      "ModelYear": "2018",
+      "Make": "CHEVROLET",
+      "Model": "BOLT EV"
+    },
+    {
+      "ModelYear": "2019",
+      "Make": "CHEVROLET",
+      "Model": "BOLT EV"
+    }
+  ]
+}

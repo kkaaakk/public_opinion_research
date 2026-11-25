@@ -1,0 +1,42 @@
+{
+  "title": "LZ-V09 门锁召回演练范围单",
+  "data_origin": "synthetic",
+  "scope_note": "虚构演练资料",
+  "source_status": "authoritative",
+  "organization": "砾舟智行（虚构新能源车企）",
+  "division": "产品安全组",
+  "version": "1.0",
+  "event": {
+    "id": "LZ-RCL-2503",
+    "opened": "2025-03-04",
+    "vehicle_model": "LZ-V09",
+    "name": "尾门锁线束召回演练"
+  },
+  "campaign": "DRILL-V09-03",
+  "defect": "尾门门锁线束接触不良导致锁闭状态信号异常",
+  "lots": [
+    {
+      "code": "KT-51",
+      "decision": "进入召回演练",
+      "production_count": 218
+    },
+    {
+      "code": "KT-51X",
+      "decision": "人工核对返工追溯号",
+      "production_count": 36
+    },
+    {
+      "code": "KT-52",
+      "decision": "保留排查记录",
+      "production_count": 142
+    }
+  ],
+  "remedy": {
+    "part": "尾门门锁线束",
+    "owner": "授权服务中心"
+  },
+  "reporting": {
+    "external_announcement": false,
+    "scope": "演练召回，数量为该批产出"
+  }
+}

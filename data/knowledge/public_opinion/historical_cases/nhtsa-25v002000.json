@@ -1,0 +1,69 @@
+{
+  "title": "NHTSA 25V002000 — Tesla, Inc. (MODEL 3 / MODEL S / MODEL X / MODEL Y)",
+  "campaign": {
+    "Manufacturer": "Tesla, Inc.",
+    "NHTSACampaignNumber": "25V002000",
+    "parkIt": false,
+    "parkOutSide": false,
+    "overTheAirUpdate": false,
+    "ReportReceivedDate": "07/01/2025",
+    "Component": "BACK OVER PREVENTION:SOFTWARE",
+    "PotentialNumberofUnitsAffected": 239382,
+    "Summary": "Tesla, Inc. (Tesla) is recalling certain 2024-2025 Model 3, Model S, 2023-2025 Model X, and Model Y vehicles.  The computer circuit board may short, resulting in the loss of the rearview camera image.  As such, these vehicles fail to comply with the requirements of Federal Motor Vehicle Safety Standard (FMVSS) number 111, \"Rear Visibility.\"",
+    "Consequence": "A rearview camera that does not display an image reduces the driver's rear view, increasing the risk of a crash.",
+    "Remedy": "Tesla released an over-the-air (OTA) software update, free of charge. Tesla will also identify any vehicles that experienced a circuit board failure, or stress that may lead to a circuit board failure, and replace the affected computers, free of charge.  Owner notification letters were mailed March 7, 2025.  Owners may contact Tesla customer service at 1-877-798-3752.  Tesla's number for this recall is SB-25-00-001.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153) or go to nhtsa.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2024",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2025",
+      "Make": "TESLA",
+      "Model": "MODEL 3"
+    },
+    {
+      "ModelYear": "2024",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2025",
+      "Make": "TESLA",
+      "Model": "MODEL S"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2024",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2025",
+      "Make": "TESLA",
+      "Model": "MODEL X"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "TESLA",
+      "Model": "MODEL Y"
+    },
+    {
+      "ModelYear": "2024",
+      "Make": "TESLA",
+      "Model": "MODEL Y"
+    },
+    {
+      "ModelYear": "2025",
+      "Make": "TESLA",
+      "Model": "MODEL Y"
+    }
+  ]
+}

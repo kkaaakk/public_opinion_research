@@ -1,0 +1,39 @@
+{
+  "title": "NHTSA 24V651000 — Volkswagen Group of America, Inc. (ID.4)",
+  "campaign": {
+    "Manufacturer": "Volkswagen Group of America, Inc.",
+    "NHTSACampaignNumber": "24V651000",
+    "parkIt": false,
+    "parkOutSide": false,
+    "overTheAirUpdate": false,
+    "ReportReceivedDate": "04/09/2024",
+    "Component": "STRUCTURE:BODY:DOOR:HANDLE:EXTERIOR",
+    "PotentialNumberofUnitsAffected": 99064,
+    "Summary": "Volkswagen Group of America, Inc. (Volkswagen) is recalling certain 2021-2024 ID.4 vehicles.  The door handles may allow water to enter the circuit board assembly, which can cause the doors to open unexpectedly.",
+    "Consequence": "A vehicle door that opens unexpectedly while driving increases the risk of injury.",
+    "Remedy": "Volkswagen dealers will inspect and replace the door handles as necessary, and update the vehicle software, free of charge.  Owner notification letters were mailed on December 27, 2024.  Owners may contact Volkswagen's customer service at 1-800-893-5298.  Volkswagen's number for this recall is 57J9.  This recall expands previous recall numbers 23V-312 and 23V-213.  Vehicles previously repaired under 23V-312 and 23V-213 will need to have the new remedy completed.",
+    "Notes": "Owners may also contact the National Highway Traffic Safety Administration Vehicle Safety Hotline at 1-888-327-4236 (TTY 1-800-424-9153), or go to www.nhtsa.gov."
+  },
+  "vehicles": [
+    {
+      "ModelYear": "2021",
+      "Make": "VOLKSWAGEN",
+      "Model": "ID.4"
+    },
+    {
+      "ModelYear": "2022",
+      "Make": "VOLKSWAGEN",
+      "Model": "ID.4"
+    },
+    {
+      "ModelYear": "2023",
+      "Make": "VOLKSWAGEN",
+      "Model": "ID.4"
+    },
+    {
+      "ModelYear": "2024",
+      "Make": "VOLKSWAGEN",
+      "Model": "ID.4"
+    }
+  ]
+}
