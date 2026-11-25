@@ -14,6 +14,10 @@
 
 车型代际以 2026 年 3 月企业发布为准。CLTC 数值是披露的测试工况指标。
 
+表中 CLTC 续航统一对应 19 英寸长续航胎配置。厂商参数表还按轮胎规格列出其他标示续航。
+
 ## 原始来源
 
 [Xiaomi Corporation原件](https://ir.mi.com/system/files-encrypted/nasdaq_kms/assets/2026/03/24/6-22-11/Xiaomi%20Corp_25Q4_ER_CHN%20vF.pdf)
+
+[小米汽车 · 新一代 SU7 参数配置](https://www.xiaomiev.com/xiaomi/car-config)

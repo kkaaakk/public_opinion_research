@@ -131,6 +131,8 @@ def read_documents():
                 f"{doc_id}: license basis")
         if row["data_origin"] == "public":
             require(valid_url(row["source_url"]), f"{doc_id}: primary source")
+            require(all(valid_url(url) for url in row.get("supporting_source_urls", [])),
+                    f"{doc_id}: supporting source")
             date.fromisoformat(row["accessed_at"])
         else:
             require(row["data_origin"] == "synthetic" and row["source_url"] is None

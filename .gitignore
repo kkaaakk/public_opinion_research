@@ -90,6 +90,9 @@ data/runs/
 data/indexes/rag/*
 !data/indexes/rag/.gitkeep
 
+# Local RAG evaluation records
+/docs/evaluation/runs/
+
 .venv/
 
 # Execution Studio frontend dependencies and build outputs
