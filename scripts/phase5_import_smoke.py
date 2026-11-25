@@ -70,7 +70,6 @@ def main():
         "web.runs",
         "web.durable",
         "web.executor",
-        "web.history",
         "web.cli",
         "rag",
         "rag.mcp_server",

@@ -142,7 +142,6 @@ def inventory(base):
             ),
         },
         "historical_data_readers_retained": [
-            "src/open_deep_research/web/history.py",
             "src/open_deep_research/observability/langsmith.py",
         ],
         "production_changes": changes,

@@ -3,14 +3,10 @@ import {
   array,
   boolean,
   integer,
-  parseRoleReports,
-  parseUsage,
   record,
   string,
   type ExecutionPage,
-  type HistoryItem,
   type HistoryPage,
-  type HistoryRecord,
 } from './protocol';
 const nullableString = (v: unknown): string | null => (v == null ? null : string(v));
 const nullableNumber = (v: unknown): number | null => (v == null ? null : integer(v));
@@ -50,26 +46,20 @@ export function parseExecution(v: unknown): ExecutionPage {
     next_offset: integer(r.next_offset),
   };
 }
-function historyItem(v: unknown): HistoryItem {
-  const r = record(v);
-  return {
-    id: string(r.id),
-    run_id: string(r.run_id),
-    topic: string(r.topic),
-    status: string(r.status),
-    completed_at: string(r.completed_at),
-  };
-}
 export function parseHistory(v: unknown): HistoryPage {
   const r = record(v);
-  return { items: array(r.items).map(historyItem), total: integer(r.total) };
-}
-export function parseArchive(v: unknown): HistoryRecord {
-  const r = record(v);
   return {
-    ...historyItem(r),
-    report: string(r.report),
-    role_reports: parseRoleReports(r.role_reports ?? []),
-    usage: parseUsage(r.usage ?? {}),
+    items: array(r.items).map((item) => {
+      const run = record(item);
+      return {
+        run_id: string(run.run_id),
+        topic: string(run.topic),
+        status: string(run.status),
+        started_at: string(run.started_at),
+        completed_at: string(run.completed_at),
+      };
+    }),
+    next_offset: integer(r.next_offset),
+    has_more: boolean(r.has_more),
   };
 }

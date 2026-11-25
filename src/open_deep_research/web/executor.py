@@ -18,9 +18,9 @@ from open_deep_research.web.run_data import RunJSON
 from open_deep_research.workflow import dbos_workflow, transactions
 from open_deep_research.workflow.dbos_config import (
     APP,
-    ARCHIVE,
     BUSINESS,
     CONTROL,
+    FINALIZE,
     RECOVERY,
     SYSTEM_SCHEMA,
     VERSION,
@@ -82,7 +82,7 @@ def launch(executor_id, *, queues=None):
     # Datasources must exist before launch: DBOS owns their checkpoint
     # lifecycle for rewind.
     transactions.prepare()
-    DBOS.listen_queues(queues or [CONTROL, BUSINESS, ARCHIVE, RECOVERY])
+    DBOS.listen_queues(queues or [CONTROL, BUSINESS, FINALIZE, RECOVERY])
     DBOS.launch()
     DBOS.register_queue(CONTROL, polling_interval_sec=0.2)
     DBOS.register_queue(
@@ -91,7 +91,7 @@ def launch(executor_id, *, queues=None):
         partition_concurrency=cfg.owner_active,
         polling_interval_sec=0.2,
     )
-    DBOS.register_queue(ARCHIVE, polling_interval_sec=0.2)
+    DBOS.register_queue(FINALIZE, polling_interval_sec=0.2)
     DBOS.register_queue(
         RECOVERY, worker_concurrency=cfg.max_active, polling_interval_sec=0.2
     )

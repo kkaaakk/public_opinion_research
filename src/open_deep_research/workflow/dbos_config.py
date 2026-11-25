@@ -11,14 +11,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
 APP = "public-opinion-research"
-# The stage journal changed shape: one datasource transaction owns each stage
-# transition and Review is no longer its own Workflow. A pending journal from
-# the previous Application Version must drain on that release.
-VERSION = "por-datasource-stage-v1"
+# Finalizer and relay journal commands changed. Pending journals must drain on
+# their original release.
+VERSION = "por-native-history-v1"
 SDK_VERSION = "0.24.0"
 CONTROL = "por-control"
 BUSINESS = "por-business"
-ARCHIVE = "por-archive"
+FINALIZE = "por-finalize"
 RECOVERY = "por-recovery"
 FACT_WRITE_GRACE_SECONDS = 15
 SETTLEMENT_GRACE_SECONDS = 60

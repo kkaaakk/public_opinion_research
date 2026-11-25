@@ -1,16 +1,14 @@
-/* 页面状态：管理研究流、请求版本、历史选择和导入状态。 */
+/* 页面状态：管理研究流、请求版本和历史选择。 */
 let reportMarkdown = '';
 let startTime = 0;
 let timerInterval = null;
 let isResearchRunning = false;
-let archiveSaved = false;
 let activeResearchRequest = null;
 let selectedHistoryRecord = null;
 let historyOffset = 0;
+let historyNextOffset = 0;
 let historyRequestVersion = 0;
 let reportRequestVersion = 0;
-let historySearchTimer = null;
-let isImportingHistory = false;
 const DURABLE_STORAGE_KEY = 'public-opinion-pending-run-v1';
 let durableRun = readDurableRun();
 let durablePlanVersion = null;
@@ -36,17 +34,14 @@ const reportMeta = document.getElementById('report-meta');
 const resultsTitle = document.getElementById('results-title');
 const reportNotice = document.getElementById('report-notice');
 const reuseBtn = document.getElementById('reuse-btn');
-const historySearch = document.getElementById('history-search');
 const historyList = document.getElementById('history-list');
 const historyMessage = document.getElementById('history-message');
 const historyFeedback = document.getElementById('history-feedback');
-const historyCount = document.getElementById('history-count');
 const historyRefresh = document.getElementById('history-refresh');
-const historyImport = document.getElementById('history-import');
 const historyPagination = document.getElementById('history-pagination');
 const historyPrev = document.getElementById('history-prev');
 const historyNext = document.getElementById('history-next');
-const HISTORY_STATUS_LABELS = { completed: '已完成', failed: '运行失败', cancelled: '已停止', incomplete: '未完成' };
+const HISTORY_STATUS_LABELS = { completed: '已完成', failed: '运行失败', cancelled: '已停止', interrupted: '运行中断' };
 const HISTORY_ROLE_LABELS = { public_signal: '舆情采集', internal_knowledge: '内部知识', risk_assessment: '风险评估', response_strategy: '应对策略' };
 
 /* 将后端节点名称映射为日志徽标及其样式。 */
@@ -88,7 +83,6 @@ async function startResearch(resumeDurable = false) {
     reportMarkdown = '';
     startTime = Date.now();
     isResearchRunning = true;
-    archiveSaved = false;
     selectedHistoryRecord = null;
     reportRequestVersion += 1;
     activeResearchRequest = {
@@ -132,7 +126,7 @@ async function startResearch(resumeDurable = false) {
         }
     } finally {
         resetUI();
-        if (archiveSaved) await loadHistory(0);
+        if (durableRun?.finished) await loadHistory(0);
     }
 }
 
@@ -150,7 +144,7 @@ async function stopResearch() {
     }
 }
 
-/* 按 SSE 事件类型更新进度、日志、报告、用量和历史保存状态。 */
+/* 按 SSE 事件类型更新进度、日志、报告和用量。 */
 function handleEvent(data) {
     switch (data.type) {
         case 'status':
@@ -172,15 +166,6 @@ function handleEvent(data) {
 
         case 'usage':
             renderUsage(data);
-            break;
-
-        case 'history_saved':
-            archiveSaved = true;
-            selectedHistoryRecord = { id: data.id, request: activeResearchRequest, status: data.status || 'completed' };
-            setHistorySelection(data.id);
-            reportMeta.textContent = truncate(activeResearchRequest.topic, 180) + ' · '
-                + (HISTORY_STATUS_LABELS[data.status || 'completed']) + ' · 已保存 · ' + formatDate(data.completed_at);
-            reuseBtn.classList.remove('hidden');
             break;
 
         case 'warning':
@@ -293,8 +278,6 @@ function showDurableState(state) {
     statusText.textContent = terminal && !delivered ? '正在接收结果…' : (labels[state.status] || state.status);
     if (state.report && state.report !== reportMarkdown) handleEvent({ type: 'report', content: state.report });
     renderUsage(state.usage || {});
-    if (state.history_id) handleEvent({ type: 'history_saved', id: state.history_id,
-        status: state.status, completed_at: state.terminated_at });
     showBriefApproval(state);
     showClarification(state);
     return delivered;
@@ -372,7 +355,7 @@ async function followDurableRun(request) {
                 // never create this Run, so keep no stale identity and say so.
                 durableRun = null;
                 saveDurableRun();
-                addLog('error', '⚠ 创建未获确认：原请求可能已创建为 Run，请先按历史归档或 Run ID 核对。');
+                addLog('error', '⚠ 创建未获确认：原请求可能已创建为 Run，请先按研究历史或 Run ID 核对。');
             }
             throw error;
         }
@@ -387,10 +370,11 @@ async function followDurableRun(request) {
             hydrate = false;
         }
         if (delivered) {
-            if (state.archive_status === 'pending') {
-                reportNotice.textContent = '结果已保存到运行记录，历史归档等待后台补偿。';
-                reportNotice.classList.remove('hidden');
-            }
+            selectedHistoryRecord = { ...state, run_id: durableRun.runId, request: state.request || request };
+            setHistorySelection(durableRun.runId);
+            reportMeta.textContent = truncate(selectedHistoryRecord.request.topic || '', 180) + ' · '
+                + HISTORY_STATUS_LABELS[state.status] + ' · ' + formatDate(state.terminated_at);
+            reuseBtn.classList.remove('hidden');
             durableRun.finished = true;
             saveDurableRun();
             return;
@@ -501,7 +485,7 @@ function truncate(text, max) {
     return text.length > max ? text.slice(0, max) + '…' : text;
 }
 
-/* 历史归档：分页查询、打开报告、沿用参数以及导入既有追踪。 */
+/* 研究历史的分页、报告和参数复用。 */
 // 合并请求头，并仅在页面填写令牌时添加 Bearer 授权信息。
 function apiHeaders(extra = {}) {
     const headers = { ...extra };
@@ -532,7 +516,7 @@ function formatDate(value) {
     });
 }
 
-// 同步 URL 中的历史 ID 与列表选中态，支持刷新后重新打开记录。
+// 同步 URL 中的 Run ID 与列表选中态，支持刷新后重新打开记录。
 function setHistorySelection(id) {
     const url = new URL(window.location.href);
     if (id) url.searchParams.set('history', id);
@@ -544,16 +528,15 @@ function setHistorySelection(id) {
     }
 }
 
-// 根据研究和导入状态禁用冲突操作，避免覆盖正在展示的研究结果。
+// 研究期间禁用会覆盖当前结果的历史操作。
 function setHistoryActionsDisabled() {
-    historyImport.disabled = isResearchRunning || isImportingHistory;
     reuseBtn.disabled = isResearchRunning;
     for (const row of historyList.querySelectorAll('.history-item')) {
         row.disabled = isResearchRunning;
     }
 }
 
-// 按搜索词和偏移读取历史；请求版本号防止较慢旧响应覆盖最新列表。
+// 按偏移读取历史，请求版本号防止较慢旧响应覆盖最新列表。
 async function loadHistory(offset = historyOffset) {
     const version = ++historyRequestVersion;
     historyList.setAttribute('aria-busy', 'true');
@@ -563,7 +546,7 @@ async function loadHistory(offset = historyOffset) {
     historyPrev.disabled = true;
     historyNext.disabled = true;
     const params = new URLSearchParams({
-        q: historySearch.value.trim(), limit: String(HISTORY_PAGE_SIZE), offset: String(offset),
+        limit: String(HISTORY_PAGE_SIZE), offset: String(offset),
     });
     try {
         const response = await fetch('/api/history?' + params, { headers: apiHeaders(), cache: 'no-store' });
@@ -571,17 +554,16 @@ async function loadHistory(offset = historyOffset) {
         const data = await response.json();
         // 用户已发起新查询时，丢弃当前过期响应。
         if (version !== historyRequestVersion) return;
-        if (offset && offset >= data.total) return loadHistory(0);
         historyOffset = offset;
-        historyCount.textContent = String(data.total);
+        historyNextOffset = data.next_offset;
         historyList.replaceChildren();
         for (const item of data.items) {
             const row = document.createElement('button');
             row.type = 'button';
             row.className = 'history-item';
-            row.dataset.id = item.id;
+            row.dataset.id = item.run_id;
             row.setAttribute('aria-label', '查看研究记录：' + item.topic);
-            if (selectedHistoryRecord?.id === item.id) row.setAttribute('aria-current', 'true');
+            if (selectedHistoryRecord?.run_id === item.run_id) row.setAttribute('aria-current', 'true');
             const title = document.createElement('span');
             title.className = 'history-topic';
             title.textContent = item.topic;
@@ -589,35 +571,22 @@ async function loadHistory(offset = historyOffset) {
             date.className = 'history-date';
             date.textContent = formatDate(item.completed_at);
             const status = document.createElement('span');
-            const statusName = item.status || 'completed';
-            status.className = 'history-status status-' + statusName;
-            status.textContent = HISTORY_STATUS_LABELS[statusName] || '未完成';
-            if (statusName !== 'completed' && item.stage_count) status.textContent += ' · 保留 ' + item.stage_count + ' 份阶段报告';
-            const preview = document.createElement('span');
-            preview.className = 'history-preview';
-            preview.textContent = (item.preview || '').replace(/^#{1,6}\s+/gm, '')
-                .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/(\*\*|__|`)/g, '')
-                .replace(/\s+/g, ' ').trim();
-            const source = document.createElement('span');
-            source.className = 'history-source';
-            source.textContent = item.source === 'langsmith' ? 'LangSmith 导入' : '网页研究';
-            row.append(title, date, status, preview, source);
-            // 每条历史按钮捕获自己的记录 ID，点击后打开对应归档。
-            row.addEventListener('click', () => openHistory(item.id));
+            status.className = 'history-status status-' + item.status;
+            status.textContent = HISTORY_STATUS_LABELS[item.status] || '未完成';
+            row.append(title, date, status);
+            row.addEventListener('click', () => openHistory(item.run_id));
             historyList.appendChild(row);
         }
-        historyMessage.textContent = historySearch.value.trim()
-            ? '没有匹配的研究，试试其他关键词。' : '还没有历史记录。研究结束或中断后会保存，也可以导入 LangSmith 中的旧运行。';
+        historyMessage.textContent = '本页暂无研究记录。';
         historyMessage.classList.toggle('hidden', data.items.length > 0);
-        historyPagination.classList.toggle('hidden', data.total <= HISTORY_PAGE_SIZE);
+        historyPagination.classList.toggle('hidden', offset === 0 && !data.has_more);
         document.getElementById('history-page').textContent =
-            Math.floor(offset / HISTORY_PAGE_SIZE) + 1 + ' / ' + Math.max(1, Math.ceil(data.total / HISTORY_PAGE_SIZE));
+            '第 ' + (Math.floor(offset / HISTORY_PAGE_SIZE) + 1) + ' 页';
         historyPrev.disabled = offset === 0;
-        historyNext.disabled = offset + HISTORY_PAGE_SIZE >= data.total;
+        historyNext.disabled = !data.has_more;
     } catch (err) {
         if (version !== historyRequestVersion) return;
         historyList.replaceChildren();
-        historyCount.textContent = '—';
         historyPagination.classList.add('hidden');
         historyMessage.textContent = err.message;
         historyMessage.classList.remove('hidden');
@@ -630,7 +599,7 @@ async function loadHistory(offset = historyOffset) {
     }
 }
 
-// 加载归档正文和阶段报告；若用户已切换记录或开始研究，则忽略旧响应。
+// 加载终态 Run 的报告，忽略已切换记录或开始研究后的旧响应。
 async function openHistory(id) {
     if (isResearchRunning) return;
     const version = ++reportRequestVersion;
@@ -649,8 +618,8 @@ async function openHistory(id) {
         resultsTitle.textContent = record.report ? '研究报告' : '研究阶段记录';
         if (Object.keys(record.usage || {}).length) renderUsage(record.usage);
         else usageBar.classList.add('hidden');
-        reportMeta.textContent = truncate(record.topic, 180) + ' · ' + formatDate(record.completed_at);
-        const incomplete = (record.status || 'completed') !== 'completed' || !record.report;
+        reportMeta.textContent = truncate(record.request.topic || '', 180) + ' · ' + formatDate(record.terminated_at);
+        const incomplete = record.status !== 'completed' || !record.report;
         reportNotice.classList.toggle('hidden', !incomplete);
         if (incomplete) reportNotice.textContent = record.report
             ? '这次运行未正常结束，以下为已经保存的报告。'
@@ -660,7 +629,7 @@ async function openHistory(id) {
         statusBar.classList.add('hidden');
         logPanel.classList.add('hidden');
         emptyState.classList.add('hidden');
-        setHistorySelection(record.id);
+        setHistorySelection(record.run_id);
         historyFeedback.classList.add('hidden');
         resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) {
@@ -676,8 +645,8 @@ function historyMarkdown(record) {
     const stages = record.role_reports || [];
     const parts = ['# 未完成研究记录', '> 最终研究报告未生成。以下内容来自原始运行记录及已完成的阶段报告。',
         '状态：' + (HISTORY_STATUS_LABELS[record.status] || '未完成')];
-    if (record.failed_stage) parts.push('失败阶段：' + (HISTORY_ROLE_LABELS[record.failed_stage] || record.failed_stage));
-    if (record.error_message) parts.push(record.error_message);
+    if (record.current_step) parts.push('失败阶段：' + (HISTORY_ROLE_LABELS[record.current_step] || record.current_step));
+    if (record.error?.kind) parts.push('错误类型：' + record.error.kind);
     const counts = {};
     for (const stage of stages) {
         counts[stage.role] = (counts[stage.role] || 0) + 1;
@@ -688,7 +657,7 @@ function historyMarkdown(record) {
     return parts.join('\n\n');
 }
 
-// 将选中归档的研究参数填回表单；模型等系统配置不再由用户选择。
+// 将选中 Run 的研究参数填回表单。
 function reuseHistoryParameters() {
     if (!selectedHistoryRecord || isResearchRunning) return;
     const request = selectedHistoryRecord.request;
@@ -700,44 +669,12 @@ function reuseHistoryParameters() {
     toast('已填入研究参数，可修改后开始新的分析。');
 }
 
-// 导入 LangSmith 既有运行，并在结束时刷新列表及恢复按钮状态。
-async function importHistory() {
-    if (isImportingHistory || isResearchRunning) return;
-    isImportingHistory = true;
-    setHistoryActionsDisabled();
-    historyFeedback.textContent = '正在从 LangSmith 导入研究运行及保留的阶段报告…';
-    historyFeedback.classList.remove('hidden');
-    try {
-        const response = await fetch('/api/history/import/langsmith', { method: 'POST', headers: apiHeaders() });
-        if (!response.ok) throw new Error(await apiError(response));
-        const result = await response.json();
-        historyFeedback.textContent = '已导入 ' + result.imported + ' 条研究记录。'
-            + '已保存的研究不会重复导入。';
-        historySearch.value = '';
-        await loadHistory(0);
-    } catch (err) {
-        historyFeedback.textContent = err.message;
-    } finally {
-        isImportingHistory = false;
-        setHistoryActionsDisabled();
-    }
-}
-
-// 刷新当前分页，导入按钮直接复用异步导入函数。
+// 刷新当前分页。
 historyRefresh.addEventListener('click', () => loadHistory());
-historyImport.addEventListener('click', importHistory);
 // 根据固定页大小计算前后页偏移，上一页不允许小于零。
 historyPrev.addEventListener('click', () => loadHistory(Math.max(0, historyOffset - HISTORY_PAGE_SIZE)));
 // 下一页沿当前偏移递增，是否可点击由历史查询结果控制。
-historyNext.addEventListener('click', () => loadHistory(historyOffset + HISTORY_PAGE_SIZE));
-// 输入变化立即让旧请求失效，延迟 250 毫秒再搜索以减少连续请求。
-historySearch.addEventListener('input', () => {
-    // 在防抖计时结束前使正在返回的旧结果失效。
-    historyRequestVersion += 1;
-    clearTimeout(historySearchTimer);
-    // 连续输入重置计时，停顿后从第一页执行新搜索。
-    historySearchTimer = setTimeout(() => loadHistory(0), 250);
-});
+historyNext.addEventListener('click', () => loadHistory(historyNextOffset));
 // 令牌变更后重试历史查询，并尝试恢复 URL 指定的尚未打开记录。
 apiToken.addEventListener('change', () => {
     loadHistory(0);
@@ -745,7 +682,7 @@ apiToken.addEventListener('change', () => {
     if (id && !selectedHistoryRecord) openHistory(id);
 });
 reuseBtn.addEventListener('click', reuseHistoryParameters);
-// 页面首次进入先加载历史列表，再按 URL 中的历史 ID 恢复报告。
+// 页面首次进入先加载历史列表，再按 URL 中的 Run ID 恢复报告。
 loadHistory(0);
 const initialHistoryId = new URL(window.location.href).searchParams.get('history');
 if (initialHistoryId) openHistory(initialHistoryId);

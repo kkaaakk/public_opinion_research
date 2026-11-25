@@ -143,12 +143,10 @@ test('actual FastAPI → DBOS → SDK: approval, trace, replay, refresh, report 
   await expect(page.locator('.connection')).toHaveText('事件已交付');
   expect(Number(await page.getByLabel('回放游标').getAttribute('max'))).toBe(cursor);
   expect(posts).toEqual([]);
-  await page.getByRole('button', { name: '历史归档', exact: true }).click();
-  await expect(page.locator('.archive-item').filter({ hasText: id })).toBeVisible();
-  await page.locator('.archive-item').filter({ hasText: id }).click();
-  await expect(
-    page.getByText('报告归档与 DBOS 执行事件独立。此视图不代表完整 Trace。'),
-  ).toBeVisible();
+  await page.getByRole('button', { name: '研究历史', exact: true }).click();
+  await expect(page.locator('.history-item').filter({ hasText: id })).toBeVisible();
+  await page.locator('.history-item').filter({ hasText: id }).click();
+  await expect(page.getByRole('button', { name: '打开持久 Run 轨迹' })).toBeVisible();
   await expect(page.locator('.report-panel .markdown')).toContainText('FINAL brand recall report');
   expect(errors).toEqual([]);
 });
@@ -194,7 +192,7 @@ test('cancel is explicit and a narrow viewport retains real navigation and contr
   await page.screenshot({ path: '../.tmp/studio-mobile.png', fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole('button', { name: '打开导航', exact: true }).click();
-  await expect(page.getByRole('button', { name: '历史归档', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '研究历史', exact: true })).toBeVisible();
 });
 test('a broken SSE connection automatically reconnects to the same Run', async ({ page }) => {
   let streams = 0;

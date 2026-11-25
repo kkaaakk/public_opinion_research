@@ -49,7 +49,6 @@ const connectionLabels: Record<Connection | 'idle', string> = {
   live: '实时订阅',
   reconnecting: '自动重连',
   paused: '等待补充或审批 · 观察中',
-  archiving: '已清算 · 归档补偿中',
   complete: '事件已交付',
   error: '订阅需处理',
 };
@@ -273,7 +272,7 @@ export default function App() {
             }}
           >
             <HistoryIcon size={17} />
-            历史归档
+            研究历史
           </button>
         </nav>
         <div className="sidebar-controls">
@@ -343,7 +342,7 @@ export default function App() {
             </button>
             <span>工作空间</span>
             <ChevronRight size={13} />
-            <strong>{history ? '历史归档' : '运行观测'}</strong>
+            <strong>{history ? '研究历史' : '运行观测'}</strong>
           </div>
           <button className="text-button" onClick={() => setSettings(true)}>
             <KeyRound size={15} />
@@ -496,7 +495,7 @@ export default function App() {
                 {replayCursor === null && run && Object.keys(run.error).length > 0 && (
                   <p className="warning-note">
                     错误位置：{String(run.error.step ?? run.current_step ?? '未提供')} ·{' '}
-                    {String(run.error.kind ?? '未提供')} · Archive {run.archive_status ?? '未提供'}
+                    {String(run.error.kind ?? '未提供')}
                   </p>
                 )}
                 {replayCursor !== null && (
@@ -612,7 +611,6 @@ export default function App() {
                 <p className="workspace-footnote">
                   {run?.workflow_version ?? 'Workflow version 未提供'} ·{' '}
                   {run?.runtime_version ?? 'sdk-phase5-v1'} · 费用未提供，未计算估算账单。
-                  {runId && ` 当前归档：${run?.archive_status ?? '未提供'}`}
                 </p>
               </>
             )}

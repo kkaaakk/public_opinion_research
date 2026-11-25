@@ -19,7 +19,7 @@ flowchart LR
     RES --> ROLE["por.role"]
     PLAN --> Bounded["有界 SDK 生成<br/>por.llm"]
     RES -->|"评审、风险、策略和终稿"| Bounded
-    PLAN --> Tx["por.commit_stage<br/>por.archive"]
+    PLAN --> Tx["por.commit_stage"]
     RES --> Tx
     FIN --> Tx
     ROLE --> RT["SDKAgentRuntime"]
@@ -40,8 +40,7 @@ flowchart LR
     PLAN -. "规划进度" .-> EV
     RES -. "研究进度和终稿" .-> EV
     ROLE -. "角色成果和 SDK 观察" .-> EV
-    FIN -. "终态与归档消息" .-> EV
-    FIN --> Hist[("PostgreSQL History")]
+    FIN -. "终态消息" .-> EV
     EV --> PG
     Client -. "只读状态与 SSE" .-> API
 ```
@@ -51,10 +50,10 @@ flowchart LR
 | CLI / API / RunClient | `cli.py` 加载并校验 `config.yaml`，经 `RunClient.create` 冻结快照并原子入队；`status`/`inspect`/`approve`/`clarify`/`report`/`retry` 直接控制同一持久 Run，不经过 FastAPI。可选 `web/runs.py:create_run` 仍校验令牌、Idempotency-Key 与 Session，但业务设置同样来自冻结配置。`web/durable.py:RunClient` 按 owner 检查 Session、请求指纹、容量及未结算效果，用 `DBOSClient` 接受请求并提交取消、审批、澄清与重试授权。 |
 | DBOS | `web/executor.py:launch` 注册队列并启动监听。`workflow/dbos_workflow.py` 定义 Workflow 和 Step。DBOS 用同一 PostgreSQL 中的 journal 决定恢复位置，管理 Workflow 状态、消息、Event、Stream 及 rewind。 |
 | Agent Runtime / Harness | `SDKAgentRuntime` 装配并启动两个自主研究角色，`SDKContextHarness` 调用官方 `DBOSRunner.run`、观察 SDK 生命周期并清算工具。SDK 保有原始历史。输入过滤器估算容量，按完整轮次滚动压缩旧内容。`MeteredModel` 负责 Agent 推理的准入及回执，`ToolExecutor` 负责工具准入及 `por.agent_tool`。 |
-| 业务可靠性 | `budget.py` 负责共享配额、最终报告预留及 `model_attempts` 收据。`workflow/execution.py` 结合取消意图和原生 Executor 所有权保护外部效果，`operations` 只记录需要保护的工具。History 使用稳定业务键。 |
-| 结果交付 | `events_workflow` 单写 Stream。`RunClient.get` 和 `web/observations.py` 按需查询原生状态、输出及业务结算。`web/runs.py:event_stream` 提供 SSE，`finalize_workflow` 清算、归档补偿及执行用户已授权的重试。History 有独立读取接口。 |
+| 业务可靠性 | `budget.py` 负责共享配额、最终报告预留及 `model_attempts` 收据。`workflow/execution.py` 结合取消意图和原生 Executor 所有权保护外部效果，`operations` 只记录需要保护的工具。 |
+| 结果交付 | `events_workflow` 单写 Stream。`RunClient.get` 和 `web/observations.py` 按需查询原生状态、输出及业务结算。`web/runs.py` 提供 SSE 和历史查询。Finalizer 确认终态、汇总用量、发布终态并执行用户已授权的安全重试。 |
 
-`por.run` 和 `por.events` 入 `por-control`，`por.finalize` 入 `por-archive`。根通过 `por-business` 入队每轮 Plan、AI Brief 修改及 Research，以 owner 为分区键。`por.research` 启动研究 Agent，在本 Workflow 内完成评审、风险评估、回应策略和终稿的模型 Step。取消请求需要时另入 `por.cancel`。
+`por.run` 和 `por.events` 入 `por-control`，`por.finalize` 入 `por-finalize`。根通过 `por-business` 入队每轮 Plan、AI Brief 修改及 Research，以 owner 为分区键。`por.research` 启动研究 Agent，在本 Workflow 内完成评审、风险评估、回应策略和终稿的模型 Step。取消请求需要时另入 `por.cancel`。
 
 ## 完整业务链路
 
@@ -91,8 +90,6 @@ flowchart TD
     Q -. "报告" .-> L
     Q --> T
     T -->|终态帧| L
-    T --> O["归档与补偿 · PostgreSQL History"]
-    O -->|归档回执| L
 ```
 
 | 节点 | 输入、输出及持久边界 |
@@ -105,9 +102,9 @@ flowchart TD
 | 6. 并行 Producer | `research_workflow` 给 `public_signal`、`internal_knowledge` 启动各自的 `por.role`（按启用配置工作）。`role_snapshot` 为角色隔离 State。`wait_first_async` 收集先结束的子 Workflow，`assemble_research_results` 等本轮齐备后按固定角色顺序归并 `ResearchRoleResult`，含角色报告、来源、指标和预算增量。 |
 | 7. Review / Gap | `por.research` 内的 `review_round` 用 `research.research_review` 对照 Brief 与角色报告，单用途模型产出结构化 Review；它是一次有界模型调用加普通业务函数，不是独立 Workflow，因此 Review 失败只重跑本轮评审而不会重复已提交的角色研究。`followup_assignments` 按任务去重、轮次、角色与预算生成新 packets，仅向有补研任务的角色分派。 |
 | 8. 风险与策略 | 补研结束后，`por.research` 依次调用风险评估与回应策略。两步复用 `generate_text()` 和 `por.llm`。Risk 读取获批 Brief、两份研究报告和最新 Review，Strategy 还读取 Risk 输出。两份 Markdown 写入原 State 字段，并通过原生 Event 保留进度与阶段报告，供 Run 状态和 History 读取。 |
-| 9. 报告 | `por.research` 在 Strategy 后直接调用 `generate_final_report()`，由一个 `por.llm` Step 综合获批 Brief、角色报告、Risk、Strategy 和最新 Review。终稿写入 `report.final`，先经 `por.research` 的 `report` Event 暴露，再由 `por.commit_stage` 事务提交阶段事件。Finalizer 读取终稿并经 `por.archive` 事务归档。 |
+| 9. 报告 | `por.research` 在 Strategy 后直接调用 `generate_final_report()`，由一个 `por.llm` Step 综合获批 Brief、角色报告、Risk、Strategy 和最新 Review。终稿写入 `report.final`，先经 `por.research` 的 `report` Event 暴露，再由 `por.commit_stage` 事务提交阶段事件。 |
 | 10. SSE | `events_workflow` 收集原生消息并通过 `DBOS.write_stream_async` 追加，公开 `seq = offset + 1`。GET 分页和 SSE 共用 `RunClient.read_events`，由 `Last-Event-ID` 或 `after` 补发。研究中可交付阶段报告。`delivery` Event 确认当前代次已交付前缀。 |
-| 11. Finalizer / History | `finalize_workflow` 自准入时就在等待根终态。`completion_facts` 检查业务子 Workflow 已退出活跃状态并读取清算，先发送 `_terminal`，再由 `por.archive` 事务归档。失败会独立重试归档；成功的 `_archive_saved` 由 relay 更新交付回执。`GET /api/history` 和详情接口读取 `por_domain.history`。 |
+| 11. Finalizer / 历史查询 | `finalize_workflow` 等待根终态。`por.completion_facts` 确认业务子 Workflow 已退出活跃状态，并根据原生结果和账本汇总状态、清算与用量。随后发布 `_terminal`。历史列表读取终态候选和已交付的业务状态，历史详情复用 Run 查询。 |
 
 `state.py` 定义 `messages`、`workflow`、`agents`、`report`、`runtime`。`workflow/python_state.py` 的 `copy_state`、`role_snapshot` 与 `apply_patch` 负责规范化、角色隔离和显式 reducer；跨 Workflow 传递的是序列化的 State、patch 或结果。SDK 循环内的工作上下文由 Harness 从 DBOS Tool Step、Context Step 和原生 checkpoint 恢复。 [角色结果格式历史](../audits/research-role-results-assembly.md)
 
@@ -127,7 +124,7 @@ flowchart TD
 | --- | --- | --- |
 | Workflow | `por.run`、`por.plan`、`por.research`、`por.role`、`por.events`、`por.finalize`、`por.cancel` | 业务控制流、并行分派、人工交互等待、原生 Event/Stream |
 | Step | `por.llm`、`por.agent_tool`、`por.role_tools`、`por.load_request`、`por.clock`、`por.completion_facts`、`por.retry_execution`、条件使用的 `por.wait_for_revision` | 一次外部调用或一次非确定性读取 |
-| Datasource Transaction | `por.commit_stage`、`por.archive` | 一次业务数据库提交：阶段事件或报告归档 |
+| Datasource Transaction | `por.commit_stage` | 在同一业务数据库事务提交阶段事件及检查点 |
 | 普通 Python | 其余函数 | 可确定性重算的合并、评审编排、状态推导 |
 
 `SQLAlchemyDatasource` 与业务引擎共用同一 PostgreSQL。`por.commit_stage` 在一个事务里写入 `step_started`/`step_failed`/`step_completed` 等业务事件和该事务的 checkpoint，因此崩溃不会留下半个阶段，恢复时命中 checkpoint 即整体跳过。它登记为原生 Step，`rewind_workflow` 会随该 Step 一起删除 checkpoint，重放时重新执行事务。契约只做行级写入，不需要串行化隔离。模型、搜索、MCP 与 Embedding 调用一律留在 Step，绝不进入数据库事务。除 `por.clock` 与 `por.load_request` 读取数据库时钟和已接纳请求外，不再有专用时间戳或冻结结果的 Step：事件时间戳在产生事件时写入消息，消息 ID 由业务来源和列表位置确定性生成。
@@ -146,11 +143,9 @@ SDK 并行工具在兄弟调用失败或取消时，可能有调用只被钩子�
 
 Step 执行体与外部服务返回之间存在提交窗口。宕机发生在原生结果提交前，恢复会再次进入对应边界。调用前尚无意图记录时可开始执行；Model 或受保护 Tool 已有意图或回执而原生结果缺失时，同一调用身份会被拒绝，Run 保留已知结果并进入核对流程。保护记录可能只证明准入，`returned` 也只证明 invoker 返回。收到外部返回但 PostgreSQL 回执 ACK 丢失时，`commit_receipt` 在有限时间内补写相同收据。远端实际效果需要依据供应商记录核对。 [业务持久化审计](../audits/dbos-domain-simplification.md)
 
-已知只读工具可以在缺失 Tool Step 结果时重新执行。History 写入使用稳定业务键，效果检查结合请求取消意图和原生 Workflow/Executor 归属。PostgreSQL 的事务覆盖本库请求、原生队列和报告归档，远端 provider 独立提交。操作员确认 Executor 已停止并核对外部记录后，可以记录 reconciliation 以解除 Session 准入隔离，原记录继续保留。 [数据库与运维](dbos-deployment.md)
+已知只读工具可以在缺失 Tool Step 结果时重新执行。效果检查结合请求取消意图和原生 Workflow/Executor 归属。PostgreSQL 的准入事务覆盖请求及原生入队，远端 provider 独立提交。操作员确认 Executor 已停止并核对外部记录后，可以记录 reconciliation 以解除 Session 准入隔离，原记录继续保留。 [数据库与运维](dbos-deployment.md)
 
-`start_model_attempt` 持请求锁检查并行调用共享的 Run 级预算，保留最终报告额度后才登记物理调用。`model_attempts` 按 `(run_id, id)` 唯一写入，返回或失败有用量时以同键更新。`por_domain.tool_calls` 记录每一次准入的工具调用（无论预算是否开启），`por_domain.operations` 通过 `tool_call_id` 外键归属到发起它的工具调用。`RunClient` 按字段归属汇总用量：模型次数与 Token 来自 `model_attempts`，工具与搜索次数来自 `tool_calls`，阶段事件只提供告警和降级原因，因此同一次调用不会被重复相加。已提交的模型响应重放、客户端重连和归档补偿各自复用记录。缺少真实 Token 时保留已知调用数并标记 `usage_complete=false`；一次未报告用量的尝试不会永久阻断后续调用。有 Token 上限时，在途账单按有限等待结算，超时后按预算不足结束。公开用量来自 provider 回执，实际货币费用由 provider 账单确认。
-
-History 归档以「新执行版本整体替换，否则只补全缺失内容」合并。第六轮补了一条反向规则：迟到的旧版本保存不能把它的失败阶段重新挂到已完成的记录上——合并后状态为 `completed` 时 `failed_stage` 必须为空，失败记录仍保留能解释它的阶段名。
+`start_model_attempt` 持请求锁检查并行调用共享的 Run 级预算，保留最终报告额度后才登记物理调用。`model_attempts` 按 `(run_id, id)` 唯一写入，返回或失败有用量时以同键更新。`por_domain.tool_calls` 记录每一次准入的工具调用（无论预算是否开启），`por_domain.operations` 通过 `tool_call_id` 外键归属到发起它的工具调用。`RunClient` 按字段归属汇总用量：模型次数与 Token 来自 `model_attempts`，工具与搜索次数来自 `tool_calls`，阶段事件只提供告警和降级原因，因此同一次调用不会被重复相加。模型响应重放和客户端重连沿用已提交记录。缺少真实 Token 时保留已知调用数并标记 `usage_complete=false`；一次未报告用量的尝试不会永久阻断后续调用。有 Token 上限时，在途账单按有限等待结算，超时后按预算不足结束。公开用量来自 provider 回执，实际货币费用由 provider 账单确认。
 
 ## 已知限制
 
@@ -159,4 +154,4 @@ History 归档以「新执行版本整体替换，否则只补全缺失内容」
 
 ## 交付与执行状态
 
-`native_status` 表示 DBOS 根 Workflow 状态，`status` 加入人工等待和业务结果解释，`settlement` 表示回执结算。`event_cursor`、`events_complete` 和 `archive_status` 分别表示已写前缀、当前代次终态交付和 History 状态。relay 收到终态或归档通知后排空已提交邮箱前缀，再追加尾帧并写 `delivery`。SSE 可以在已交付的人工等待前缀或终态前缀结束。报告已经可读时，History 仍可能 pending。使用原生状态和当前代次回执确认进度。 [Studio 协议](agent-execution-studio.md)
+`native_status` 表示 DBOS 根 Workflow 状态，`status` 加入人工等待和业务结果解释，`settlement` 表示回执结算。`event_cursor` 是已交付的前缀，`events_complete` 表示当前代次已交付终态。relay 收到 `_terminal` 后排空已提交的邮箱前缀，追加一次 `done`，并通过 `delivery` 记录代次和终态游标。SSE 可以在人工等待前缀或终态前缀交付后结束。可安全重试的失败保留原生 Stream，供后续代次继续交付。 [Studio 协议](agent-execution-studio.md)

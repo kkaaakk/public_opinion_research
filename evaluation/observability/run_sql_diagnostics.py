@@ -266,7 +266,6 @@ def worker(args):
     from dbos import DBOS
     from dbos_support import NativeCase
 
-    from open_deep_research.web.history import HistoryStore
     from open_deep_research.workflow.run_facts import RunFacts
 
     probe = SQLProbe()
@@ -398,12 +397,12 @@ def worker(args):
             SCOPE.reset(token)
 
     NativeCase.create = create
-    original_wait = bench.wait_for_archive
+    original_wait = bench.wait_for_terminal_delivery
 
     def wait(case, run, timeout=120):
         token = SCOPE.set("observer:" + run["run_id"])
         try:
-            probe.marker("archive_receipt_wait", "start")
+            probe.marker("terminal_receipt_wait", "start")
             result = original_wait(case, run, timeout)
             probe.marker("complete_projection_visible", "end")
             visible_at = (
@@ -461,7 +460,7 @@ def worker(args):
         finally:
             SCOPE.reset(token)
 
-    bench.wait_for_archive = wait
+    bench.wait_for_terminal_delivery = wait
     from dbos import DBOSClient
 
     from open_deep_research.web.durable import RunClient
@@ -472,10 +471,10 @@ def worker(args):
         result = original_get_event(client, workflow_id, key, timeout_seconds)
         if (
             SCOPE.get().startswith("observer:")
-            and key == "history"
+            and key == "done"
             and timeout_seconds > 0
         ):
-            probe.marker("archive_receipt_readable", "end")
+            probe.marker("terminal_receipt_readable", "end")
         return result
 
     DBOSClient.get_event = get_event
@@ -490,7 +489,6 @@ def worker(args):
 
     RunClient.get = get_run
     for target, method in (
-        (HistoryStore, "save"),
         (RunFacts, "release"),
         (RunFacts, "publish"),
     ):
@@ -507,9 +505,7 @@ def worker(args):
                     "usage",
                     "report",
                     "settlement",
-                    "history_saved",
                     "error",
-                    "archive_pending",
                     "research_followup",
                 }:
                     label += ":" + kind

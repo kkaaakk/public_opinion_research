@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { parseArchive, parseExecution } from '../src/readModels';
+import { parseExecution, parseHistory } from '../src/readModels';
 import { parseSnapshot } from '../src/protocol';
 import { snapshot } from './fixtures';
 it('rejects incorrectly typed optional snapshot fields before render', () => {
@@ -29,25 +29,16 @@ it('validates native step identities and nullable actual times', () => {
   expect(parseExecution(data).steps[0].completed_at_epoch_ms).toBeNull();
   expect(() => parseExecution({ ...data, steps: [{ function_id: '1' }] })).toThrow();
 });
-it('validates archive report data', () => {
-  expect(() =>
-    parseArchive({
-      id: '1',
-      run_id: 'old-legacy-id',
-      topic: 'old',
-      status: 'completed',
-      completed_at: '2026-10-25',
-      report: [],
-    }),
-  ).toThrow();
-  expect(
-    parseArchive({
-      id: '1',
-      run_id: 'old-legacy-id',
-      topic: 'old',
-      status: 'completed',
-      completed_at: '2026-10-25',
-      report: 'old report',
-    }).role_reports,
-  ).toEqual([]);
+it('validates Run IDs and native history pagination', () => {
+  const item = {
+    run_id: 'research-run',
+    topic: 'Brand recall',
+    status: 'completed',
+    started_at: '2026-10-25T01:00:00Z',
+    completed_at: '2026-10-25T01:01:00Z',
+  };
+  const page = { items: [item], has_more: true, next_offset: 10 };
+  expect(parseHistory(page)).toEqual(page);
+  expect(() => parseHistory({ ...page, items: [{ ...item, run_id: null }] })).toThrow();
+  expect(() => parseHistory({ ...page, next_offset: '10' })).toThrow();
 });

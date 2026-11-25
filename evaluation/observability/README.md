@@ -1,10 +1,9 @@
 # Local observability benchmark
 
-These runners reproduce the historical RunFacts workload, including the old
-relay's archive receipt and the frozen trace/count gates. For the SQL/Event
-study, use a separate checkout at `022fb1aa7e4c92e3b4727bc20a90b271a4c5d08b`
-and install its root lock there. Run its scripts with its fixtures. The current
-checkout still supports the pure probe and aggregation tests.
+These runners target the historical RunFacts workload and its frozen trace/count
+gates. To reproduce the original SQL/Event study and its observer, use checkout
+`022fb1aa7e4c92e3b4727bc20a90b271a4c5d08b` with its root lock, scripts and
+fixtures. This checkout supports the pure probe and aggregation tests.
 Use the audit's versioned input trees for comparisons. The controlled fixtures
 disable paid inference, dotenv, LangSmith and non-loopback Python sockets.
 [Historical baseline and evidence](../../docs/audits/dbos-sql-event-performance.md#9-原始证据与复现)
@@ -18,8 +17,7 @@ and no query parameters; host/service/passfile overrides are rejected. Operator
 business environment and SDK session paths are not inherited. Local PG disables
 SSL/GSS and requires password authentication; Requests sessions ignore netrc/proxies.
 `--source-root` applies to single-case execution as well as the full matrix.
-Only random `por_test_UUID` databases are created/dropped. Report History remains
-in the isolated PostgreSQL test database until that test project's normal cleanup.
+Only random `por_test_UUID` databases are created/dropped.
 
 ```powershell
 .venv/Scripts/python.exe evaluation/observability/run_benchmark.py --enable-local-services --healthy-url http://127.0.0.1:33080 --output .tmp/observability/benchmark.json --repetitions 3 --runs 4 --warmup 1
@@ -30,7 +28,7 @@ The seeded order randomizes balanced blocks to reduce service-cache/time drift.
 The five configurations are serial tracing off/on, four concurrent tracing off/on,
 and tracing with a reserved non-listening loopback port. Four matches the project's
 default active capacity. All use the same deterministic responses, workflows and
-service resources. Every measured Run must finish/settle/archive with 28 model
+service resources. Every measured Run must settle and deliver completion with 28 model
 calls / 311 tokens, including the fixture's initial 7 calls / 77 tokens. Real
 requests are 6 SDK + 15 Core and tools execute twice. No failure grants are issued.
 
@@ -50,7 +48,7 @@ machine, VM/container limits and other workloads separately. RSS/CPU for Langfus
 and database services are separate from the Python process. OTel's official SDK
 internal metrics measure queue occupancy, capacity and `queue_full` drops; the
 driver never reads private queue fields or implements a queue. Run elapsed time
-ends after terminal delivery and archive; telemetry shutdown/drain is separate.
+ends after terminal delivery. Telemetry shutdown and drain are measured separately.
 
 The numeric `LIMITS` in the script are frozen **before running**. The local gate
 allows 25% p95 overhead plus 100ms, at most 256MiB additional peak RSS, zero healthy
@@ -59,13 +57,11 @@ is compared with the healthy sequential baseline using a 2× local capacity gate
 Report failed gates; do not adjust limits after seeing favorable measurements.
 No production optimization is justified solely by this synthetic test.
 
-The integration revision waits using public `DBOSClient.get_event` for the
-relay's archive receipt, then reads and validates the complete public Run
-projection once. Both submission and that final projection remain inside Run
-latency/CPU timing. The relay publishes this receipt only after saved History
-and the terminal manifest. There are still exactly 21 model requests and two
-tools per measured Run. The old fixture polled the full projection every 50ms;
-it adds a substantial SQL workload. Keep its historical measurements separately.
+The current observer uses public `DBOSClient.get_event` to await the historical
+relay's `done` receipt and then validates the public Run projection once.
+Submission and this projection are included in Run latency and CPU timing.
+There are 21 model requests and two tools per measured Run. Timing results from
+the original study use the observer in its frozen checkout.
 Compare OFF/original ON/optimized ON with the same observer; a measurement-method
 correction is not a production optimization. Regular native tests retain the
 original polling helper, so this does not weaken their correctness contracts.

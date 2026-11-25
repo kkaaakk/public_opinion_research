@@ -100,8 +100,6 @@ export type RunSnapshot = {
   clarification?: Clarification | null;
   request?: RunRequestSnapshot;
   approval_required?: boolean;
-  archive_status?: string;
-  history_id?: string | null;
   workflow_version?: string;
   sdk_version?: string;
   runtime_version?: string;
@@ -171,19 +169,13 @@ export type ExecutionPage = {
   next_offset: number;
 };
 export type HistoryItem = {
-  id: string;
   run_id: string;
   topic: string;
   status: string;
+  started_at: string;
   completed_at: string;
-  [key: string]: unknown;
 };
-export type HistoryRecord = HistoryItem & {
-  report: string;
-  role_reports: RoleReport[];
-  usage: Usage;
-};
-export type HistoryPage = { items: HistoryItem[]; total: number };
+export type HistoryPage = { items: HistoryItem[]; next_offset: number; has_more: boolean };
 
 export class ProtocolError extends Error {}
 export function record(value: unknown): Record<string, unknown> {
@@ -391,8 +383,6 @@ export function parseSnapshot(value: unknown): RunSnapshot {
     created_at: optionalString(v.created_at),
     updated_at: optionalString(v.updated_at),
     terminated_at: v.terminated_at === null ? null : optionalString(v.terminated_at),
-    archive_status: optionalString(v.archive_status),
-    history_id: v.history_id === null ? null : optionalString(v.history_id),
     workflow_version: optionalString(v.workflow_version),
     sdk_version: optionalString(v.sdk_version),
     runtime_version: optionalString(v.runtime_version),

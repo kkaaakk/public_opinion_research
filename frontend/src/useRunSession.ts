@@ -104,7 +104,7 @@ export function useRunSession() {
         // and leave verification to the user.
         commit({ ...session, create: undefined });
         setMessage(
-          `${error.message} · 创建未获确认：原创建请求可能已创建为 Run；请按 Run ID 或历史归档核对后再重新创建。`,
+          `${error.message} · 创建未获确认，原创建请求可能已创建为 Run。请按 Run ID 或研究历史核对后再重新创建。`,
         );
       } else if (error instanceof ApiError && [400, 413, 422].includes(error.status)) {
         commit({ ...session, create: undefined });
@@ -154,7 +154,7 @@ export function useRunSession() {
       }
       setMessage(
         action === 'cancel'
-          ? '取消请求已提交；继续观察 SDK 清算与归档。'
+          ? '取消请求已提交，继续观察 SDK 清算与终态交付。'
           : action === 'retry'
             ? '重试请求已确认；只有 durable Finalizer 可以应用授权。'
             : action === 'clarification'

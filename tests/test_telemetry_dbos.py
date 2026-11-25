@@ -72,11 +72,10 @@ def traced_case(trace_capture, pg_database, monkeypatch, tmp_path, request):
         DBOS.destroy(workflow_completion_timeout_sec=2)
 
 
-def saved(case, run, status="completed", generation=0):
+def wait_delivered(case, run, status="completed", generation=0):
     return case.wait(
         run,
         lambda r: r["status"] == status
-        and r["archive_status"] == "saved"
         and r["generation"] == generation
         and r["events_complete"],
         timeout=60,
@@ -119,7 +118,7 @@ def test_cancel_before_model_admission_with_tracing_has_no_unsettled_bill(
         case.wait(run, lambda r: r["native_status"] == "CANCELLED")
     finally:
         release.set()
-    result = saved(case, run, "cancelled")
+    result = wait_delivered(case, run, "cancelled")
     assert result["settlement"] == "settled"
     assert (
         result["usage"]["model_calls"] == case.state["runtime"]["budget"]["model_calls"]
@@ -132,8 +131,8 @@ def test_native_hierarchy_parallel_roles_usage_and_read_only_replay(
 ):
     case = traced_case
     run = case.create()
-    result = saved(case, run)
-    # The archive receipt can be visible before the relay and Finalizer finish
+    result = wait_delivered(case, run)
+    # Terminal delivery can be visible before the relay and Finalizer finish
     # exporting their spans. Wait for both native workflows before counting.
     delivery_ids = [run["run_id"] + suffix for suffix in (":events", ":finalize")]
     case.wait(
@@ -216,9 +215,9 @@ def test_safe_retry_distinguishes_generation_without_repeating_producers(
 
     monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
-    first = saved(case, run, "failed")
+    first = wait_delivered(case, run, "failed")
     case.client.retry(run["run_id"], "alice", "safe-otel-retry", first["state_version"])
-    final = saved(case, run, generation=1)
+    final = wait_delivered(case, run, generation=1)
     spans = trace_capture.spans()
     reviews = [s for s in spans if s.name == "research_review"]
     assert {s.attributes["por.generation"] for s in reviews} == {0, 1}
@@ -241,7 +240,7 @@ def test_native_cancellation_keeps_settlement_and_tool_counts(
     run = case.create()
     case.wait(run, lambda _: case.blocked.is_set())
     case.client.cancel(run["run_id"], "alice")
-    saved(case, run, "cancelled")
+    wait_delivered(case, run, "cancelled")
     spans = trace_capture.spans()
     assert any(
         s.attributes.get("por.status") == "cancelled"
@@ -273,7 +272,7 @@ def test_followup_rounds_keep_native_call_and_invocation_identity(
 
     monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
-    saved(case, run)
+    wait_delivered(case, run)
     spans = trace_capture.spans()
     tools = [s for s in spans if s.attributes.get("openinference.span.kind") == "TOOL"]
     assert len(tools) == 4

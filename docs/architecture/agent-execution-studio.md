@@ -11,7 +11,7 @@ Studio 和 Classic 共用 Run API 与 SSE 协议。 [执行架构](agent-loop.md
 | 效果与清算 | `model_attempts`、`operations` 和 Finalizer | 显示模型用量、操作回执和实际工具结果，保留未知效果的核对状态 |
 | 顺序事件 | 单写者 `por.events` → DBOS Durable Stream | 以 seq 重建连续前缀；去重和只读回放 |
 | 角色报告与来源 | `agents.*.report` | 只读 provenance，引用必须来自真实工具结果 |
-| 报告归档 | PostgreSQL History | 查询/阅读；不冒充完整 Trace |
+| 研究历史 | DBOS 和请求、用量账本 | 按 Run ID 查询终态和报告 |
 
 Planning、Intake、Review、报告和滚动压缩依旧是有界业务服务。Studio 不把它们画成额外 SDK Agent，也不以 SDK spans 推算全部业务模型用量。
 
@@ -33,7 +33,7 @@ Planning、Intake、Review、报告和滚动压缩依旧是有界业务服务。
 
 ## 3. v1 事件与身份
 
-`protocol_version=1` 沿用原生 Stream 的游标。Finalizer 在根及业务子 Workflow 结束并清算后发 `_terminal`，归档成功时另发 `_archive_saved`。relay 收到任一尾部消息后排空已提交的消息，再依次写终态、归档帧并更新 `delivery` Event。这个前缀回执记录 offset、generation、人工等待版本、终态和 History ID，供读端处理同毫秒的乱序消息。已终止的旧版本可读取保留的 Stream 与回执，缺失的字段按可用信息展示。 [交付与执行状态](agent-loop.md#交付与执行状态)
+`protocol_version=1` 沿用原生 Stream 的游标。Finalizer 在根及业务子 Workflow 结束并确认清算后发 `_terminal`。relay 排空已提交的消息，再写本代终态帧和一次 `done`，并更新 `delivery` Event。回执记录 offset、generation、人工等待版本和终态游标。已终止的旧版本继续读取保留的 Stream 与回执。 [交付与执行状态](agent-loop.md#交付与执行状态)
 
 | 字段 | 含义 |
 | --- | --- |
@@ -64,7 +64,7 @@ seq 是 relay 接收顺序，支持确定性回放；并行任务之间不能据
 | research_review / research_followup | 结构化 Review、Gap 决策及补查轮次/目标角色；不新增自主 Supervisor |
 | retry_started | 已记录授权请求；不是已应用 rewind，不表示新研究成功 |
 | settlement / usage / run_status / done | 清算、已结算用量、当前业务解释和当前代次事件交付 |
-| agent_report / report / history_saved / archive_pending | 阶段产物、最终产物和独立归档事实 |
+| agent_report / report | 阶段产物和最终报告 |
 
 Hook 的 `duration_ms` 用 monotonic 时钟测量 SDK 钩子边界，包含该边界内已有控制/观测开销，不宣称是供应商纯推理延迟。Step 仅在开始/结束均有 observed_at 时计算差值；旧 relay timestamp 不拿来假装实际执行耗时。图规模、context_chars、压缩条数均是计数，不公开上下文内容。rolling compaction 的估算 Token 减量不当实际用量发布。
 
@@ -76,13 +76,13 @@ SDK 公共字段在生产 observer 中再次 allowlist：字符串长度、非�
 - 去重只消费新 seq；跨 Run、跳号、帧 id 不符、无效字段、未知协议版本停止推进。不会静默跳过坏事件或改写游标。
 - SSE 支持任意分片、UTF-8、CR/LF、注释、多行 data。EOF 的残帧丢弃，完整游标保持，后续从数据库重取该事件。
 - 连接与业务状态分开。网络/503 自动退避到最多 10s；401/404/409/协议错误交给用户处理。重连只有 GET，从不自动 create、retry 或 cancel。
-- 原生 GET 每 1.5s 更新事实。完整结束要求终态、settlement 非 pending、当前 generation 的 events_complete、已送达 event_cursor 且没有 pending retry grant。归档 pending 时降低频率继续读取补偿结果。
+- 原生 GET 每 1.5s 更新事实。完整结束要求终态、settlement 非 pending、当前 generation 的 events_complete、已送达 event_cursor 且没有 pending retry grant。
 - 审批暂停继续观察原 Run，另一页面提交决定后可恢复。显式取消继续等 SDK/工具清算；关闭页面或切换 Run 只关闭订阅。
 - 创建先保存 key + 原参数；丢响应后确认同一请求。重试先保存 key + 原 state_version + generation；丢 ACK 后确认同一授权。前端不执行 rewind、人工核对或释放未知占位。
 
 `projection.ts` 对同一事件前缀执行纯 fold。静态拓扑为 Intake → Planning → Approval → 并行 Producers → Review/Gap → Risk → Strategy → Report；动态 Step 实例按 execution_id 区分，SDK 调用按 invocation / turn / call 区分。不能因最终 Run 成功、旧 completed_steps、旧 report 或 RAG 选择将未开始节点填成完成。补查重新进入被指定的 Producer / Review；重试保留旧失败和成功角色，只有新开始事件才产生新执行实例。
 
-回放只限制事件前缀，不恢复模型/工具，不读取未来报告填充过去的界面，且禁用审批/取消/重试。Journal 和 History 未提供按事件游标的历史快照，因此原生日志面板会明确展示“当前持久视图”。History 归档不能转换成 Trace；必须打开原 Run 读取其 Stream。
+回放只限制事件前缀，不恢复模型/工具，不读取未来报告填充过去的界面，且禁用审批/取消/重试。原生日志面板展示当前持久视图。打开历史报告所属的 Run 后，可读取其原生 Stream 并回放研究过程。
 
 ## 5. 构建、验证与后续能力
 

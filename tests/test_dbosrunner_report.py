@@ -216,7 +216,6 @@ def test_incomplete_synthesis_retries_last_response_without_repeating_roles(
     failed = case.wait(
         run,
         lambda r: r["status"] == "failed"
-        and r["archive_status"] == "saved"
         and r["events_complete"],
     )
     assert failed["retry_safe"] and len(calls) == 1
@@ -225,7 +224,6 @@ def test_incomplete_synthesis_retries_last_response_without_repeating_roles(
     done = case.wait(
         run,
         lambda r: r["status"] == "completed"
-        and r["archive_status"] == "saved"
         and r["events_complete"],
     )
     assert len(calls) == 2 and len(case.models) == 2

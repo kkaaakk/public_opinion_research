@@ -54,10 +54,8 @@ from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import telemetry_enabled
 from open_deep_research.runtime import business_agent, tool_executor
 from open_deep_research.tools import register_tool
-from open_deep_research.web import history
 from open_deep_research.web.executor import launch
 from open_deep_research.workflow import dbos_workflow as engine
-from open_deep_research.workflow.dbos_config import domain_engine
 from open_deep_research.workflow.execution import (
     ExecutionControlError,
     admit_tool_call,
@@ -97,8 +95,6 @@ def install(directory, scenario):
         on_plan=record_plan if plan_mode != "normal" else None,
         on_revision=record_revision if scenario.startswith("revision-") else None,
     )
-    store = history.HistoryStore(domain_engine())
-    patch.setattr(history, "get_history_store", lambda: store)
     if scenario == "plan-error":
         from sdk_model_support import Reply, install_inference
 
@@ -521,7 +517,7 @@ def install(directory, scenario):
 
     patch.setattr(business_agent, "sdk_model", model)
     patch.setattr(business_agent, "_business_agent_tools", tools)
-    return patch, store
+    return patch
 
 
 @DBOS.step(preemptible=False)
@@ -606,7 +602,7 @@ def main():
     p.add_argument("--executor", required=True)
     args = p.parse_args()
     args.directory.mkdir(parents=True, exist_ok=True)
-    patch, store = install(args.directory, args.scenario)
+    patch = install(args.directory, args.scenario)
     launch(
         args.executor,
         queues=os.environ.get("TEST_EXECUTOR_QUEUES", "").split(",")
@@ -619,7 +615,6 @@ def main():
             time.sleep(0.1)
     finally:
         DBOS.destroy()
-        store.close()
         from open_deep_research.observability.telemetry import shutdown_telemetry
 
         shutdown_telemetry()

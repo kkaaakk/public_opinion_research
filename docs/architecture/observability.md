@@ -12,7 +12,7 @@ or resource release. See the [implementation audit](../audits/langfuse-otel.md).
 | Tool effects | `por_domain.operations` stable operation ID, role/unit/native call/name and argument fingerprint; no public raw arguments |
 | Evidence | Run/role/task/round and tool call/receipt IDs link Source → Evidence → Claim → Finding |
 | Public progress | DBOS Durable Stream seq, generation and Run ID; SSE is a read projection |
-| Report archive | Stable History ID, owner, Run ID and generation-derived `run_state_version` |
+| Report and history queries | DBOS report Events and Workflow outputs, joined to owner-scoped request and usage facts by Run ID |
 | Trace hierarchy/timing | Native DBOS + OpenInference SDK spans and selected business spans exported to Langfuse |
 | Bounded SDK generation | OpenInference Agents SDK spans on the shared Provider and exporter. LangSmith remains opt-in for other business spans. |
 
@@ -28,16 +28,11 @@ Tool/report services record their model attempts and usage. Provider
 usage gaps are marked as incomplete. Context admission uses estimates of prompt
 size. Request redelivery and SSE replay do not create new model attempts.
 
-History intentionally stores the four numeric public counters: model calls,
-input tokens, output tokens and total tokens. Run status retains the full budget
-including warnings/cache details/tool counts. Compare those four counters across
-History, Run and SSE; their schemas are not identical. Unknown opaque effects
-project as Run `interrupted`/unresolved and legacy History `incomplete`.
-
-Research terminal delivery and History completion are separate facts. A stream
-can end after `done` while History is pending; reconnect/read Run for eventual
-`history_saved`, and do not treat an old generation's receipt as current success.
-Database errors close admission/control writes; SSE EOF is never proof of success.
+Run and history detail show the same usage, including warnings, cache details,
+and tool counts. The SSE settlement frame carries the full usage for that
+generation. Unconfirmed opaque effects project as `interrupted` and `unresolved`.
+The relay writes one `done` per generation and publishes the delivered cursor.
+Read the Run and its current-generation delivery receipt after SSE EOF.
 
 LangSmith remains opt-in (`LANGSMITH_TRACING`, `LANGSMITH_API_KEY`,
 `LANGSMITH_PROJECT`). Existing RAG stage spans are retained without wrapping a
@@ -45,8 +40,7 @@ model/tool twice. It no longer supplies native execution ownership. Trace
 failure does not authorize repeating research or suppress a business exception.
 Avoid raw prompts, tool payloads, private context, provider responses and secrets
 in public events or correlation metadata; egress redaction and owner checks stay
-active. Historical LangSmith reports can still be imported into owner-scoped
-History without executing research.
+active.
 
 ## Trace structure and business boundaries
 
@@ -62,7 +56,7 @@ run_submit                                API; only for a newly accepted Run
 │     ├─ response_strategy ── por.llm
 │     └─ report_generation ── por.llm
 ├─ por.events                             native durable event relay
-└─ por.finalize                           native settlement/archive/retry
+└─ por.finalize                           native terminal confirmation and retry
 ```
 
 `run_submit` measures intake. `por.run` measures execution. Producer workflows are siblings and can overlap.
@@ -190,7 +184,7 @@ auth or baggage is propagated. Retries/recovery emit fresh span identities under
 the persisted caller. A killed process cannot finish/export its in-flight spans.
 Unknown effects remain quarantined; completed tools are never replayed for traces.
 
-Current application and SDK Runtime versions are `por-datasource-stage-v1` and
+Current application and SDK Runtime versions are `por-native-history-v1` and
 `sdk-vertical-v1`. When a matching-version journal lacks the optional OTel carrier,
 the Run ID still groups its observations. Earlier journals use their matching
 Executor for drain. [Deployment](dbos-deployment.md)

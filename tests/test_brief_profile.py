@@ -17,9 +17,7 @@ def test_native_fixture_profile(native_case):
     for _ in range(5):
         start = time.perf_counter()
         run = c.create()
-        done = c.wait(
-            run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-        )
+        done = c.wait(run, lambda r: r["events_complete"])
         assert done["status"] == "completed"
         samples.append(
             dict(

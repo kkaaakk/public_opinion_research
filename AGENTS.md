@@ -12,7 +12,7 @@ use bounded SDK model Steps inside the research Workflow.
 Read `docs/audits/openai-agents-phase5.md`, the migration plan,
 `docs/audits/openai-agents-phase4-dbos.md` and
 `docs/architecture/dbos-deployment.md` before changing execution ownership,
-resource reservations, external operation receipts, archive compensation or auth.
+resource reservations, external operation receipts, terminal delivery or auth.
 DBOS journal/status is the execution authority. Business persistence is limited
 to request and retry authorization, actual model and tool usage, and protected
 external effects. See [domain persistence and cutover](docs/audits/dbos-domain-simplification.md). Never replay an interrupted
@@ -24,7 +24,9 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `por-datasource-stage-v1`. Drain `por-call-ledger-v1`,
+Application version is `por-native-history-v1`. Drain `por-datasource-stage-v1`
+Finalizer and relay journals with their matching release. Completed Runs still
+use their native stage results, delivery receipts and call ledger. Drain `por-call-ledger-v1`,
 `por-agent-context-v1`, `por-inline-report-v1`, `por-research-agents-v1`,
 `por-sdk-models-v1` and `por-vertical-v1` with their matching releases before
 cutover: the stage journal now commits through one Datasource transaction and
@@ -33,7 +35,7 @@ Pending `dbos-events-v1` and earlier
 journals must drain with their matching release before cutover. Native Stream offsets
 drive SSE resume. The single writer records one delivery Event per published
 prefix. Finalizer reads native results and the effect ledger before publishing
-terminal frames and compensates History independently. Pending
+one terminal batch per generation. Pending
 `dbos-native-recovery-v1` journals require matching executors and explicit schema cutover. Pending
 `dbosrunner-native-interaction-v1` and earlier journals must drain on their
 matching release. The earlier PR #44 preview `dbosrunner-brief-idempotency-v1`, if deployed,
@@ -43,7 +45,8 @@ Pending `dbos-phase5-v1` journals must drain on their matching release;
 the new Executor must not replay those older relay command sequences.
 Pending Phase 4 DBOS journals must drain on their matching release/Executor.
 Old SQL Runs also drain on their original release; no migration/replay is implied.
-Report archives live in PostgreSQL (`por_domain.history`) under the existing owner policy.
+History reads retained DBOS results and business facts within the Run owner scope.
+Keep the root, related Workflows, Events and Stream for the required history window.
 
 The runtime no longer has a Research Graph, Working Context, Context Manager,
 Agent private memory, MySQL long-term memory or Neo4j history. Do not reintroduce
@@ -112,8 +115,8 @@ in the migration plan, which links to the original Git evidence.
   skills. There is no local social adapter or HTTP collector: social platform data is
   collected through Apify MCP and the shared `ToolExecutor`. Do not reintroduce a
   local social-media backend or a per-platform MCP server.
-- `rag/`: enterprise knowledge indexing and hybrid retrieval. Report history is
-  owned by `web/history.py` in PostgreSQL; there is no runtime evidence graph.
+- `rag/`: enterprise knowledge indexing and hybrid retrieval. `web/runs.py`
+  serves owner-scoped Run and history queries via `RunClient`.
 - `models/`, `llm/`, `mcp/`, `tools/`: provider adapters, invocation,
   protocol clients and tool admission. `web/runs.py` owns Run authentication.
 - `web/`: FastAPI and the existing static UI; `evaluation/` and `tests/`:

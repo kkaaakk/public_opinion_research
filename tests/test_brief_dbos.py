@@ -31,7 +31,7 @@ def test_manual_edit_keeps_original_approval_deadline(native_case):
     c.client.approve(run["run_id"], "alice", old["version"], "edit", edited)
     current = c.wait(run, lambda r: r["plan"]["revision"] == 2)["plan"]
     assert current["expires_at"] == old["expires_at"]
-    done = c.wait(run, lambda r: r["archive_status"] == "saved")
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "cancelled" and done["plan"]["brief"] == edited
     assert c.client.client.get_event(run["run_id"], "approval_end", 0) == "expired"
     assert not c.models and not c.calls
@@ -49,9 +49,7 @@ def test_accepted_brief_config_is_frozen_across_operator_default_changes(
     assert accepted["allow_clarification"] is False
     monkeypatch.setenv("ALLOW_CLARIFICATION", "true")
     c.client.approve(run["run_id"], "alice", pending["plan"]["version"], "approve")
-    done = c.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "completed"
     assert done["plan"]["brief"].startswith("# ")
     assert done["completed_steps"].count("plan_research") == 1
@@ -88,9 +86,7 @@ def test_clarification_same_run_releases_quota_and_resumes(
     approved = c.wait(run, lambda r: r["status"] == "awaiting_approval")
     assert approved["clarification"] is None and approved["run_id"] == run["run_id"]
     c.client.approve(run["run_id"], "alice", approved["plan"]["version"], "approve")
-    done = c.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "completed" and len(c.models) == 2
     assert done["plan"]["locked"]
     assert done["completed_steps"].count("plan_research") == 2
@@ -192,9 +188,7 @@ def test_clarification_rounds_preserve_context_and_versioned_approval(
     with pytest.raises(RunConflict):
         c.client.approve(run_id, "alice", old_plan["version"], "approve")
     c.client.approve(run_id, "alice", new_plan["version"], "approve")
-    done = c.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "completed" and done["plan"]["locked"]
     assert done["plan"]["brief"] == edited and len(c.plan_prompts) == rounds + 1
 
@@ -208,9 +202,7 @@ def test_fourth_plan_asking_again_fails_without_publishing_a_fourth_challenge(
     for number, answers in enumerate(CLARIFICATION_ANSWERS, 1):
         pending = waiting_for_round(c, run, number)
         c.client.clarify(run["run_id"], "alice", pending["version"], answers)
-    done = c.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "failed" and done["native_status"] == "ERROR"
     assert done["clarification"] is None and done["plan"] is None
     assert (
@@ -273,9 +265,7 @@ def test_edit_rejects_old_approval_and_execution_uses_frozen_brief(native_case):
         c.client.approve(run["run_id"], "alice", old["version"], "approve")
     version = pending["plan"]["version"]
     c.client.approve(run["run_id"], "alice", version, "approve")
-    done = c.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["plan"]["version"] == version and done["plan"]["locked"]
     assert done["status"] == "completed" and len(c.models) == 2
     assert not c.revision_requests
@@ -298,7 +288,7 @@ def test_cancel_pending_clarification_is_terminal_and_never_runs_agents(native_c
     run = c.create()
     pending = c.wait(run, lambda r: r["status"] == "awaiting_clarification")
     c.client.cancel(run["run_id"], "alice")
-    done = c.wait(run, lambda r: r["archive_status"] == "saved")
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "cancelled" and not c.models and not c.calls
     with pytest.raises(RunConflict):
         c.client.clarify(
@@ -316,7 +306,7 @@ def test_clarification_timeout_cancels_without_success_or_research(native_case, 
         pending = waiting_for_round(c, run, prior)
         c.client.clarify(run["run_id"], "alice", pending["version"], answers)
     pending = waiting_for_round(c, run, number)
-    done = c.wait(run, lambda r: r["archive_status"] == "saved")
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "cancelled" and not c.models and not c.calls
     assert done["report"] == "" and done["events_complete"]
     assert done["clarification"] is None and len(c.plan_prompts) == number
@@ -399,9 +389,7 @@ def test_three_brief_revisions_after_three_clarifications_then_manual_edit_and_a
         and manual["expires_at"] == initial["expires_at"]
     )
     c.client.approve(run_id, "alice", manual["version"], "approve")
-    done = c.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "completed" and done["plan"]["locked"]
     assert done["plan"]["brief"] == edited and done["report"]
     assert len(c.revision_requests) == 3
@@ -517,7 +505,7 @@ def test_native_revision_admission_race(
             ).status_code
             == 200
         )
-        done = c.wait(run, lambda r: r["archive_status"] == "saved")
+        done = c.wait(run, lambda r: r["events_complete"])
         assert done["status"] == "completed" and done["plan"]["locked"]
         assert len(c.revision_requests) == (2 if first_fails else 1)
         children = native_client().list_workflows(
@@ -551,7 +539,7 @@ def test_repeated_failed_revisions_do_not_spend_success_quota(native_case):
     assert not result["plan"]["ai_revision"]["pending"]
     assert len(c.revision_requests) == 4
     c.client.approve(run["run_id"], "alice", plan["version"], "approve")
-    done = c.wait(run, lambda r: r["archive_status"] == "saved")
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "completed" and done["plan"]["locked"]
     assert done["plan"]["version"] == plan["version"]
     with pytest.raises(RunConflict):
@@ -646,9 +634,7 @@ def test_revision_cannot_publish_after_expiry_or_cancel(native_case, mode):
     )
     if mode == "cancel":
         c.client.cancel(run_id, "alice")
-    done = c.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "cancelled" and done["settlement"] == "settled"
     assert (
         done["plan"]["version"] == old["version"]
@@ -690,7 +676,6 @@ def test_single_synthesis_failure_retries_without_repeating_roles(
     failed = c.wait(
         run,
         lambda r: r["status"] == "failed"
-        and r["archive_status"] == "saved"
         and r["events_complete"],
     )
     assert len(c.models) == 2 and failed["retry_safe"]
@@ -698,7 +683,6 @@ def test_single_synthesis_failure_retries_without_repeating_roles(
     done = c.wait(
         run,
         lambda r: r["status"] == "completed"
-        and r["archive_status"] == "saved"
         and r["events_complete"],
     )
     assert (
@@ -769,15 +753,13 @@ def test_terminal_delivery_waits_for_committed_sdk_metadata(native_case, monkeyp
         assert current["native_status"] == "SUCCESS" and current["report"]
         assert not current["events_complete"]
         assert not any(
-            e["type"] in {"done", "history_saved"}
+            e["type"] == "done"
             for e in c.client.read_events(run["run_id"], "alice", 0, 1000)
         )
     finally:
         release.set()
 
-    done = c.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = c.wait(run, lambda r: r["events_complete"])
     assert done["status"] == "completed"
     events = c.client.read_events(run["run_id"], "alice", 0, 1000)
     ends = [

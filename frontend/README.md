@@ -28,7 +28,7 @@ npm run build
 | --------------------------------- | ---------------------------------------------------------------------------------------- |
 | `protocol.ts` / `readModels.ts`   | v1 事件及 REST DTO 的严格类型、运行时校验                                                |
 | `api.ts`                          | 同源认证、受保护读写、稳定错误处理                                                       |
-| `observer.ts`                     | 冷回放、连续前缀、SSE 解码/补发/去重、自动重连、清算及归档观察；只有 GET                 |
+| `observer.ts`                     | 冷回放、连续前缀、SSE 解码/补发/去重、自动重连和终态交付观察                 |
 | `session.ts` / `useRunSession.ts` | Tab 内 Run 选择、创建/重试的不可变请求身份、显式用户命令                                 |
 | `projection.ts`                   | Live / Replay 共用的确定性 fold，按 execution / invocation / model turn / tool call 配对 |
 | `inspection.ts`                   | 从真实前缀选择默认节点，按 execution/invocation/generation 定位 SDK 记录                 |
@@ -43,9 +43,9 @@ npm run build
 - 打开 Run 只读取；刷新从 seq 0 分页重建，随后按 `Last-Event-ID` 订阅。会话存储不保存孤立游标或 Token。
 - SDK 模型/工具状态、身份、实测钩子时长与 Harness 元数据来自正式后端观测。缺失字段显示「未提供」。`returned` 工具效果回执不等于 `succeeded` 业务结果。
 - 审批绑定服务端不可变 plan version；安全重试先保存 key、state_version、generation。丢 ACK 后只能确认原请求，不能自动换新 key。只有 Finalizer 应用授权。
-- DBOS 终态、SDK 清算、事件交付、PostgreSQL 报告归档分别展示。断线和页面切换不取消 Run；归档补偿期间继续只读观察。
+- DBOS 终态、SDK 清算和当前代次的事件交付分别展示。断线和页面切换后可以按原游标继续观察。
 - 旧事件没有新身份/时间字段时保留可观测部分，不制造 turn、Prompt、工具参数/输出或账单。RAG 开关本身不证明某 Agent 已执行；跳过需要服务端 `step_skipped` 事实。
-- PostgreSQL History 只作为报告归档；打开原 Run 后才能读取 DBOS Trace。原生日志面板显示当前持久视图，不宣称是回放游标处的历史快照。
+- 研究历史从 DBOS 和业务账本查询。按 Run ID 打开报告或原生事件回放，原生日志面板显示当前持久视图。
 - Report Markdown 禁止 raw HTML，外部图片仅显示说明，不主动加载远程跟踪图片。
 
 协议、接口字段及所有权详见[架构与协议说明](../docs/architecture/agent-execution-studio.md)；Review、验证和截图见[实施审计](../docs/audits/agent-execution-studio.md)。

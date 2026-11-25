@@ -13,7 +13,6 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from open_deep_research.web.durable import RunClient, close_run_client
-from open_deep_research.web.history import HistoryStore
 from open_deep_research.web.run_data import RunConflict
 from open_deep_research.workflow.dbos_config import (
     domain_engine,
@@ -194,8 +193,6 @@ class NativeCase:
         self.mode = mode
         from test_python_workflow_sdk import install_sdk
 
-        from open_deep_research.web import history
-
         self.plan_prompts = []
         self.revision_requests = []
         self.revision_response = None
@@ -217,8 +214,6 @@ class NativeCase:
         )
         self.client = RunClient()
         self.owner = "alice"
-        self.history = HistoryStore(domain_engine())
-        patch.setattr(history, "get_history_store", lambda: self.history)
 
     def create(self, *, owner="alice", key=None, approval=False, session=None):
         from copy import deepcopy

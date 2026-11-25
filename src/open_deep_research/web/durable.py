@@ -9,7 +9,7 @@ from itertools import islice
 from uuid import uuid4
 
 from dbos import error as dbos_error
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from open_deep_research.budget import (
     compose_run_usage,
@@ -29,6 +29,7 @@ from open_deep_research.time_utils import get_today_str
 from open_deep_research.web.observations import stage_errors, stage_results
 from open_deep_research.web.run_data import (
     IDEMPOTENCY_KEY_PATTERN,
+    TERMINAL,
     RunConflict,
     RunNotFound,
     db_time,
@@ -48,8 +49,8 @@ from open_deep_research.workflow.brief import (
 )
 from open_deep_research.workflow.dbos_config import (
     ACTIVE,
-    ARCHIVE,
     CONTROL,
+    FINALIZE,
     SDK_VERSION,
     SETTLEMENT_GRACE_SECONDS,
     VERSION,
@@ -69,6 +70,7 @@ NATIVE_TERMINAL = {"SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEE
 HUMAN_PHASES = {"awaiting_approval", "awaiting_clarification"}
 NATIVE_RESULT_VERSIONS = {
     VERSION,
+    "por-datasource-stage-v1",
     "por-call-ledger-v1",
     "por-agent-context-v1",
     "por-research-agents-v1",
@@ -296,7 +298,7 @@ class RunClient:
                     for suffix, name, queue in [
                         (":events", "por.events", CONTROL),
                         ("", "por.run", CONTROL),
-                        (":finalize", "por.finalize", ARCHIVE),
+                        (":finalize", "por.finalize", FINALIZE),
                     ]:
                         self.client.enqueue_in_transaction(
                             db,
@@ -321,6 +323,58 @@ class RunClient:
         if not values:
             raise RunNotFound("Native workflow not found")
         return values[0]
+
+    def list_history(self, owner, limit, offset):
+        """Page terminal roots and read only their delivered business status."""
+        workflows = self.client.list_workflows(
+            name="por.run",
+            has_parent=False,
+            user=owner,
+            status=sorted(NATIVE_TERMINAL),
+            load_input=False,
+            load_output=False,
+            sort_desc=True,
+            limit=limit + 1,
+            offset=offset,
+        )
+        page = workflows[:limit]
+        requests = {}
+        if page:
+            with self.engine.connect() as db:
+                requests = {
+                    row.id: row
+                    for row in db.execute(
+                        text("""
+                        SELECT r.id, CAST(r.value AS jsonb)->'request'->>'topic' AS topic,
+                               CAST(r.value AS jsonb)->>'version' AS version,
+                               (SELECT coalesce(max(generation), 0) FROM por_domain.retries
+                                WHERE run_id = r.id) AS generation
+                        FROM por_domain.requests r WHERE r.owner = :owner AND r.id IN :ids
+                        """).bindparams(bindparam("ids", expanding=True)),
+                        {"owner": owner, "ids": [wf.workflow_id for wf in page]},
+                    )
+                }
+        items = []
+        for wf in page:
+            run_id = wf.workflow_id
+            request = requests.get(run_id)
+            if request is None:
+                continue
+            status = self._delivered_status(run_id, request.version, request.generation)
+            if status is None:
+                continue
+            items.append(
+                dict(
+                    run_id=run_id,
+                    topic=request.topic or "",
+                    status=status,
+                    started_at=timestamp((wf.created_at or 0) / 1000),
+                    completed_at=timestamp((wf.completed_at or wf.updated_at or 0) / 1000),
+                )
+            )
+        return dict(
+            items=items, next_offset=offset + len(page), has_more=len(workflows) > limit
+        )
 
     def _unconfirmed_stage(self, workflow):
         if workflow is None or workflow.status == "SUCCESS":
@@ -483,7 +537,6 @@ class RunClient:
             else error.get("step") or view["current_step"],
             owner=req["owner"],
             research_session_id=req["session"],
-            archive_request=data["request"],
             generation=generation,
             retry_requested=generation > applied["generation"],
             retry_safe=(
@@ -506,20 +559,36 @@ class RunClient:
                 "offset": 0,
                 "generation": 0,
             }
-        history = self.client.get_event(relay, "history", 0)
         done = self.client.get_event(relay, "done", 0)
         return {
             "offset": self.client.get_event(relay, "cursor", 0) or 0,
             "generation": (done or {}).get("generation", 0),
             "terminal": bool(done),
             "pause": {"phase": self.client.get_event(relay, "phase", 0)},
-            "history_id": history.get("id")
-            if isinstance(history, dict)
-            and history.get("generation", 0) == (done or {}).get("generation", 0)
-            else history
-            if isinstance(history, str)
-            else None,
         }
+
+    def _delivered_status(self, run_id, version, generation):
+        delivery = self._delivery(run_id, version)
+        terminal = delivery.get("terminal")
+        if not terminal or delivery["generation"] != generation:
+            return None
+        # Drained releases recorded a boolean. Their terminal prefix ends in done.
+        offset = delivery["offset"] if terminal is True else terminal
+        if not offset:
+            return None
+        try:
+            frame = self.client.read_stream_offset(
+                run_id + ":events", "events", offset - 1, timeout_seconds=0
+            )
+        except (
+            dbos_error.DBOSStreamTimeoutError,
+            dbos_error.DBOSNonExistentWorkflowError,
+        ):
+            return None
+        if frame.get("type") != "done" or frame.get("generation", 0) != generation:
+            return None
+        status = frame.get("status")
+        return status if status in TERMINAL else None
 
     def get(self, run_id, owner):
         req = read_request(run_id, owner)
@@ -531,7 +600,6 @@ class RunClient:
         delivery = self._delivery(run_id, version)
         same_generation = delivery["generation"] == result["generation"]
         cursor = delivery["offset"]
-        history_id = delivery.get("history_id") if same_generation else None
         if result["status"] == "running" and phase in HUMAN_PHASES:
             result["status"] = phase
         clarification = None
@@ -541,8 +609,7 @@ class RunClient:
                 with self.engine.connect() as db:
                     if db_time(db) >= clarification["expires_at"]:
                         clarification = None
-        request = result.pop("archive_request")
-        terminal = native.status in NATIVE_TERMINAL
+        request = req["data"]["request"]
         return dict(
             result,
             approval_required=bool(
@@ -550,7 +617,16 @@ class RunClient:
             ),
             request={
                 key: request[key]
-                for key in ("topic", "model", "mode", "rag_enabled", "require_approval")
+                for key in (
+                    "topic",
+                    "org_context",
+                    "model",
+                    "search_api",
+                    "mode",
+                    "rag_enabled",
+                    "require_approval",
+                    "allow_clarification",
+                )
                 if key in request
             },
             run_id=run_id,
@@ -571,8 +647,6 @@ class RunClient:
             )
             if clarification
             else None,
-            history_id=history_id,
-            archive_status="saved" if history_id else "pending" if terminal else "none",
             plan=self._public_plan(
                 run_id,
                 plan,

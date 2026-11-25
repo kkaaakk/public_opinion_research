@@ -4,7 +4,7 @@ Every function here is one native transaction step: the business rows it writes
 and the datasource checkpoint that records its result commit in the same
 database transaction. A recovered execution therefore replays the committed
 outcome instead of writing a second time, and a crash before the commit leaves
-no partial stage, event or archive behind.
+no partial stage transition behind.
 
 These transactions never perform network I/O. Model calls, tool calls and
 provider receipts stay in their own ledgers.
@@ -20,7 +20,6 @@ from open_deep_research.state import ResearchReview
 from open_deep_research.web.run_data import (
     RunJSON,
     digest,
-    public_payload,
     publish_event,
     role_deliverables,
     stage_budget,
@@ -31,9 +30,7 @@ from open_deep_research.workflow.dbos_config import (
     settings,
 )
 
-# Business writes only need row-level correctness; the request row, the history
-# row and the tool ledger keep their own locks. Serializable would add retries
-# without protecting a write that this code does not read back.
+# Stage events are inserted with a deterministic message identity.
 ISOLATION = "READ COMMITTED"
 STAGES = ("running", "completed", "failed")
 
@@ -145,47 +142,7 @@ def commit_stage(scope, status, *, result=None, error=None):
     return run_transaction("por.commit_stage", _commit_stage, scope, status, result, error)
 
 
-def _archive(run_id, facts):
-    """Store one Run archive inside the transaction that records it."""
-    from open_deep_research.web.history import (
-        HistoryStage,
-        get_history_store,
-        history_record,
-    )
-
-    record = history_record(
-        run_id=run_id,
-        request=facts["archive_request"],
-        report=public_payload(facts["report"]),
-        usage=facts["usage"],
-        started_at=facts["created_at"],
-        completed_at=facts["terminated_at"],
-        status=facts["status"]
-        if facts["status"] in {"completed", "failed", "cancelled"}
-        else "incomplete",
-        source="dbos",
-        role_reports=[
-            HistoryStage.model_validate(public_payload(stage))
-            for stage in facts["role_reports"]
-        ],
-        error_message="Research requires review." if facts["error"] else "",
-        failed_stage=facts["current_step"],
-    )
-    record.owner = facts["owner"]
-    record.research_session_id = facts["research_session_id"]
-    # Archive order follows the business retry generation, not relay latency.
-    record.run_state_version = facts["generation"] + 1
-    get_history_store().save([record], db=business_datasource().sql_session())
-    return record.id
-
-
-def archive(run_id, facts):
-    """Archive a completed, failed or cancelled Run exactly once."""
-    return run_transaction("por.archive", _archive, run_id, facts)
-
-
 __all__ = [
-    "archive",
     "business_datasource",
     "commit_stage",
     "prepare",
