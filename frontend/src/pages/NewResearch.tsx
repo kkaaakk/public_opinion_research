@@ -58,16 +58,18 @@ function mediaType(file: File, limits: Schema['ImageLimits']) {
 function ResearchForm({
   settings,
   sessionId,
+  previousRequest,
 }: {
   settings: Schema['Settings'];
   sessionId: string | null;
+  previousRequest?: Schema['RequestSummary'];
 }) {
   const { api } = useApi();
   const client = useQueryClient();
   const navigate = useNavigate();
-  const [topic, setTopic] = useState('');
-  const [context, setContext] = useState('');
-  const [rag, setRag] = useState(settings.new_run_rag_default);
+  const [topic, setTopic] = useState(previousRequest?.topic ?? '');
+  const [context, setContext] = useState(previousRequest?.org_context ?? '');
+  const [rag, setRag] = useState(previousRequest?.rag_enabled ?? settings.new_run_rag_default);
   const [files, setFiles] = useState<SelectedImage[]>([]);
   const [pending, setPending] = useState<PendingSubmission | null>(null);
   const [restoring, setRestoring] = useState(true);
@@ -366,24 +368,47 @@ function ResearchForm({
 export default function NewResearch() {
   const { api, authenticated } = useApi();
   const [params] = useSearchParams();
-  const sessionId = params.get('session');
+  const previousRunId = params.get('fromRun');
   const settings = useQuery({
     queryKey: ['settings'],
     queryFn: ({ signal }) => api.settings(signal),
     enabled: authenticated,
   });
+  const previousRun = useQuery({
+    queryKey: ['run', previousRunId],
+    queryFn: ({ signal }) => api.run(previousRunId!, signal),
+    enabled: authenticated && Boolean(previousRunId),
+  });
+  const sessionId = previousRunId
+    ? previousRun.data?.research_session_id || null
+    : params.get('session');
   return (
     <div className="new-research">
       <div className="new-intro">
-        <h1>{sessionId ? '延续研究会话' : '开始一项研究'}</h1>
-        <p>从一个问题开始，逐步明确研究范围并沉淀可追溯的报告。</p>
+        <h1>{sessionId || previousRunId ? '延续研究会话' : '开始一项研究'}</h1>
+        <p>
+          {previousRun.data
+            ? '已带入原研究信息，点击开始研究会创建一条新的 Run。'
+            : '从一个问题开始，逐步明确研究范围并沉淀可追溯的报告。'}
+        </p>
       </div>
       {!authenticated ? (
         <AccessRequired />
       ) : settings.isError ? (
         <ErrorNotice error={settings.error} retry={() => void settings.refetch()} />
+      ) : previousRunId && previousRun.isError ? (
+        <ErrorNotice error={previousRun.error} retry={() => void previousRun.refetch()} />
+      ) : previousRunId && !previousRun.data ? (
+        <Loading text="正在读取原研究信息…" />
+      ) : previousRunId && !sessionId ? (
+        <ErrorNotice error="原研究的会话不可用。" />
       ) : settings.data ? (
-        <ResearchForm key={sessionId ?? ''} settings={settings.data} sessionId={sessionId} />
+        <ResearchForm
+          key={previousRunId ?? sessionId ?? ''}
+          settings={settings.data}
+          sessionId={sessionId}
+          previousRequest={previousRun.data?.request}
+        />
       ) : (
         <Loading text="正在读取研究输入限制…" />
       )}

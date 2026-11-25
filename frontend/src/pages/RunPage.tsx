@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
   ChevronRight,
@@ -219,13 +220,21 @@ function useRunObservation(id: string, history: boolean, enabled: boolean) {
 }
 
 function RunView({ id, history }: { id: string; history: boolean }) {
-  const { authenticated } = useApi();
+  const { api, authenticated } = useApi();
   const { run, events, connection, error, refresh } = useRunObservation(id, history, authenticated);
   const commands = useRunCommands(id, run, events, refresh);
   const [inspector, setInspector] = useState(
     () => window.matchMedia('(min-width: 1120px)').matches,
   );
   const stages = useMemo(() => (run ? stageTimeline(run, events) : []), [run, events]);
+  const sessionId = run?.research_session_id ?? '';
+  const finished = run ? delivered(run) : false;
+  const session = useQuery({
+    queryKey: ['session', sessionId, 0],
+    queryFn: ({ signal }) => api.session(sessionId, 0, signal),
+    enabled: authenticated && finished && Boolean(sessionId),
+    refetchInterval: (query) => (query.state.data?.can_continue === false ? 10_000 : false),
+  });
   const back = history
     ? '/history'
     : run?.research_session_id
@@ -241,7 +250,6 @@ function RunView({ id, history }: { id: string; history: boolean }) {
     );
 
   const topic = run.request.topic || '研究详情';
-  const finished = delivered(run);
   const currentClarification =
     run.status === 'awaiting_clarification' && run.clarification?.questions.length
       ? run.clarification
@@ -314,7 +322,8 @@ function RunView({ id, history }: { id: string; history: boolean }) {
     ((run.status === 'awaiting_approval' && run.can_approve) ||
       plan.ai_revision?.pending ||
       (run.phase === 'revising_brief' && run.status === 'running'));
-  const showContinue = finished && run.settlement === 'settled' && run.research_session_id;
+  const showContinue =
+    finished && session.isSuccess && session.data.can_continue && !commands.locked;
 
   return (
     <div className="run-layout" data-inspector={inspector ? 'open' : 'closed'}>
@@ -343,11 +352,11 @@ function RunView({ id, history }: { id: string; history: boolean }) {
                 }
               >
                 <RotateCcw data-icon="inline-start" />
-                重试
+                恢复运行
               </Button>
             )}
             {showContinue && (
-              <LinkButton to={'/?session=' + run.research_session_id}>延续研究</LinkButton>
+              <LinkButton to={'/?fromRun=' + encodeURIComponent(run.run_id)}>延续研究</LinkButton>
             )}
             {!inspector && (
               <Button
