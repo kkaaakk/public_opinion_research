@@ -122,7 +122,7 @@ def test_native_interactions_ignore_optional_legacy_tables(native_case):
     )["plan"]
     case.client.approve(run_id, "alice", revised["version"], "approve")
     assert (
-        case.wait(run, lambda r: r["archive_status"] == "saved")["status"]
+        case.wait(run, lambda r: r["events_complete"])["status"]
         == "completed"
     )
     with domain_engine().connect() as db:

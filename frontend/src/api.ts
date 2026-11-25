@@ -10,11 +10,12 @@ import {
   type EventPage,
   type ExecutionPage,
   type HistoryPage,
-  type HistoryRecord,
   type RunRequest,
   type RunSnapshot,
 } from './protocol';
-import { parseArchive, parseExecution, parseHistory } from './readModels';
+import { parseExecution, parseHistory } from './readModels';
+
+export const HISTORY_PAGE_SIZE = 10;
 
 export class ApiError extends Error {
   constructor(
@@ -53,12 +54,13 @@ export class StudioApi {
   async json(path: string, init: RequestInit = {}): Promise<unknown> {
     return (await this.request(path, init)).json();
   }
-  async read(id: string, signal?: AbortSignal): Promise<RunSnapshot> {
-    const result = parseSnapshot(
-      await this.json(`/api/runs/${encodeURIComponent(id)}`, { signal }),
-    );
+  private async readSnapshot(path: string, id: string, signal?: AbortSignal): Promise<RunSnapshot> {
+    const result = parseSnapshot(await this.json(`${path}/${encodeURIComponent(id)}`, { signal }));
     if (result.run_id !== id) throw new ProtocolError('快照属于其他 Run');
     return result;
+  }
+  read(id: string, signal?: AbortSignal): Promise<RunSnapshot> {
+    return this.readSnapshot('/api/runs', id, signal);
   }
   async create(request: RunRequest, key: string): Promise<RunSnapshot> {
     return parseSnapshot(
@@ -123,16 +125,15 @@ export class StudioApi {
     if (string(v.run_id) !== id) throw new ProtocolError('日志属于其他 Run');
     return parseExecution(v);
   }
-  async history(query: string, offset: number, signal?: AbortSignal): Promise<HistoryPage> {
+  async history(offset: number, signal?: AbortSignal): Promise<HistoryPage> {
     const v = record(
-      await this.json(`/api/history?q=${encodeURIComponent(query)}&offset=${offset}&limit=10`, {
+      await this.json(`/api/history?offset=${offset}&limit=${HISTORY_PAGE_SIZE}`, {
         signal,
       }),
     );
     return parseHistory(v);
   }
-  async archive(id: string, signal?: AbortSignal): Promise<HistoryRecord> {
-    const v = record(await this.json(`/api/history/${encodeURIComponent(id)}`, { signal }));
-    return parseArchive(v);
+  historyDetail(id: string, signal?: AbortSignal): Promise<RunSnapshot> {
+    return this.readSnapshot('/api/history', id, signal);
   }
 }

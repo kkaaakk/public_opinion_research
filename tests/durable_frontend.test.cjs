@@ -25,7 +25,7 @@ function stream(events) {
     } }) } };
 }
 function state(status, extra = {}) {
-    return { status, usage: {}, role_reports: [], report: '', archive_status: 'pending',
+    return { status, usage: {}, role_reports: [], report: '',
         events_complete: ['completed', 'failed', 'cancelled', 'interrupted'].includes(status),
         event_cursor: 0, ...extra };
 }
@@ -59,7 +59,7 @@ function page(sessionStorage, transport) {
         document: { getElementById: element, createElement: () => element('created-' + elements.size), body: { appendChild() {} } },
         window: { location: { href: 'http://localhost/' }, history: { replaceState() {} } },
         fetch: async (path, options = {}) => {
-            if (path.startsWith('/api/history')) return response({ items: [], total: 0 });
+            if (path.startsWith('/api/history')) return response({ items: [], next_offset: 0, has_more: false });
             calls.push({ path, options });
             return transport(path, options);
         },
@@ -131,7 +131,7 @@ test('known Run reload only subscribes and deduplicates durable event sequences'
             assert.equal(view.element('status-text').textContent, '正在接收结果…');
             assert.notEqual(JSON.parse(saved.getItem(storageKey)).finished, true);
             return stream([
-                { seq: 8, type: 'history_saved', id: 'old-archive', generation: 0 },
+                { seq: 8, type: 'warning', message: 'old warning', generation: 0 },
                 { seq: 8, type: 'status', message: 'duplicate', generation: 1 },
                 { seq: 9, type: 'report', content: 'report', generation: 1 }, { seq: 10, type: 'done', generation: 1 },
             ]);
@@ -144,7 +144,8 @@ test('known Run reload only subscribes and deduplicates durable event sequences'
     assert.equal(JSON.parse(saved.getItem(storageKey)).cursor, 10);
     assert.equal(JSON.parse(saved.getItem(storageKey)).finished, true);
     assert.equal(view.element('report-content').textContent, 'report');
-    assert.equal(view.call('archiveSaved'), false, 'older generations must not replace the current archive state');
+    assert.ok(view.element('report-notice').classList.contains('hidden'), 'older generations must not change the report notice');
+    assert.equal(view.call('selectedHistoryRecord.run_id'), runId);
     assert.equal(view.element('status-text').textContent, '已完成');
 });
 

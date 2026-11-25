@@ -5,13 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { ROLE_LABELS } from '../projection';
 import { Empty, exportMarkdown } from './common';
 export type ReportOption = { id: string; label: string; content: string };
-export function Reports({
-  reports,
-  archive = false,
-}: {
-  reports: ReportOption[];
-  archive?: boolean;
-}) {
+export function Reports({ reports }: { reports: ReportOption[] }) {
   const [selection, setSelection] = useState('final');
   const selected = reports.find((r) => r.id === selection) ?? reports.at(-1);
   return (
@@ -19,7 +13,7 @@ export function Reports({
       <div className="panel-head">
         <strong>
           <FileText size={16} />
-          {archive ? 'PostgreSQL 报告归档' : '研究产物'}
+          研究产物
         </strong>
         <div className="filters">
           <select
@@ -45,9 +39,6 @@ export function Reports({
           </button>
         </div>
       </div>
-      {archive && (
-        <p className="panel-note">报告归档与 DBOS 执行事件独立。此视图不代表完整 Trace。</p>
-      )}
       {selected?.content ? (
         <article className="markdown">
           <ReactMarkdown

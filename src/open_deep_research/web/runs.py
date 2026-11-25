@@ -6,6 +6,7 @@ import asyncio
 import json
 from typing import Literal
 
+from dbos import error as dbos_error
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
@@ -15,8 +16,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from open_deep_research.web.durable import get_run_client
 from open_deep_research.web.run_data import (
     IDEMPOTENCY_KEY_PATTERN,
+    TERMINAL,
     RunConflict,
     RunNotFound,
+    public_payload,
     public_run,
 )
 from open_deep_research.workflow.brief import MAX_BRIEF_FEEDBACK_CHARS
@@ -25,6 +28,7 @@ MAX_TOPIC_LENGTH = 12_000
 MAX_ORG_CONTEXT_LENGTH = 8_000
 
 router = APIRouter(prefix="/api/runs")
+history_router = APIRouter(prefix="/api/history")
 
 
 class ResearchRequest(BaseModel):
@@ -79,7 +83,7 @@ def _call(operation, *args, **kwargs):
         raise HTTPException(404, "Run or Session not found.") from None
     except RunConflict as exc:
         raise HTTPException(409, str(exc)) from None
-    except SQLAlchemyError:
+    except (SQLAlchemyError, dbos_error.DBOSQueryTimeoutError):
         raise HTTPException(503, "Durable Run storage is unavailable.") from None
 
 
@@ -153,6 +157,33 @@ def read(run_id: str, raw: Request) -> JSONResponse:
     """Read current progress and retained reports within the trusted owner scope."""
     owner = trusted_owner(raw)
     run = _call(_store().get, run_id, owner)
+    return JSONResponse(public_run(run), headers={"Cache-Control": "no-store"})
+
+
+@history_router.get("")
+def list_history(
+    raw: Request,
+    limit: int = Query(default=10, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100_000),
+) -> JSONResponse:
+    """List the authenticated owner's delivered terminal Runs."""
+    owner = trusted_owner(raw)
+    page = _call(_store().list_history, owner, limit, offset)
+    return JSONResponse(public_payload(page), headers={"Cache-Control": "no-store"})
+
+
+@history_router.get("/{run_id}")
+def read_history(run_id: str, raw: Request) -> JSONResponse:
+    """Open a terminal Run with the same read model as the live Run API."""
+    owner = trusted_owner(raw)
+    run = _call(_store().get, run_id, owner)
+    if (
+        run["status"] not in TERMINAL
+        or run["settlement"] == "pending"
+        or not run["events_complete"]
+        or run["retry_requested"]
+    ):
+        raise HTTPException(404, "Finished research Run not found.")
     return JSONResponse(public_run(run), headers={"Cache-Control": "no-store"})
 
 

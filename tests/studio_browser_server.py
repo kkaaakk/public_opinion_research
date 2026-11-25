@@ -57,11 +57,11 @@ from open_deep_research import config_file
 from open_deep_research.budget import capture_budget_usage
 from open_deep_research.configuration import Configuration
 from open_deep_research.runtime import business_agent
-from open_deep_research.web import history, runs, server
+from open_deep_research.web import runs, server
 from open_deep_research.web.durable import close_run_client
 from open_deep_research.web.executor import launch
 from open_deep_research.workflow import dbos_workflow
-from open_deep_research.workflow.dbos_config import domain_engine, settings
+from open_deep_research.workflow.dbos_config import settings
 
 # The Web API accepts business input only, so a browser fixture selects its
 # server-side policy from the submitted topic. Clarification stays available to
@@ -100,9 +100,6 @@ def main():
                 raise RuntimeError("Controlled revision provider failure")
 
         _, cfg, _, _, _, _ = install_sdk(patch, Path(directory), on_revision=revise)
-        archive = history.HistoryStore(domain_engine())
-        patch.setattr(history, "get_history_store", lambda: archive)
-        patch.setattr(server, "get_history_store", lambda: archive)
         patch.setattr(server, "WEB_API_TOKEN", "studio-browser-test-only")
 
         # Browser scenarios come from the submitted topic, the only business
@@ -208,7 +205,6 @@ def main():
             # Only this process's UUID DB can be removed. Existing business stores stay intact.
             DBOS.destroy(destroy_registry=True)
             close_run_client()
-            archive.close()
             patch.undo()
             assert (
                 name.startswith("por_test_")

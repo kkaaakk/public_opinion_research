@@ -56,7 +56,7 @@ export function NativeTrace({ api, runId }: { api: StudioApi; runId: string }) {
       </div>
       <p className="panel-note">
         原生状态是执行权威。Journal 中的命令包含审批等待、子 Workflow 和业务
-        Step；未写入的调用可能仍在执行。DBOS 终态与 SDK 清算、归档分别显示。
+        Step。未写入的调用可能仍在执行。DBOS 终态、SDK 清算和事件交付分别显示。
       </p>
       <ErrorNote error={error} />
       <div className="native-grid">

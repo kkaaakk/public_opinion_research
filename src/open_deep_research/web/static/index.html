@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 研究仪表盘模板：参数输入、SSE 进度展示、历史归档及报告操作。 -->
+<!-- 研究仪表盘模板，包含参数、SSE 进度、研究历史和报告。 -->
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -18,19 +18,14 @@
         </header>
 
         <div class="workspace">
-        <!-- 历史侧栏：搜索、分页和导入；记录列表由 JavaScript 动态生成。 -->
+        <!-- 研究历史及分页。 -->
         <aside id="history-panel" class="history-panel" aria-labelledby="history-heading">
             <div class="history-header">
                 <h2 id="history-heading">研究历史</h2>
-                <span id="history-count" class="history-count" aria-live="polite">0</span>
             </div>
             <p class="history-description">保留研究结果和中断前的阶段内容</p>
-            <label for="history-search" class="history-search-label">搜索主题或报告内容</label>
-            <input id="history-search" class="history-search" type="search"
-                placeholder="搜索研究历史" maxlength="200" autocomplete="off">
             <div class="history-actions">
                 <button id="history-refresh" class="btn-action" type="button">刷新</button>
-                <button id="history-import" class="btn-action" type="button">导入 LangSmith</button>
             </div>
             <p id="history-feedback" class="history-feedback hidden" role="status"></p>
             <p id="history-message" class="history-message" role="status">正在加载历史记录…</p>
@@ -120,7 +115,7 @@
             <div id="log-entries" class="log-entries"></div>
         </section>
 
-        <!-- 结果区域：展示经过净化的报告、用量与归档信息。 -->
+        <!-- 结果区域，展示经过净化的报告及用量。 -->
         <section id="results-panel" class="results-panel hidden">
             <div class="results-header">
                 <div class="results-heading">

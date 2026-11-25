@@ -177,17 +177,11 @@ def experiment_schedule(source_root, baseline_source_root, repetitions, seed):
     return plan
 
 
-def wait_for_archive(case, run, timeout=120):
-    """Wait on DBOS's delivered archive receipt, then verify the full projection.
-
-    The normal fixture has no retry generation. Its relay publishes history
-    only after saved History and the terminal event manifest. Repeated complete
-    Run projections every 50ms otherwise become an unrelated SQL load generator.
-    This helper is benchmark-only and never changes execution or its receipts.
-    """
+def wait_for_terminal_delivery(case, run, timeout=120):
+    """Wait on the historical RunFacts relay's native terminal receipt."""
     generation = run.get("generation", 0)
     receipt = case.client.client.get_event(
-        run["run_id"] + ":events", "history", timeout_seconds=timeout
+        run["run_id"] + ":events", "done", timeout_seconds=timeout
     )
     assert isinstance(receipt, dict) and receipt.get("generation") == generation
     final = case.client.get(run["run_id"], run["owner"])
@@ -196,11 +190,8 @@ def wait_for_archive(case, run, timeout=120):
         and final["generation"] == generation
         and final["status"] == "completed"
         and final["settlement"] == "settled"
-        and final["archive_status"] == "saved"
         and final["events_complete"]
-        and final["history_id"] == receipt.get("id")
-        and bool(final["history_id"])
-    ), "Native archive receipt and complete terminal projection must agree"
+    ), "Native receipt and complete terminal projection must agree"
     return final
 
 
@@ -741,7 +732,7 @@ def worker(args):
     def run(index):
         start = time.perf_counter()
         value = case.create(owner="bench-" + str(index))
-        final = wait_for_archive(case, value)
+        final = wait_for_terminal_delivery(case, value)
         assert final["status"] == "completed" and final["settlement"] == "settled"
         assert (
             final["usage"]["model_calls"] == 28
@@ -984,7 +975,7 @@ def worker(args):
         output = {
             "case": args.case,
             "variant": getattr(args, "variant", "candidate"),
-            "observer": "native_archive_receipt_then_one_full_projection",
+            "observer": "native_terminal_receipt_then_one_full_projection",
             "concurrency": concurrency,
             "runs": results,
             "latency_ms": {
@@ -1053,8 +1044,6 @@ def worker(args):
         stop.set()
         DBOS.destroy(workflow_completion_timeout_sec=2)
         telemetry.shutdown_telemetry()
-        if case is not None:
-            case.history.close()
         close_run_client()
         patch.undo()
         meters.shutdown()

@@ -64,7 +64,7 @@ from open_deep_research.workflow.python_state import (
     read_research_result,
     role_snapshot,
 )
-from open_deep_research.workflow.transactions import archive, commit_stage
+from open_deep_research.workflow.transactions import commit_stage
 
 
 def _interaction_now():
@@ -641,7 +641,7 @@ def public_event(event, fallback_at):
 async def events_workflow(run_id):
     """Merge native mailboxes into one append-only Stream for all readers."""
     delivery = {"offset": 0, "generation": 0}
-    terminal = archive_batch = None
+    terminal = None
     # Producers stamp observed_at when they send. The relay never asks the
     # clock itself: a fallback is resolved once, and only a legacy message
     # that predates the stamp can ever reach it.
@@ -654,35 +654,32 @@ async def events_workflow(run_id):
         delivery["offset"] += 1
 
     while True:
-        draining = terminal is not None or archive_batch is not None
         event = await DBOS.recv_async(
-            "events", timeout_seconds=0 if draining else 86400
+            "events", timeout_seconds=0 if terminal is not None else 86400
         )
         if event is None:
             # recv orders by millisecond, with no tie breaker. A terminal
             # notification is a fence: consume the committed mailbox prefix
-            # before writing any terminal frames, including when archive won
-            # the timestamp tie.
-            if not draining:
+            # before writing any terminal frames.
+            if terminal is None:
                 continue
-            for batch in (terminal, archive_batch):
-                if batch is None:
-                    continue
-                observed = batch.get("observed_at") or fallback_at
-                for frame in batch["frames"]:
-                    await append(
-                        dict(
-                            frame,
-                            observed_at=observed,
-                            generation=delivery["generation"],
-                        )
+            observed = terminal.get("observed_at") or fallback_at
+            for frame in terminal["frames"]:
+                await append(
+                    dict(
+                        frame,
+                        observed_at=observed,
+                        generation=delivery["generation"],
                     )
-                delivery.update(batch["receipt"])
+                )
+            # The final frame is done. Its one-based offset lets history read
+            # that frame directly from the delivered prefix.
+            delivery.update(terminal=delivery["offset"], pause=None)
             await DBOS.set_event_async("delivery", delivery)
-            if archive_batch and archive_batch["close"]:
+            if terminal["close"]:
                 await DBOS.close_stream_async("events")
                 return
-            terminal = archive_batch = None
+            terminal = None
             continue
 
         generation = event["generation"]
@@ -690,13 +687,11 @@ async def events_workflow(run_id):
             continue
         if generation > delivery["generation"]:
             delivery = {"offset": delivery["offset"], "generation": generation}
-            terminal = archive_batch = None
+            terminal = None
         kind = event["type"]
         if kind == "_terminal":
-            terminal = event
-            continue
-        if kind == "_archive_saved":
-            archive_batch = event
+            if not delivery.get("terminal"):
+                terminal = event
             continue
         if kind == "run_status" and (
             version := event.get("plan_version") or event.get("clarification_version")
@@ -734,7 +729,13 @@ async def completion_facts(run_id):
             limit=1,
         ):
             return None
-        return get_run_client().outcome(run_id)
+        result = get_run_client().outcome(run_id)
+        return {
+            key: result[key]
+            for key in (
+                "status", "settlement", "usage", "error", "current_step", "retry_safe"
+            )
+        }
 
     return await asyncio.to_thread(read)
 
@@ -1032,7 +1033,7 @@ def terminal_frames(result):
             failed_stage=result["current_step"],
         )
     yield dict(type="run_status", status=status)
-    yield dict(type="done", status=status, archive_status="pending")
+    yield dict(type="done", status=status)
 
 
 @DBOS.workflow(name="por.finalize")
@@ -1051,52 +1052,19 @@ async def finalize_workflow(run_id):
                 break
             await DBOS.sleep_async(1)
 
+        safe = result["retry_safe"]
         await send_event(
             run_id,
             "_terminal",
             generation=generation,
             frames=list(terminal_frames(result)),
-            receipt={"terminal": True, "pause": None},
+            close=not safe,
         )
-        archived = notified = False
-        safe = result["retry_safe"]
+        if not safe:
+            return
         while True:
-            if not archived:
-                try:
-                    history_id = await asyncio.to_thread(
-                        archive, run_id, dict(result, generation=generation)
-                    )
-                except Exception:
-                    if not notified:
-                        await send_event(
-                            run_id,
-                            "archive_pending",
-                            generation=generation,
-                            message="Report archive is pending; the Run retains its result.",
-                        )
-                        notified = True
-                else:
-                    status = result["status"]
-                    await send_event(
-                        run_id,
-                        "_archive_saved",
-                        generation=generation,
-                        close=not safe,
-                        receipt={"history_id": history_id},
-                        frames=[
-                            dict(type="history_saved", id=history_id, status=status),
-                            dict(type="done", status=status, archive_status="saved"),
-                        ],
-                    )
-                    archived = True
-                    if not safe:
-                        return
-
-            command = await DBOS.recv_async(
-                "retry", timeout_seconds=86400 if archived else 30
-            )
-            if safe:
-                advanced = await apply_retry(run_id, command, generation)
-                if advanced > generation:
-                    generation = advanced
-                    break
+            command = await DBOS.recv_async("retry", timeout_seconds=86400)
+            advanced = await apply_retry(run_id, command, generation)
+            if advanced > generation:
+                generation = advanced
+                break

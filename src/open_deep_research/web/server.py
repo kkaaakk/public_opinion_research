@@ -1,4 +1,4 @@
-# 提供仪表盘、SSE 实时研究接口和历史归档 API，并校验请求与可选令牌。
+# 提供仪表盘、SSE 实时研究接口和历史 API，并校验请求与访问令牌。
 """FastAPI web server for Open Deep Research.
 
 Provides a clean web frontend and SSE streaming API for the deep research agent.
@@ -25,15 +25,10 @@ from open_deep_research.observability import (  # noqa: E402, I001
 
 ensure_langsmith_configuration()
 
-from fastapi import FastAPI, HTTPException, Query, Request  # noqa: E402, I001
+from fastapi import FastAPI, HTTPException, Request  # noqa: E402, I001
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
-
-from open_deep_research.web.history import (  # noqa: E402, I001
-    HistoryUnavailable,
-    get_history_store,
-)
 
 STATIC_DIR = Path(__file__).parent / "static"
 STUDIO_DIR = Path(__file__).parent / "studio"
@@ -45,10 +40,10 @@ WEB_API_TOKEN = (
 ).strip()
 
 
-# 管理 Web 服务生命周期，在关闭时释放历史数据库连接。
+# 管理 Web 服务生命周期，在关闭时释放数据库连接。
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Release history database connections when the web server stops."""
+    """Release Run database connections when the web server stops."""
     from open_deep_research.observability.telemetry import (
         initialize_telemetry,
         shutdown_telemetry,
@@ -194,56 +189,6 @@ def _require_authorization(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Authentication required.")
 
 
-# 返回历史服务错误，隐藏连接串与数据库凭据。
-@app.exception_handler(HistoryUnavailable)
-async def handle_history_unavailable(
-    _request: Request, exc: HistoryUnavailable
-) -> JSONResponse:
-    """Report history failures without leaking connection strings or credentials."""
-    LOGGER.warning("History service unavailable", exc_info=exc)
-    return JSONResponse(status_code=503, content={"detail": str(exc)})
-
-
-# 在授权后按搜索条件和分页查询研究历史。
-@app.get("/api/history")
-def list_history(
-    raw: Request,
-    q: str = Query(default="", max_length=200),
-    limit: int = Query(default=10, ge=1, le=100),
-    offset: int = Query(default=0, ge=0, le=100_000),
-) -> JSONResponse:
-    """List and search completed reports from the business database."""
-    _require_authorization(raw)
-    from open_deep_research.web.run_data import public_payload
-
-    data = get_history_store().list(
-        query=q,
-        limit=limit,
-        offset=offset,
-        **({"owner": "operator"} if WEB_API_TOKEN else {}),
-    )
-    return JSONResponse(
-        content=public_payload(data), headers={"Cache-Control": "no-store"}
-    )
-
-
-# 读取指定历史报告及当时研究参数，不存在时返回相应 HTTP 错误。
-@app.get("/api/history/{history_id}")
-def read_history(history_id: str, raw: Request) -> JSONResponse:
-    """Return a saved report and the research parameters used to produce it."""
-    _require_authorization(raw)
-    record = get_history_store().get(
-        history_id, **({"owner": "operator"} if WEB_API_TOKEN else {})
-    )
-    if record is None:
-        raise HTTPException(status_code=404, detail="研究历史不存在。")
-    from open_deep_research.web.run_data import public_payload
-
-    return JSONResponse(
-        content=public_payload(record), headers={"Cache-Control": "no-store"}
-    )
-
-
 # 读取服务启动配置并运行本地 Uvicorn 服务。
 def main():
     """Launch the local research web server."""
@@ -270,9 +215,10 @@ def main():
     )
 
 
-from open_deep_research.web.runs import router as _run_router  # noqa: E402
+from open_deep_research.web import runs  # noqa: E402
 
-app.include_router(_run_router)
+app.include_router(runs.router)
+app.include_router(runs.history_router)
 
 
 if __name__ == "__main__":

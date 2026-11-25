@@ -12,7 +12,7 @@ CLI（`por`）经 RunClient 和 DBOSClient 将研究入 PostgreSQL 队列。独�
 两个 Producer 并行汇合，经 Review/Gap 定向补查，再顺序执行 Risk → Strategy → Report Node。
 原 LangGraph Server、业务 Graph 和手写 Agent Loop 已退役。
 
-PostgreSQL 保存 DBOS journal、领域事实和报告 History；研究运行不再依赖 Neo4j 或第二套长期记忆。
+PostgreSQL 保存 DBOS journal 和领域事实，研究历史按 Run ID 从这些记录读取。
 部署需要 `DBOS_DATABASE_URL`、操作员访问令牌及独立 DBOS Executor，详见 [部署说明](docs/architecture/dbos-deployment.md)。
 旧 SQL 任务及旧版本 DBOS 任务须在匹配的发行版受控排空，不能跨引擎重投。
 历史记录继续读取和导入。单操作员令牌不等于多租户身份；跨主机自动接管需要额外协调。
@@ -161,26 +161,26 @@ uv run python -m open_deep_research.web.executor --executor-id workstation-1
 Smoke 的结论以最终结果为准，`CLI 提交成功 ≠ 研究成功`。拿到 Run ID 后依次核对：
 
 ```powershell
-uv run por status <run_id>     # status 是否 completed、settlement 是否 settled
+uv run por status <run_id> --json  # status、settlement 和 events_complete
 uv run por inspect <run_id>    # 模型尝试 / 工具调用 / 操作回执是否入账
 uv run por report <run_id>     # Final Report 是否存在且完整
 ```
 
 验收要点：Final Report 非空且带来源；Public Signal 实际调用了检索工具；Risk /
-Strategy 真实完成；Usage 完整或明确标记 `usage_complete=false`；History 归档为
-`saved` 且与 Run 终态一致；没有未确认的外部副作用。失败时用 `por inspect` 加
+Strategy 真实完成；Usage 完整或明确标记 `usage_complete=false`；终态交付完成
+（`events_complete=true`），且所有外部副作用都已确认。失败时用 `por inspect` 加
 Executor 日志定位环节，不要为跑通而无限制放宽预算。完整链路与故障诊断命令见
 [执行架构](docs/architecture/agent-loop.md) 与 [部署说明](docs/architecture/dbos-deployment.md)。
 
 第六轮已用上述路径完成两次真实端到端验收（隔离 PostgreSQL、`config.smoke.yaml`、
 真实 DeepSeek 与 Tavily）：Run `b3321ea7…` 与 `d3375523…` 均达到 `completed`，
-`settlement=settled`，History `saved`，Plan → 公开信号检索 → Review → Risk →
+`settlement=settled`，Plan → 公开信号检索 → Review → Risk →
 Strategy → Final Report 全部真实执行；账本 61 次模型尝试 / 6 次工具调用与
 PostgreSQL 完全一致。已知限制见 [执行架构](docs/architecture/agent-loop.md#已知限制)。
 
 ## 🔭 可观测性与预算
 
-DBOS journal/Step/Stream 记录持久执行、阶段、错误和重试。Run ID 与证据、工具操作回执、History 关联。
+DBOS journal/Step/Stream 持久化执行、阶段、错误和重试。研究历史与证据、工具操作回执共用 Run ID。
 SDK hooks 提供角色执行事实。所有推理使用 SDK Usage 写入模型尝试收据，未知 token 标记为未确认。OpenTelemetry 可按进程启用，只导出经过筛选的诊断信息。LangSmith 仍可用于 RAG 等非模型业务追踪。
 详见 [观测说明](docs/architecture/observability.md)。
 
@@ -289,8 +289,8 @@ RAG、模式或审批开关；旧表单字段会被接受但忽略。
 
 ### 数据库
 
-研究运行只需要 PostgreSQL：DBOS journal、领域事实和报告 History 都在
-`por_domain` schema 中。部署连接、初始化与 Executor 启动见
+研究运行只需要 PostgreSQL。`por_dbos` 保存原生执行记录，`por_domain` 保存
+请求、授权和调用回执。部署连接、初始化与 Executor 启动见
 [部署说明](docs/architecture/dbos-deployment.md)。RAG 与运行存储独立；RAG 关闭时
 `internal_knowledge` 必须同时从 `enabled_business_agents` 中移除，否则启动前检查报错。
 
@@ -309,19 +309,13 @@ python -m open_deep_research.web.server
 
 ### 研究历史
 
-页面左侧的 **研究历史** 支持搜索主题或报告内容、按时间分页、重新打开完整报告、
-下载和复制报告，以及通过 **沿用参数** 填入原研究主题、模型、检索方式和组织背景。
-成功、失败和主动停止的运行都会保留；未生成最终报告时，可查看中断前完成的阶段报告。
-刷新页面或重启 Web 服务后，已归档的记录仍可查看；打开历史记录不会重新调用模型。
+**研究历史** 按时间分页，可打开报告或已完成的阶段产物。Classic 页面可下载、复制报告，
+也可通过 **沿用参数** 填入原研究主题、组织背景和 RAG 选项。
 
-历史档案保存在 PostgreSQL 的 `por_domain.history`，无需额外图数据库。
-每次网页研究结束或中断后自动归档，历史列表展示运行状态和时间，详情保留参数、
-已知 token 用量及原始阶段报告。Finalizer 从 DBOS 原生结果与报告 Event 读取已完成产物，
-报告交付后可以继续独立补偿归档；归档按 owner 与 generation 幂等写入。
-
-数据库暂时不可用时，页面会显示历史读取或保存失败的提示，已生成的报告仍能下载。
-启用 `PUBLIC_OPINION_API_TOKEN` 后，在页面的 **访问设置** 中填写令牌；历史列表、
-报告详情和研究 API 都使用同一认证。令牌仅在当前页面使用。
+历史列表显示已交付终态的 Run。详情复用 Run 读取逻辑，从 DBOS 与业务账本获取请求参数、
+报告、已知用量和错误信息。历史查询是只读操作，保留期取决于对应的 DBOS 记录和业务账本。
+在页面的 **访问设置** 中填写 `PUBLIC_OPINION_API_TOKEN`，历史和 Run API 使用同一认证及 owner 范围。
+ [历史 API 和数据保留](docs/architecture/dbos-deployment.md#历史查询与数据保留)
 
 ## 📱 社媒采集插件
 

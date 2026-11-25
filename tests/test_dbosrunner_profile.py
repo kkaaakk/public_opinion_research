@@ -80,7 +80,7 @@ def test_native_runner_profile(native_case, monkeypatch):
         run = c.create()
         done = c.wait(
             run,
-            lambda r: r["archive_status"] == "saved" and r["events_complete"],
+            lambda r: r["events_complete"],
             timeout=120,
         )
         assert done["status"] == "completed", done["error"]

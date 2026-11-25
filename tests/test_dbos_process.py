@@ -32,73 +32,6 @@ def stage_status(step):
     return commit_status(step)
 
 
-def test_archive_outage_keeps_report_and_retries_without_sdk_replay(
-    native_case, monkeypatch
-):
-    from fastapi.testclient import TestClient
-
-    from open_deep_research.web import history, server
-
-    case = native_case
-    original_history = case.history
-
-    class UnavailableStore(history.HistoryStore):
-        def __init__(self, engine):
-            super().__init__(engine)
-            self.available = False
-
-        def save(self, records):
-            if not self.available:
-                raise history.HistoryUnavailable(
-                    "研究历史暂时无法写入，请检查业务数据库连接。"
-                )
-            return super().save(records)
-
-    store = UnavailableStore(domain_engine())
-    case.history = store
-    monkeypatch.setattr(history, "get_history_store", lambda: store)
-    monkeypatch.setattr(server, "get_history_store", lambda: store)
-    monkeypatch.setattr(server, "WEB_API_TOKEN", "archive-outage-test-token")
-    try:
-        run = case.create(owner="operator")
-        completed = case.wait(run)
-        assert completed["status"] == "completed"
-        assert completed["report"]
-        case.wait(
-            run,
-            lambda r: any(
-                e["type"] == "archive_pending"
-                for e in case.client.read_events(run["run_id"], "operator", 0, 1000)
-            ),
-        )
-        assert case.client.get(run["run_id"], "operator")["archive_status"] == "pending"
-        with TestClient(server.app) as http:
-            unavailable = http.get(
-                "/api/history",
-                headers={"Authorization": "Bearer archive-outage-test-token"},
-            )
-            assert unavailable.status_code == 503
-            assert "local-dbos-test-only" not in unavailable.text
-        before = len(case.models)
-        assert before == 2
-        store.available = True
-        saved = case.wait(run, lambda r: r["archive_status"] == "saved", timeout=90)
-        record = store.get(saved["history_id"], owner="operator")
-        assert record["report"] == saved["report"] == completed["report"]
-        assert saved["usage"] == completed["usage"]
-        assert record["usage"] == {
-            k: saved["usage"][k]
-            for k in ("model_calls", "input_tokens", "output_tokens", "total_tokens")
-        }
-        assert len(case.models) == before
-        assert any(
-            e["type"] == "history_saved"
-            for e in case.client.read_events(run["run_id"], "operator", 0, 1000)
-        )
-    finally:
-        case.history = original_history
-
-
 def start(directory, executor, scenario="normal", *, queues=None):
     output = (directory / (executor + ".log")).open("w", encoding="utf-8")
     env = {
@@ -414,7 +347,7 @@ def test_live_old_executor_is_fenced_after_public_recovery(pg_database, tmp_path
     directory = tmp_path
     old_id = "old-" + uuid4().hex
     new_id = "new-" + uuid4().hex
-    old = start(directory, old_id, queues="por-control,por-business,por-archive")
+    old = start(directory, old_id, queues="por-control,por-business,por-finalize")
     new = None
     try:
         wait(lambda: (directory / "executor-ready").exists(), old, directory)
@@ -756,7 +689,7 @@ def test_restart_reuses_both_committed_analysis_model_steps(pg_database, tmp_pat
         ready.unlink()
         restart = start(tmp_path, executor, scenario)
         wait(
-            lambda: client.get(run_id, "alice")["archive_status"] == "saved",
+            lambda: client.get(run_id, "alice")["events_complete"],
             restart,
             tmp_path,
             timeout=90,
@@ -952,9 +885,9 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
         (tmp_path / (scenario + ".release")).write_text("resume")
         (tmp_path / "executor-ready").unlink()
         if scenario == "revision-expiry":
-            from open_deep_research.workflow.dbos_config import ARCHIVE, CONTROL
+            from open_deep_research.workflow.dbos_config import CONTROL, FINALIZE
 
-            restart = start(tmp_path, executor, scenario, queues=f"{CONTROL},{ARCHIVE}")
+            restart = start(tmp_path, executor, scenario, queues=f"{CONTROL},{FINALIZE}")
             wait(
                 lambda: any(
                     w.status == "ENQUEUED"
@@ -964,7 +897,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
                 tmp_path,
             )
             assert snapshot()["plan"]["ai_revision"]["pending"]
-            wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)
+            wait(lambda: snapshot()["events_complete"], restart, tmp_path)
             done = snapshot()
             assert done["status"] == "cancelled" and done["settlement"] == "settled"
             assert done["plan"]["version"] == old["version"]
@@ -980,7 +913,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
 
         restart = start(tmp_path, executor, scenario)
         if scenario == "revision-unconfirmed":
-            wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)
+            wait(lambda: snapshot()["events_complete"], restart, tmp_path)
             done = snapshot()
             assert (
                 done["status"] == "interrupted" and done["settlement"] == "unresolved"
@@ -1027,7 +960,7 @@ def test_brief_revision_executor_recovery(pg_database, tmp_path, scenario):
             )
             assert {w.workflow_id for w in children} == {first_child, child_id}
             client.approve(run_id, "alice", plan["version"], "approve")
-            wait(lambda: snapshot()["archive_status"] == "saved", restart, tmp_path)
+            wait(lambda: snapshot()["events_complete"], restart, tmp_path)
             assert snapshot()["status"] == "completed" and snapshot()["plan"]["locked"]
         assert (tmp_path / "revision-calls").read_text().splitlines() == expected_calls
     finally:
@@ -1094,7 +1027,7 @@ def test_planning_recovers_before_waiting_for_clarification(
             client.clarify(run_id, "alice", pending(2)["version"], {}, skip=True)
 
         wait(
-            lambda: client.get(run_id, "alice")["archive_status"] == "saved",
+            lambda: client.get(run_id, "alice")["events_complete"],
             restart,
             tmp_path,
         )
@@ -1227,7 +1160,7 @@ def test_clarification_wait_survives_executor_kill_and_same_run_answer(
             )
 
         wait(
-            lambda: client.get(run_id, owner)["archive_status"] == "saved",
+            lambda: client.get(run_id, owner)["events_complete"],
             restart,
             tmp_path,
         )

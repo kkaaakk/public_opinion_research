@@ -276,21 +276,19 @@ def test_worker_timeout_terminates_the_owned_process_tree(monkeypatch):
     assert process.waits == 2
 
 
-def test_archive_wait_observes_native_receipt_and_reads_full_projection_once():
+def test_terminal_wait_observes_native_receipt_and_reads_full_projection_once():
     calls = []
     final = dict(
         run_id="run-a",
         generation=0,
         status="completed",
         settlement="settled",
-        archive_status="saved",
         events_complete=True,
-        history_id="archive-a",
     )
 
     def event(run_id, key, *, timeout_seconds):
         calls.append((run_id, key, timeout_seconds))
-        return {"id": "archive-a", "generation": 0}
+        return {"generation": 0}
 
     def get(run_id, owner):
         calls.append((run_id, owner))
@@ -303,12 +301,12 @@ def test_archive_wait_observes_native_receipt_and_reads_full_projection_once():
         )
     )
     assert (
-        DRIVER["wait_for_archive"](
+        DRIVER["wait_for_terminal_delivery"](
             case, {"run_id": "run-a", "owner": "alice", "generation": 0}
         )
         is final
     )
-    assert calls == [("run-a:events", "history", 120), ("run-a", "alice")]
+    assert calls == [("run-a:events", "done", 120), ("run-a", "alice")]
 
 
 @pytest.mark.parametrize(
@@ -316,33 +314,30 @@ def test_archive_wait_observes_native_receipt_and_reads_full_projection_once():
     [
         {"generation": 1},
         {"events_complete": False},
-        {"history_id": "other"},
+        {"run_id": "other"},
         {"settlement": "pending"},
         {"status": "failed"},
-        {"archive_status": "pending"},
     ],
 )
-def test_archive_wait_still_requires_full_terminal_projection(mutation):
+def test_terminal_wait_still_requires_full_terminal_projection(mutation):
     final = dict(
         run_id="run-a",
         generation=0,
         status="completed",
         settlement="settled",
-        archive_status="saved",
         events_complete=True,
-        history_id="archive-a",
     )
     final.update(mutation)
     case = SimpleNamespace(
         client=SimpleNamespace(
             client=SimpleNamespace(
-                get_event=lambda *a, **k: {"id": "archive-a", "generation": 0}
+                get_event=lambda *a, **k: {"generation": 0}
             ),
             get=lambda *a: final,
         )
     )
     with pytest.raises(AssertionError):
-        DRIVER["wait_for_archive"](
+        DRIVER["wait_for_terminal_delivery"](
             case, {"run_id": "run-a", "owner": "alice", "generation": 0}
         )
 

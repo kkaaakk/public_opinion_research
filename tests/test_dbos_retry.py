@@ -1,4 +1,4 @@
-"""Retry grants use real native execution, public messages and actual archives."""
+"""Retry grants use real native execution and public terminal delivery."""
 
 from __future__ import annotations
 
@@ -71,27 +71,26 @@ def test_terminal_delivery_drains_reordered_committed_messages(
     monkeypatch.setattr(engine.research, "research_review", review)
     monkeypatch.setattr(engine, "send_event", send)
     run = case.create()
-    failed = saved(case, run, "failed", 0)
+    failed = wait_delivered(case, run, "failed", 0)
     case.client.retry(
         run["run_id"], "alice", "reordered-terminal", failed["state_version"]
     )
-    completed = saved(case, run, "completed", 1)
-    _, events = assert_consistent(case, run, completed)
+    completed = wait_delivered(case, run, "completed", 1)
+    events = assert_consistent(case, run, completed)
     terminal = [e for e in events if e["generation"] == 1]
     tail = next(e for e in terminal if e.get("message") == "Producer tail")
     usage = next(e for e in terminal if e["type"] == "usage")
-    history = next(e for e in terminal if e["type"] == "history_saved")
-    assert tail["seq"] < usage["seq"] < history["seq"] < events[-1]["seq"]
+    assert tail["seq"] < usage["seq"] < events[-1]["seq"]
     assert len(attempts) == 2 and len(case.models) == 2
 
 
-def saved(case, run, status, generation):
+def wait_delivered(case, run, status, generation):
     return case.wait(
         run,
         lambda r: r["status"] == status
         and r["generation"] == generation
         and not r["retry_requested"]
-        and r["archive_status"] == "saved",
+        and r["events_complete"],
     )
 
 
@@ -112,32 +111,26 @@ def command_for(run_id, key):
 
 
 def assert_consistent(case, run, result):
-    record = case.history.get(result["history_id"], owner="alice")
-    events = case.client.read_events(run["run_id"], "alice", 0, 10000)
-    assert record["status"] == result["status"]
-    assert record["run_state_version"] == result["generation"] + 1
-    assert record["usage"] == {
-        k: result["usage"].get(k, 0)
-        for k in (
-            "model_calls",
-            "input_tokens",
-            "output_tokens",
-            "total_tokens",
-            "usage_complete",
-        )
-        if k in result["usage"]
-    }
-    assert record["report"] == result["report"]
+    run_id = run["run_id"]
+    assert_history_status(case.client, run_id, result["status"])
+    events = case.client.read_events(run_id, "alice", 0, 10000)
     assert result["events_complete"]
     assert events[-1]["type"] == "done"
     assert events[-1]["generation"] == result["generation"]
     assert events[-1]["status"] == result["status"]
-    assert events[-1]["archive_status"] == "saved"
+    assert [e["generation"] for e in events if e["type"] == "done"] == list(
+        range(result["generation"] + 1)
+    )
     usage = next(e for e in reversed(events) if e["type"] == "usage")
     assert usage["generation"] == result["generation"]
     for key in ("model_calls", "input_tokens", "output_tokens", "total_tokens"):
         assert usage[key] == result["usage"].get(key, 0)
-    return record, events
+    return events
+
+
+def assert_history_status(client, run_id, status):
+    items = client.list_history("alice", limit=10, offset=0)["items"]
+    assert [item["status"] for item in items if item["run_id"] == run_id] == [status]
 
 
 def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
@@ -164,8 +157,8 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
 
     monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
-    first = saved(case, run, "failed", 0)
-    first_record, _ = assert_consistent(case, run, first)
+    first = wait_delivered(case, run, "failed", 0)
+    assert_consistent(case, run, first)
     key = "original-review-retry"
     try:
         case.client.retry(run["run_id"], "alice", key, first["state_version"])
@@ -176,7 +169,7 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
                 run["run_id"], "alice", key, first["state_version"]
             )
             assert current["generation"] == 1
-            assert current["archive_status"] != "saved"
+            assert not current["events_complete"]
         with pytest.raises(RunConflict):
             case.client.retry(
                 run["run_id"],
@@ -185,8 +178,8 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
                 current["state_version"],
             )
         release[2].set()
-        second = saved(case, run, "failed", 1)
-        second_record, _ = assert_consistent(case, run, second)
+        second = wait_delivered(case, run, "failed", 1)
+        assert_consistent(case, run, second)
         assert second["usage"]["model_calls"] == first["usage"]["model_calls"] + 1
         with pytest.raises(RunConflict):
             case.client.retry(run["run_id"], "alice", key, second["state_version"])
@@ -222,8 +215,7 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
         )
         assert entered[3].wait(15)
         current = case.client.get(run["run_id"], "alice")
-        assert current["generation"] == 2 and current["archive_status"] != "saved"
-        assert current["history_id"] is None
+        assert current["generation"] == 2 and not current["events_complete"]
         for k, v in (
             (key, first["state_version"]),
             ("second-grant", second["state_version"]),
@@ -237,34 +229,29 @@ def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
             ),
         )
         with domain_engine().begin() as db:
-            for event in ("run_status", "done", "history_saved"):
+            for event in ("run_status", "done"):
                 publish_event(
                     db,
                     run["run_id"],
                     event,
                     generation=1,
                     status="failed",
-                    id="late-old-archive",
+                    id="late-old-event",
                 )
         release[3].set()
-        completed = saved(case, run, "completed", 2)
-        record, events = assert_consistent(case, run, completed)
+        completed = wait_delivered(case, run, "completed", 2)
+        events = assert_consistent(case, run, completed)
         # Usage is composed from the model_attempts ledger since por-call-ledger-v1;
-    # the stage-note double count this file once asserted (28) is gone.
+        # the stage-note double count this file once asserted (28) is gone.
         assert completed["usage"]["model_calls"] == 20
         assert attempts == [1, 2, 3]
         assert len(case.models) == 2
         assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
-        assert not any(e.get("id") == "late-old-archive" for e in events)
+        assert not any(e.get("id") == "late-old-event" for e in events)
         assert [e["generation"] for e in events if e["type"] == "retry_started"] == [
             1,
             2,
         ]
-        from open_deep_research.web.history import HistoryRecord
-
-        case.history.save([HistoryRecord.model_validate(first_record)])
-        case.history.save([HistoryRecord.model_validate(second_record)])
-        assert case.history.get(completed["history_id"], owner="alice") == record
         native_version = case.client.native(run["run_id"]).updated_at
         for k, v in (
             (key, first["state_version"]),
@@ -302,7 +289,7 @@ def test_concurrent_distinct_keys_authorize_one_native_failure(
 
     monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
-    failed = saved(case, run, "failed", 0)
+    failed = wait_delivered(case, run, "failed", 0)
     barrier = threading.Barrier(2)
 
     def submit(key):
@@ -316,7 +303,7 @@ def test_concurrent_distinct_keys_authorize_one_native_failure(
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(submit, ["first", "second"]))
     assert sorted(results) == ["accepted", "conflict"]
-    completed = saved(case, run, "completed", 1)
+    completed = wait_delivered(case, run, "completed", 1)
     assert_consistent(case, run, completed)
     assert len(attempts) == 2
     assert len(case.models) == 2
@@ -395,7 +382,7 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
             engine.reporting, "generate_final_report", uncertain_external_write
         )
     run = case.create()
-    failed = saved(case, run, "failed", 0)
+    failed = wait_delivered(case, run, "failed", 0)
     failed = retry_observed_failure(case, run, "only-grant", failed)
     if outcome == "cancelled":
         assert entered.wait(15)
@@ -403,7 +390,7 @@ def test_old_key_cannot_bypass_cancel_or_unknown_effect(
         case.client.retry(run["run_id"], "alice", "only-grant", failed["state_version"])
         case.client.cancel(run["run_id"], "alice")
     expected = "cancelled" if outcome == "cancelled" else "interrupted"
-    result = saved(case, run, expected, 1)
+    result = wait_delivered(case, run, expected, 1)
     native_version = case.client.native(run["run_id"]).updated_at
     for _ in range(3):
         current = case.client.retry(
@@ -442,13 +429,11 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
     from test_python_workflow import initial
 
     from open_deep_research.web.durable import RunClient
-    from open_deep_research.web.history import HistoryStore
 
     client = RunClient()
     executor = "retry-fault-" + uuid4().hex
     process = start(tmp_path, executor, scenario)
     restart = None
-    store = HistoryStore(domain_engine())
     try:
         wait(lambda: (tmp_path / "executor-ready").exists(), process, tmp_path)
         run = client.create(
@@ -459,7 +444,7 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
             initial(),
         )[0]
         wait(
-            lambda: client.get(run["run_id"], "alice")["archive_status"] == "saved",
+            lambda: client.get(run["run_id"], "alice")["events_complete"],
             process,
             tmp_path,
         )
@@ -510,7 +495,7 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
             lambda: (r := client.get(run["run_id"], "alice"))["generation"] == 1
             and r["status"] == "failed"
             and not r["retry_requested"]
-            and r["archive_status"] == "saved",
+            and r["events_complete"],
             restart,
             tmp_path,
         )
@@ -525,12 +510,12 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
         native_version = client.native(run["run_id"]).updated_at
         client.retry(run["run_id"], "alice", "original", first["state_version"])
         assert client.native(run["run_id"]).updated_at == native_version
-        assert store.get(second["history_id"], owner="alice")["status"] == "failed"
+        assert_history_status(client, run["run_id"], "failed")
         client.retry(run["run_id"], "alice", "next-generation", second["state_version"])
         wait(
             lambda: (r := client.get(run["run_id"], "alice"))["generation"] == 2
             and r["status"] == "completed"
-            and r["archive_status"] == "saved",
+            and r["events_complete"],
             restart,
             tmp_path,
         )
@@ -538,21 +523,16 @@ def test_retry_command_recovers_process_death_without_reauthorizing(
         assert effect_count(tmp_path, "reviews") == 3
         assert effect_count(tmp_path) == effect_count(tmp_path, "effects") == 2
         assert final["usage"]["model_calls"] == 20
-        archive = store.get(final["history_id"], owner="alice")
-        assert archive["status"] == "completed"
-        assert archive["report"] == final["report"]
-        assert archive["usage"]["model_calls"] == 20
-        assert archive["run_state_version"] == 3
+        assert final["report"]
+        assert_history_status(client, run["run_id"], "completed")
         events = client.read_events(run["run_id"], "alice", 0, 10000)
         assert [e["generation"] for e in events if e["type"] == "retry_started"] == [
             1,
             2,
         ]
         assert events[-1]["type"] == "done" and events[-1]["generation"] == 2
-        assert (
-            events[-1]["status"] == "completed"
-            and events[-1]["archive_status"] == "saved"
-        )
+        assert events[-1]["status"] == "completed"
+        assert [e["generation"] for e in events if e["type"] == "done"] == [0, 1, 2]
     finally:
         for child in (process, restart):
             if child:
@@ -575,7 +555,6 @@ def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypat
     observed = case.wait(
         run,
         lambda r: r["status"] == "failed"
-        and r["archive_status"] == "saved"
         and r["events_complete"]
         and r["retry_safe"],
     )
@@ -589,67 +568,14 @@ def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypat
     )
     current = case.wait(run, lambda r: r["state_version"] > observed["state_version"])
     assert current["generation"] == observed["generation"] == 0
+    assert_history_status(case.client, run["run_id"], "failed")
     with pytest.raises(RunConflict):
         case.client.retry(run["run_id"], "alice", "fresh", observed["state_version"])
     retry_observed_failure(case, run, "fresh", observed)
-    final = saved(case, run, "completed", 1)
+    final = wait_delivered(case, run, "completed", 1)
     assert final["generation"] == 1
     assert len(attempts) == 2 and len(case.models) == 2
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
-
-
-def test_stale_retry_message_cannot_abandon_pending_archive(native_case, monkeypatch):
-    case = native_case
-    original_review = engine.research.research_review
-    original_save = case.history.save
-    unavailable = threading.Event()
-    unavailable.set()
-    attempts = []
-
-    async def review(state, cfg):
-        attempts.append(1)
-        if len(attempts) <= 2:
-            await record_scripted_model_attempt()
-            raise RuntimeError("Safe read failure")
-        return await original_review(state, cfg)
-
-    def save(records):
-        result = original_save(records)  # Real PostgreSQL commit before lost ACK.
-        if records[0].run_state_version == 2 and unavailable.is_set():
-            from open_deep_research.web.history import HistoryUnavailable
-
-            raise HistoryUnavailable("Committed archive ACK unavailable")
-        return result
-
-    monkeypatch.setattr(engine.research, "research_review", review)
-    monkeypatch.setattr(case.history, "save", save)
-    run = case.create()
-    first = saved(case, run, "failed", 0)
-    retry_observed_failure(case, run, "original", first)
-    case.wait(
-        run,
-        lambda r: r["generation"] == 1
-        and any(
-            e["type"] == "archive_pending" and e["generation"] == 1
-            for e in case.client.read_events(run["run_id"], "alice", 0, 10000)
-        ),
-    )
-    assert case.client.get(run["run_id"], "alice")["archive_status"] == "pending"
-    unavailable.clear()
-    case.client.client.send(
-        run["run_id"] + ":finalize",
-        command_for(run["run_id"], "original"),
-        topic="retry",
-        idempotency_key="duplicate-during-archive",
-    )
-    second = saved(case, run, "failed", 1)
-    assert_consistent(case, run, second)
-    assert len(attempts) == 2
-    retry_observed_failure(case, run, "next", second)
-    final = saved(case, run, "completed", 2)
-    assert_consistent(case, run, final)
-    assert len(attempts) == 3
-    assert final["usage"]["model_calls"] == 20
 
 
 def test_new_retry_requires_delivery_of_the_current_failed_generation(
@@ -678,7 +604,7 @@ def test_new_retry_requires_delivery_of_the_current_failed_generation(
     monkeypatch.setattr(engine.research, "research_review", review)
     monkeypatch.setattr(engine, "public_event", delayed_event)
     run = case.create()
-    first = saved(case, run, "failed", 0)
+    first = wait_delivered(case, run, "failed", 0)
     case.client.retry(run["run_id"], "alice", "first", first["state_version"])
     try:
         assert entered.wait(15)
@@ -693,9 +619,9 @@ def test_new_retry_requires_delivery_of_the_current_failed_generation(
         assert len(attempts) == 2
     finally:
         release.set()
-    delivered = saved(case, run, "failed", 1)
+    delivered = wait_delivered(case, run, "failed", 1)
     assert delivered["state_version"] > second["state_version"]
     case.client.retry(run["run_id"], "alice", "second", delivered["state_version"])
-    completed = saved(case, run, "completed", 2)
+    completed = wait_delivered(case, run, "completed", 2)
     assert_consistent(case, run, completed)
     assert len(attempts) == 3

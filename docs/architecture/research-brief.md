@@ -1,7 +1,7 @@
 # Markdown Research Brief workflow
 
 The Run API uses native interaction messages with
-DBOS 3.3.0 and DBOSRunner 0.3.0. [Deployment and cutover](dbos-deployment.md#事件与归档版本切换)
+DBOS 3.3.0 and DBOSRunner 0.3.0. [Deployment and cutover](dbos-deployment.md#应用版本切换)
 DBOS owns execution and recovery. Runner owns the Public Signal and Internal
 Knowledge loops. The Brief describes research intent, and the role reports cite
 the evidence used downstream. Workflow code and fixed tool policies control
@@ -24,9 +24,9 @@ flowchart TD
   I --> J[Risk then Strategy]
   J --> K[por.research: one bounded report synthesis Step]
   K --> L[Persisted report artifact]
-  L --> M[por.finalize publishes terminal result and archives History]
+  L --> M[por.finalize confirms settlement and publishes the terminal result]
   L -. "report event" .-> S[por.events / SSE]
-  M -. "terminal and archive frames" .-> S
+  M -. "terminal frames" .-> S
 ```
 
 `por.plan` remains a BUSINESS child workflow, with no human wait inside its queue
@@ -149,7 +149,7 @@ The original approval deadline covers the queue, execution and return to
 preview. A new provider call checks the database clock at admission, and the
 parent checks it before accepting the result. The parent bounds its wait on
 native child completion and cancels the child at expiry, including while it is
-still queued. Native cancellation and the Finalizer settle and archive the Run.
+still queued. Native cancellation and the Finalizer settle and deliver the Run's terminal result.
 Already issued provider requests can still incur charges.
 
 ### Cost and persistence
@@ -199,7 +199,7 @@ the original Brief plus their scoped Gap tasks. Evidence, Finding and source
 ownership are unchanged. Long initial assignments still fail the existing
 protected-context capacity guard rather than silently dropping constraints.
 
-Old plain-string Briefs and archives remain readable. Old journals require their
+Old plain-string Briefs remain readable from retained Run records. Old journals require their
 matching release; they are not migrated or replayed by this release.
 
 ## Review and reporting
@@ -232,7 +232,7 @@ consumers. Production intake calls `plan_research` and `revise_brief`.
 
 Settle unfinished Runs using the original API and Executor for their application
 version. Startup and new admission check for incompatible unfinished journals.
-[Deployment and rollback](dbos-deployment.md#事件与归档版本切换)
+[Deployment and rollback](dbos-deployment.md#应用版本切换)
 
 For verification, measurements and remaining limitations see
 [the implementation audit](../audits/research-brief-spec.md).

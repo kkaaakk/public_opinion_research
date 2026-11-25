@@ -1,23 +1,21 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { History as HistoryIcon, Search } from 'lucide-react';
-import type { StudioApi } from '../api';
-import type { HistoryPage, HistoryRecord } from '../protocol';
+import { useEffect, useState } from 'react';
+import { History as HistoryIcon } from 'lucide-react';
+import { HISTORY_PAGE_SIZE, type StudioApi } from '../api';
+import type { HistoryPage, RunSnapshot } from '../protocol';
 import { Badge, Empty, ErrorNote, time } from './common';
 import { Reports } from './Reports';
 export function History({ api, onOpen }: { api: StudioApi; onOpen: (id: string) => void }) {
-  const [query, setQuery] = useState('');
-  const [search, setSearch] = useState('');
   const [offset, setOffset] = useState(0);
   const [revision, setRevision] = useState(0);
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [selected, setSelected] = useState('');
-  const [archive, setArchive] = useState<HistoryRecord | null>(null);
+  const [run, setRun] = useState<RunSnapshot | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
     const controller = new AbortController();
     setError('');
     void api
-      .history(search, offset, controller.signal)
+      .history(offset, controller.signal)
       .then((p) => {
         if (!controller.signal.aborted) setPage(p);
       })
@@ -25,55 +23,40 @@ export function History({ api, onOpen }: { api: StudioApi; onOpen: (id: string) 
         if (!controller.signal.aborted) setError((e as Error).message);
       });
     return () => controller.abort();
-  }, [api, search, offset, revision]);
+  }, [api, offset, revision]);
   useEffect(() => {
     if (!selected) return;
     const controller = new AbortController();
-    setArchive(null);
+    setRun(null);
     void api
-      .archive(selected, controller.signal)
+      .historyDetail(selected, controller.signal)
       .then((p) => {
-        if (!controller.signal.aborted) setArchive(p);
+        if (!controller.signal.aborted) setRun(p);
       })
       .catch((e) => {
         if (!controller.signal.aborted) setError((e as Error).message);
       });
     return () => controller.abort();
   }, [api, selected]);
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    setSearch(query);
-    setOffset(0);
-    setRevision((v) => v + 1);
-  }
   return (
     <>
       <section className="panel history-panel">
         <div className="panel-head">
           <strong>
             <HistoryIcon size={16} />
-            历史报告归档
+            历史报告
           </strong>
-          <span className="muted">PostgreSQL History · {page?.total ?? '—'} 条</span>
+          <button className="button" onClick={() => setRevision((v) => v + 1)}>
+            刷新
+          </button>
         </div>
-        <form className="evidence-search" onSubmit={submit}>
-          <Search size={16} />
-          <input
-            aria-label="搜索归档"
-            value={query}
-            maxLength={300}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索研究主题"
-          />
-          <button className="button">查询归档</button>
-        </form>
         <ErrorNote error={error} />
-        <div className="archive-list">
+        <div className="history-list">
           {page?.items.map((item) => (
             <button
-              className={`archive-item${selected === item.id ? ' chosen' : ''}`}
-              key={item.id}
-              onClick={() => setSelected(item.id)}
+              className={`history-item${selected === item.run_id ? ' chosen' : ''}`}
+              key={item.run_id}
+              onClick={() => setSelected(item.run_id)}
             >
               <div>
                 <strong>{item.topic}</strong>
@@ -84,51 +67,44 @@ export function History({ api, onOpen }: { api: StudioApi; onOpen: (id: string) 
             </button>
           ))}
         </div>
-        {!page?.items.length && <Empty>暂无归档记录</Empty>}
+        {page && !page.items.length && <Empty>本页暂无研究记录</Empty>}
         <div className="pagination">
           <button
             className="text-button"
             disabled={!offset}
-            onClick={() => setOffset(Math.max(0, offset - 10))}
+            onClick={() => setOffset(Math.max(0, offset - HISTORY_PAGE_SIZE))}
           >
             上一页
           </button>
-          <span>
-            {Math.floor(offset / 10) + 1} / {Math.max(1, Math.ceil((page?.total ?? 0) / 10))}
-          </span>
+          <span>第 {Math.floor(offset / HISTORY_PAGE_SIZE) + 1} 页</span>
           <button
             className="text-button"
-            disabled={!page || offset + 10 >= page.total}
-            onClick={() => setOffset(offset + 10)}
+            disabled={!page?.has_more || page.next_offset !== offset + HISTORY_PAGE_SIZE}
+            onClick={() => {
+              if (page) setOffset(page.next_offset);
+            }}
           >
             下一页
           </button>
         </div>
       </section>
-      {archive && (
+      {run && (
         <>
-          <div className="archive-heading">
-            <strong>{archive.topic}</strong>
-            <button
-              className="button"
-              disabled={!/^[a-f0-9]{32}$/.test(archive.run_id)}
-              onClick={() => onOpen(archive.run_id)}
-            >
+          <div className="history-heading">
+            <strong>{run.request?.topic ?? run.run_id}</strong>
+            <button className="button" onClick={() => onOpen(run.run_id)}>
               打开持久 Run 轨迹
             </button>
           </div>
           <Reports
-            key={archive.id}
-            archive
+            key={run.run_id}
             reports={[
-              ...archive.role_reports.map((r, i) => ({
+              ...run.role_reports.map((r, i) => ({
                 id: `${r.role}-${i}`,
                 label: `${r.role} · ${i + 1}`,
                 content: r.content,
               })),
-              ...(archive.report
-                ? [{ id: 'final', label: '归档最终报告', content: archive.report }]
-                : []),
+              ...(run.report ? [{ id: 'final', label: '最终报告', content: run.report }] : []),
             ]}
           />
         </>

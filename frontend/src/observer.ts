@@ -9,8 +9,7 @@ import {
   type RunSnapshot,
 } from './protocol';
 
-export type Connection =
-  'loading' | 'live' | 'reconnecting' | 'paused' | 'archiving' | 'complete' | 'error';
+export type Connection = 'loading' | 'live' | 'reconnecting' | 'paused' | 'complete' | 'error';
 type Sink = {
   events: (events: RunEvent[]) => void;
   snapshot: (run: RunSnapshot) => void;
@@ -72,11 +71,6 @@ export class RunObserver {
         if (signal.aborted) return;
         this.sink.snapshot(snapshot);
         if (isDelivered(snapshot, this.cursor())) {
-          if (snapshot.archive_status === 'pending') {
-            this.sink.connection('archiving');
-            await delay(this.interval * 2, signal);
-            continue;
-          }
           this.sink.connection('complete');
           return;
         }

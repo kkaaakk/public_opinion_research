@@ -344,8 +344,7 @@ def test_finalizer_crash_after_leaf_rewind_keeps_original_grant_live(
         )[0]
         wait(
             lambda: (r := client.get(run["run_id"], "alice"))["status"] == "failed"
-            and r["events_complete"]
-            and r["archive_status"] == "saved",
+            and r["events_complete"],
             proc,
             tmp_path,
         )
@@ -378,8 +377,7 @@ def test_finalizer_crash_after_leaf_rewind_keeps_original_grant_live(
         proc = start(tmp_path, "nested-finalizer", "retry-nested")
         wait(
             lambda: (r := client.get(run["run_id"], "alice"))["status"] == "completed"
-            and r["events_complete"]
-            and r["archive_status"] == "saved",
+            and r["events_complete"],
             proc,
             tmp_path,
             timeout=90,

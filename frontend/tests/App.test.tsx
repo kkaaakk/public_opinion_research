@@ -61,7 +61,7 @@ it('stops retrying an identity whose key already owns another request', async ()
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole('button', { name: '确认原创建请求' }));
-  await screen.findByText(/原创建请求可能已创建为 Run；请按 Run ID 或历史归档核对/);
+  await screen.findByText(/原创建请求可能已创建为 Run。请按 Run ID 或研究历史核对/);
   // The rejected identity is dropped, so it can never be replayed silently.
   await waitFor(() => expect(restore().create).toBeUndefined());
   await waitFor(() =>

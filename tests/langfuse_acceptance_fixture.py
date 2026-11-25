@@ -104,7 +104,6 @@ def main():
     )
     settings.cache_clear()
     patch = pytest.MonkeyPatch()
-    case = None
     requests = Counter()
     invocations = Counter()
     trace_ids = set()
@@ -200,7 +199,7 @@ def main():
         run = case.create()
         final = case.wait(
             run,
-            lambda r: r["archive_status"] == "saved" and r["events_complete"],
+            lambda r: r["events_complete"],
             timeout=120,
         )
         assert final["status"] == "completed" and final["settlement"] == "settled"
@@ -213,7 +212,7 @@ def main():
             "trace_id": next(iter(trace_ids)),
             "status": final["status"],
             "settlement": final["settlement"],
-            "archive_status": final["archive_status"],
+            "events_complete": final["events_complete"],
             "sdk_requests": dict(requests),
             "sdk_invocations": dict(invocations),
             "tool_calls": dict(case.calls),
@@ -240,8 +239,6 @@ def main():
     finally:
         DBOS.destroy(workflow_completion_timeout_sec=3)
         shutdown_telemetry()
-        if case is not None:
-            case.history.close()
         close_run_client()
         patch.undo()
         settings.cache_clear()

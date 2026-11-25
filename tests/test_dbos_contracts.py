@@ -123,7 +123,7 @@ def test_studio_cancel_records_failed_model_and_agent_after_cancel_intent(native
     run = case.create()
     case.wait(run, lambda _r: case.blocked.is_set())
     case.client.cancel(run["run_id"], "alice")
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "cancelled" and result["settlement"] == "settled"
     events = case.client.read_events(run["run_id"], "alice", 0, 1000)
     cancelled = [
@@ -176,7 +176,7 @@ def test_cancel_delivers_when_native_role_loses_ownership_before_stage_end(
 
     result = case.wait(
         run,
-        lambda r: r["events_complete"] and r["archive_status"] == "saved",
+        lambda r: r["events_complete"],
         timeout=20,
     )
     assert result["status"] == "cancelled" and result["settlement"] == "settled"
@@ -195,9 +195,7 @@ def test_studio_native_sdk_metadata_is_identified_replayable_and_read_only(nativ
 
     case = native_case
     run = case.create()
-    result = case.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    result = case.wait(run, lambda r: r["events_complete"])
     before = len(case.models)
     cursor = 0
     events = []
@@ -281,7 +279,7 @@ def test_studio_disabled_role_is_an_explicit_skip(
     if disabled_role == "internal_knowledge":
         monkeypatch.setattr(business_agent, "sdk_model", model)
     run = case.create()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "completed", result["error"]
     events = case.client.read_events(run["run_id"], "alice", 0, 1000)
     skipped = [e for e in events if e["type"] == "step_skipped"]
@@ -311,7 +309,7 @@ def test_sse_terminal_receipt_cannot_close_over_an_older_cursor(
 
     case = native_case
     run = case.create()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     end = result["seq"]
     before = len(case.models)
     original = case.client.client.read_stream
@@ -380,7 +378,7 @@ def test_approved_brief_reaches_two_agents_analysis_report_and_history(
     approved = case.wait(run, lambda r: r["status"] == "awaiting_approval")
     assert not case.runtimes
     case.client.approve(run["run_id"], "alice", approved["plan"]["version"], "approve")
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "completed", result["error"]
     assert "FINAL brand recall report" in result["report"]
     assert calls == ["review", "risk", "strategy", "report"]
@@ -468,12 +466,11 @@ def test_approved_brief_reaches_two_agents_analysis_report_and_history(
             assert role_result.budget_delta[field] == unit["usage"][field]
         assert role_result.evidence_collected
         assert role_result.report == state["agents"][role]["report"]
-    saved = case.history.get(result["history_id"], owner="alice")
-    assert saved["run_id"] == run_id
-    assert {entry["role"]: entry["content"] for entry in saved["role_reports"]} == {
+    history = case.client.list_history("alice", limit=10, offset=0)["items"]
+    assert [(item["run_id"], item["status"]) for item in history] == [(run_id, "completed")]
+    assert {entry["role"]: entry["content"] for entry in result["role_reports"]} == {
         role: data["report"] for role, data in state["agents"].items()
     }
-    assert saved["report"] == result["report"]
 
 
 def test_analysis_respects_the_reserved_report_model_call(native_case, monkeypatch):
@@ -487,7 +484,7 @@ def test_analysis_respects_the_reserved_report_model_call(native_case, monkeypat
 
     install_inference(monkeypatch, reject_analysis)
     run = case.create()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "completed", result["error"]
     assert result["report"] and result["usage"]["model_calls"] == 16
     reports = {entry["role"]: entry["content"] for entry in result["role_reports"]}
@@ -578,7 +575,7 @@ def test_approval_immutable_once_and_no_replanning(native_case, decision):
 def test_sse_cursor_replay_is_read_only_and_redacted(native_case):
     case = native_case
     run = case.create()
-    case.wait(run, lambda r: r["archive_status"] == "saved")
+    case.wait(run, lambda r: r["events_complete"])
     events = case.client.read_events(run["run_id"], "alice", 0, 1000)
     assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
     types = {e["type"] for e in events}
@@ -591,7 +588,6 @@ def test_sse_cursor_replay_is_read_only_and_redacted(native_case):
         "usage",
         "settlement",
         "done",
-        "history_saved",
     } <= types
     assert all(e["protocol_version"] == 1 for e in events)
     tools = [e for e in events if e["type"] == "sdk_event" and e.get("event") == "tool"]
@@ -608,7 +604,8 @@ def test_sse_cursor_replay_is_read_only_and_redacted(native_case):
     assert any(
         e["type"] == "status" and e.get("granularity") == "stage" for e in events
     )
-    assert events[-1]["type"] == "done" and events[-1]["archive_status"] == "saved"
+    assert events[-1]["type"] == "done"
+    assert sum(e["type"] == "done" for e in events) == 1
     before = len(case.models)
     assert case.client.read_events(run["run_id"], "alice", 3, 1000) == events[3:]
     assert len(case.models) == before
@@ -726,7 +723,7 @@ def test_tool_operation_identity_never_authorizes_unknown_replay(
             assert "arguments" not in row and "usage" not in row
     finally:
         release.set()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "completed" and case.calls["public_signal"] == 1
     execution.finish_operation(run_id, op, "returned")
     with pytest.raises(execution.ExecutionControlError):
@@ -798,10 +795,10 @@ def test_api_contract_create_auth_cancel_and_sse(native_case, monkeypatch):
             "/api/runs", json=dict(body, topic="another topic"), headers=headers
         )
         assert conflict.status_code == 409
-        case.wait(dict(run, owner="operator"), lambda r: r["archive_status"] == "saved")
+        case.wait(dict(run, owner="operator"), lambda r: r["events_complete"])
         replay = http.get("/api/runs/" + run["run_id"] + "/events", headers=headers)
         assert "id: 1" in replay.text
-        assert "history_saved" in replay.text
+        assert replay.text.count('"type": "done"') == 1
         end = int(replay.text.rsplit("id: ", 1)[-1].splitlines()[0])
         resumed = http.get(
             "/api/runs/" + run["run_id"] + "/events?after=0",
@@ -864,44 +861,6 @@ def test_configuration_and_sdk_drift_fail_before_external_work(
     assert result["usage"]["model_calls"] == 8
 
 
-def test_archive_compensates_independently_without_rerunning_research(
-    native_case, monkeypatch
-):
-    import threading
-
-    from open_deep_research.web.history import HistoryUnavailable
-
-    case = native_case
-    unavailable = threading.Event()
-    unavailable.set()
-    original = case.history.save
-
-    def save(records, **kwargs):
-        # The archive transaction hands History its own session.
-        if unavailable.is_set():
-            raise HistoryUnavailable("Synthetic archive outage")
-        return original(records, **kwargs)
-
-    monkeypatch.setattr(case.history, "save", save)
-    run = case.create()
-    completed = case.wait(run)
-    assert completed["status"] == "completed"
-    case.wait(
-        run,
-        lambda r: any(
-            e["type"] == "archive_pending"
-            for e in case.client.read_events(run["run_id"], "alice", 0, 1000)
-        ),
-    )
-    assert completed["report"]
-    before = len(case.models)
-    unavailable.clear()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved", timeout=50)
-    assert result["report"] == completed["report"]
-    assert len(case.models) == before == 2
-    assert result["usage"] == completed["usage"]
-
-
 def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
     native_case, monkeypatch
 ):
@@ -924,38 +883,18 @@ def test_safe_read_retry_is_idempotent_and_reuses_successful_roles(
     assert failed["status"] == "failed"
     assert failed["retry_safe"]
     assert len(case.models) == 2
-    failed = case.wait(run, lambda r: r["archive_status"] == "saved")
-    from open_deep_research.web.history import HistoryRecord
-
-    prior = HistoryRecord.model_validate(
-        case.history.get(failed["history_id"], owner="alice")
-    )
-    assert prior.run_state_version == 1
+    prior = case.client.list_history("alice", limit=10, offset=0)["items"]
+    assert [(item["run_id"], item["status"]) for item in prior] == [(run["run_id"], "failed")]
     key = uuid4().hex
     failed = retry_observed_failure(case, run, key, failed)
     case.client.retry(run["run_id"], "alice", key, failed["state_version"])
-    result = case.wait(run, lambda r: r["status"] == "completed")
+    result = case.wait(run, lambda r: r["status"] == "completed" and r["events_complete"])
     assert len(case.models) == 2
     assert result["usage"]["model_calls"] == 19
     assert result["generation"] == 1
-    saved = case.wait(run, lambda r: r["archive_status"] == "saved")
-    assert case.history.get(saved["history_id"], owner="alice")["status"] == "completed"
-    # A delayed acknowledgement/commit for the earlier failed outcome cannot win.
-    case.history.save([prior])
-    latest = case.history.get(saved["history_id"], owner="alice")
-    assert latest["status"] == "completed"
-    assert latest["run_state_version"] == 2
-    assert latest["report"] == result["report"]
-    assert latest["failed_stage"] == ""
-    assert "_por_archive_lock" not in latest
-    forged = prior.model_copy(
-        update={"owner": "bob", "run_state_version": 999, "report": "foreign overwrite"}
-    )
-    case.history.save([forged])
-    unchanged = case.history.get(saved["history_id"], owner="alice")
-    assert unchanged["owner"] == "alice"
-    assert unchanged["report"] == result["report"]
-    assert unchanged["run_state_version"] == 2
+    latest = case.client.list_history("alice", limit=10, offset=0)["items"]
+    assert [(item["run_id"], item["status"]) for item in latest] == [(run["run_id"], "completed")]
+    assert result["report"] and result["current_step"] == ""
 
 
 @pytest.mark.parametrize("pg_database", [{"RUN_QUEUE_CAPACITY": 1}], indirect=True)
@@ -1089,7 +1028,7 @@ def test_gap_loop_dispatches_only_targeted_roles_and_merges_reports(
 
     install_inference(monkeypatch, review)
     run = case.create()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "completed", result["error"]
     expected_round = 2 if targets else 1
     assert len(reviews) == expected_round
@@ -1227,7 +1166,7 @@ def test_cancellation_during_real_receipt_commit_drains_harness(
         )
     finally:
         release.set()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "cancelled" and result["settlement"] == "settled"
     assert case.calls["public_signal"] == 1
     with domain_engine().connect() as db:
@@ -1251,7 +1190,7 @@ def test_persisted_cancel_intent_survives_request_ack_loss(native_case, monkeypa
         patch.setattr(case.client, "get", lost)
         with pytest.raises(RuntimeError, match="Response lost"):
             case.client.cancel(run["run_id"], "alice")
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["native_status"] == "CANCELLED" and result["status"] == "cancelled"
     assert result["settlement"] == "settled" and len(case.models) == 2
     assert original(run["run_id"], "alice")["cancel_requested"]
@@ -1273,7 +1212,7 @@ def test_approval_expiry_gap_before_recv_is_still_enforced(native_case, monkeypa
     paused = c.wait(run, lambda r: r["status"] == "awaiting_approval")
     run_id = run["run_id"]
     c.client.approve(run_id, "alice", paused["plan"]["version"], "approve")
-    result = c.wait(run, lambda r: r["archive_status"] == "saved")
+    result = c.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "cancelled" and result["settlement"] == "settled"
     assert not c.runtimes and not result["plan"]["locked"]
     assert c.client.client.get_event(run_id, "approval_end", 0) == "expired"
@@ -1304,7 +1243,7 @@ def test_retry_after_failed_result_publication_keeps_committed_model(
     case = native_case
     run = case.create()
     failed = case.wait(
-        run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
+        run, lambda r: r["status"] == "failed" and r["events_complete"]
     )
     assert failures == [run["run_id"] + ":plan:1"]
     workflow_id = run["run_id"] + ":planning:1"
@@ -1319,7 +1258,7 @@ def test_retry_after_failed_result_publication_keeps_committed_model(
     )
     retry_observed_failure(case, run, "result-accounting", failed)
     done = case.wait(
-        run, lambda r: r["status"] == "completed" and r["archive_status"] == "saved"
+        run, lambda r: r["status"] == "completed" and r["events_complete"]
     )
     assert done["generation"] == 1
     assert done["usage"]["model_calls"] == 18
@@ -1358,7 +1297,7 @@ def test_failed_analysis_publication_fails_closed_without_a_second_report(
     assert failures == [run["run_id"] + ":response_strategy"]
     assert failed["current_step"] == "response_strategy_agent"
     assert failed["usage"]["model_calls"] == 17
-    native_case.wait(run, lambda r: r["archive_status"] == "saved")
+    native_case.wait(run, lambda r: r["events_complete"])
     assert not failed["report"]
     events = native_case.client.read_events(run["run_id"], "alice", 0, 1000)
     assert (
@@ -1427,7 +1366,7 @@ def test_cancel_during_safe_retry_preserves_inflight_model_bill(
     case = native_case
     run = case.create()
     failed = case.wait(
-        run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
+        run, lambda r: r["status"] == "failed" and r["events_complete"]
     )
     assert failed["retry_safe"]
     retry_observed_failure(case, run, "retry", failed)
@@ -1439,7 +1378,7 @@ def test_cancel_during_safe_retry_preserves_inflight_model_bill(
     finally:
         release.set()
     result = case.wait(
-        run, lambda r: r["generation"] == 1 and r["archive_status"] == "saved"
+        run, lambda r: r["generation"] == 1 and r["events_complete"]
     )
     assert result["status"] == "cancelled" and not result["retry_safe"]
     assert result["settlement"] == "settled"
@@ -1459,7 +1398,7 @@ def test_native_workflow_matches_frozen_business_reference(
 
     case = native_case
     run = case.create()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     native = case.client.client.list_workflows(
         workflow_ids=[run["run_id"]], load_input=False, load_output=True
     )[0].output
@@ -1535,7 +1474,7 @@ def test_operator_approval_cannot_be_bypassed_or_replanned(native_case, monkeypa
     assert result["plan"] == dict(paused["plan"], locked=True)
 
 
-def test_paused_runs_do_not_starve_another_runs_archive(native_case):
+def test_paused_runs_do_not_starve_another_runs_terminal_delivery(native_case):
     case = native_case
     runs = [case.create(key="paused-" + str(i), approval=True) for i in range(21)]
     for run in runs:
@@ -1543,8 +1482,8 @@ def test_paused_runs_do_not_starve_another_runs_archive(native_case):
     last = runs[-1]
     plan = case.client.get(last["run_id"], "alice")["plan"]
     case.client.approve(last["run_id"], "alice", plan["version"], "approve")
-    saved = case.wait(last, lambda r: r["archive_status"] == "saved")
-    assert saved["status"] == "completed"
+    delivered = case.wait(last, lambda r: r["events_complete"])
+    assert delivered["status"] == "completed"
     assert len(case.models) == 2
     assert all(
         case.client.get(r["run_id"], "alice")["status"] == "awaiting_approval"
@@ -1576,7 +1515,7 @@ def test_distinct_retry_keys_cannot_reaccept_one_pending_outcome(
     monkeypatch.setattr(engine.research, "research_review", review)
     run = case.create()
     failed = case.wait(
-        run, lambda r: r["status"] == "failed" and r["archive_status"] == "saved"
+        run, lambda r: r["status"] == "failed" and r["events_complete"]
     )
     retry_observed_failure(case, run, "first", failed)
     try:
@@ -1616,7 +1555,7 @@ def test_native_vision_attempt_and_usage_are_settled_once(native_case, monkeypat
         rag_query_image_enabled=True, rag_vision_model="openai:vision-fixture"
     )
     run = case.create()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "completed", result["error"]
     assert result["usage"]["model_calls"] == 19
     assert result["usage"]["total_tokens"] == 218
@@ -1708,7 +1647,7 @@ def test_native_cancelled_vision_keeps_reservation_until_actual_usage_settles(
         assert unit["settled"] is None and unit["artifact"] is None
     finally:
         model.release.set()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "cancelled"
     assert result["settlement"] == "settled"
     assert result["usage"]["model_calls"] == baseline["model_calls"] + 1
@@ -1769,7 +1708,7 @@ def test_research_results_are_joined_after_both_native_children(
 
     monkeypatch.setattr(engine, "commit_stage", finish)
     run = case.create()
-    result = case.wait(run, lambda r: r["archive_status"] == "saved")
+    result = case.wait(run, lambda r: r["events_complete"])
     assert result["status"] == "completed", result["error"]
     assert order == [
         r for r in ("public_signal", "internal_knowledge") if r != slower

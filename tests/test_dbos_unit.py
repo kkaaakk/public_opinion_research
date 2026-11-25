@@ -2,9 +2,10 @@
 
 import ast
 import asyncio
+from inspect import unwrap
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -16,12 +17,112 @@ from open_deep_research.web.run_data import (
     legacy_projection,
     public_payload,
 )
+from open_deep_research.workflow import dbos_workflow
 from open_deep_research.workflow.dbos_config import ExecutionSettings
 from open_deep_research.workflow.execution import (
     execution_effect,
     owned_io,
     stage_context,
 )
+
+
+def test_terminal_relay_drains_prefix_and_delivers_one_done_per_generation(monkeypatch):
+    async def run():
+        def terminal(status, generation, *, close):
+            return {
+                "type": "_terminal",
+                "generation": generation,
+                "close": close,
+                "frames": list(
+                    dbos_workflow.terminal_frames(
+                        {
+                            "status": status,
+                            "settlement": "settled",
+                            "usage": {},
+                            "error": {},
+                        }
+                    )
+                ),
+            }
+
+        failed = terminal("failed", 0, close=False)
+        success = terminal("completed", 1, close=True)
+        recv = AsyncMock(
+            side_effect=[
+                {
+                    "type": "run_status",
+                    "generation": 0,
+                    "status": "awaiting_approval",
+                    "plan_version": "v1",
+                },
+                failed,
+                {"type": "status", "generation": 0, "message": "first committed tail"},
+                None,
+                failed,
+                {"type": "retry_started", "generation": 1},
+                {"type": "status", "generation": 0, "message": "obsolete"},
+                success,
+                {"type": "status", "generation": 1, "message": "second committed tail"},
+                None,
+            ]
+        )
+        receipts, stream = [], []
+        monkeypatch.setattr(dbos_workflow, "_interaction_now", lambda: 1)
+        monkeypatch.setattr(dbos_workflow.DBOS, "recv_async", recv)
+        monkeypatch.setattr(
+            dbos_workflow.DBOS,
+            "write_stream_async",
+            AsyncMock(side_effect=lambda _key, frame: stream.append(frame)),
+        )
+        monkeypatch.setattr(
+            dbos_workflow.DBOS,
+            "set_event_async",
+            AsyncMock(side_effect=lambda _key, receipt: receipts.append(dict(receipt))),
+        )
+        close = AsyncMock()
+        monkeypatch.setattr(dbos_workflow.DBOS, "close_stream_async", close)
+
+        await unwrap(dbos_workflow.events_workflow)("run")
+
+        assert receipts[0]["pause"] == {"phase": "awaiting_approval", "version": "v1"}
+        done = [(seq, f) for seq, f in enumerate(stream, 1) if f["type"] == "done"]
+        assert [(f["generation"], f["status"]) for _, f in done] == [
+            (0, "failed"),
+            (1, "completed"),
+        ]
+        for seq, frame in done:
+            generation = frame["generation"]
+            assert (
+                next(
+                    i
+                    for i, f in enumerate(stream, 1)
+                    if f.get("message", "").endswith("committed tail")
+                    and f["generation"] == generation
+                )
+                < seq
+            )
+            assert {
+                "generation": generation,
+                "offset": seq,
+                "terminal": seq,
+                "pause": None,
+            } in receipts
+        assert not any(f.get("message") == "obsolete" for f in stream)
+        assert [c.kwargs["timeout_seconds"] for c in recv.await_args_list] == [
+            86400,
+            86400,
+            0,
+            0,
+            86400,
+            86400,
+            86400,
+            86400,
+            0,
+            0,
+        ]
+        close.assert_awaited_once_with("events")
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(

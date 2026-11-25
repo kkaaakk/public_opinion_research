@@ -174,8 +174,6 @@ export function describeEvent(e: RunEvent): string {
       usage: '已结算用量',
       error: '执行错误',
       done: '代次事件交付完成',
-      history_saved: '报告归档完成',
-      archive_error: '归档等待补偿',
       approval_ended: '审批结束',
     }[e.type] ?? e.type
   );

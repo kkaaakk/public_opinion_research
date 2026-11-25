@@ -129,7 +129,7 @@ def request_payload(
     *,
     org_context: str | None = None,
 ) -> dict[str, Any]:
-    """Describe the effective business settings for one Run and its archive."""
+    """Describe the effective business settings for one accepted Run."""
     return {
         "topic": topic,
         "model": configuration.research_model,

@@ -466,8 +466,6 @@ class FakeClient:
             "current_step": "",
             "completed_steps": [],
             "report": "",
-            "archive_status": "pending",
-            "history_id": None,
             "plan": {"version": "v1", "revision": 1, "locked": False},
             "clarification": None,
             "error": {},
@@ -585,7 +583,6 @@ def test_cli_approve_clarify_report_and_retry(monkeypatch, tmp_path, capsys):
         client.run,
         status="completed",
         report="# Report\n\nbody",
-        history_id=None,
     )
     output = tmp_path / "report.md"
     assert cli.main(["report", "run-1", "--output", str(output)]) == 0

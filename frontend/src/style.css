@@ -1191,10 +1191,10 @@ td strong {
   color: #8c9fb4;
   flex-shrink: 0;
 }
-.archive-list {
+.history-list {
   padding: 0 15px;
 }
-.archive-item {
+.history-item {
   padding: 13px 0;
   text-align: left;
   display: flex;
@@ -1205,20 +1205,20 @@ td strong {
   border-bottom: 1px solid #293747;
   background: transparent;
 }
-.archive-item > div {
+.history-item > div {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 15px;
 }
-.archive-item small {
+.history-item small {
   color: #8298b3;
   font-size: 10px;
 }
-.archive-item.chosen strong {
+.history-item.chosen strong {
   color: var(--accent);
 }
-.archive-heading {
+.history-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1647,7 +1647,7 @@ dialog::backdrop {
   .workspace-footnote {
     font-size: 9px;
   }
-  .archive-heading {
+  .history-heading {
     align-items: flex-start;
     flex-direction: column;
   }

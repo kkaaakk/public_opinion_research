@@ -240,20 +240,6 @@ def initialize_domain(*, migrate_legacy=False):
                 version bigint NOT NULL, generation bigint NOT NULL, outcome text,
                 PRIMARY KEY(run_id, key))""",
             "CREATE UNIQUE INDEX IF NOT EXISTS por_retry_generation ON por_domain.retries(run_id,generation)",
-            """CREATE TABLE IF NOT EXISTS por_domain.history
-               (id text PRIMARY KEY, run_id text NOT NULL, topic text NOT NULL,
-                report text NOT NULL DEFAULT '', started_at text NOT NULL,
-                completed_at text NOT NULL, request_json text NOT NULL DEFAULT '{}',
-                usage_json text NOT NULL DEFAULT '{}', source text NOT NULL DEFAULT 'dbos',
-                langsmith_run_id text, status text NOT NULL DEFAULT 'completed',
-                role_reports_json text NOT NULL DEFAULT '[]',
-                stage_count integer NOT NULL DEFAULT 0,
-                error_message text NOT NULL DEFAULT '', failed_stage text NOT NULL DEFAULT '',
-                owner text NOT NULL DEFAULT '', research_session_id text NOT NULL DEFAULT '',
-                run_state_version bigint NOT NULL DEFAULT 0,
-                preview text NOT NULL DEFAULT '', search_text text NOT NULL DEFAULT '')""",
-            "CREATE INDEX IF NOT EXISTS por_history_completed ON por_domain.history(completed_at DESC)",
-            "CREATE INDEX IF NOT EXISTS por_history_owner ON por_domain.history(owner)",
         ):
             db.exec_driver_sql(ddl)
         _upgrade_call_ledger(db)

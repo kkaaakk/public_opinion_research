@@ -48,9 +48,7 @@ def test_finished_receipt_retries_control_only(
 
     monkeypatch.setattr(module, name, fail_once)
     run = case.create()
-    done = case.wait(
-        run, lambda r: r["archive_status"] == "saved" and r["events_complete"]
-    )
+    done = case.wait(run, lambda r: r["events_complete"])
     assert injected and done["status"] == "completed", done["error"]
     assert done["usage"]["model_calls"] == 18 and done["usage"]["total_tokens"] == 203
     assert sum(len(m.calls) for m in case.models) == 4
@@ -103,7 +101,6 @@ def test_failed_generations_keep_the_final_report_reservation(native_case, monke
             run,
             lambda r: r["status"] == "failed"
             and r["generation"] == generation
-            and r["archive_status"] == "saved"
             and r["events_complete"]
             and not r["retry_requested"],
         )

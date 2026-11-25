@@ -201,7 +201,6 @@ def _status(args) -> int:
     print(f"Current step: {run.get('current_step') or '-'}")
     print(f"Completed steps: {', '.join(run.get('completed_steps') or []) or '-'}")
     print(f"Report: {'ready' if run.get('report') else 'pending'}")
-    print(f"Archive: {run.get('archive_status')} ({run.get('history_id') or '-'})")
     plan = run.get("plan")
     if plan:
         print(
@@ -450,12 +449,6 @@ def _prompt_answers(pending: dict[str, Any]) -> dict[str, Any]:
 def _report(args) -> int:
     run = _client().get(args.run_id, OWNER)
     text = run.get("report") or ""
-    if not text and run.get("history_id"):
-        from open_deep_research.web.history import get_history_store
-
-        record = get_history_store().get(run["history_id"], owner=OWNER)
-        if record:
-            text = record.get("report") or ""
     if not text:
         _error(
             f"Report is not ready (status={run['status']}, "

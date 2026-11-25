@@ -76,31 +76,9 @@ button, input, select, textarea { font-family: var(--font-sans); }
 }
 
 .history-header h2 { font-size: 1.05rem; font-weight: 600; }
-.history-count {
-    min-width: 26px;
-    padding: 1px 8px;
-    border-radius: 12px;
-    background: var(--accent-light);
-    color: var(--accent);
-    text-align: center;
-    font-size: 0.8rem;
-}
-
 .history-description { margin: 6px 0 16px; font-size: 0.8rem; color: var(--text-secondary); }
-.history-search-label { display: block; margin-bottom: 4px; font-size: 0.78rem; color: var(--text-secondary); }
-.history-search {
-    width: 100%;
-    min-width: 0;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    font: inherit;
-    font-size: 0.85rem;
-    color: var(--text);
-    background: var(--surface);
-}
 
-.history-search:focus-visible, .history-item:focus-visible, .btn-action:focus-visible {
+.history-item:focus-visible, .btn-action:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
 }
@@ -131,7 +109,7 @@ button, input, select, textarea { font-family: var(--font-sans); }
 .history-item:last-child { margin-bottom: 0; }
 .history-item:hover, .history-item[aria-current="true"] { border-color: var(--accent); background: var(--accent-light); }
 .history-item:disabled { opacity: 0.6; cursor: not-allowed; }
-.history-topic, .history-preview {
+.history-topic {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
@@ -142,11 +120,9 @@ button, input, select, textarea { font-family: var(--font-sans); }
 
 .history-topic { font-size: 0.87rem; font-weight: 600; }
 .history-date { font-size: 0.74rem; color: var(--text-secondary); }
-.history-preview { font-size: 0.77rem; color: var(--text-secondary); }
-.history-source { font-size: 0.72rem; color: var(--accent); }
 .history-status { align-self: flex-start; font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; color: #137333; background: #e6f4ea; }
 .history-status.status-failed { color: #b42318; background: #fff1f0; }
-.history-status.status-cancelled, .history-status.status-incomplete { color: #795600; background: #fff8dc; }
+.history-status.status-cancelled, .history-status.status-interrupted { color: #795600; background: #fff8dc; }
 .history-pagination { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 16px; }
 .history-pagination .btn-action { padding: 5px 9px; }
 #history-page { font-size: 0.75rem; color: var(--text-secondary); }
