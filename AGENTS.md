@@ -124,6 +124,16 @@ mechanical renames. Preserve compatibility exports until their consumers,
 including external scripts, have been assessed. Keep Golden Sets, meaningful
 baselines, reproducible runners and independent learning materials.
 
+## RAG evaluation
+
+Before changing source, configuration, or dependencies that can affect RAG
+document processing, retrieval, ranking, query rewriting, evidence output,
+model cost, or latency, read and follow the
+[rag-evaluation Skill](.agents/skills/rag-evaluation/SKILL.md).
+Reuse a valid baseline for the current evaluation fingerprint or run the
+baseline first. After the change, evaluate under matching conditions, compare
+the results, and save the run records.
+
 ## Validation and local data
 
 Use the root dependency lock and root `.venv`:
