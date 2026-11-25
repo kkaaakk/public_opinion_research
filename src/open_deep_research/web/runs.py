@@ -114,7 +114,10 @@ def web_configuration():
     try:
         return load_configuration()
     except (ConfigFileError, ValueError):
-        raise HTTPException(503, "Research configuration is unavailable.") from None
+        raise HTTPException(
+            503,
+            "Research configuration is unavailable; migrate retired runtime settings to DBOS/SDK.",
+        ) from None
 
 
 def create_run(body: ResearchRequest, raw: Request) -> tuple[dict, bool]:
