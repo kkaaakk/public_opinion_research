@@ -382,15 +382,16 @@ async def _load_server_tools(
         )
         for mcp_tool in mcp_tools:
             apify_actor = hosted_apify and mcp_tool.name == "call-actor"
-            effect = spec.effect
-            if apify_actor:
-                effect = "protected"
-            elif hosted_apify and mcp_tool.name in {
+            apify_read = hosted_apify and mcp_tool.name in {
                 "search-actors",
                 "fetch-actor-details",
                 "get-actor-run",
                 "get-dataset-items",
-            }:
+            }
+            effect = spec.effect
+            if apify_actor:
+                effect = "protected"
+            elif apify_read:
                 effect = "read"
             public_name = allocate_tool_name(spec.name, mcp_tool.name, taken)
             if public_name != mcp_tool.name:
@@ -411,6 +412,7 @@ async def _load_server_tools(
                         domain=spec.domain,
                         effect=effect,
                         apify_actor=apify_actor,
+                        legacy_protected=apify_read,
                     )
                 )
             except Exception:

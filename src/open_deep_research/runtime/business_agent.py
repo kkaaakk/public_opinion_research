@@ -309,11 +309,15 @@ def _tool_catalog(tools: Iterable[BusinessTool]) -> list[dict[str, Any]]:
 
 
 def _restore_role_tools(admitted, tools):
-    """Preserve the SDK's tool definitions and use the current local effect policy."""
-    fields = ("name", "domain", "description", "schema")
-    if [[entry[key] for key in fields] for entry in admitted] != [
-        [entry[key] for key in fields] for entry in _tool_catalog(tools)
-    ]:
+    """Keep the frozen definitions with the known Apify read-only reclassification."""
+    reclassified = {tool.name for tool in tools if tool.legacy_protected}
+    previous = [
+        dict(entry, effect="read")
+        if entry["name"] in reclassified and entry.get("effect") == "protected"
+        else entry
+        for entry in admitted
+    ]
+    if previous != _tool_catalog(tools):
         raise ValueError("Role tool definitions changed during recovery")
     return tools
 

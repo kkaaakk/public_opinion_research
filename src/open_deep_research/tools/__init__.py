@@ -28,6 +28,7 @@ class BusinessTool:
     domain: str
     effect: ToolEffect = "protected"
     drain_on_cancel: bool = False
+    legacy_protected: bool = False
 
     @property
     def name(self) -> str:

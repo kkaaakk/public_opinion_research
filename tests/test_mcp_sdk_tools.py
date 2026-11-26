@@ -519,9 +519,6 @@ def test_mcp_catalog_changes_are_rejected_during_recovery(tmp_path):
     )
     catalog = business_agent._tool_catalog([echo])
     assert catalog[0]["effect"] == "read"
-    assert business_agent._restore_role_tools(
-        [{**catalog[0], "effect": "protected"}], [echo]
-    ) == [echo]
 
     with pytest.raises(ValueError, match="definitions changed"):
         business_agent._restore_role_tools(

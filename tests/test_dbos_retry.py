@@ -228,6 +228,10 @@ def test_role_recovery_reuses_native_results(native_case, monkeypatch, failure):
                 "get-actor-run": "read",
                 "get-dataset-items": "read",
             }
+            previous = [
+                dict(entry, effect="protected") for entry in business_agent._tool_catalog(remote)
+            ]
+            assert business_agent._restore_role_tools(previous, remote) == remote
             return tools + remote
         return tools + [
             _tool(failed_role, name=failing_tool, coroutine=execute, effect=failure)

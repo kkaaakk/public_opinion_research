@@ -82,6 +82,7 @@ def build_mcp_tool(
     domain: str,
     effect: ToolEffect,
     apify_actor: bool = False,
+    legacy_protected: bool = False,
 ) -> BusinessTool:
     """Convert one SDK MCP tool and attach trusted business policy.
 
@@ -111,7 +112,9 @@ def build_mcp_tool(
         description=declaration.description or public_name,
         on_invoke_tool=invoker,
     )
-    return BusinessTool(declared, domain=domain, effect=effect)
+    return BusinessTool(
+        declared, domain=domain, effect=effect, legacy_protected=legacy_protected
+    )
 
 
 # 保留服务方 Schema 校验，然后进入统一 execute 边界。

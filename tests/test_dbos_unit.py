@@ -45,7 +45,7 @@ def test_terminal_relay_drains_prefix_and_delivers_one_done_per_generation(monke
                 ),
             }
 
-        failed = terminal("failed", 0, close=False)
+        failed = terminal("failed", 0, close=True)
         success = terminal("completed", 1, close=True)
         recv = AsyncMock(
             side_effect=[
@@ -68,6 +68,7 @@ def test_terminal_relay_drains_prefix_and_delivers_one_done_per_generation(monke
         )
         receipts, stream = [], []
         monkeypatch.setattr(dbos_workflow, "_interaction_now", lambda: 1)
+        monkeypatch.setattr(dbos_workflow, "run_generation", lambda _run_id: 1)
         monkeypatch.setattr(dbos_workflow.DBOS, "recv_async", recv)
         monkeypatch.setattr(
             dbos_workflow.DBOS,
