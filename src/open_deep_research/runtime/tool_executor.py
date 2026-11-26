@@ -16,6 +16,11 @@ proof that a call finished:
 * ``protected`` tools consult the existing Operation. An Apify Actor reference
   can be queried again. An operation without proof of absence or a reference
   that can be resolved is fenced.
+
+A provider that explicitly rejects the request before starting it settles the
+Operation as ``not_executed`` and returns the rejection to the model as an
+ordinary tool error. Argument validation and confirmed pre-run rejections never
+become an ``ExecutionControlError`` or an unknown external effect.
 """
 
 from __future__ import annotations
@@ -47,7 +52,7 @@ from open_deep_research.budget import (
 )
 from open_deep_research.configuration import Configuration
 from open_deep_research.mcp.domain_filter import get_tool_domain
-from open_deep_research.tools import tool_result_text
+from open_deep_research.tools import ToolNotExecuted, tool_result_text
 from open_deep_research.tools.registry import tool_effect
 from open_deep_research.web.run_data import digest
 from open_deep_research.workflow.execution import (
@@ -553,13 +558,24 @@ class ToolExecutor:
             if operation_id is not None:
                 if actor_run_id is None:
                     await commit_receipt(
-                        finish_operation, scope.run_id, operation_id, "unknown"
+                        finish_operation,
+                        scope.run_id,
+                        operation_id,
+                        "not_executed"
+                        if isinstance(exc, ToolNotExecuted)
+                        else "unknown",
                     )
-                record.effect_status = "uncertain"
-                if isinstance(exc, Exception):
-                    raise unconfirmed(
-                        "External tool result requires reconciliation"
-                    ) from exc
+                if isinstance(exc, ToolNotExecuted):
+                    # The provider proved the request was rejected before it
+                    # could start. This is a normal tool error: the model may
+                    # correct the arguments in the next turn.
+                    record.effect_status = "not_executed"
+                else:
+                    record.effect_status = "uncertain"
+                    if isinstance(exc, Exception):
+                        raise unconfirmed(
+                            "External tool result requires reconciliation"
+                        ) from exc
             raise
         if operation_id is not None:
             await commit_receipt(

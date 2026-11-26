@@ -20,6 +20,15 @@ from agents.tool_context import ToolContext
 ToolEffect = Literal["read", "idempotent", "protected"]
 
 
+class ToolNotExecuted(RuntimeError):
+    """The provider confirmed the external operation never started.
+
+    This is an ordinary tool failure, not an execution-control failure. The
+    Agent loop may show the provider's rejection to the model and let it correct
+    its arguments; the operation receipt is settled as ``not_executed``.
+    """
+
+
 @dataclass(frozen=True)
 class BusinessTool:
     """An official SDK tool plus the business metadata kept outside it."""

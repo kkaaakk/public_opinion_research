@@ -1,7 +1,7 @@
 ---
 name: douyin
 title: 抖音舆情调研
-description: 通过 Apify MCP 发现并运行抖音采集 Actor，覆盖视频讨论、传播主题、争议焦点、评论反馈、成本控制和代表性证据输出。
+description: 通过 Apify MCP 的抖音专属 Actor 工具采集视频与评论，覆盖传播主题、争议焦点、评论反馈、数量控制和代表性证据输出。
 ---
 
 # 抖音舆情调研
@@ -16,7 +16,7 @@ description: 通过 Apify MCP 发现并运行抖音采集 Actor，覆盖视频�
 
 ## 工具可见性检查
 
-开始前确认工具列表中存在 `search-actors`、`fetch-actor-details`、`call-actor`、`get-actor-run`、`get-dataset-items`。
+开始前确认工具列表中存在专属工具 `zen-studio--douyin-search-scraper`，以及 `get-actor-run`、`get-dataset-items`。
 
 - 如果这些工具不存在，说明 `APIFY_TOKEN` 缺失或 Apify MCP 连接未建立。必须在报告中写明“社媒数据不可用：Apify MCP 未配置或连接失败”，不得用其他平台数据或虚构视频替代。
 - 工具效果按服务级 `protected` 执行。不要为了绕过失败而重复启动同一个 Actor。
@@ -29,36 +29,24 @@ description: 通过 Apify MCP 发现并运行抖音采集 Actor，覆盖视频�
    - 售后与交易：`售后`、`客服`、`退款`、`退货`、`赔偿`、`投诉`；
    - 传播与内容形态：`实测`、`测评`、`开箱`、`同款`、`直播`、`热搜`、`话题`。
    每轮使用 2–4 个变体，避免单次输入过于宽泛。
-3. **发现 Actor**：调用 `search-actors`，关键词使用平台与数据类型：
-   - `douyin videos`（视频、搜索结果）；
-   - `douyin comments`（评论）；
-   - `douyin`（平台整体可用 Actor）。
-   记录候选 Actor 的完整 ID，不要凭印象构造 Actor 名称。
-4. **核对 Actor 能力与价格**：对候选调用 `fetch-actor-details`，读取 `inputSchema`、`pricing`、`stats`、`readme`。确认：
-   - 平台确实是抖音，产出是视频列表、视频详情或评论；
-   - 输入是否支持关键词、视频链接/ID、用户主页、时间范围；
-   - 是否按结果或计算单元计费，是否有最低收费；
-   - 是否能返回视频文案、话题标签、互动量和评论。
-   视频与评论可能由不同 Actor 提供，不要假设一个 Actor 同时覆盖两者。
-5. **构造输入并执行**：按实际 `inputSchema` 构造输入，把关键词、数量上限、时间窗写入 Actor 输入字段。调用 `call-actor` 时：
-   - `actor` 使用完整 ID（`username/name`）；
-   - `callOptions` 设置 `maxTotalChargeUsd`，需要限制条数时同时设置 `maxItems`；
-   - `waitSecs` 不超过 45。
-   本地预算或 `maxItems` 不等于 Apify 实际费用上限，只有 `maxTotalChargeUsd` 是本轮运行的账单上限。
-6. **等待运行完成**：`call-actor` 只返回运行状态和存储 ID。状态不是 `SUCCEEDED` 时用返回的 run ID 调用 `get-actor-run` 轮询（参数名以实际 Schema 为准）；`FAILED`、`TIMED-OUT`、`ABORTED` 时读取 `statusMessage` 和 `exitCode` 并停止，不要立刻重跑。超时或断连后先查询原有运行，确认没有已产生的数据集再决定是否继续。
-7. **读取真实结果**：用运行返回的 dataset ID（常见字段为 `defaultDatasetId`，以工具实际返回为准）调用 `get-dataset-items`，按分析需要设置 `limit`。空数据集是数据缺口，不是“没有讨论”的证据。
-8. **补充评论**：需要评论区时选择评论类 Actor，用视频 URL 或 ID 作为输入。视频文案与评论分别标注来源类型；评论是否覆盖回复、楼中楼和翻页以实际返回为准。
-9. **控制轮次**：只有现有证据不足以回答问题时才追加运行；每轮说明新增目的和成本上限，避免为同一问题反复启动相似 Actor。
+3. **使用专属 Actor 工具**：直接调用 `zen-studio--douyin-search-scraper`。该工具的 Schema 就是 Actor 的业务输入；不要重新发现、选择或通过通用入口启动 Actor。
+4. **构造输入并执行**：输入字段以工具 Schema 为准：
+   - `keywords`（必填字符串数组）；
+   - `maxResultsPerQuery`（默认 100，控制每个关键词的规模）；
+   - `sort`：`general` / `most_liked` / `latest`；
+   - `publishTime`：`unlimited` / `one_day` / `one_week` / `half_year`；
+   - `duration`：`unlimited` / `under_1m` / `one_to_five` / `over_5m`；
+   - `shouldDownloadVideos`、`shouldDownloadCovers`、`shouldDownloadSlideshowImages` 按需设置；
+   - `waitSecs` 为 0–45，默认 30。
+   枚举值必须原样复制英文标识，不要翻译成中文再传入。数量上限由 `maxResultsPerQuery` 控制；Apify 账户的月度配额是最终费用上限。
+5. **等待运行完成**：专属工具只返回运行状态和存储 ID。状态不是 `SUCCEEDED` 时用返回的 run ID 调用 `get-actor-run` 轮询（参数名以实际 Schema 为准）；`FAILED`、`TIMED-OUT`、`ABORTED` 时读取 `statusMessage` 和 `exitCode` 并停止，不要立刻重跑。超时或断连后先查询原有运行，确认没有已产生的数据集再决定是否继续。
+6. **读取真实结果**：用运行返回的 dataset ID（常见字段为 `defaultDatasetId`，以工具实际返回为准）调用 `get-dataset-items`，按分析需要设置 `limit`。空数据集是数据缺口，不是“没有讨论”的证据。
+7. **补充评论**：需要评论区时选择评论类工具或 Actor，用视频 URL 或 ID 作为输入。视频文案与评论分别标注来源类型；评论覆盖范围以实际返回为准。
+8. **控制轮次**：只有现有证据不足以回答问题时才追加运行；每轮说明新增目的和数量上限，避免为同一问题反复启动相似 Actor。
 
-## Actor 选择标准
+## Actor 能力与限制
 
-- 描述明确写明抖音视频或评论采集，而不是通用社交媒体抓取。
-- 输入 Schema 可核验，能限制关键词、数量和（如支持）时间范围。
-- 返回字段能定位原文（URL 或视频 ID），并包含文案、作者、时间、互动量中的多数信息。
-- 近期有成功运行记录，价格可读且计费方式明确。
-- 不需要账号密码、Cookie 或验证码人工介入。
-
-以下情况应放弃或改用其他 Actor：只返回截图或文件、只返回聚合榜单、要求个人账号凭据、无法定位原文、平台明显不符。
+本插件固定使用 `zen-studio/douyin-search-scraper`（工具名 `zen-studio--douyin-search-scraper`）。它按关键词返回抖音视频搜索结果；评论、时间窗和翻页以该 Actor 的实际返回为准，未返回的字段写“未提供”。
 
 ## 证据提取与字段保留
 
@@ -82,13 +70,13 @@ description: 通过 Apify MCP 发现并运行抖音采集 Actor，覆盖视频�
 - 工具报错时原样记录工具名称和错误要点，标记为数据缺口。
 - 运行未到终态时不得引用结果。
 - 数据集为空、条数明显偏少、只覆盖最近几天、评论缺失、翻页受限，都要写成覆盖限制。
-- 达到 `maxTotalChargeUsd` 或 `maxItems` 上限时，明确说明结果被截断，不要声称覆盖全量传播。
+- 达到 Actor 的 `maxResultsPerQuery` 上限时，明确说明结果被数量上限截断，不要声称覆盖全量传播。
 - 历史视频、已删除内容和私域直播间数据通常不可得；只有在实际返回时才引用，否则列为缺口。
 
 ## 输出要求
 
 - 调研问题与检索时间窗。
-- 使用的关键词变体、Actor ID、输入要点、`maxTotalChargeUsd`/`maxItems` 上限和运行状态。
+- 使用的关键词变体、Actor ID、输入要点、数量上限和运行状态。
 - 抖音传播时间线：首次出现、集中传播、官方或品牌回应（如检索到）。
 - 代表性证据表：类型（视频/评论）、摘要、`url`、`published_at`、作者类型、互动量、话题标签、争议焦点。
 - 传播主题与争议焦点分布：每个主题下的代表证据数量与原文要点。

@@ -39,6 +39,26 @@ logger = logging.getLogger(__name__)
 # ordinary document conversions.  Zero would disable the SDK read timeout.
 _MCP_SESSION_TIMEOUT_SECONDS = 300.0
 
+# Hosted Apify helpers that only read provider state.
+_APIFY_READ_TOOLS = frozenset(
+    {
+        "search-actors",
+        "fetch-actor-details",
+        "get-actor-run",
+        "get-actor-run-log",
+        "get-dataset-items",
+        "get-key-value-store-record",
+    }
+)
+# Hosted Apify tools with an external effect but no Actor-run receipt.
+_APIFY_NON_ACTOR_TOOLS = frozenset(
+    {
+        "abort-actor-run",
+        "call-actor-mcp-tool",
+        "send-server-actor-request",
+    }
+)
+
 
 # ---------------------------------------------------------------------------
 # DSN security
@@ -356,6 +376,26 @@ def _build_feishu_server(configurable: Configuration) -> MCPServerSpec:
 # ---------------------------------------------------------------------------
 
 
+# 托管 Apify 的工具分为只读、非 Actor 写入和 Actor 运行工具。
+def _apify_tool_policy(
+    hosted_apify: bool, tool_name: str, fallback_effect: ToolEffect
+) -> tuple[ToolEffect, bool, bool]:
+    """Return ``(effect, starts_actor, read_only)`` for one hosted Apify tool.
+
+    Dedicated Actor tools (``username--actor-name``) and the generic
+    ``call-actor`` start an Actor run and keep the protected receipt path.
+    Helpers that only read provider state stay read-only; other mutations keep
+    the server's declared protection without an Actor-run receipt.
+    """
+    if not hosted_apify:
+        return fallback_effect, False, False
+    if tool_name in _APIFY_READ_TOOLS:
+        return "read", False, True
+    if tool_name in _APIFY_NON_ACTOR_TOOLS:
+        return "protected", False, False
+    return "protected", True, False
+
+
 # 在一个短生命周期连接中发现服务方工具，并完成 SDK 原生声明转换。
 async def _load_server_tools(
     spec: MCPServerSpec,
@@ -381,18 +421,9 @@ async def _load_server_tools(
             and endpoint.netloc == "mcp.apify.com"
         )
         for mcp_tool in mcp_tools:
-            apify_actor = hosted_apify and mcp_tool.name == "call-actor"
-            apify_read = hosted_apify and mcp_tool.name in {
-                "search-actors",
-                "fetch-actor-details",
-                "get-actor-run",
-                "get-dataset-items",
-            }
-            effect = spec.effect
-            if apify_actor:
-                effect = "protected"
-            elif apify_read:
-                effect = "read"
+            effect, apify_actor, apify_read = _apify_tool_policy(
+                hosted_apify, mcp_tool.name, spec.effect
+            )
             public_name = allocate_tool_name(spec.name, mcp_tool.name, taken)
             if public_name != mcp_tool.name:
                 logger.info(

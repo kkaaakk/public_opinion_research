@@ -55,9 +55,14 @@ RETIRED_SOCIAL_TOOLS = {
     "get_public_opinion_snapshot",
 }
 APIFY_TOOL_NAMES = {
-    "search-actors",
-    "fetch-actor-details",
-    "call-actor",
+    "zen-studio/douyin-search-scraper",
+    "zen-studio/rednote-search-scraper",
+    "zhorex/weibo-scraper",
+    "get-actor-run",
+    "get-dataset-items",
+}
+APIFY_DEDICATED_TOOLS = {
+    "zen-studio--rednote-search-scraper",
     "get-actor-run",
     "get-dataset-items",
 }
@@ -100,6 +105,7 @@ if __name__ == "__main__":
 
 # 模拟官方 Apify MCP 的五个社媒工具；参数名以官方文档和实际 Schema 为准。
 APIFY_MCP_SERVER = '''import json
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
@@ -117,33 +123,11 @@ ITEMS = [
 ]
 
 
-@server.tool(name="search-actors")
-def search_actors(keywords: str = "", limit: int = 5) -> str:
-    """Search Apify Store Actors."""
-    return json.dumps(
-        [{"id": "fixture/xhs-notes", "title": "XHS Notes", "pricing": "per 1000 results"}],
-        ensure_ascii=False,
-    )
-
-
-@server.tool(name="fetch-actor-details")
-def fetch_actor_details(actor: str) -> str:
-    """Return a fixture Actor input schema and pricing."""
-    return json.dumps(
-        {
-            "id": actor,
-            "inputSchema": {"keywords": "array", "maxItems": "number"},
-            "pricing": "per 1000 results",
-        },
-        ensure_ascii=False,
-    )
-
-
-@server.tool(name="call-actor")
-def call_actor(
-    actor: str,
-    input: dict | None = None,
-    callOptions: dict | None = None,
+@server.tool(name="zen-studio--rednote-search-scraper")
+def rednote_search(
+    keywords: list[str],
+    maxResults: int = 100,
+    sortType: Literal["general", "popularity_descending", "time_descending"] = "general",
     waitSecs: int = 30,
 ) -> str:
     """Start a fixture run and return its status and dataset id."""
@@ -184,10 +168,10 @@ FAILING_APIFY_SERVER = '''from mcp.server.fastmcp import FastMCP
 server = FastMCP("apify-failure-fixture")
 
 
-@server.tool(name="call-actor")
-def call_actor(actor: str, input: dict | None = None, callOptions: dict | None = None) -> str:
+@server.tool(name="zen-studio--rednote-search-scraper")
+def rednote_search(keywords: list[str], maxResults: int = 100) -> str:
     """Fail like an Actor run that never produced a dataset."""
-    raise RuntimeError("synthetic actor failure: " + actor)
+    raise RuntimeError("synthetic actor failure: " + ",".join(keywords))
 
 
 if __name__ == "__main__":
@@ -221,16 +205,15 @@ RECORD_PATH = __RECORD_PATH__
 server = FastMCP("apify-recording-fixture")
 
 
-@server.tool(name="call-actor")
-def call_actor(
-    actor: str,
-    input: dict | None = None,
-    callOptions: dict | None = None,
+@server.tool(name="zen-studio--rednote-search-scraper")
+def rednote_search(
+    keywords: list[str],
+    maxResults: int = 100,
     waitSecs: int = 30,
 ) -> str:
     """Record one Actor start and return a terminal fixture run."""
     with open(RECORD_PATH, "a", encoding="utf-8") as handle:
-        handle.write(actor + "\\n")
+        handle.write("zen-studio/rednote-search-scraper\\n")
     return json.dumps(
         {"runId": "run-1", "status": "SUCCEEDED", "defaultDatasetId": "ds-1"},
         ensure_ascii=False,
@@ -506,7 +489,7 @@ def test_repository_social_plugin_declares_only_apify_mcp(monkeypatch):
 
     plugin = role_plugins.plugins[0]
     assert plugin.plugin_id == "social-research"
-    assert plugin.version == "2.0.0"
+    assert plugin.version == "2.1.0"
     assert plugin.tools == ()
     assert [skill.name for skill in role_plugins.skills] == [
         "xiaohongshu",
@@ -523,10 +506,19 @@ def test_repository_social_plugin_declares_only_apify_mcp(monkeypatch):
     parsed = urlsplit(server.params["url"])
     assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://mcp.apify.com"
     assert set(parse_qs(parsed.query)["tools"][0].split(",")) == APIFY_TOOL_NAMES
+    dedicated = {
+        "xiaohongshu": "zen-studio--rednote-search-scraper",
+        "douyin": "zen-studio--douyin-search-scraper",
+        "weibo": "zhorex--weibo-scraper",
+    }
     for skill in role_plugins.skills:
         assert skill.plugin_id == "social-research"
-        assert "call-actor" in skill.body
+        assert dedicated[skill.name] in skill.body
         assert "get-dataset-items" in skill.body
+        assert "call-actor" not in skill.body
+        assert "search-actors" not in skill.body
+        assert "fetch-actor-details" not in skill.body
+        assert "callOptions" not in skill.body
         for retired in RETIRED_SOCIAL_TOOLS:
             assert f"`{retired}`" not in skill.body
 
@@ -669,11 +661,11 @@ def test_agent_runs_apify_actor_chain_through_tool_executor(
     )
     tools, plugins = _load_fixture_tools(tmp_path)
 
-    assert APIFY_TOOL_NAMES <= {tool.name for tool in tools}
+    assert APIFY_DEDICATED_TOOLS <= {tool.name for tool in tools}
     assert all(
         tool.domain == "social_media" and tool.effect == "protected"
         for tool in tools
-        if tool.name in APIFY_TOOL_NAMES
+        if tool.name in APIFY_DEDICATED_TOOLS
     )
     assert plugins.assembled_servers == frozenset({"apify"})
 
@@ -710,26 +702,12 @@ def test_agent_runs_apify_actor_chain_through_tool_executor(
             [function_call(LOAD_SKILL_TOOL, '{"skill_name":"xiaohongshu"}', call_id="skill")],
             [
                 function_call(
-                    "search-actors",
-                    '{"keywords":"xiaohongshu notes","limit":5}',
-                    call_id="actors",
-                )
-            ],
-            [
-                function_call(
-                    "fetch-actor-details",
-                    '{"actor":"fixture/xhs-notes"}',
-                    call_id="details",
-                )
-            ],
-            [
-                function_call(
-                    "call-actor",
+                    "zen-studio--rednote-search-scraper",
                     json.dumps(
                         {
-                            "actor": "fixture/xhs-notes",
-                            "input": {"keywords": ["售后"], "maxItems": 20},
-                            "callOptions": {"maxTotalChargeUsd": 0.2, "maxItems": 20},
+                            "keywords": ["售后"],
+                            "maxResults": 20,
+                            "sortType": "general",
                             "waitSecs": 45,
                         },
                         ensure_ascii=False,
@@ -764,21 +742,19 @@ def test_agent_runs_apify_actor_chain_through_tool_executor(
         stage_context.reset(token)
 
     assert runtime.harness.results["skill"].status == "succeeded"
-    for call_id in ("actors", "details", "run", "items"):
+    for call_id in ("run", "items"):
         assert runtime.harness.results[call_id].status == "succeeded"
-    assert "fixture/xhs-notes" in str(runtime.harness.results["actors"].observation)
-    assert "per 1000 results" in str(runtime.harness.results["details"].observation)
     assert "run-1" in str(runtime.harness.results["run"].observation)
     assert "https://www.xiaohongshu.com/explore/n1" in str(
         runtime.harness.results["items"].observation
     )
-    assert result.budget["tool_calls"] == 5
-    # Each Apify MCP call is protected; load_skill stays a read-only tool.
-    for call_id in ("actors", "details", "run", "items"):
+    assert result.budget["tool_calls"] == 3
+    # The Actor tool and dataset reader are protected; load_skill is read-only.
+    for call_id in ("run", "items"):
         assert runtime.harness.results[call_id].operation_id is not None
     assert runtime.harness.results["skill"].operation_id is None
-    assert len(starts) == 4
-    assert [entry[-1] for entry in finishes] == ["returned"] * 4
+    assert len(starts) == 2
+    assert [entry[-1] for entry in finishes] == ["returned"] * 2
 
 
 # 验证 Actor 失败会作为工具失败报告，不会伪装成成功证据。
@@ -795,8 +771,8 @@ def test_failed_actor_is_reported_as_tool_failure(tmp_path):
         [
             [
                 function_call(
-                    "call-actor",
-                    '{"actor":"fixture/broken"}',
+                    "zen-studio--rednote-search-scraper",
+                    '{"keywords":["售后"]}',
                     call_id="run",
                 )
             ],
@@ -1292,8 +1268,8 @@ def test_committed_actor_step_restores_without_rerunning_the_run(
             [
                 [
                     function_call(
-                        "call-actor",
-                        '{"actor":"fixture/xhs-notes","callOptions":{"maxTotalChargeUsd":0.2}}',
+                        "zen-studio--rednote-search-scraper",
+                        '{"keywords":["售后"],"maxResults":20}',
                         call_id="run",
                     )
                 ],
@@ -1351,7 +1327,7 @@ def test_committed_actor_step_restores_without_rerunning_the_run(
         before = client.list_workflow_steps(workflow_id)
         assert sum(s["function_name"] == "por.agent_tool" for s in before) == 2
         assert record_path.read_text(encoding="utf-8").splitlines() == [
-            "fixture/xhs-notes"
+            "zen-studio/rednote-search-scraper"
         ]
         DBOS.destroy()
         launch()
@@ -1363,7 +1339,7 @@ def test_committed_actor_step_restores_without_rerunning_the_run(
         assert usage["tool_calls"] == 2
         assert "finished with one source" in report
         assert record_path.read_text(encoding="utf-8").splitlines() == [
-            "fixture/xhs-notes"
+            "zen-studio/rednote-search-scraper"
         ]
         assert client.list_workflow_steps(workflow_id) == before
         assert attempts == 2

@@ -1,7 +1,7 @@
 ---
 name: weibo
 title: 微博舆情调研
-description: 通过 Apify MCP 发现并运行微博采集 Actor，覆盖话题传播、事件时间线、官方回应、用户观点、成本控制和代表性证据输出。
+description: 通过 Apify MCP 的微博专属 Actor 工具采集博文与评论，覆盖话题传播、事件时间线、官方回应、用户观点、数量控制和代表性证据输出。
 ---
 
 # 微博舆情调研
@@ -16,7 +16,7 @@ description: 通过 Apify MCP 发现并运行微博采集 Actor，覆盖话题�
 
 ## 工具可见性检查
 
-开始前确认工具列表中存在 `search-actors`、`fetch-actor-details`、`call-actor`、`get-actor-run`、`get-dataset-items`。
+开始前确认工具列表中存在专属工具 `zhorex--weibo-scraper`，以及 `get-actor-run`、`get-dataset-items`。
 
 - 如果这些工具不存在，说明 `APIFY_TOKEN` 缺失或 Apify MCP 连接未建立。必须在报告中写明“社媒数据不可用：Apify MCP 未配置或连接失败”，不得用新闻或虚构博文替代。
 - 工具效果按服务级 `protected` 执行。不要为了绕过失败而重复启动同一个 Actor。
@@ -29,36 +29,28 @@ description: 通过 Apify MCP 发现并运行微博采集 Actor，覆盖话题�
    - 负面与维权：`投诉`、`维权`、`退款`、`质量`、`事故`、`虚假宣传`；
    - 官方与回应：`官方回应`、`通报`、`声明`、`道歉`、`召回`。
    每轮使用 2–4 个变体；官方回应类关键词可以单独一轮检索。
-3. **发现 Actor**：调用 `search-actors`，关键词使用平台与数据类型：
-   - `weibo posts`（博文、关键词搜索结果）；
-   - `weibo comments`（评论）；
-   - `weibo`（平台整体可用 Actor）。
-   记录候选 Actor 的完整 ID，不要凭印象构造 Actor 名称。
-4. **核对 Actor 能力与价格**：对候选调用 `fetch-actor-details`，读取 `inputSchema`、`pricing`、`stats`、`readme`。确认：
-   - 平台确实是微博，产出是博文、话题页或评论；
-   - 输入是否支持关键词、博文链接/ID、用户主页、时间范围；
-   - 是否按结果或计算单元计费，是否有最低收费；
-   - 是否能返回转发/评论/点赞数、认证信息和话题标签。
-   热搜榜、话题页和评论可能由不同 Actor 覆盖，不要假设一个 Actor 全包。
-5. **构造输入并执行**：按实际 `inputSchema` 构造输入，把关键词、数量上限、时间窗写入 Actor 输入字段。调用 `call-actor` 时：
-   - `actor` 使用完整 ID（`username/name`）；
-   - `callOptions` 设置 `maxTotalChargeUsd`，需要限制条数时同时设置 `maxItems`；
-   - `waitSecs` 不超过 45。
-   本地预算或 `maxItems` 不等于 Apify 实际费用上限，只有 `maxTotalChargeUsd` 是本轮运行的账单上限。
-6. **等待运行完成**：`call-actor` 只返回运行状态和存储 ID。状态不是 `SUCCEEDED` 时用返回的 run ID 调用 `get-actor-run` 轮询（参数名以实际 Schema 为准）；`FAILED`、`TIMED-OUT`、`ABORTED` 时读取 `statusMessage` 和 `exitCode` 并停止，不要立刻重跑。超时或断连后先查询原有运行，确认没有已产生的数据集再决定是否继续。
-7. **读取真实结果**：用运行返回的 dataset ID（常见字段为 `defaultDatasetId`，以工具实际返回为准）调用 `get-dataset-items`，按分析需要设置 `limit`。空数据集是数据缺口，不是“没有讨论”的证据。
-8. **补充评论与转发**：需要评论区时选择评论类 Actor，用博文 URL 或 ID 作为输入。转发链与评论分别标注来源类型；是否覆盖二级评论和翻页以实际返回为准。
-9. **控制轮次**：只有当已有证据不足以还原时间线或观点分布时才追加运行；每轮说明目的和成本上限。
+3. **使用专属 Actor 工具**：直接调用 `zhorex--weibo-scraper`。该工具的 Schema 就是 Actor 的业务输入；不要重新发现、选择或通过通用入口启动 Actor。
+4. **构造输入并执行**：先按研究问题选择 `mode`：
+   - `search`（关键词搜索，默认）；`hot_search` / `hot_timeline`（热搜与时间线）；
+   - `post_comments`（评论）；`post_details`（单条博文）；`user_posts` / `user_profile`（账号主页）；
+   - `complaints`（投诉类）；`hot_search_delta`（热搜变化）。
+   常用字段：
+   - `searchQuery`、`searchDateFrom`、`searchDateTo`（搜索窗口）；
+   - `postIds`（评论或博文详情）；
+   - `maxResults`（默认 100，控制单次规模）；
+   - `includeComments`、`maxComments`；
+   - `fetchFullText`、`includeAuthorProfiles`；
+   - `adFilter`：`all` / `organic_only` / `promo_only`；
+   - `waitSecs` 为 0–45，默认 30。
+   枚举值必须原样复制英文标识，不要翻译成中文再传入。数量上限由 `maxResults` 控制；Apify 账户的月度配额是最终费用上限。
+5. **等待运行完成**：专属工具只返回运行状态和存储 ID。状态不是 `SUCCEEDED` 时用返回的 run ID 调用 `get-actor-run` 轮询（参数名以实际 Schema 为准）；`FAILED`、`TIMED-OUT`、`ABORTED` 时读取 `statusMessage` 和 `exitCode` 并停止，不要立刻重跑。超时或断连后先查询原有运行，确认没有已产生的数据集再决定是否继续。
+6. **读取真实结果**：用运行返回的 dataset ID（常见字段为 `defaultDatasetId`，以工具实际返回为准）调用 `get-dataset-items`，按分析需要设置 `limit`。空数据集是数据缺口，不是“没有讨论”的证据。
+7. **补充评论与转发**：需要评论区时再次调用 `zhorex--weibo-scraper`，使用 `mode: post_comments` 和 `postIds`。转发链与评论分别标注来源类型；是否覆盖二级评论和翻页以实际返回为准。
+8. **控制轮次**：只有当已有证据不足以还原时间线或观点分布时才追加运行；每轮说明目的和数量上限。
 
-## Actor 选择标准
+## Actor 能力与限制
 
-- 描述明确写明微博博文、话题或评论采集，而不是通用网页抓取。
-- 输入 Schema 可核验，能限制关键词、数量和（如支持）时间范围。
-- 返回字段能定位原文（URL 或博文 ID），并包含正文、作者、时间、互动量中的多数信息。
-- 近期有成功运行记录，价格可读且计费方式明确。
-- 不需要账号密码、Cookie 或验证码人工介入。
-
-以下情况应放弃或改用其他 Actor：只返回截图或文件、只返回聚合榜单、要求个人账号凭据、无法定位原文、平台明显不符。
+本插件固定使用 `zhorex/weibo-scraper`（工具名 `zhorex--weibo-scraper`）。它覆盖关键词搜索、热搜、博文详情、评论和账号主页等模式；具体字段、时间窗和翻页以该 Actor 的实际 Schema 与返回为准，未返回的字段写“未提供”。
 
 ## 证据提取与字段保留
 
@@ -81,13 +73,13 @@ description: 通过 Apify MCP 发现并运行微博采集 Actor，覆盖话题�
 - 工具报错时原样记录工具名称和错误要点，标记为数据缺口。
 - 运行未到终态时不得引用结果。
 - 数据集为空、条数明显偏少、只覆盖最近几天、评论缺失、翻页受限，都要写成覆盖限制。
-- 达到 `maxTotalChargeUsd` 或 `maxItems` 上限时，明确说明结果被截断，不要声称覆盖全量讨论。
+- 达到 Actor 的 `maxResults` 上限时，明确说明结果被数量上限截断，不要声称覆盖全量讨论。
 - 热搜历史榜单、已删除博文和受限账号内容通常不可得；只有在实际返回时才引用，否则列为缺口。
 
 ## 输出要求
 
 - 调研问题与检索时间窗。
-- 使用的关键词变体、Actor ID、输入要点、`maxTotalChargeUsd`/`maxItems` 上限和运行状态。
+- 使用的关键词变体、Actor ID、输入要点、数量上限和运行状态。
 - 事件时间线：首次出现、话题升温、官方回应、媒体跟进、后续进展；每个节点给出来源和日期。
 - 代表性证据表：类型（博文/评论）、摘要、`url`、`published_at`、作者类型、互动量、观点倾向。
 - 观点分布：支持、质疑、投诉、中立等类别的代表证据与数量；分类依据要引用原文。
