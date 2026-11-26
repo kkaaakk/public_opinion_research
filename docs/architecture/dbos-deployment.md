@@ -1,6 +1,6 @@
 # DBOS 部署、数据库和恢复
 
-当前应用版本为 `por-role-recovery-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-vertical-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
+当前应用版本为 `por-resume-v1`，由 `workflow/dbos_config.py:VERSION` 固定，并同时用于入队与 Executor 配置。SDK Runtime 版本为 `sdk-vertical-v1`。新环境使用 `--initialize-only`，旧环境先盘点并排空。 [执行架构](agent-loop.md) · [可靠性验收](../audits/dbos-architecture-closeout.md#故障验收清单)
 
 ## Local setup
 
@@ -88,7 +88,9 @@ PostgreSQL/DBOS。Web 准入可接受本次 Run 的 RAG 开关，模型、预算
 
 ## 应用版本切换
 
-`por-role-recovery-v1` 更新了角色工具提交顺序、Research 的角色等待和 Finalizer 的恢复命令。先由 `por-native-history-v1` 对应的 API 和 Executor 排空旧 journal，再运行 `--initialize-only`。安装器为 `model_attempts` 增加预算预留字段，为 `operations` 增加 Workflow、Step 和 Apify Actor Run ID 字段。旧 Run 继续读取原生阶段结果、Stream 和账本，恢复请求要求匹配的应用版本。
+`por-resume-v1` 沿用现有表和队列。用户恢复请求为新代次入队一个 Finalizer，终止的 relay 在原 Stream 上从关闭 Step 续写。保留的终态业务 journal 可以从 `por-role-recovery-v1` 或 `por-native-history-v1` rewind 到当前版本，前提是对应输入、工具定义和原生 Step 可重放。已完成的子 Workflow 保留原结果。
+
+`por-role-recovery-v1` 更新了角色工具提交顺序、Research 的角色等待和 Finalizer 的恢复命令。安装器为 `model_attempts` 增加预算预留字段，为 `operations` 增加 Workflow、Step 和 Apify Actor Run ID 字段。从 `por-native-history-v1` 升级时运行一次 `--initialize-only`。
 
 `por-native-history-v1` 更改了 `por.finalize` 和 `por.events` 的 journal。先使用 `por-datasource-stage-v1` 对应的 API 和 Executor 排空。已完成的上一版本 Run 沿用原生阶段结果、`delivery` 和调用账本的读取路径。`por.commit_stage` 继续提交阶段事件。现存的旧 `por_domain.history` 数据原地保留。
 
@@ -104,7 +106,7 @@ PostgreSQL/DBOS。Web 准入可接受本次 Run 的 RAG 开关，模型、预算
 `por-agent-context-v1` 精简 `por.agent_context` 和 `por.agent_settlement` 的检查点。Agent 模型预算拒绝发生在 DBOSRunner 的模型 Step。`por-inline-report-v1` 使用匹配的 API 和 Executor 排空其 journal 和人工交互。
 
 `por-inline-report-v1` 将终稿的模型 Step 和事件移入 `por.research`，改变了原生 journal 命令序列。切换前，使用 `por-research-agents-v1` 对应的 API 和 Executor 排空其 journal、人工交互及归档。`por-sdk-models-v1` 和 `por-vertical-v1` 也须由匹配的发行版排空。
-旧版已成功 Run 的终稿可从保留的根 Workflow 结果读取。旧 Run 的原生 rewind 由其匹配版本执行。
+旧版已成功 Run 的终稿可从保留的根 Workflow 结果读取。其余旧版本的原生 rewind 由匹配发行版执行。
 更新自定义 YAML 时移除旧的章节模式与章节模型字段。本轮沿用现有业务 schema 和 `por_domain.model_attempts`。
 
 历史 Phase 4 DBOS、`dbos-phase5-v1`、`dbos-phase5-studio-v1`、`dbos-brief-spec-v1`、`dbosrunner-unified-v1`、后续规划/审批版本（含 `dbosrunner-brief-idempotency-v1` 预览）、`dbosrunner-native-interaction-v1` 与 `dbos-native-recovery-v1` 均由各自的发行版处理原生执行。旧 SQL 队列也由原 SQL 发行版排空，保留原 History。数据库中可能存在的旧 `approvals` 与 `brief_revision_receipts` 供历史或回滚保留。 [版本与恢复](https://docs.dbos.dev/python/tutorials/upgrading-workflows) · [原生交互变更](research-brief.md) · [旧阶段清算记录](../audits/run-execution-reliability.md) · [业务 schema 迁移审计](../audits/dbos-domain-simplification.md)
@@ -117,8 +119,8 @@ PostgreSQL/DBOS。Web 准入可接受本次 Run 的 RAG 开关，模型、预算
 
 - 同机恢复使用相同的 `application_version` 和已停止 Executor 的原 ID。多机部署需要 Conductor 或外部编排器协调故障检测与接管；本仓库的 Executor 启动命令只配置 ID、队列和匹配版本。关闭进程与提交业务取消属于两个入口。 [DBOS Executor 恢复](https://docs.dbos.dev/production/workflow-recovery)
 - PostgreSQL 短时故障会让准入和控制失败，API 存储错误返回 `503`。恢复后用原请求和键确认是否提交。SSE EOF 后从最后完整游标重连并读取当前状态。
-- 用户恢复适用于当前代次已交付的兼容 `ERROR` Workflow。GET 通过 `retry_safe` 标记当前资格，通过 `retry_reason` 说明不可恢复的原因。使用观测到的 `state_version` 和新键提交请求。同一个键只确认原来的代次。Finalizer 校验原生失败身份和所需的回执，从失败的子 Workflow 逐级 rewind 到根。 [执行和外部调用边界](agent-loop.md#可靠性设计)
-- 未确认外部效果先核对供应商或存储系统回执、确认旧 Executor 已停止，并记录证据。操作命令 `--reconcile-run RUN_ID --state-version VERSION --worker-stopped --note '…'` 只记录人工核验并解除 Session 准入隔离。
+- 用户恢复适用于已停止且 journal 可重放的 `ERROR` Workflow。GET 通过 `retry_safe` 标记资格，通过 `retry_reason` 说明阻碍。使用观测到的 `state_version` 和新键提交请求，同一个键只确认原代次。新 Finalizer 负责从失败子 Workflow 逐级 rewind 到根并交付该代结果。 [执行和外部调用边界](agent-loop.md#可靠性设计)
+- 未确认外部效果先核对供应商回执、确认旧 Executor 已停止，并记录证据。`--reconcile-run RUN_ID --state-version VERSION --worker-stopped --note '…'` 保留人工核验。Apify 原操作的 Actor Run ID 可在核对后补作回执引用，恢复时由 MCP 读取原任务状态和对应 Dataset。
 
 ## Verification
 

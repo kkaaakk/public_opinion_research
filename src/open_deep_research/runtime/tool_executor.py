@@ -158,8 +158,6 @@ class ToolExecutor:
         self.budget = budget
         self.tools = tools
         self._tool_calls: dict[str, asyncio.Future[Any]] = {}
-        self._step_lock = asyncio.Lock()
-        self._step_failure: BaseException | None = None
 
     def bind(self, tool: FunctionTool, *, drain_on_cancel: bool = False) -> FunctionTool:
         """Bind an SDK declaration to this executor's durable invocation.
@@ -195,19 +193,7 @@ class ToolExecutor:
         )
         try:
             if native_step_available():
-                # DBOSRunner orders step starts. Wait for each commit as well:
-                # native rewind would discard later successes in the same batch.
-                async with self._step_lock:
-                    if self._step_failure is not None:
-                        harness.close_unexecuted(
-                            record, type(self._step_failure).__name__
-                        )
-                        raise self._step_failure
-                    try:
-                        output = await self._step(call)
-                    except BaseException as exc:
-                        self._step_failure = exc
-                        raise
+                output = await self._step(call)
             else:
                 output = await self._perform(call)
         except BaseException as exc:

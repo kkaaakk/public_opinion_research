@@ -309,15 +309,11 @@ def _tool_catalog(tools: Iterable[BusinessTool]) -> list[dict[str, Any]]:
 
 
 def _restore_role_tools(admitted, tools):
-    """Fence a resumed Run to the tool definitions it was admitted with.
-
-    The catalog carries the declared effect, and every current declaration states
-    one (unclassified declarations fall back to ``protected``). A journal written
-    before ``effect`` existed belongs to an older DBOS Application Version, which
-    this Executor never recovers, so an effect-less catalog is a definition
-    change rather than a format to tolerate.
-    """
-    if admitted != _tool_catalog(tools):
+    """Preserve the SDK's tool definitions and use the current local effect policy."""
+    fields = ("name", "domain", "description", "schema")
+    if [[entry[key] for key in fields] for entry in admitted] != [
+        [entry[key] for key in fields] for entry in _tool_catalog(tools)
+    ]:
         raise ValueError("Role tool definitions changed during recovery")
     return tools
 

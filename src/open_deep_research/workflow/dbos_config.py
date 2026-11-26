@@ -11,9 +11,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
 APP = "public-opinion-research"
-# Role joins and Finalizer retry commands changed. Drain pending journals with
-# their original release.
-VERSION = "por-role-recovery-v1"
+# Finalizers are now enqueued per generation. Only terminal research journals
+# from these releases share the rewind path.
+VERSION = "por-resume-v1"
+RESUMABLE_VERSIONS = {VERSION, "por-role-recovery-v1", "por-native-history-v1"}
 SDK_VERSION = "0.24.0"
 CONTROL = "por-control"
 BUSINESS = "por-business"

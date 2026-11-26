@@ -135,9 +135,9 @@ flowchart TD
 
 `por.agent_context` 保存滚动摘要、已压缩轮次、摘要调用增量和已改写的输入窗口。SDK 用重放的响应重建轮次边界及角色用量投影。工具输出及局部用量来自 `por.agent_tool`。若 Tool Step 抛出异常，其错误回执保留局部用量；退出结算在进程内补齐终态，不再是独立的 DBOS Step。可选 SQLite transcript 供排查，SDK 恢复数据来自 DBOS journal。
 
-两个角色仍并行运行。单个角色内，DBOSRunner 确定同一批工具的开始顺序，`ToolExecutor` 等前一个 Step 提交后再执行下一个。发生执行控制故障时，排在后面的调用由 Harness 结算为未执行。这样原生 rewind 可以丢弃失败后缀，并保留已成功的调用。 [工具观察记录终态](tools.md#观察记录的终态)
+两个角色仍并行运行。DBOSRunner 为同批工具确定 Step 分配顺序，工具调用可以并行完成。原生 rewind 保留断点前缀。后缀中的普通调用可重新执行，受保护调用由 `ToolExecutor` 按原操作身份查回执。 [工具观察记录终态](tools.md#观察记录的终态)
 
-角色失败时 Research 等同批角色结算。恢复资格以同一个后端判断为准，检查当前代次、应用版本、活跃 Workflow、原生断点、受保护操作和已知的新模型调用预算。`RunClient.retry` 只写授权和消息。Finalizer 沿 journal 中失败的 `DBOS.getResult` 找到实际子 Workflow，由叶到根调用 `rewind_workflow`，成功的角色仍由原 Workflow ID 提供结果。普通代码报错时保留前面的成功 Step，子 Workflow 结果已更新后父级重新读取。原生取消沿子 Workflow 级联。 [DBOS 取消与 rewind](https://docs.dbos.dev/python/tutorials/workflow-management)
+角色失败时 Research 等同批角色结算。后端统一检查活跃 Workflow、可重放的断点、所需预算和断点处的受保护操作。`RunClient.retry` 原子保存授权并入队该代次的 Finalizer。Finalizer 沿 native 子 Workflow ID 从叶到根调用 `rewind_workflow`，成功的角色继续提供原结果。原生取消沿子 Workflow 级联。 [DBOS 取消与 rewind](https://docs.dbos.dev/python/tutorials/workflow-management)
 
 ### 外部调用可靠性
 
@@ -154,4 +154,4 @@ Step 结果缺失时，`read` 可以重做请求并记录可能的重复费用�
 
 ## 交付与执行状态
 
-`native_status` 表示 DBOS 根 Workflow 状态，`status` 加入人工等待和业务结果解释，`settlement` 表示回执结算。`event_cursor` 是已交付的前缀，`events_complete` 表示当前代次已交付终态。relay 收到 `_terminal` 后排空已提交的邮箱前缀，追加一次 `done`，并通过 `delivery` 记录代次和终态游标。当前版本的 `ERROR` 保留 Finalizer 和原生 Stream，SSE 可在这一代交付后结束。恢复请求获准后从原偏移继续订阅，运行完成时交付新代次的终态。 [工作台协议](agent-execution-studio.md)
+`native_status` 是根 Workflow 状态，`status` 加入人工等待和业务结果解释，`settlement` 表示回执结算。`event_cursor` 是已交付偏移，`events_complete` 表示当前代次已交付终态。relay 按代次接收 `_terminal` 并追加 `done`。恢复时若 relay 已结束，Finalizer 用 DBOS rewind 重新开放同一个 Stream，已交付的事件仍在原偏移。每代 Finalizer 提交终态后退出。 [工作台协议](agent-execution-studio.md)

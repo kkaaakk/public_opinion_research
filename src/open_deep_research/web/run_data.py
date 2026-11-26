@@ -325,6 +325,10 @@ def retry_generation(db, run_id):
     )
 
 
+def finalizer_id(run_id, generation=0):
+    return f"{run_id}:finalize:{generation}" if generation else run_id + ":finalize"
+
+
 def result_budget(result):
     if role := result.get("research_result"):
         return role["budget_delta"]

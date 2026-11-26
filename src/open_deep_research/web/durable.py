@@ -37,6 +37,7 @@ from open_deep_research.web.run_data import (
     db_time,
     digest,
     dumps,
+    finalizer_id,
     legacy_projection,
     loads,
     public_payload,
@@ -55,6 +56,7 @@ from open_deep_research.workflow.dbos_config import (
     APP,
     CONTROL,
     FINALIZE,
+    RESUMABLE_VERSIONS,
     SDK_VERSION,
     SETTLEMENT_GRACE_SECONDS,
     VERSION,
@@ -72,9 +74,7 @@ from open_deep_research.workflow.python_state import copy_state
 
 NATIVE_TERMINAL = {"SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED"}
 HUMAN_PHASES = {"awaiting_approval", "awaiting_clarification"}
-NATIVE_RESULT_VERSIONS = {
-    VERSION,
-    "por-native-history-v1",
+NATIVE_RESULT_VERSIONS = RESUMABLE_VERSIONS | {
     "por-datasource-stage-v1",
     "por-call-ledger-v1",
     "por-agent-context-v1",
@@ -96,7 +96,7 @@ def validate_request(request):
             "Accepted configuration is no longer valid; drain using the original release"
         ) from exc
     if (
-        data["version"] != VERSION
+        data["version"] not in RESUMABLE_VERSIONS
         or data["sdk"] != SDK_VERSION
         or installed_version("openai-agents") != SDK_VERSION
         or data["runtime"] != SDK_RUNTIME_VERSION
@@ -118,24 +118,25 @@ def external_effects(db, run_id):
 
 
 def check_retry_target(db, req, target):
-    """Check effects in the exact suffix DBOS would discard."""
-    for name, step_id, actor_run_id in db.execute(
+    """Check the failed call. ToolExecutor still protects effects reached later."""
+    name = db.scalar(
         text("""
-        SELECT name, step_id, apify_run_id FROM por_domain.operations
+        SELECT name FROM por_domain.operations
         WHERE run_id=:r AND workflow_id=:workflow AND outcome IS DISTINCT FROM 'not_executed'
-          AND (step_id IS NULL OR step_id>=:step)
+          AND apify_run_id IS NULL AND (step_id IS NULL OR step_id=:step)
+        LIMIT 1
         """),
         {
             "r": req["id"],
             "workflow": target["workflow_id"],
             "step": target["start_step"],
         },
-    ):
-        if not actor_run_id or step_id != target["start_step"]:
-            raise RunConflict(
-                f"Protected tool '{name}' has no reusable result at the recovery point. "
-                "Verify the original operation before resuming."
-            )
+    )
+    if name:
+        raise RunConflict(
+            f"Protected tool '{name}' has no reusable result at the recovery point. "
+            "Verify the original operation before resuming."
+        )
 
     if (reserve_report := target["model_reserve"]) is not None:
         data = req["data"]
@@ -255,18 +256,19 @@ class RunClient:
         if any(wf.status in ACTIVE for wf in statuses.values()):
             raise RunConflict("Session already has an active research Run")
         for run_id, _, reconciliation in requests:
-            if run_id == excluding or reconciliation:
+            if run_id == excluding:
                 continue
-            if (
-                retry_generation(db, run_id) > self._retry_receipt(run_id)["generation"]
-                or any(external_effects(db, run_id))
-                or (
-                    statuses.get(run_id) is not None
-                    and statuses[run_id].app_version != VERSION
-                    and (
-                        model_bill(db, run_id)[1]
-                        or self._unconfirmed_stage(statuses[run_id])
-                    )
+            generation = retry_generation(db, run_id)
+            if self._retry_pending(run_id, generation):
+                raise RunConflict("Session has a recovery request in progress")
+            if reconciliation and not generation:
+                continue
+            if any(external_effects(db, run_id)) or (
+                statuses.get(run_id) is not None
+                and statuses[run_id].app_version != VERSION
+                and (
+                    model_bill(db, run_id)[1]
+                    or self._unconfirmed_stage(statuses[run_id])
                 )
             ):
                 raise RunConflict(
@@ -296,14 +298,36 @@ class RunClient:
                 "SELECT run_id, max(generation) FROM por_domain.retries GROUP BY run_id"
             )
         ):
-            if generation > self._retry_receipt(run_id)["generation"]:
+            if self._retry_pending(run_id, generation):
                 raise RunConflict("A research retry is pending.")
 
-    def _retry_receipt(self, run_id):
+    def _retry_receipt(self, run_id, generation):
+        if not generation:
+            return {"generation": 0}
         receipt = self.client.get_event(
-            run_id + ":finalize", "retry_applied", timeout_seconds=0
+            finalizer_id(run_id, generation), "retry_applied", timeout_seconds=0
+        )
+        if receipt is not None:
+            return receipt
+        # Previous releases delivered all recovery generations in one Workflow.
+        receipt = self.client.get_event(
+            finalizer_id(run_id), "retry_applied", timeout_seconds=0
         )
         return receipt if isinstance(receipt, dict) else {"generation": receipt or 0}
+
+    def _retry_pending(self, run_id, generation, applied=None):
+        applied = applied or self._retry_receipt(run_id, generation)
+        if generation <= applied["generation"]:
+            return False
+        # A stopped Finalizer cannot still apply an older grant.
+        current, legacy = finalizer_id(run_id, generation), finalizer_id(run_id)
+        workflows = {
+            wf.workflow_id: wf.status
+            for wf in self.client.list_workflows(
+                workflow_ids=[current, legacy], load_input=False, load_output=False
+            )
+        }
+        return workflows.get(current, workflows.get(legacy)) in ACTIVE
 
     def create(
         self,
@@ -706,6 +730,7 @@ class RunClient:
         run_id = req["id"]
         data = req["data"]
         version = data["version"]
+        legacy_settlement = native.app_version not in {VERSION, "por-role-recovery-v1"}
         terminal = native.status in NATIVE_TERMINAL
         old = {}
         if version not in NATIVE_RESULT_VERSIONS:
@@ -721,7 +746,7 @@ class RunClient:
                 charges, pending_model, complete = model_bill(db, run_id)
                 tool_counts = tool_ledger(db, run_id)
                 open_effect, unknown = external_effects(db, run_id)
-                if version != VERSION:
+                if legacy_settlement:
                     open_effect = bool(open_effect or pending_model)
             expired = (
                 terminal
@@ -732,7 +757,7 @@ class RunClient:
                 )
             )
 
-        applied = self._retry_receipt(run_id) if generation else {"generation": 0}
+        applied = self._retry_receipt(run_id, generation)
         errors = (
             stage_errors(self.client, run_id)
             if version in NATIVE_RESULT_VERSIONS and terminal
@@ -746,7 +771,7 @@ class RunClient:
         missing_checkpoint = any(err.get("unknown_outcome") for err in errors)
         unconfirmed_effect = bool(unknown or open_effect)
         pending = open_effect and not (
-            missing_checkpoint or req["reconciliation"] or expired
+            missing_checkpoint or (req["reconciliation"] and not generation) or expired
         )
         unknown = bool(unknown or missing_checkpoint or open_effect)
         settlement = "pending" if pending else "unresolved" if unknown else "settled"
@@ -767,7 +792,7 @@ class RunClient:
                 status = "cancelling"
             elif applied.get("outcome") == "cancelled":
                 status = "cancelled"
-        interrupted = unconfirmed_effect if version == VERSION else unknown
+        interrupted = unknown if legacy_settlement else unconfirmed_effect
         if terminal and interrupted and not pending:
             status = "interrupted"
             error.setdefault("kind", "unconfirmed_effect")
@@ -775,7 +800,7 @@ class RunClient:
             error.setdefault("kind", "execution_error")
         if error or unknown:
             error["usage_complete"] = (
-                complete if version == VERSION else complete and not unknown
+                complete and not unknown if legacy_settlement else complete
             )
 
         view = (
@@ -799,7 +824,7 @@ class RunClient:
         if not complete:
             usage["usage_complete"] = False
         settled_at = native.completed_at or native.updated_at or 0
-        retry_requested = generation > applied["generation"]
+        retry_requested = self._retry_pending(run_id, generation, applied)
         if retry_requested and native.status == "ERROR" and not req["cancel_requested"]:
             status = "running" if view["current_step"] else "queued"
         return dict(
@@ -873,7 +898,7 @@ class RunClient:
         if native.status in NATIVE_TERMINAL:
             with self.engine.connect() as db:
                 try:
-                    self._retry_plan(db, req, native, result["generation"], delivery)
+                    self._retry_plan(db, req, native, result["generation"])
                 except RunConflict as exc:
                     retry_reason = str(exc)
                 else:
@@ -890,7 +915,9 @@ class RunClient:
                         clarification = None
         elif result["status"] == "awaiting_approval" and plan:
             with self.engine.connect() as db:
-                can_approve = version == VERSION and db_time(db) < plan["expires_at"]
+                can_approve = (
+                    native.app_version == VERSION and db_time(db) < plan["expires_at"]
+                )
         request = req["data"]["request"]
         config = req["data"]["config"]["configurable"]
         images = [
@@ -903,8 +930,8 @@ class RunClient:
             retry_reason=retry_reason,
             approval_required=bool(config.get("allow_plan_feedback")),
             can_approve=can_approve,
-            can_clarify=version == VERSION and clarification is not None,
-            can_cancel=version == VERSION
+            can_clarify=native.app_version == VERSION and clarification is not None,
+            can_cancel=(native.app_version == VERSION or result["retry_requested"])
             and not req["cancel_requested"]
             and (native.status not in NATIVE_TERMINAL or result["retry_requested"]),
             enabled_roles=config.get("enabled_business_agents") or [],
@@ -965,7 +992,7 @@ class RunClient:
             ),
             execution_engine="dbos",
             workflow_backend="dbos",
-            workflow_version=version,
+            workflow_version=native.app_version or version,
             business_agent_runtime="openai_agents",
             sdk_version=SDK_VERSION,
             runtime_version=SDK_RUNTIME_VERSION,
@@ -1177,12 +1204,13 @@ class RunClient:
     def cancel(self, run_id, owner):
         with self.engine.begin() as db:
             req = read_request(run_id, owner, db=db, lock=True)
+            native = self.native(run_id)
+            generation = retry_generation(db, run_id)
+            recovering = self._retry_pending(run_id, generation)
             if not req["cancel_requested"] and (
-                self.native(run_id).status not in NATIVE_TERMINAL
-                or retry_generation(db, run_id)
-                > self._retry_receipt(run_id)["generation"]
+                native.status not in NATIVE_TERMINAL or recovering
             ):
-                if req["data"]["version"] != VERSION:
+                if native.app_version != VERSION and not recovering:
                     raise RunConflict("Cancel using the original application release")
                 db.execute(
                     text(
@@ -1203,33 +1231,17 @@ class RunClient:
                 )
         return self.get(run_id, owner)
 
-    def _retry_plan(self, db, req, native, generation, delivery):
+    def _retry_plan(self, db, req, native, generation):
         from open_deep_research.workflow.dbos_workflow import retry_targets
 
         if req["cancel_requested"] or native.status == "CANCELLED":
             raise RunConflict("This Run was cancelled")
         if native.status != "ERROR":
             raise RunConflict("Recovery requires a failed DBOS Workflow")
-        if native.app_version != VERSION:
-            raise RunConflict("The Run uses an incompatible Workflow version")
         validate_request(req)
-        if req["reconciliation"]:
-            raise RunConflict("This Run was closed by operator reconciliation")
         run_id = req["id"]
-        if generation > self._retry_receipt(run_id)["generation"]:
+        if self._retry_pending(run_id, generation):
             raise RunConflict("A recovery request is already pending")
-        if generation != delivery["generation"] or not delivery.get("terminal"):
-            raise RunConflict("The current failure is still being delivered")
-        delivery_ids = {run_id + ":events", run_id + ":finalize"}
-        available = self.client.list_workflows(
-            workflow_ids=list(delivery_ids),
-            status=list(ACTIVE),
-            app_version=VERSION,
-            load_input=False,
-            load_output=False,
-        )
-        if {wf.workflow_id for wf in available} != delivery_ids:
-            raise RunConflict("The Run's Finalizer or event stream is closed")
         targets = retry_targets(run_id, native)
         for target in targets:
             check_retry_target(db, req, target)
@@ -1259,38 +1271,32 @@ class RunClient:
                     raise RunConflict(
                         "Run state changed. Refresh before requesting recovery."
                     )
-                targets = self._retry_plan(db, req, native, generation, delivery)
-                grant = {
-                    "source_generation": generation,
-                    "version": VERSION,
-                    "targets": targets,
-                }
+                targets = self._retry_plan(db, req, native, generation)
                 generation += 1
                 db.execute(
                     text("""
-                    INSERT INTO por_domain.retries(run_id,key,version,generation,outcome)
-                    VALUES (:id,:k,:v,:g,:o)
+                    INSERT INTO por_domain.retries(run_id,key,version,generation)
+                    VALUES (:id,:k,:v,:g)
                     """),
                     dict(
                         id=run_id,
                         k=key,
                         v=expected_version,
                         g=generation,
-                        o=dumps(grant),
                     ),
                 )
-                publish_event(db, run_id, "retry_started", generation=generation)
-                self.client.send_in_transaction(
+                self.client.enqueue_in_transaction(
                     db,
-                    run_id + ":finalize",
                     {
-                        "key": key,
-                        "generation": generation,
-                        "version": expected_version,
-                        "outcome": digest(grant),
+                        "workflow_name": "por.finalize",
+                        "queue_name": FINALIZE,
+                        "workflow_id": finalizer_id(run_id, generation),
+                        "app_version": VERSION,
+                        "authenticated_user": owner,
                     },
-                    topic="retry",
-                    idempotency_key=key,
+                    run_id,
+                    generation,
+                    targets,
                 )
         return self.get(run_id, owner)
 

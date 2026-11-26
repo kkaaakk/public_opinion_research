@@ -24,8 +24,11 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `por-role-recovery-v1`. Drain `por-native-history-v1`
-with its matching release before switching the role and Finalizer journals.
+Application version is `por-resume-v1`. Drain active business journals with
+their matching release. Terminal research journals from `por-role-recovery-v1`
+and `por-native-history-v1` can resume through native rewind. Each recovery
+generation enqueues its own `por.finalize` on the existing queue. A closed relay
+resumes on the original Workflow ID and Stream.
 Drain `por-datasource-stage-v1`
 Finalizer and relay journals with their matching release. Completed Runs still
 use their native stage results, delivery receipts and call ledger. Drain `por-call-ledger-v1`,

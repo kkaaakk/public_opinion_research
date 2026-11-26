@@ -20,8 +20,7 @@ from sqlalchemy import text
 
 from open_deep_research.web.run_data import (
     RunConflict,
-    digest,
-    loads,
+    finalizer_id,
     publish_event,
     read_request,
 )
@@ -103,7 +102,7 @@ def command_for(run_id, key):
     with domain_engine().connect() as db:
         row = db.execute(
             text(
-                "SELECT version,generation,outcome FROM por_domain.retries WHERE run_id=:id AND key=:k"
+                "SELECT version,generation FROM por_domain.retries WHERE run_id=:id AND key=:k"
             ),
             {"id": run_id, "k": key},
         ).one()
@@ -111,7 +110,6 @@ def command_for(run_id, key):
         "key": key,
         "version": row[0],
         "generation": row[1],
-        "outcome": digest(loads(row[2])),
     }
 
 
@@ -173,6 +171,8 @@ def test_role_recovery_reuses_native_results(native_case, monkeypatch, failure):
         },
     }
     lost_bill = []
+    prefix_committed = asyncio.Event()
+    tail_committed = asyncio.Event()
 
     class Apify(MCPServerStdio):
         async def __aenter__(self):
@@ -181,6 +181,7 @@ def test_role_recovery_reuses_native_results(native_case, monkeypatch, failure):
 
         async def __aexit__(self, *_):
             if self.launched:
+                await asyncio.wait_for(prefix_committed.wait(), 10)
                 raise RuntimeError("Injected disconnect after the Actor run receipt")
 
         async def list_tools(self):
@@ -286,8 +287,28 @@ def test_role_recovery_reuses_native_results(native_case, monkeypatch, failure):
         result = await original_perform(executor, call)
         if failure in {"read", "protected"} and call.record.tool_call_id == "failed":
             if stage_context.get().generation == 0:
+                await asyncio.wait_for(prefix_committed.wait(), 10)
+                if failure == "read":
+                    await asyncio.wait_for(tail_committed.wait(), 10)
                 raise unconfirmed("Injected loss of the tool checkpoint")
         return result
+
+    original_step = tool_executor.ToolExecutor._step
+    original_send = engine.send_event
+
+    async def step(executor, call):
+        result = await original_step(executor, call)
+        if executor.role == failed_role and stage_context.get().generation == 0:
+            if call.record.tool_call_id == "first":
+                prefix_committed.set()
+            if call.record.tool_call_id == "tail":
+                tail_committed.set()
+        return result
+
+    async def send(run_id, event_type, **data):
+        if failure == "read" and event_type == "_terminal" and data["generation"] == 0:
+            data["close"] = True
+        await original_send(run_id, event_type, **data)
 
     monkeypatch.setattr(business_agent, "_business_agent_tools", tool_catalog)
     monkeypatch.setattr(business_agent, "sdk_model", model)
@@ -298,6 +319,8 @@ def test_role_recovery_reuses_native_results(native_case, monkeypatch, failure):
     )
     monkeypatch.setattr(budget, "finish_model_attempt", finish_model)
     monkeypatch.setattr(tool_executor.ToolExecutor, "_perform", perform)
+    monkeypatch.setattr(tool_executor.ToolExecutor, "_step", step)
+    monkeypatch.setattr(engine, "send_event", send)
     monkeypatch.setattr(server, "WEB_API_TOKEN", "recovery-test")
     case.cfg["configurable"].update(
         max_input_tokens=1_000_000, max_output_tokens=100_000
@@ -316,7 +339,19 @@ def test_role_recovery_reuses_native_results(native_case, monkeypatch, failure):
     assert broken["function_name"] == (
         "_model_call_step" if failure == "model" else "por.agent_tool"
     )
-    assert not effects["tail"]
+    if failure == "read":
+        case.wait(
+            run, lambda _: case.client.native(run_id + ":events").status == "SUCCESS"
+        )
+        assert case.client.native(finalizer_id(run_id)).status == "SUCCESS"
+        tail = next(
+            s
+            for s in steps
+            if s.get("output")
+            and isinstance(s["output"], dict)
+            and s["output"].get("record", {}).get("tool_call_id") == "tail"
+        )
+        assert tail["function_id"] > broken["function_id"] and effects["tail"] == 1
     if failure == "model":
         assert lost_bill and first["usage"]["usage_complete"] is False
     url = "/api/runs/" + run_id
@@ -369,7 +404,7 @@ def test_role_recovery_reuses_native_results(native_case, monkeypatch, failure):
             == 1
         )
     elif failure == "read":
-        assert effects["retry"] == 2 and effects["tail"] == 1
+        assert effects["retry"] == effects["tail"] == 2
         assert finished["usage"]["tool_calls"] == 4
         assert any(
             "provider may have received it twice" in w
@@ -834,9 +869,7 @@ def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypat
     assert case.calls == {"public_signal": 1, "internal_knowledge": 1}
 
 
-def test_new_retry_requires_delivery_of_the_current_failed_generation(
-    native_case, monkeypatch
-):
+def test_recovery_does_not_wait_for_terminal_sse_delivery(native_case, monkeypatch):
     from dbos import DBOS
 
     case = native_case
@@ -868,18 +901,19 @@ def test_new_retry_requires_delivery_of_the_current_failed_generation(
         assert entered.wait(15)
         second = case.client.get(run["run_id"], "alice")
         assert second["status"] == "failed" and second["generation"] == 1
-        assert not second["events_complete"]
-        with pytest.raises(RunConflict):
-            case.client.retry(
-                run["run_id"], "alice", "not-yet-observed", second["state_version"]
-            )
-        case.client.retry(run["run_id"], "alice", "first", first["state_version"])
-        assert len(attempts) == 2
+        assert not second["events_complete"] and second["retry_safe"]
+        accepted = case.client.retry(
+            run["run_id"], "alice", "second", second["state_version"]
+        )
+        assert accepted["generation"] == 2
+        assert (
+            case.client.retry(run["run_id"], "alice", "first", first["state_version"])[
+                "generation"
+            ]
+            == 2
+        )
     finally:
         release.set()
-    delivered = wait_delivered(case, run, "failed", 1)
-    assert delivered["state_version"] > second["state_version"]
-    case.client.retry(run["run_id"], "alice", "second", delivered["state_version"])
     completed = wait_delivered(case, run, "completed", 2)
     assert_consistent(case, run, completed)
     assert len(attempts) == 3

@@ -14,8 +14,6 @@ from copy import deepcopy
 
 from dbos import DBOS, SetEnqueueOptions, SetWorkflowID, SetWorkflowTimeout
 from dbos import error as dbos_error
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.llm.generation import ModelOutputError
@@ -32,7 +30,6 @@ from open_deep_research.web.run_data import (
     db_time,
     digest,
     dumps,
-    loads,
     public_payload,
     read_request,
     retry_generation,
@@ -44,6 +41,7 @@ from open_deep_research.workflow.dbos_config import (
     ACTIVE,
     BUSINESS,
     CONTROL,
+    RESUMABLE_VERSIONS,
     VERSION,
     domain_engine,
     native_client,
@@ -714,7 +712,10 @@ async def events_workflow(run_id):
             # that frame directly from the delivered prefix.
             delivery.update(terminal=delivery["offset"], pause=None)
             await DBOS.set_event_async("delivery", delivery)
-            if terminal["close"]:
+            if terminal["close"] and (
+                delivery["generation"]
+                == await asyncio.to_thread(run_generation, run_id)
+            ):
                 await DBOS.close_stream_async("events")
                 return
             terminal = None
@@ -803,7 +804,7 @@ def commit_status(step):
 
 
 MODEL_STEPS = {"por.llm", "_model_call_step"}
-CALL_STEPS = MODEL_STEPS | {"por.agent_tool", "por.agent_context"}
+REWINDABLE_FAILURES = {"ERROR", "CANCELLED"}
 
 
 def failure_target(workflow, steps=None):
@@ -856,18 +857,6 @@ def failure_target(workflow, steps=None):
         and (rejected or failure.get("invalid_model_output"))
     ):
         start = last_model["function_id"]
-    # Native rewind discards a contiguous suffix. A completed provider call
-    # after a gap cannot be replayed from that suffix.
-    if any(
-        step["function_id"] >= start
-        and step["function_name"] in CALL_STEPS
-        and step.get("error") is None
-        and step is not last_model
-        and step.get("output") is not None
-        for step in steps
-    ):
-        raise RunConflict("The failed checkpoint overlaps later completed calls")
-
     step_name = by_id.get(start, {}).get("function_name")
     stage_name = (anchor or {}).get("output", {}).get("stage")
     return dict(
@@ -877,23 +866,7 @@ def failure_target(workflow, steps=None):
         model_reserve=stage_name != "generate_final_report"
         if step_name in MODEL_STEPS
         else None,
-        failure=digest(
-            [
-                workflow.app_version,
-                workflow.updated_at,
-                workflow.completed_at,
-                [
-                    (
-                        step["function_id"],
-                        step["function_name"],
-                        step.get("child_workflow_id"),
-                        step.get("started_at_epoch_ms"),
-                        step.get("completed_at_epoch_ms"),
-                    )
-                    for step in steps
-                ],
-            ]
-        ),
+        completed_at=workflow.completed_at,
     )
 
 
@@ -907,160 +880,105 @@ def retry_targets(run_id, root):
     )
     if any(wf.status in ACTIVE for wf in workflows):
         raise RunConflict("A research workflow is still running")
-    if any(wf.app_version != VERSION for wf in workflows):
-        raise RunConflict("A related research Workflow uses an incompatible version")
     by_id = {wf.workflow_id: wf for wf in workflows}
     targets = []
 
     def visit(workflow):
-        if workflow.status != "ERROR" or workflow.app_version != VERSION:
-            raise RunConflict("A failed workflow is missing or incompatible")
+        if workflow.app_version not in RESUMABLE_VERSIONS:
+            raise RunConflict(
+                "This release cannot replay the failed Workflow's journal"
+            )
+        if workflow.status not in REWINDABLE_FAILURES:
+            raise RunConflict("A required child Workflow has no recoverable result")
         steps = client.list_workflow_steps(workflow.workflow_id)
         target = failure_target(workflow, steps)
-        failed_children = {}
-        for step in steps:
-            child_id = step.get("child_workflow_id")
-            if not child_id:
-                continue
+        for child_id in dict.fromkeys(
+            step["child_workflow_id"] for step in steps if step.get("child_workflow_id")
+        ):
             child = by_id.get(child_id)
-            failed_join = (
-                step["function_id"] >= target["start_step"]
-                and step["function_name"] == "DBOS.getResult"
-                and step.get("error") is not None
-            )
-            if failed_join and (
-                child is None or child.parent_workflow_id != workflow.workflow_id
-            ):
-                raise RunConflict("The failed child workflow is unavailable")
-            # A parent can lose the getResult checkpoint after a child has
-            # failed. Its native start command still identifies that child.
-            if (
-                child
-                and child.parent_workflow_id == workflow.workflow_id
-                and (
-                    child.status == "ERROR"
-                    or (failed_join and child.status != "SUCCESS")
-                )
-            ):
-                failed_children[child_id] = child
-        for child in failed_children.values():
-            visit(child)
+            if child is None or child.parent_workflow_id != workflow.workflow_id:
+                raise RunConflict("A recorded child Workflow is missing")
+            if child.status != "SUCCESS":
+                visit(child)
         targets.append(target)
 
     visit(root)
     return targets
 
 
-@DBOS.step(name="por.retry_execution")
-async def retry_execution(run_id, command, index):
-    """Apply only the native failure version captured by HTTP admission."""
-    from open_deep_research.web.durable import check_retry_target, validate_request
+@DBOS.step(name="por.reopen_events", retries_allowed=True, max_attempts=5)
+async def reopen_events(run_id):
+    """Resume the same append-only Stream at its recorded close."""
+
+    def reopen():
+        client = native_client()
+        relay_id = run_id + ":events"
+        relay = client.retrieve_workflow(relay_id).get_status()
+        if relay.status in ACTIVE:
+            return
+        steps = client.list_workflow_steps(relay_id, load_output=False)
+        start = steps[-1]["function_id"] if steps else 0
+        if not steps or steps[-1]["function_name"] != "DBOS.closeStream":
+            start += 1
+        client.rewind_workflow(
+            relay_id, start_step=start, application_version=VERSION, queue_name=CONTROL
+        )
+
+    await asyncio.to_thread(reopen)
+
+
+@DBOS.step(name="por.retry_execution", retries_allowed=True, max_attempts=5)
+async def retry_execution(run_id, target):
+    """Apply one authorized cut, fenced by the prior native completion."""
 
     def rewind():
         with domain_engine().begin() as db:
             req = read_request(run_id, db=db, lock=True)
-            row = db.execute(
-                text("""
-                SELECT version,generation,outcome FROM por_domain.retries
-                WHERE run_id=:id AND key=:key
-                """),
-                {"id": run_id, "key": command.get("key")},
-            ).first()
-            if not row or not row.outcome:
-                return None
-            grant = loads(row.outcome)
-            if (
-                command
-                != dict(
-                    key=command.get("key"),
-                    generation=row.generation,
-                    version=row.version,
-                    outcome=digest(grant),
-                )
-                or grant["version"] != VERSION
-                or grant["source_generation"] + 1 != row.generation
-                or retry_generation(db, run_id) != row.generation
-            ):
-                return None
-            validate_request(req)
             if req["cancel_requested"]:
-                return {"outcome": "cancelled"}
+                return False
             client = native_client()
-            targets = grant["targets"]
-            root = targets[-1]
-            statuses = {
-                wf.workflow_id: wf
-                for wf in client.list_workflows(
-                    workflow_ids=[t["workflow_id"] for t in targets],
-                    load_input=False,
-                    load_output=False,
+            wf = client.retrieve_workflow(target["workflow_id"]).get_status()
+            # If rewind committed before this Step's ACK, the old completion
+            # is already gone and the original grant must not rewind it again.
+            if (
+                wf.status in REWINDABLE_FAILURES
+                and wf.completed_at == target["completed_at"]
+            ):
+                client.rewind_workflow(
+                    wf.workflow_id,
+                    start_step=target["start_step"],
+                    application_version=VERSION,
+                    queue_name=target["queue"],
+                    queue_partition_key=req["owner"]
+                    if target["queue"] == BUSINESS
+                    else None,
                 )
-            }
+            return True
 
-            def same_failure(target):
-                wf = statuses.get(target["workflow_id"])
-                return (
-                    wf
-                    and wf.status == "ERROR"
-                    and wf.app_version == VERSION
-                    and failure_target(wf) == target
-                )
-
-            if not same_failure(root):
-                return {"outcome": "superseded"}
-            target = targets[index]
-            if same_failure(target):
-                check_retry_target(db, req, target)
-                options = {
-                    "start_step": target["start_step"],
-                    "queue_name": target["queue"],
-                }
-                if target["queue"] == BUSINESS:
-                    options["queue_partition_key"] = req["owner"]
-                # A terminal Workflow already had its transaction checkpoints
-                # deleted, so this rewind re-runs each transaction body and the
-                # business idempotency keys keep the writes single.
-                client.rewind_workflow(target["workflow_id"], **options)
-            return {"target": target["workflow_id"], "last": target == root}
-
-    try:
-        return await asyncio.to_thread(rewind)
-    except RunConflict as exc:
-        return {"outcome": "blocked", "reason": str(exc)}
-    except SQLAlchemyError:
-        return {"retryable": True}
+    return await asyncio.to_thread(rewind)
 
 
-async def apply_retry(run_id, command, applied_generation):
-    if (
-        not isinstance(command, dict)
-        or command.get("generation") != applied_generation + 1
-    ):
-        return applied_generation
-    index = 0
-    while True:
-        receipt = await retry_execution(run_id, command, index)
-        if receipt is None:
-            return applied_generation
-        if receipt.get("retryable"):
-            await DBOS.sleep_async(1)
-            continue
-        if receipt.get("outcome") or receipt["last"]:
+async def apply_retry(run_id, generation, targets):
+    await reopen_events(run_id)
+    # Rewind removes unconsumed mailbox entries. Send progress only after the
+    # relay is ready to receive the new generation.
+    await send_event(run_id, "retry_started", generation=generation)
+    outcome = "applied"
+    for target in targets:
+        try:
+            if not await retry_execution(run_id, target):
+                outcome = "cancelled"
+                break
+        except Exception:
+            outcome = "blocked"
             break
-        # Use the same native business queue for retries. A parent must not
-        # occupy the last queue slot while waiting for its rewound child.
-        await wait_for_terminal(receipt["target"])
-        index += 1
-    generation = command["generation"]
+        # Let each child release its queue slot before rewinding its parent.
+        if target["workflow_id"] != run_id:
+            await wait_for_terminal(target["workflow_id"])
     await DBOS.set_event_async(
         "retry_applied",
-        dict(
-            generation=generation,
-            outcome=receipt.get("outcome", "applied"),
-            **({"reason": receipt["reason"]} if "reason" in receipt else {}),
-        ),
+        dict(generation=generation, outcome=outcome),
     )
-    return generation
 
 
 def terminal_frames(result):
@@ -1091,37 +1009,24 @@ def terminal_frames(result):
 
 @DBOS.workflow(name="por.finalize")
 @dbos_scope
-async def finalize_workflow(run_id):
-    generation = 0
+async def finalize_workflow(run_id, generation=0, targets=()):
+    if targets:
+        await apply_retry(run_id, generation, targets)
+    await wait_for_terminal(run_id)
     while True:
-        await wait_for_terminal(run_id)
-        while True:
-            try:
-                result = await completion_facts(run_id)
-            except Exception:
-                await DBOS.sleep_async(5)
-                continue
-            if result is not None and result["settlement"] != "pending":
-                break
-            await DBOS.sleep_async(1)
-
-        # ERROR can become recoverable after a code or provider fix. Keep the
-        # two existing workflows available while the failed Run is retained.
-        keep_open = (
-            result["native_status"] == "ERROR" and result["status"] != "cancelled"
-        )
+        try:
+            result = await completion_facts(run_id)
+        except Exception:
+            await DBOS.sleep_async(5)
+            continue
+        if result is not None and result["settlement"] != "pending":
+            break
+        await DBOS.sleep_async(1)
+    if generation == await asyncio.to_thread(run_generation, run_id):
         await send_event(
             run_id,
             "_terminal",
             generation=generation,
             frames=list(terminal_frames(result)),
-            close=not keep_open,
+            close=result["native_status"] != "ERROR" or result["status"] == "cancelled",
         )
-        if not keep_open:
-            return
-        while True:
-            command = await DBOS.recv_async("retry", timeout_seconds=86400)
-            advanced = await apply_retry(run_id, command, generation)
-            if advanced > generation:
-                generation = advanced
-                break

@@ -350,11 +350,7 @@ def require_live_effect(db, run_id, workflow_id, executor_id):
     )
     if not workflows or workflows[0].status == "CANCELLED":
         raise dbos_error.DBOSWorkflowCancelledError("Workflow is cancelled")
-    if (
-        workflows[0].status != "PENDING"
-        or workflows[0].executor_id != executor_id
-        or request["reconciliation"]
-    ):
+    if workflows[0].status != "PENDING" or workflows[0].executor_id != executor_id:
         raise ExecutionControlError("Native executor no longer owns this effect")
     return workflows[0]
 
@@ -400,7 +396,6 @@ def start_operation(
             text("""
             SELECT outcome, apify_run_id FROM por_domain.operations
             WHERE run_id=:r AND id=:id AND fingerprint=:fingerprint
-              AND workflow_id=:workflow AND step_id IS NOT DISTINCT FROM :step
             """),
             keys,
         ).first()
