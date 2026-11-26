@@ -22,7 +22,7 @@ from open_deep_research.workflow.execution import StageContext, stage_context
 @pytest.mark.parametrize(
     "ending", ["completed", "denied", "provider-error", "tool-budget-error"]
 )
-def test_agent_recovery_restores_ordered_tool_results_and_usage(
+def test_agent_recovery_reuses_concurrent_tool_results_and_usage(
     tmp_path, monkeypatch, ending, memory_ledger
 ):
     url = f"sqlite:///{(tmp_path / 'agent.sqlite').as_posix()}"
@@ -31,6 +31,7 @@ def test_agent_recovery_restores_ordered_tool_results_and_usage(
     calls = []
     receipts = []
     attempts = 0
+    first_started = asyncio.Event()
     sibling_committed = asyncio.Event()
 
     async def begin(_model_ref, _max_output_tokens):
@@ -62,7 +63,10 @@ def test_agent_recovery_restores_ordered_tool_results_and_usage(
 
     async def search(query: str, limit: int = 3):
         if query == "first":
+            first_started.set()
             await asyncio.wait_for(sibling_committed.wait(), 10)
+        else:
+            await asyncio.wait_for(first_started.wait(), 10)
         calls.append(query)
         if query == "first" and ending == "tool-budget-error":
             await generation.generate_text("openai:fixture", query, max_tokens=64)
@@ -85,15 +89,16 @@ def test_agent_recovery_restores_ordered_tool_results_and_usage(
         nonlocal attempts
         attempts += 1
         tool = _tool(coroutine=search, effect="read")
+
+        def batch(call):
+            assert call.model_settings.parallel_tool_calls is not False
+            return [
+                function_call(tool.name, {"query": "first"}, call_id="call-1"),
+                function_call(tool.name, {"query": "second"}, call_id="call-2"),
+            ]
+
         model = ScriptedModel(
-            [
-                [
-                    # The successful sibling commits before the failing slot.
-                    function_call(tool.name, {"query": "second"}, call_id="call-2"),
-                    function_call(tool.name, {"query": "first"}, call_id="call-1"),
-                ],
-                ModelStep.respond(final),
-            ],
+            [ModelStep.respond(batch), ModelStep.respond(final)],
             default_usage=TOKENS,
         )
         runtime = _runtime(tools=[tool], model=model)
@@ -172,7 +177,10 @@ def test_agent_recovery_restores_ordered_tool_results_and_usage(
         assert sum("_model_call_step" in s["function_name"] for s in before) == (
             1 if ending == "tool-budget-error" else 2
         )
-        assert sum(s["function_name"] == "por.agent_tool" for s in before) == 2
+        first_step, second_step = [
+            step for step in before if step["function_name"] == "por.agent_tool"
+        ]
+        assert first_step["function_id"] < second_step["function_id"]
         assert all(
             step["output"]["model_input"] is None
             for step in before if step["function_name"] == "por.agent_context"
@@ -211,20 +219,12 @@ def test_agent_recovery_restores_ordered_tool_results_and_usage(
             assert receipts[-1]["usage_complete"] is False
         else:
             assert report is None
-            assert any(
-                isinstance(step["error"], ModelBudgetExceeded)
-                and step["error"].budget_usage["tool_calls"] == 1
-                for step in before if step["function_name"] == "por.agent_tool"
-            )
+            assert isinstance(first_step["error"], ModelBudgetExceeded)
+            assert first_step["error"].budget_usage["tool_calls"] == 1
         # The completed sibling's original receipt survives both attempts.
-        committed = next(
-            step["output"]
-            for step in before
-            if step["function_name"] == "por.agent_tool"
-            and step["output"]
-            and step["output"]["record"]["tool_call_id"] == "call-2"
-        )
-        assert committed["record"]["status"] == "succeeded"
+        committed = second_step["output"]["record"]
+        assert committed["tool_call_id"] == "call-2"
+        assert committed["status"] == "succeeded"
         assert calls == observed_effects
         assert serializer.serialize(client.list_workflow_steps(workflow_id)) == (
             serializer.serialize(before)
