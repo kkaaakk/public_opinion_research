@@ -25,7 +25,7 @@ def wrapped(cause):
 def _budget_spy(monkeypatch):
     calls = {"begin": 0, "end": []}
 
-    async def begin():
+    async def begin(_model_ref, _max_output_tokens):
         calls["begin"] += 1
         return f"call-{calls['begin']}"
 
