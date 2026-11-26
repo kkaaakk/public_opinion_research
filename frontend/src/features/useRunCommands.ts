@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '@/api/auth';
-import { ApiError, TERMINAL, delivered, type Run, type RunCommand } from '@/api/client';
+import { ApiError, TERMINAL, type Run, type RunCommand } from '@/api/client';
 import type { RunEvent } from '@/api/events';
 import { newKey } from '@/lib/presentation';
 
@@ -25,7 +25,7 @@ function acknowledged(run: Run, events: RunEvent[], pending: Pending) {
   const { command } = pending;
   if (run.generation > pending.generation) return true;
   if (command.action === 'cancel') return run.cancel_requested || TERMINAL.has(run.status);
-  if (command.action === 'retry') return run.retry_requested || !run.retry_safe;
+  if (command.action === 'retry') return run.retry_requested;
   if (command.action === 'clarification') {
     return (
       run.status !== 'awaiting_clarification' || run.clarification?.version !== command.body.version
@@ -56,7 +56,7 @@ function acknowledged(run: Run, events: RunEvent[], pending: Pending) {
 function available(run: Run, command: RunCommand) {
   if (command.action === 'cancel') return run.can_cancel;
   if (command.action === 'retry')
-    return run.retry_safe && delivered(run) && run.state_version === command.body.state_version;
+    return run.retry_safe && run.state_version === command.body.state_version;
   if (command.action === 'clarification') {
     return run.can_clarify && run.clarification?.version === command.body.version;
   }
@@ -115,7 +115,11 @@ export function useRunCommands(
     } catch (failure) {
       if (failure instanceof ApiError && [400, 409, 413, 415, 422].includes(failure.status)) {
         save(null);
-        setError(failure.status === 409 ? '运行状态或交互版本已变化，正在重新读取。' : failure);
+        setError(
+          failure.status === 409 && value.command.action !== 'retry'
+            ? '运行状态或交互版本已变化，正在重新读取。'
+            : failure,
+        );
       } else {
         setError(failure);
       }

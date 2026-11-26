@@ -11,9 +11,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
 APP = "public-opinion-research"
-# Finalizer and relay journal commands changed. Pending journals must drain on
+# Role joins and Finalizer retry commands changed. Drain pending journals with
 # their original release.
-VERSION = "por-native-history-v1"
+VERSION = "por-role-recovery-v1"
 SDK_VERSION = "0.24.0"
 CONTROL = "por-control"
 BUSINESS = "por-business"

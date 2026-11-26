@@ -48,7 +48,8 @@ export function stageName(stage: string) {
 }
 
 export function runStatus(run: Run) {
-  return run.retry_requested ? '等待重试' : statusNames[run.status];
+  if (!run.retry_requested) return statusNames[run.status];
+  return run.status === 'running' ? '恢复执行中' : '已接收恢复请求';
 }
 
 const dateTime = new Intl.DateTimeFormat('zh-CN', {

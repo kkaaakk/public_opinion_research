@@ -697,7 +697,7 @@ def test_agent_runs_apify_actor_chain_through_tool_executor(
     monkeypatch.setattr(tool_executor, "commit_receipt", commit)
     monkeypatch.setattr(StageContext, "observe", observe)
     # This test isolates plugins and MCP; model and execution storage are out of scope.
-    async def begin_model_call():
+    async def begin_model_call(*_args):
         return None
 
     monkeypatch.setattr(generation, "begin_model_call", begin_model_call)
@@ -1262,7 +1262,7 @@ def test_committed_actor_step_restores_without_rerunning_the_run(
     monkeypatch.setattr(tool_executor, "commit_receipt", commit)
     monkeypatch.setattr(StageContext, "observe", observe)
 
-    async def begin_model_call():
+    async def begin_model_call(*_args):
         assert DBOS.step_id is not None
         return None
 

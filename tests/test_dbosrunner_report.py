@@ -115,7 +115,7 @@ def test_research_workflow_publishes_inline_report(monkeypatch, finish):
         "stage_event",
         lambda _db, scope, kind, **payload: frames.append((scope.name, kind, payload)),
     )
-    monkeypatch.setattr(budget, "start_model_attempt", lambda *_args: None)
+    monkeypatch.setattr(budget, "start_model_attempt", lambda *_args: "attempt")
     monkeypatch.setattr(
         budget, "finish_model_attempt", lambda _run, _id, usage: bills.append(usage)
     )
@@ -154,7 +154,7 @@ def test_research_workflow_publishes_inline_report(monkeypatch, finish):
             asyncio.run(run)
         workflow.status = "ERROR"
         [error] = stage_errors(client, run_id)
-        assert error["step"] == report_step and error["retry_safe"]
+        assert error["step"] == report_step and error["invalid_model_output"]
         assert stage_results(client, run_id)["report"] == ""
         assert [kind for step, kind, _ in frames if step == report_step] == [
             "step_started",

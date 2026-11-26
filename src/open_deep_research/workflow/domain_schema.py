@@ -247,6 +247,15 @@ def initialize_domain(*, migrate_legacy=False):
         ):
             db.exec_driver_sql(ddl)
         _upgrade_call_ledger(db)
+        db.exec_driver_sql(
+            "ALTER TABLE por_domain.model_attempts ADD COLUMN IF NOT EXISTS reservation jsonb"
+        )
+        db.exec_driver_sql("""
+            ALTER TABLE por_domain.operations
+            ADD COLUMN IF NOT EXISTS workflow_id text,
+            ADD COLUMN IF NOT EXISTS step_id integer,
+            ADD COLUMN IF NOT EXISTS apify_run_id text
+            """)
         db.execute(
             text("INSERT INTO por_domain.policy VALUES (1,:v) ON CONFLICT DO NOTHING"),
             {"v": _policy()},

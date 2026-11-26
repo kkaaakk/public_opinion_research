@@ -16,6 +16,7 @@ No MCP-specific executor or second registry lives here.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
@@ -80,6 +81,7 @@ def build_mcp_tool(
     public_name: str,
     domain: str,
     effect: ToolEffect,
+    apify_actor: bool = False,
 ) -> BusinessTool:
     """Convert one SDK MCP tool and attach trusted business policy.
 
@@ -102,6 +104,7 @@ def build_mcp_tool(
         server_factory=server_factory,
         mcp_tool_name=mcp_tool.name,
         schema=declaration.params_json_schema,
+        apify_actor=apify_actor,
     )
     declared = replace(
         declaration,
@@ -118,6 +121,7 @@ def _mcp_tool_invoker(
     server_factory: Callable[[], MCPServer],
     mcp_tool_name: str,
     schema: dict[str, Any],
+    apify_actor: bool,
 ) -> Callable[[ToolContext[Any], str], Any]:
     """Validate one MCP argument object, then enter the shared executor.
 
@@ -136,7 +140,41 @@ def _mcp_tool_invoker(
         if not isinstance(args, dict):
             raise ValueError("Tool arguments must be a JSON object.")
         validator.validate(args)
-        return await context.context.tool_executor.execute(
+        executor = context.context.tool_executor
+        if apify_actor:
+
+            async def remember(result):
+                if run_id := _apify_run_id(result.structuredContent):
+                    await executor.remember_apify_run(context, run_id)
+
+            async def launch():
+                return await _call_mcp_tool(
+                    server_name,
+                    server_factory,
+                    mcp_tool_name,
+                    args,
+                    observe_result=remember,
+                )
+
+            async def lookup(run_id):
+                result = await _call_mcp_tool(
+                    server_name, server_factory, "get-actor-run", {"runId": run_id}
+                )
+                receipt = (
+                    result.get("structured_content")
+                    if isinstance(result, dict)
+                    else None
+                )
+                if _apify_run_id(receipt) != run_id or not isinstance(
+                    receipt.get("status"), str
+                ):
+                    raise MCPToolError("Apify did not confirm the original Actor run")
+                # The provider supplies its status and storage IDs. The Agent
+                # can continue with the existing read-only Dataset tool.
+                return result
+
+            return await executor.execute(context, launch, recover_apify=lookup)
+        return await executor.execute(
             context,
             _call_mcp_tool,
             server_name,
@@ -148,12 +186,23 @@ def _mcp_tool_invoker(
     return invoke
 
 
+def _apify_run_id(receipt):
+    run_id = receipt.get("runId") if isinstance(receipt, dict) else None
+    return (
+        run_id
+        if isinstance(run_id, str) and re.fullmatch(r"[A-Za-z0-9]{1,128}", run_id)
+        else None
+    )
+
+
 # 每次调用使用独立连接，断连或取消后不会复用失效会话。
 async def _call_mcp_tool(
     server_name: str,
     server_factory: Callable[[], MCPServer],
     mcp_tool_name: str,
     args: dict[str, Any],
+    *,
+    observe_result=None,
 ) -> Any:
     """Call the remote MCP tool over a fresh SDK connection.
 
@@ -165,6 +214,8 @@ async def _call_mcp_tool(
     try:
         async with server:
             result = await server.call_tool(mcp_tool_name, args)
+            if observe_result is not None:
+                await observe_result(result)
     except BaseException as exc:
         interaction = _interaction_required_message(exc)
         if interaction is not None:

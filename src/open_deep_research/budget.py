@@ -13,6 +13,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Any, Callable, Iterator, Mapping, cast
+from uuid import uuid4
 
 from dbos import DBOS
 from langchain_core.messages import HumanMessage
@@ -69,28 +70,62 @@ def require_physical_model_budget(config, baseline, actual, *, reserve_report):
         )
 
 
-def model_bill(db, run_id):
-    """Known physical charges, a count of open invocations, and usage completeness."""
+def model_bill(db, run_id, *, config=None, generation=None):
+    """Read actual receipts, or charge conservative holds for budget admission."""
     from open_deep_research.web.run_data import loads
 
     total: dict[str, Any] = {}
     pending = 0
     complete = True
-    for usage in db.execute(
-        text("SELECT usage FROM por_domain.model_attempts WHERE run_id=:r"),
+    rows = db.execute(
+        text(
+            "SELECT usage, reservation FROM por_domain.model_attempts WHERE run_id=:r"
+            if config
+            else "SELECT usage FROM por_domain.model_attempts WHERE run_id=:r"
+        ),
         {"r": run_id},
-    ).scalars():
-        if usage is None:
-            pending += 1
-            continue
-        value = loads(usage)
-        complete &= value.get("usage_complete", True)
-        total = merge_budget_usage(total, value)
-    return (
-        merge_budget_usage(total, {"model_calls": pending}),
-        pending,
-        complete and not pending,
     )
+    live = []
+    for usage, reservation in rows if config else ((v, None) for v in rows.scalars()):
+        value = loads(usage) if usage is not None else {"model_calls": 1}
+        unknown = usage is None or not value.get("usage_complete", True)
+        complete &= not unknown
+        if config is None:
+            pending += usage is None
+        elif unknown:
+            reservation = reservation or {}
+            for field in ("input_tokens", "output_tokens"):
+                ceiling = getattr(config, "max_" + field)
+                if ceiling is not None:
+                    value[field] = max(
+                        value.get(field, 0), reservation.get(field, ceiling)
+                    )
+            if (
+                usage is None
+                and generation is not None
+                and reservation.get("generation") == generation
+            ):
+                live.append(reservation)
+        total = merge_budget_usage(total, value)
+
+    if live:
+        from open_deep_research.workflow.dbos_config import native_client
+
+        active = {
+            wf.workflow_id: (wf.executor_id, wf.recovery_attempts)
+            for wf in native_client().list_workflows(
+                workflow_ids=list({reservation["workflow"] for reservation in live}),
+                status="PENDING",
+                load_input=False,
+                load_output=False,
+            )
+        }
+        pending = sum(
+            active.get(reservation["workflow"])
+            == (reservation["executor"], reservation["epoch"])
+            for reservation in live
+        )
+    return total, pending, complete
 
 
 def tool_ledger(db, run_id):
@@ -122,7 +157,7 @@ def compose_run_usage(initial, model_charges, tool_counts, notes=None):
 
 
 def start_model_attempt(
-    scope, workflow_id, executor_id, call_id, *, wait_seconds=None
+    scope, workflow_id, executor_id, call_id, bounds=None, *, wait_seconds=None
 ):
     """Admit one physical model attempt after any in-flight token bill settles.
 
@@ -133,9 +168,9 @@ def start_model_attempt(
     re-read on every poll. A bill that never settles becomes a controlled
     ``ModelBudgetExceeded`` timeout instead of being treated as zero cost.
     """
-    from open_deep_research.web.run_data import db_time
+    from open_deep_research.web.run_data import db_time, dumps
     from open_deep_research.workflow.dbos_config import domain_engine
-    from open_deep_research.workflow.execution import require_live_effect, unconfirmed
+    from open_deep_research.workflow.execution import require_live_effect
 
     if wait_seconds is None:
         wait_seconds = MODEL_BILL_WAIT_SECONDS
@@ -143,7 +178,7 @@ def start_model_attempt(
 
     while True:
         with domain_engine().begin() as db:
-            require_live_effect(db, scope.run_id, workflow_id, executor_id)
+            workflow = require_live_effect(db, scope.run_id, workflow_id, executor_id)
             keys = {"r": scope.run_id, "id": call_id}
             if db.scalar(
                 text(
@@ -151,47 +186,50 @@ def start_model_attempt(
                 ),
                 keys,
             ):
-                raise unconfirmed(
-                    "Model attempt already exists without its native result"
-                )
+                # An uncommitted DBOS Step can start a new physical request.
+                # Append its receipt and preserve the original attempt's bill.
+                keys["id"] = uuid4().hex
             if scope.expires_at is not None and db_time(db) >= scope.expires_at:
                 raise ModelInvocationError("BriefApprovalExpired")
-            if scope.config.budget_enabled:
-                actual, pending, _complete = model_bill(db, scope.run_id)
-                # With token ceilings, an in-flight bill has no provider token
-                # count yet. Wait for its settlement instead of rejecting a
-                # normal parallel Agent call as a budget failure. A finalized
-                # attempt whose provider reported no usage can never be priced:
-                # it stays counted as one call and marks the Run incomplete
-                # instead of blocking every later Agent for the rest of the Run.
-                token_limit = (
-                    scope.config.max_input_tokens is not None
-                    or scope.config.max_output_tokens is not None
+            config = scope.config
+            generation = scope.generation
+            token_limit = (
+                config.max_input_tokens is not None
+                or config.max_output_tokens is not None
+            )
+            actual, pending, _complete = (
+                model_bill(
+                    db,
+                    scope.run_id,
+                    config=config,
+                    generation=generation if token_limit else None,
                 )
-                if not (token_limit and pending):
+                if config.budget_enabled
+                else ({}, 0, True)
+            )
+            if not token_limit or not pending:
+                if config.budget_enabled:
                     require_physical_model_budget(
-                        scope.config,
+                        config,
                         scope.initial_usage,
                         actual,
                         reserve_report=scope.reserve_report,
                     )
-                    db.execute(
-                        text(
-                            "INSERT INTO por_domain.model_attempts(run_id,id,stage_id) "
-                            "VALUES (:r,:id,:stage)"
-                        ),
-                        dict(keys, stage=scope.stage_id),
-                    )
-                    return
-            else:
+                reservation = dict(
+                    bounds or {},
+                    generation=generation,
+                    workflow=workflow_id,
+                    executor=executor_id,
+                    epoch=getattr(workflow, "recovery_attempts", None),
+                )
                 db.execute(
                     text(
-                        "INSERT INTO por_domain.model_attempts(run_id,id,stage_id) "
-                        "VALUES (:r,:id,:stage)"
+                        "INSERT INTO por_domain.model_attempts(run_id,id,stage_id,reservation) "
+                        "VALUES (:r,:id,:stage,CAST(:reservation AS jsonb))"
                     ),
-                    dict(keys, stage=scope.stage_id),
+                    dict(keys, stage=scope.stage_id, reservation=dumps(reservation)),
                 )
-                return
+                return keys["id"]
 
         # The transaction above is closed before sleeping. A blocked caller
         # holds neither a pool connection nor the request row lock. Check the
@@ -222,7 +260,8 @@ def finish_model_attempt(run_id, call_id, usage):
             raise unconfirmed("Conflicting model usage receipt")
 
 
-async def begin_model_call():
+async def begin_model_call(model_ref, max_output_tokens):
+    from open_deep_research.llm.context import resolve_context_capacity
     from open_deep_research.workflow.execution import (
         ExecutionControlError,
         owned_cleanup,
@@ -235,9 +274,18 @@ async def begin_model_call():
         return None
     if owned_cleanup.get():
         raise ExecutionControlError("No new inference during cancellation cleanup")
-    call_id = scope.call_id("model")
-    _, cancellation = await owned_io(
-        start_model_attempt, scope, DBOS.workflow_id, DBOS.executor_id, call_id
+    # Keep the conservative budget hold separate from the provider's usage.
+    capacity = max(
+        resolve_context_capacity(model_ref), scope.config.context_capacity_tokens or 0
+    )
+    bounds = {"input_tokens": capacity, "output_tokens": max_output_tokens or capacity}
+    call_id, cancellation = await owned_io(
+        start_model_attempt,
+        scope,
+        DBOS.workflow_id,
+        DBOS.executor_id,
+        scope.call_id("model"),
+        bounds,
     )
     if cancellation is not None:
         await end_model_call(call_id, {})

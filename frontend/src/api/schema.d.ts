@@ -155,7 +155,7 @@ export interface paths {
         put?: never;
         /**
          * Retry
-         * @description Continue only a verified safe checkpoint or a settled side-effect-free step.
+         * @description Request continuation from the failed Run's native DBOS checkpoint.
          */
         post: operations["retry_api_runs__run_id__resume_post"];
         delete?: never;
@@ -175,7 +175,7 @@ export interface paths {
         put?: never;
         /**
          * Retry
-         * @description Continue only a verified safe checkpoint or a settled side-effect-free step.
+         * @description Request continuation from the failed Run's native DBOS checkpoint.
          */
         post: operations["retry_api_runs__run_id__retry_post"];
         delete?: never;
@@ -931,6 +931,8 @@ export interface components {
             events_paused: boolean;
             /** Retry Safe */
             retry_safe: boolean;
+            /** Retry Reason */
+            retry_reason: string | null;
             /** Retry Requested */
             retry_requested: boolean;
             /** Cancel Requested */

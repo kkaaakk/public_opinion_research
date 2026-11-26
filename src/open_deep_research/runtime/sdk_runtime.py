@@ -70,10 +70,15 @@ class MeteredModel(Model):
         self.model_name = getattr(model, "model_name", type(model).__name__)
 
     async def get_response(self, *args, **kwargs):
+        scope = stage_context.get()
         try:
             admit_model_call({})
             response, _, _ = await metered_model_response(
-                self.model_name, lambda identity: self._response(identity, *args, **kwargs)
+                scope.config.research_model if scope else self.model_name,
+                lambda identity: self._response(identity, *args, **kwargs),
+                max_output_tokens=scope.config.research_model_max_tokens
+                if scope
+                else None,
             )
         except ModelBudgetExceeded as exc:
             raise _ReasoningStopped(str(exc)) from exc

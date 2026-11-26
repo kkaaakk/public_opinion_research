@@ -67,6 +67,9 @@ class Bills:
     def scalars(self):
         return self.usage
 
+    def __iter__(self):
+        return iter(self.usage)
+
 
 def test_known_costs_are_counted_once_with_provider_details():
     actual = {
@@ -99,6 +102,26 @@ def test_lost_and_partial_provider_bills_remain_counted_and_incomplete():
     assert result["model_calls"] == 4 and result["input_tokens"] == 7
 
 
+def test_old_unknown_model_receipt_reserves_tokens_without_reporting_them():
+    from open_deep_research.budget import require_physical_model_budget
+    from open_deep_research.configuration import Configuration
+
+    config = Configuration(budget_enabled=True, max_input_tokens=100)
+    known = dumps({"model_calls": 1, "input_tokens": 20})
+    actual, pending, complete = model_bill(
+        Bills([(known, None), (None, {"generation": 0, "input_tokens": 80})]),
+        "run",
+        config=config,
+        generation=1,
+    )
+    assert not pending and not complete
+    assert actual["model_calls"] == 2 and actual["input_tokens"] == 100
+    with pytest.raises(ModelBudgetExceeded):
+        require_physical_model_budget(config, {}, actual, reserve_report=False)
+    known_usage, _, _ = model_bill(Bills([known, None]), "run")
+    assert known_usage["input_tokens"] == 20 and known_usage["model_calls"] == 2
+
+
 RUNNING = ("por.commit_stage", False, {"stage": "plan_research", "status": "running"})
 COMPLETED = (
     "por.commit_stage",
@@ -113,8 +136,15 @@ MARKED = ("por.commit_stage", False, {"stage": "plan_research", "status": "faile
     [
         # An interrupted model call is re-requested, not replayed as an error.
         ([RUNNING, ("por.llm", True), ("por.llm", False), ("por.llm", True)], 4),
-        # A recorded answer that nothing left to validate is kept.
-        ([RUNNING, ("por.llm", False), ("por.llm", False)], 3),
+        # Both recorded, usable answers survive a local error after generation.
+        (
+            [
+                RUNNING,
+                ("por.llm", False, ["First", {}, None]),
+                ("por.llm", False, ["Last", {}, None]),
+            ],
+            4,
+        ),
         # A failed stage transaction re-runs only itself.
         ([RUNNING, ("por.llm", False), ("por.commit_stage", True)], 3),
         # A published stage leaves only the code after it to re-run.
@@ -123,15 +153,23 @@ MARKED = ("por.commit_stage", False, {"stage": "plan_research", "status": "faile
         ([RUNNING, ("por.llm", False), COMPLETED, ("por.commit_stage", True)], 4),
         # A recovered attempt stays journaled: work resumes after the next stage.
         ([RUNNING, ("por.llm", True), ("por.llm", False), COMPLETED, RUNNING], 6),
-        ([("child-role", False), ("child-review", True)], 2),
+        ([("child-role", False), ("child-role", True)], 2),
         # A valid answer keeps its model call; only local publication re-runs.
         (
-            [RUNNING, ("por.llm", False, ["# Usable report", {"model_calls": 1}, None]), MARKED],
+            [
+                RUNNING,
+                ("por.llm", False, ["# Usable report", {"model_calls": 1}, None]),
+                MARKED,
+            ],
             3,
         ),
         # A rejected answer is re-requested, even after its failure transaction.
         (
-            [RUNNING, ("por.llm", False, ["", {"model_calls": 1}, ["Truncated", True]]), MARKED],
+            [
+                RUNNING,
+                ("por.llm", False, ["", {"model_calls": 1}, ["Truncated", True]]),
+                MARKED,
+            ],
             2,
         ),
     ],
@@ -150,7 +188,8 @@ def test_retry_preserves_completed_phases_and_prior_calls(steps, expected, monke
                 output=output[0] if output else None,
             )
             for i, (name, failed, *output) in enumerate(steps)
-        ]
+        ],
+        get_event=lambda *_args: None,
     )
     status = SimpleNamespace(
         workflow_id="run:research",
@@ -169,20 +208,48 @@ def test_retry_targets_follow_the_owning_workflow(monkeypatch, failed_step):
 
     from open_deep_research.workflow import dbos_workflow
 
-    root = SimpleNamespace(workflow_id="run", name="por.run", completed_at=3)
+    root = SimpleNamespace(
+        workflow_id="run",
+        name="por.run",
+        completed_at=3,
+        status="ERROR",
+        app_version=dbos_workflow.VERSION,
+    )
     research = SimpleNamespace(
-        workflow_id="run:research", name="por.research", completed_at=2,
+        workflow_id="run:research",
+        name="por.research",
+        completed_at=2,
+        parent_workflow_id="run",
+        status="ERROR",
+        app_version=dbos_workflow.VERSION,
     )
     client = SimpleNamespace(
-        list_workflows=lambda **kwargs: [root, research],
-        get_event=lambda wf_id, *_args: {"step": failed_step, "retry_safe": True}
+        list_workflows=lambda **kwargs: [research],
+        list_workflow_steps=lambda workflow_id: [
+            {
+                "function_id": 2,
+                "function_name": "DBOS.getResult",
+                "child_workflow_id": research.workflow_id,
+                "error": RuntimeError(),
+            }
+        ]
+        if workflow_id == root.workflow_id
+        else [],
+        get_event=lambda wf_id, *_args: {"step": failed_step}
         if wf_id == research.workflow_id
         else None,
     )
     monkeypatch.setattr(dbos_workflow, "native_client", lambda: client)
-    monkeypatch.setattr(dbos_workflow, "failure_target", lambda wf: wf.workflow_id)
+    monkeypatch.setattr(
+        dbos_workflow,
+        "failure_target",
+        lambda wf, _steps: {
+            "workflow_id": wf.workflow_id,
+            "start_step": 2,
+        },
+    )
     # Review is a stage inside por.research, so the leaf owns it either way.
-    assert dbos_workflow.retry_targets("run") == [
+    assert [t["workflow_id"] for t in dbos_workflow.retry_targets("run", root)] == [
         research.workflow_id,
         root.workflow_id,
     ]

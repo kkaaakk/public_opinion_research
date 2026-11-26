@@ -135,17 +135,17 @@ flowchart TD
 
 `por.agent_context` 保存滚动摘要、已压缩轮次、摘要调用增量和已改写的输入窗口。SDK 用重放的响应重建轮次边界及角色用量投影。工具输出及局部用量来自 `por.agent_tool`。若 Tool Step 抛出异常，其错误回执保留局部用量；退出结算在进程内补齐终态，不再是独立的 DBOS Step。可选 SQLite transcript 供排查，SDK 恢复数据来自 DBOS journal。
 
-SDK 并行工具在兄弟调用失败或取消时，可能有调用只被钩子观察而从未进入 `ToolExecutor`。这类调用没有工具体、没有额度、没有外部效果，由结算统一收敛为 `cancelled`（`NotInvoked`）：结算开始后新观察到的调用天生终态，不再启动新的工具执行。因此 `settlement.succeeded` 表示「已观察到的调用全部到达终态」，不表示「全部成功」。结算记录只存在于本次调用内，harness 内部观察状态不做精确恢复。 [工具观察记录终态](tools.md#观察记录的终态)
+两个角色仍并行运行。单个角色内，DBOSRunner 确定同一批工具的开始顺序，`ToolExecutor` 等前一个 Step 提交后再执行下一个。发生执行控制故障时，排在后面的调用由 Harness 结算为未执行。这样原生 rewind 可以丢弃失败后缀，并保留已成功的调用。 [工具观察记录终态](tools.md#观察记录的终态)
 
-原生取消会沿 child Workflow 级联，根可能先进入终态。Finalizer 再检查仍活跃的业务子 Workflow，并等待已发起调用结算。人工重试需要新键、观测到的 `state_version`、当前代次终态已交付以及安全失败。`RunClient.retry` 只写授权和消息；`por.finalize` 验证授权绑定的实际失败版本和外部回执，按失败叶子到根逐个 `rewind_workflow` 并等待子结果。安全目标限于可重试的 Plan 或 Research 后缀（含其中的 Review、风险、策略与报告阶段）。旧键只能确认原授权。 [DBOS 取消与 rewind](https://docs.dbos.dev/python/tutorials/workflow-management)
+角色失败时 Research 等同批角色结算。恢复资格以同一个后端判断为准，检查当前代次、应用版本、活跃 Workflow、原生断点、受保护操作和已知的新模型调用预算。`RunClient.retry` 只写授权和消息。Finalizer 沿 journal 中失败的 `DBOS.getResult` 找到实际子 Workflow，由叶到根调用 `rewind_workflow`，成功的角色仍由原 Workflow ID 提供结果。普通代码报错时保留前面的成功 Step，子 Workflow 结果已更新后父级重新读取。原生取消沿子 Workflow 级联。 [DBOS 取消与 rewind](https://docs.dbos.dev/python/tutorials/workflow-management)
 
 ### 外部调用可靠性
 
-Step 执行体与外部服务返回之间存在提交窗口。宕机发生在原生结果提交前，恢复会再次进入对应边界。调用前尚无意图记录时可开始执行；Model 或受保护 Tool 已有意图或回执而原生结果缺失时，同一调用身份会被拒绝，Run 保留已知结果并进入核对流程。保护记录可能只证明准入，`returned` 也只证明 invoker 返回。收到外部返回但 PostgreSQL 回执 ACK 丢失时，`commit_receipt` 在有限时间内补写相同收据。远端实际效果需要依据供应商记录核对。 [业务持久化审计](../audits/dbos-domain-simplification.md)
+Step 结果缺失时，`read` 可以重做请求并记录可能的重复费用，`idempotent` 复用原幂等键。Apify 的 `call-actor` 在处理结果前保留 Actor Run ID，恢复时调用同一个 MCP 服务的 `get-actor-run`，由 Agent 使用原 Dataset ID 继续读取。其它受保护操作的失联回执需要核实。收到外部返回后 PostgreSQL 回执 ACK 丢失时，`commit_receipt` 在有限时间内补写同一回执。 [Apify MCP](https://github.com/apify/apify-mcp-server) · [业务持久化审计](../audits/dbos-domain-simplification.md)
 
 已知只读工具可以在缺失 Tool Step 结果时重新执行。效果检查结合请求取消意图和原生 Workflow/Executor 归属。PostgreSQL 的准入事务覆盖请求及原生入队，远端 provider 独立提交。操作员确认 Executor 已停止并核对外部记录后，可以记录 reconciliation 以解除 Session 准入隔离，原记录继续保留。 [数据库与运维](dbos-deployment.md)
 
-`start_model_attempt` 持请求锁检查并行调用共享的 Run 级预算，保留最终报告额度后才登记物理调用。`model_attempts` 按 `(run_id, id)` 唯一写入，返回或失败有用量时以同键更新。`por_domain.tool_calls` 记录每一次准入的工具调用（无论预算是否开启），`por_domain.operations` 通过 `tool_call_id` 外键归属到发起它的工具调用。`RunClient` 按字段归属汇总用量：模型次数与 Token 来自 `model_attempts`，工具与搜索次数来自 `tool_calls`，阶段事件只提供告警和降级原因，因此同一次调用不会被重复相加。模型响应重放和客户端重连沿用已提交记录。缺少真实 Token 时保留已知调用数并标记 `usage_complete=false`；一次未报告用量的尝试不会永久阻断后续调用。有 Token 上限时，在途账单按有限等待结算，超时后按预算不足结束。公开用量来自 provider 回执，实际货币费用由 provider 账单确认。
+`start_model_attempt` 持请求锁执行 Run 级预算检查，保留最终报告额度。有 Token 上限时，只等待当前代次中仍由原生 Workflow 持有的在途账单。前次执行的未确认用量使用模型上下文窗口和请求输出上限作预算预留，并保留物理调用次数。新的物理请求写独立的 `model_attempts` 记录。公开用量来自已有回执，未知部分保持 `usage_complete=false`。工具与搜索次数来自 `tool_calls`，`operations` 关联该工具调用及其原生 Step。
 
 ## 已知限制
 
@@ -154,4 +154,4 @@ Step 执行体与外部服务返回之间存在提交窗口。宕机发生在原
 
 ## 交付与执行状态
 
-`native_status` 表示 DBOS 根 Workflow 状态，`status` 加入人工等待和业务结果解释，`settlement` 表示回执结算。`event_cursor` 是已交付的前缀，`events_complete` 表示当前代次已交付终态。relay 收到 `_terminal` 后排空已提交的邮箱前缀，追加一次 `done`，并通过 `delivery` 记录代次和终态游标。SSE 可以在人工等待前缀或终态前缀交付后结束。可安全重试的失败保留原生 Stream，供后续代次继续交付。 [工作台协议](agent-execution-studio.md)
+`native_status` 表示 DBOS 根 Workflow 状态，`status` 加入人工等待和业务结果解释，`settlement` 表示回执结算。`event_cursor` 是已交付的前缀，`events_complete` 表示当前代次已交付终态。relay 收到 `_terminal` 后排空已提交的邮箱前缀，追加一次 `done`，并通过 `delivery` 记录代次和终态游标。当前版本的 `ERROR` 保留 Finalizer 和原生 Stream，SSE 可在这一代交付后结束。恢复请求获准后从原偏移继续订阅，运行完成时交付新代次的终态。 [工作台协议](agent-execution-studio.md)

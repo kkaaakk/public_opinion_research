@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.llm.generation import ModelOutputError
 from open_deep_research.observability.telemetry import (
     annotate,
     business_span,
@@ -124,7 +125,6 @@ async def observe_stage(
     config,
     *,
     stage_id=None,
-    retry=False,
     reserve_report=True,
     expires_at=None,
 ):
@@ -172,9 +172,10 @@ async def observe_stage(
                     kind=kind,
                     error_type=type(exc).__name__,
                     step=name,
-                    retry_safe=retry and not unknown and kind != "cancelled",
                     unknown_outcome=unknown,
                 )
+                if isinstance(exc, ModelOutputError):
+                    error["invalid_model_output"] = True
                 # A cancelled Workflow cannot allocate another Step, but the
                 # transaction must still finish before the cancellation lands.
                 await owned_io(commit_stage, scope, "failed", error=error)
@@ -235,7 +236,6 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
             "revise_brief",
             state,
             config,
-            retry=True,
             expires_at=revision_request["expires_at"],
         ) as cfg:
             revised = await intake.revise_brief(
@@ -252,7 +252,6 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
             state,
             config,
             stage_id=run_id + ":enrich_query_images",
-            retry=True,
         ) as cfg:
             image_state = (
                 {**state, "messages": [await uploaded_query_message(run_id)]}
@@ -271,7 +270,6 @@ async def planning_workflow(run_id, initial, round_=1, *, revision_request=None)
         state,
         config,
         stage_id=f"{run_id}:plan:{round_}",
-        retry=True,
     ) as cfg:
         planned = await intake.plan_research(state, cfg)
         await publish_stage(stage_scope(), planned)
@@ -310,7 +308,7 @@ async def review_round(run_id, state, config, round_):
     """
     source = f"{run_id}:review:{round_}"
     async with observe_stage(
-        run_id, "research_review", state, config, stage_id=source, retry=True
+        run_id, "research_review", state, config, stage_id=source
     ) as cfg:
         with business_span("research_review"):
             patch = await research.research_review(state, cfg)
@@ -358,6 +356,7 @@ async def research_workflow(run_id, initial):
                 )
         remaining = dict(handles)
         results = {}
+        failures = {}
         try:
             while remaining:
                 completed = await DBOS.wait_first_async(list(remaining.values()))
@@ -366,16 +365,23 @@ async def research_workflow(run_id, initial):
                     for k, h in remaining.items()
                     if h.workflow_id == completed.workflow_id
                 )
-                results[role] = read_research_result(
-                    await completed.get_result(), role, packets[role]
-                )
                 del remaining[role]
+                try:
+                    results[role] = read_research_result(
+                        await completed.get_result(), role, packets[role]
+                    )
+                except Exception as exc:
+                    # Leave the other producer running. It can finish useful
+                    # work, and its native result can survive a parent rewind.
+                    failures[role] = exc
         except BaseException:
             for handle in remaining.values():
                 await DBOS.cancel_workflow_async(
                     handle.workflow_id, cancel_children=True
                 )
             raise
+        if failures:
+            raise next(failures[role] for role in RESEARCH_ROLES if role in failures)
         # Only committed role results are joined, so a failed review never
         # repeats research an Agent already finished.
         assemble_research_results(state, results, packets)
@@ -408,7 +414,7 @@ async def research_workflow(run_id, initial):
             await DBOS.set_event_async(event, artifact)
             apply_patch(state, patch, source=f"{run_id}:{role}")
     async with observe_stage(
-        run_id, "generate_final_report", state, config, retry=True, reserve_report=False
+        run_id, "generate_final_report", state, config, reserve_report=False
     ) as cfg:
         await DBOS.set_event_async("report_started", True)
         with business_span("report_generation", step="generate_final_report"):
@@ -765,7 +771,12 @@ async def completion_facts(run_id):
         return {
             key: result[key]
             for key in (
-                "status", "settlement", "usage", "error", "current_step", "retry_safe"
+                "status",
+                "native_status",
+                "settlement",
+                "usage",
+                "error",
+                "current_step",
             )
         }
 
@@ -791,93 +802,81 @@ def commit_status(step):
     return output.get("status") if isinstance(output, dict) else None
 
 
-def failure_target(workflow):
-    """Bind a retry to one native execution and the step that must re-run.
+MODEL_STEPS = {"por.llm", "_model_call_step"}
+CALL_STEPS = MODEL_STEPS | {"por.agent_tool", "por.agent_context"}
 
-    A rewind never rolls back committed business data, so the target is decided
-    from the current stage's journal suffix, in the order that keeps a retry
-    meaningful:
 
-    * an interrupted ``por.llm`` or ``por.agent_tool`` re-runs that external
-      call, because its recorded error would otherwise be replayed verbatim;
-    * a model answer that failed local validation is re-requested rather than
-      re-parsed from the same invalid text;
-    * a failed ``por.commit_stage`` re-runs only that transaction, so a stage
-      publication failure never repeats the model calls it publishes;
-    * otherwise the stage raised in plain Python after its last committed Step,
-      so only that code re-runs.
-    """
-    steps = native_client().list_workflow_steps(workflow.workflow_id)
-    stage = next(
-        (step for step in reversed(steps) if commit_status(step) == "running"), None
-    )
-    suffix = [
-        step
-        for step in steps
-        if stage is None or step["function_id"] > stage["function_id"]
-    ]
-    calls = [
-        step
-        for step in suffix
-        if step["function_name"] in {"por.llm", "por.agent_tool"}
-    ]
-    last_call = calls[-1] if calls else None
-    output = (last_call or {}).get("output")
-    validated = (
-        isinstance(output, (list, tuple))
-        and len(output) == 3
-        and output[2] is None
-    )
-    last, errors = (steps[-1]["function_id"] if steps else 0), [
-        step["function_id"] for step in suffix if step.get("error") is not None
-    ]
-    rejected = isinstance(output, (list, tuple)) and len(output) == 3 and output[2]
-    # The last stage transition the suffix recorded decides whether the stage
-    # published or reported a failure; later bookkeeping Steps do not change it.
-    last_commit = next(
+def failure_target(workflow, steps=None):
+    """Select the first Step that must run again after the committed prefix."""
+    client = native_client()
+    if steps is None:
+        steps = client.list_workflow_steps(workflow.workflow_id)
+    by_id = {step["function_id"]: step for step in steps}
+    anchor = next(
         (
             step
-            for step in reversed(suffix)
-            if step["function_name"] == "por.commit_stage" and not step.get("error")
+            for step in reversed(steps)
+            if commit_status(step) in {"running", "completed"}
         ),
         None,
     )
-    if last_call is not None and last_call.get("error") is not None:
-        start = last_call["function_id"]
-    elif last_call is not None and last_call["function_name"] == "por.llm" and rejected:
-        # The provider answered, but the answer failed local validation, so the
-        # request is repeated instead of replaying the same rejected text.
-        start = last_call["function_id"]
-    elif failed := next(
+    start = anchor["function_id"] + 1 if anchor else 1
+    # Bounded LLM callers may catch a provider error before making another
+    # successful attempt in the same stage. Keep those handled errors too.
+    last_answer = max(
         (
             step["function_id"]
-            for step in suffix
-            if step["function_name"] == "por.commit_stage" and step.get("error")
+            for step in steps
+            if step["function_name"] == "por.llm" and step.get("error") is None
         ),
-        None,
+        default=0,
+    )
+    last_model = None
+    for step in steps:
+        if step["function_id"] < start:
+            continue
+        errored = step.get("error") is not None
+        handled = step["function_name"] == "por.llm" and start < last_answer
+        if (
+            step["function_id"] > start
+            or (errored and not handled)
+            or commit_status(step) == "failed"
+        ):
+            break
+        if step["function_name"] == "por.llm" and not errored:
+            last_model = step
+        start += 1
+
+    failure = client.get_event(workflow.workflow_id, "failure", 0) or {}
+    output = last_model.get("output") if last_model else None
+    rejected = isinstance(output, (list, tuple)) and len(output) == 3 and output[2]
+    if (
+        last_model
+        and by_id.get(start, {}).get("error") is None
+        and (rejected or failure.get("invalid_model_output"))
     ):
-        start = failed
-    elif (commit := last_commit) is not None and commit_status(commit) == "completed":
-        # The stage is already published, so only the code after it re-runs.
-        start = commit["function_id"] + 1
-    elif last_call is not None:
-        # A model answer is kept only when the research Workflow has nothing
-        # left to validate; a tool result is never requested twice.
-        model = last_call["function_name"] == "por.llm"
-        start = last_call["function_id"] + (
-            1 if (not model or (validated and workflow.name == "por.research")) else 0
-        )
-    elif (commit := last_commit) is not None and commit_status(commit) == "failed":
-        # The stage raised in plain Python and already recorded its failure.
-        # Replaying from after that marker would resume a body that never runs,
-        # so the retry starts at the stage transition that began it.
-        start = stage["function_id"] if stage is not None else last + 1
-    else:
-        start = max(errors, default=last + 1)
+        start = last_model["function_id"]
+    # Native rewind discards a contiguous suffix. A completed provider call
+    # after a gap cannot be replayed from that suffix.
+    if any(
+        step["function_id"] >= start
+        and step["function_name"] in CALL_STEPS
+        and step.get("error") is None
+        and step is not last_model
+        and step.get("output") is not None
+        for step in steps
+    ):
+        raise RunConflict("The failed checkpoint overlaps later completed calls")
+
+    step_name = by_id.get(start, {}).get("function_name")
+    stage_name = (anchor or {}).get("output", {}).get("stage")
     return dict(
         workflow_id=workflow.workflow_id,
         queue=CONTROL if workflow.name == "por.run" else BUSINESS,
         start_step=start,
+        model_reserve=stage_name != "generate_final_report"
+        if step_name in MODEL_STEPS
+        else None,
         failure=digest(
             [
                 workflow.app_version,
@@ -898,48 +897,64 @@ def failure_target(workflow):
     )
 
 
-def retry_targets(run_id):
+def retry_targets(run_id, root):
     client = native_client()
     workflows = client.list_workflows(
-        workflow_id_prefix=run_id,
-        status="ERROR",
-        app_version=VERSION,
+        workflow_id_prefix=run_id + ":",
+        name=["por.plan", "por.research", "por.role"],
         load_input=False,
         load_output=False,
     )
-    root = next((wf for wf in workflows if wf.workflow_id == run_id), None)
-    if root is None:
-        raise RunConflict("The observed native failure changed")
-    candidates = [wf for wf in workflows if wf.workflow_id.startswith(run_id + ":")]
-    leaves = sorted(
-        (
-            wf
-            for wf in candidates
-            if wf.name in {"por.plan", "por.research"}
-        ),
-        key=lambda wf: wf.completed_at or 0,
-        reverse=True,
-    )
-    for leaf in leaves:
-        failure = client.get_event(leaf.workflow_id, "failure", 0)
-        if leaf.name == "por.research" and failure is None:
-            # A failed child can leave research in ERROR without its own stage failure.
-            continue
-        if not failure or not failure.get("retry_safe"):
-            raise RunConflict("The failed Step requires reconciliation")
-        parents = [
-            failure_target(wf)
-            for wf in candidates
-            if wf.name == "por.research" and wf.workflow_id != leaf.workflow_id
-        ]
-        return [failure_target(leaf), *parents, failure_target(root)]
-    raise RunConflict("No safe failed native Step to rewind")
+    if any(wf.status in ACTIVE for wf in workflows):
+        raise RunConflict("A research workflow is still running")
+    if any(wf.app_version != VERSION for wf in workflows):
+        raise RunConflict("A related research Workflow uses an incompatible version")
+    by_id = {wf.workflow_id: wf for wf in workflows}
+    targets = []
+
+    def visit(workflow):
+        if workflow.status != "ERROR" or workflow.app_version != VERSION:
+            raise RunConflict("A failed workflow is missing or incompatible")
+        steps = client.list_workflow_steps(workflow.workflow_id)
+        target = failure_target(workflow, steps)
+        failed_children = {}
+        for step in steps:
+            child_id = step.get("child_workflow_id")
+            if not child_id:
+                continue
+            child = by_id.get(child_id)
+            failed_join = (
+                step["function_id"] >= target["start_step"]
+                and step["function_name"] == "DBOS.getResult"
+                and step.get("error") is not None
+            )
+            if failed_join and (
+                child is None or child.parent_workflow_id != workflow.workflow_id
+            ):
+                raise RunConflict("The failed child workflow is unavailable")
+            # A parent can lose the getResult checkpoint after a child has
+            # failed. Its native start command still identifies that child.
+            if (
+                child
+                and child.parent_workflow_id == workflow.workflow_id
+                and (
+                    child.status == "ERROR"
+                    or (failed_join and child.status != "SUCCESS")
+                )
+            ):
+                failed_children[child_id] = child
+        for child in failed_children.values():
+            visit(child)
+        targets.append(target)
+
+    visit(root)
+    return targets
 
 
 @DBOS.step(name="por.retry_execution")
 async def retry_execution(run_id, command, index):
     """Apply only the native failure version captured by HTTP admission."""
-    from open_deep_research.web.durable import external_effects, validate_request
+    from open_deep_research.web.durable import check_retry_target, validate_request
 
     def rewind():
         with domain_engine().begin() as db:
@@ -984,18 +999,18 @@ async def retry_execution(run_id, command, index):
 
             def same_failure(target):
                 wf = statuses.get(target["workflow_id"])
-                return wf and wf.status == "ERROR" and failure_target(wf) == target
+                return (
+                    wf
+                    and wf.status == "ERROR"
+                    and wf.app_version == VERSION
+                    and failure_target(wf) == target
+                )
 
             if not same_failure(root):
                 return {"outcome": "superseded"}
             target = targets[index]
-            unchanged = same_failure(target)
-            if index == 0 and unchanged:
-                from open_deep_research.budget import model_bill
-
-                if any(external_effects(db, run_id)) or model_bill(db, run_id)[1]:
-                    return {"outcome": "blocked"}
-            if unchanged:
+            if same_failure(target):
+                check_retry_target(db, req, target)
                 options = {
                     "start_step": target["start_step"],
                     "queue_name": target["queue"],
@@ -1010,6 +1025,8 @@ async def retry_execution(run_id, command, index):
 
     try:
         return await asyncio.to_thread(rewind)
+    except RunConflict as exc:
+        return {"outcome": "blocked", "reason": str(exc)}
     except SQLAlchemyError:
         return {"retryable": True}
 
@@ -1037,7 +1054,11 @@ async def apply_retry(run_id, command, applied_generation):
     generation = command["generation"]
     await DBOS.set_event_async(
         "retry_applied",
-        dict(generation=generation, outcome=receipt.get("outcome", "applied")),
+        dict(
+            generation=generation,
+            outcome=receipt.get("outcome", "applied"),
+            **({"reason": receipt["reason"]} if "reason" in receipt else {}),
+        ),
     )
     return generation
 
@@ -1084,15 +1105,19 @@ async def finalize_workflow(run_id):
                 break
             await DBOS.sleep_async(1)
 
-        safe = result["retry_safe"]
+        # ERROR can become recoverable after a code or provider fix. Keep the
+        # two existing workflows available while the failed Run is retained.
+        keep_open = (
+            result["native_status"] == "ERROR" and result["status"] != "cancelled"
+        )
         await send_event(
             run_id,
             "_terminal",
             generation=generation,
             frames=list(terminal_frames(result)),
-            close=not safe,
+            close=not keep_open,
         )
-        if not safe:
+        if not keep_open:
             return
         while True:
             command = await DBOS.recv_async("retry", timeout_seconds=86400)

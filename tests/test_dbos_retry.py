@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
 import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 
 import pytest
 from dbos_support import (
@@ -19,6 +23,7 @@ from open_deep_research.web.run_data import (
     digest,
     loads,
     publish_event,
+    read_request,
 )
 from open_deep_research.workflow import dbos_workflow as engine
 from open_deep_research.workflow.dbos_config import domain_engine
@@ -131,6 +136,257 @@ def assert_consistent(case, run, result):
 def assert_history_status(client, run_id, status):
     items = client.list_history("alice", limit=10, offset=0)["items"]
     assert [item["status"] for item in items if item["run_id"] == run_id] == [status]
+
+
+@pytest.mark.parametrize("failure", ["model", "read", "apify", "protected"])
+def test_role_recovery_reuses_native_results(native_case, monkeypatch, failure):
+    from agents.exceptions import ModelBehaviorError
+    from agents.mcp import MCPServerStdio
+    from agents.testing import (
+        ModelStep,
+        ScriptedModel,
+        assistant_message,
+        function_call,
+    )
+    from fastapi.testclient import TestClient
+    from mcp.types import CallToolResult, Tool
+    from test_sdk_runtime import TOKENS, _tool
+
+    from open_deep_research import budget
+    from open_deep_research.mcp import tools as mcp
+    from open_deep_research.runtime import business_agent, tool_executor
+    from open_deep_research.web import server
+    from open_deep_research.workflow.execution import stage_context, unconfirmed
+
+    case = native_case
+    failed_role = "internal_knowledge" if failure == "model" else "public_signal"
+    failing_tool = {"apify": "call-actor", "protected": "publish"}.get(
+        failure, "retry_read"
+    )
+    provider_calls = Counter()
+    effects = Counter()
+    receipt = {
+        "runId": "ActorFixture",
+        "status": "SUCCEEDED",
+        "storages": {
+            "datasets": {"default": {"id": "DatasetFixture", "itemCount": 49}}
+        },
+    }
+    lost_bill = []
+
+    class Apify(MCPServerStdio):
+        async def __aenter__(self):
+            self.launched = False
+            return self
+
+        async def __aexit__(self, *_):
+            if self.launched:
+                raise RuntimeError("Injected disconnect after the Actor run receipt")
+
+        async def list_tools(self):
+            return [
+                Tool(name=name, inputSchema={"type": "object"})
+                for name in ("call-actor", "get-actor-run", "get-dataset-items")
+            ]
+
+        async def call_tool(self, name, arguments):
+            effects[name] += 1
+            if name == "call-actor":
+                self.launched = True
+            elif name == "get-actor-run":
+                assert arguments == {"runId": "ActorFixture"}
+            else:
+                assert (
+                    name == "get-dataset-items"
+                    and arguments["datasetId"] == "DatasetFixture"
+                )
+                return CallToolResult(
+                    content=[], structuredContent={"items": [{"evidence": "recall"}]}
+                )
+            return CallToolResult(content=[], structuredContent=receipt)
+
+    async def tool_catalog(config, role, spec):
+        async def execute(query, limit):
+            effects[query] += 1
+            return f"Evidence for {query}"
+
+        tools = [_tool(role, coroutine=execute, effect="read")]
+        if role != failed_role or failure == "model":
+            return tools
+        if failure == "apify":
+            spec = mcp.MCPServerSpec(
+                "apify",
+                "social_media",
+                "protected",
+                "streamable_http",
+                {"url": "https://mcp.apify.com"},
+            )
+            remote = await mcp._load_server_tools(spec, {tool.name for tool in tools})
+            assert {tool.name: tool.effect for tool in remote} == {
+                "call-actor": "protected",
+                "get-actor-run": "read",
+                "get-dataset-items": "read",
+            }
+            return tools + remote
+        return tools + [
+            _tool(failed_role, name=failing_tool, coroutine=execute, effect=failure)
+        ]
+
+    async def respond(call):
+        scope = stage_context.get()
+        role = scope.name.removesuffix("_agent")
+        name = "web_search" if role == "public_signal" else "rag_search"
+        outputs = {
+            item.get("call_id")
+            for item in call.input
+            if item.get("type") == "function_call_output"
+        }
+        if not outputs:
+            provider_calls[(role, "first")] += 1
+            calls = [function_call(name, {"query": role}, call_id="first")]
+            if role == failed_role and failure != "model":
+                args = (
+                    {"actor": "fixture"} if failure == "apify" else {"query": "retry"}
+                )
+                calls += [
+                    function_call(failing_tool, args, call_id="failed"),
+                    function_call(name, {"query": "tail"}, call_id="tail"),
+                ]
+            return calls
+        if failure == "apify" and role == failed_role and "dataset" not in outputs:
+            assert "DatasetFixture" in json.dumps(call.input)
+            provider_calls[(role, "dataset")] += 1
+            return [
+                function_call(
+                    "get-dataset-items",
+                    {"datasetId": "DatasetFixture"},
+                    call_id="dataset",
+                )
+            ]
+        provider_calls[(role, "finish")] += 1
+        if failure == "model" and role == failed_role and scope.generation == 0:
+            raise ModelBehaviorError("Injected provider failure")
+        return [assistant_message("producer analysis complete")]
+
+    @asynccontextmanager
+    async def model(*_args, **_kwargs):
+        yield ScriptedModel([ModelStep.respond(respond)] * 3, default_usage=TOKENS)
+
+    original_finish = budget.finish_model_attempt
+
+    def finish_model(run_id, call_id, usage):
+        if failure == "model" and usage.get("usage_complete") is False:
+            lost_bill.append(call_id)
+            return
+        original_finish(run_id, call_id, usage)
+
+    original_perform = tool_executor.ToolExecutor._perform
+
+    async def perform(executor, call):
+        result = await original_perform(executor, call)
+        if failure in {"read", "protected"} and call.record.tool_call_id == "failed":
+            if stage_context.get().generation == 0:
+                raise unconfirmed("Injected loss of the tool checkpoint")
+        return result
+
+    monkeypatch.setattr(business_agent, "_business_agent_tools", tool_catalog)
+    monkeypatch.setattr(business_agent, "sdk_model", model)
+    monkeypatch.setattr(
+        mcp.MCPServerSpec,
+        "create",
+        lambda self: Apify({"command": sys.executable}, name="apify"),
+    )
+    monkeypatch.setattr(budget, "finish_model_attempt", finish_model)
+    monkeypatch.setattr(tool_executor.ToolExecutor, "_perform", perform)
+    monkeypatch.setattr(server, "WEB_API_TOKEN", "recovery-test")
+    case.cfg["configurable"].update(
+        max_input_tokens=1_000_000, max_output_tokens=100_000
+    )
+    run = case.create(owner="operator", approval=True)
+    run_id = run["run_id"]
+    frozen = read_request(run_id, "operator")
+    paused = case.wait(run, lambda r: r["can_approve"])
+    case.client.approve(run_id, "operator", paused["plan"]["version"], "approve")
+    first = wait_delivered(
+        case, run, "interrupted" if failure == "apify" else "failed", 0
+    )
+    role_id = f"{run_id}:{failed_role}:1"
+    steps = case.client.client.list_workflow_steps(role_id)
+    broken = next(step for step in steps if step["error"] is not None)
+    assert broken["function_name"] == (
+        "_model_call_step" if failure == "model" else "por.agent_tool"
+    )
+    assert not effects["tail"]
+    if failure == "model":
+        assert lost_bill and first["usage"]["usage_complete"] is False
+    url = "/api/runs/" + run_id
+    headers = {
+        "Authorization": "Bearer recovery-test",
+        "Idempotency-Key": "resume-role",
+    }
+    http = TestClient(server.app)
+    response = http.post(
+        url + "/retry", json={"state_version": first["state_version"]}, headers=headers
+    )
+    if failure == "protected":
+        assert (
+            not first["retry_safe"]
+            and "Protected tool 'publish'" in first["retry_reason"]
+        )
+        assert (
+            response.status_code == 409
+            and response.json()["detail"] == first["retry_reason"]
+        )
+        assert effects["retry"] == 1 and case.client.native(role_id).status == "ERROR"
+        return
+
+    assert first["retry_safe"] and first["retry_reason"] is None
+    assert response.status_code == 200, response.text
+    grant = command_for(run_id, "resume-role")
+    assert grant["generation"] == 1
+    finished = wait_delivered(case, run, "completed", 1)
+    assert read_request(run_id, "operator") == frozen
+    assert (finished["run_id"], finished["research_session_id"], finished["plan"]) == (
+        run_id,
+        run["research_session_id"],
+        first["plan"],
+    )
+    after = case.client.client.list_workflow_steps(role_id)
+    assert after[: steps.index(broken)] == steps[: steps.index(broken)]
+    assert after[steps.index(broken)]["error"] is None
+    assert all(
+        provider_calls[(role, "first")] == 1 and effects[role] == 1
+        for role in ("public_signal", "internal_knowledge")
+    )
+    assert (
+        len([runtime for runtime in case.runtimes if runtime.role != failed_role]) == 1
+    )
+    if failure == "apify":
+        assert (
+            effects["call-actor"]
+            == effects["get-actor-run"]
+            == effects["get-dataset-items"]
+            == 1
+        )
+    elif failure == "read":
+        assert effects["retry"] == 2 and effects["tail"] == 1
+        assert finished["usage"]["tool_calls"] == 4
+        assert any(
+            "provider may have received it twice" in w
+            for w in finished["usage"]["budget_warnings"]
+        )
+    else:
+        assert provider_calls[(failed_role, "finish")] == 2
+        assert finished["usage"]["usage_complete"] is False
+    assert finished["report"]
+    sse = http.get(
+        url + "/events",
+        headers={**headers, "Last-Event-ID": str(first["event_cursor"])},
+    )
+    assert sse.status_code == 200
+    assert sse.text.count('"type": "done"') == 1
+    assert '"status": "completed"' in sse.text
+    assert '"type": "sdk_event"' in sse.text
 
 
 def test_old_retry_key_never_grants_a_later_failure_and_new_key_can_retry(
@@ -581,9 +837,11 @@ def test_terminal_receipt_advancement_preserves_retry_cas(native_case, monkeypat
 def test_new_retry_requires_delivery_of_the_current_failed_generation(
     native_case, monkeypatch
 ):
+    from dbos import DBOS
+
     case = native_case
     original_review = engine.research.research_review
-    original_event = engine.public_event
+    original_write = DBOS.write_stream_async
     entered, release = threading.Event(), threading.Event()
     attempts = []
 
@@ -593,16 +851,16 @@ def test_new_retry_requires_delivery_of_the_current_failed_generation(
             raise RuntimeError("Safe read failure")
         return await original_review(state, cfg)
 
-    async def delayed_event(event):
+    async def delayed_event(key, event):
         # Delay real terminal stream delivery, never fake a native status.
         if event["type"] == "done" and event.get("generation") == 1:
             entered.set()
             while not release.is_set():
                 await asyncio.sleep(0.02)
-        return await original_event(event)
+        return await original_write(key, event)
 
     monkeypatch.setattr(engine.research, "research_review", review)
-    monkeypatch.setattr(engine, "public_event", delayed_event)
+    monkeypatch.setattr(DBOS, "write_stream_async", staticmethod(delayed_event))
     run = case.create()
     first = wait_delivered(case, run, "failed", 0)
     case.client.retry(run["run_id"], "alice", "first", first["state_version"])

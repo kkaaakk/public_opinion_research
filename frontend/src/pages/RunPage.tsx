@@ -343,7 +343,7 @@ function RunView({ id, history }: { id: string; history: boolean }) {
                 取消研究
               </Button>
             )}
-            {!history && run.retry_safe && finished && (
+            {!history && run.retry_safe && (
               <Button
                 variant="outline"
                 disabled={commands.locked}
@@ -383,6 +383,13 @@ function RunView({ id, history }: { id: string; history: boolean }) {
             </p>
           )}
           {connection === 'error' && <ErrorNotice error={error} retry={refresh} />}
+          {!history &&
+            (run.status === 'failed' || run.status === 'interrupted') &&
+            run.retry_reason && (
+              <p className="connection-message" role="status">
+                {run.retry_reason}
+              </p>
+            )}
           {commands.error !== undefined && !history && (
             <ErrorNotice error={commands.error} retry={refresh} />
           )}

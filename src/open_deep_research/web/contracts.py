@@ -142,6 +142,7 @@ class RunSnapshot(BaseModel):
     events_complete: bool
     events_paused: bool
     retry_safe: bool
+    retry_reason: str | None
     retry_requested: bool
     cancel_requested: bool
     can_cancel: bool

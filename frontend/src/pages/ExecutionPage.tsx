@@ -92,13 +92,13 @@ function RunFacts({ run }: { run: Run }) {
             </dd>
           </div>
           <div>
-            <dt>重试</dt>
+            <dt>恢复运行</dt>
             <dd>
               {run.retry_requested
-                ? '已请求，等待 Finalizer'
-                : run.retry_safe && delivered(run)
-                  ? '可安全重试'
-                  : '当前不可用'}
+                ? runStatus(run)
+                : run.retry_safe
+                  ? '可以恢复'
+                  : (run.retry_reason ?? '运行尚未结束')}
             </dd>
           </div>
           <div>

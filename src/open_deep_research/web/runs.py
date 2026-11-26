@@ -359,7 +359,7 @@ class Retry(BaseModel):
     "/{run_id}/resume", response_model=contracts.RunSnapshot, openapi_extra=IDEMPOTENT
 )
 def retry(run_id: str, body: Retry, raw: Request) -> JSONResponse:
-    """Continue only a verified safe checkpoint or a settled side-effect-free step."""
+    """Request continuation from the failed Run's native DBOS checkpoint."""
     owner = trusted_owner(raw)
     return JSONResponse(
         public_run(_call(_store().retry, run_id, owner, _key(raw), body.state_version)),
