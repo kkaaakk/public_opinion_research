@@ -1,0 +1,22 @@
+[project]
+name = "por-manager-agent-poc"
+version = "0.1.0"
+description = "Offline Agent-as-Tools and DBOS stage recovery experiments"
+requires-python = ">=3.11"
+dependencies = [
+    "openai-agents==0.24.0",
+    "openai==3.31.0",
+    "httpx2==2.13.1",
+    "pydantic==2.14.1",
+    "dbos==3.3.0",
+    "dbos-openai-agents==0.3.0",
+    "psycopg[binary]==3.3.6",
+]
+
+[dependency-groups]
+dev = ["pytest==8.4.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["postgres: runs a separate DBOS Executor and isolated PostgreSQL"]
