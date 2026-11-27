@@ -73,9 +73,10 @@ def test_finished_receipt_retries_control_only(
 
 def test_failed_generations_keep_the_final_report_reservation(native_case, monkeypatch):
     from dbos_support import retry_observed_failure
-    from sdk_model_support import install_inference
+    from sdk_model_support import Reply, install_inference
 
     from open_deep_research.llm.generation import generate_text
+    from open_deep_research.web.run_data import RunConflict
     from open_deep_research.workflow import dbos_workflow as engine
 
     case = native_case
@@ -84,13 +85,12 @@ def test_failed_generations_keep_the_final_report_reservation(native_case, monke
     def infer(request):
         if request.model_ref == "openai:invalid-plan":
             calls.append(1)
-            return "invalid brief"
+            return Reply("invalid brief", status="length")
 
     install_inference(monkeypatch, infer)
 
     async def invalid_plan(state, config):
         await generate_text("openai:invalid-plan", "brief")
-        raise ValueError("Controlled invalid brief response")
 
     monkeypatch.setattr(engine.intake, "plan_research", invalid_plan)
     case.cfg["configurable"].update(max_model_calls=10, reserve_final_report_call=True)
@@ -110,10 +110,13 @@ def test_failed_generations_keep_the_final_report_reservation(native_case, monke
     retry_observed_failure(case, run, "first-bad-response", first)
     second = observed(1)
     assert second["usage"]["model_calls"] == 9 and len(calls) == 2
-    retry_observed_failure(case, run, "preserve-report-reserve", second)
-    final = observed(2)
-    assert final["error"]["kind"] == "budget_exhausted"
-    assert final["usage"]["model_calls"] == 9 and len(calls) == 2
+    assert not second["retry_safe"] and "model budget" in second["retry_reason"]
+    with pytest.raises(RunConflict, match="model budget"):
+        case.client.retry(
+            run["run_id"], "alice", "preserve-report-reserve", second["state_version"]
+        )
+    assert case.client.get(run["run_id"], "alice")["generation"] == 1
+    assert len(calls) == 2
 
 
 def test_parallel_models_share_run_limit_and_final_report_reservation(native_case, monkeypatch):

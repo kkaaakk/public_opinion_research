@@ -1,6 +1,6 @@
 # 🔬 Public Opinion Research
 
-> 当前应用版本为 `por-call-ledger-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，ResearchWorkflow 依次生成风险评估、应对策略和一份综合 Markdown 报告。 [Brief 合同](docs/architecture/research-brief.md)
+> 当前应用版本为 `por-native-history-v1`。Plan、可恢复澄清和 Brief 审批之后，由两个研究 Agent 并行取证。Review 定向补研，ResearchWorkflow 依次生成风险评估、应对策略和一份综合 Markdown 报告。 [Brief 合同](docs/architecture/research-brief.md)
 
 基于 DBOS、OpenAI Agents SDK、RAG 和 MCP 的企业舆情风险研究与处置辅助系统。支持多模型提供商、多种搜索工具和 MCP (Model Context Protocol) 服务器。在原版 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 基础上，扩展了企业知识 RAG、舆情分析、社交媒体监控和可追溯来源记录等能力。
 
@@ -282,40 +282,25 @@ python -m open_deep_research.rag.mcp_server --transport streamable-http --host 1
 - `rag_list_sources` — 列出知识源
 - `rag_reset_cache` — 重置缓存
 
-## 🌐 Local Web UI（可选的次要入口）
+## 🌐 Web 研究工作台
 
-CLI 是主要运行入口。前端源码暂时保留，但 Web 请求不再覆盖 `config.yaml` 的模型、
-RAG、模式或审批开关；旧表单字段会被接受但忽略。
+工作台支持图片输入、澄清、Research Brief 审批、报告阅读与导出、会话延续、历史检索、企业知识库和执行账本。新建研究可单独启用 RAG。模型、角色、预算和审批策略由 `config.yaml` 管理。
 
-### 数据库
+首次部署或从现有数据库升级时，在配置好 `DBOS_DATABASE_URL` 后运行一次初始化命令，安装与 Run 一起保留的图片表。然后在不同终端启动 Executor、FastAPI 和开发前端。 [DBOS 部署与保留](docs/architecture/dbos-deployment.md)
 
-研究运行只需要 PostgreSQL。`por_dbos` 保存原生执行记录，`por_domain` 保存
-请求、授权和调用回执。部署连接、初始化与 Executor 启动见
-[部署说明](docs/architecture/dbos-deployment.md)。RAG 与运行存储独立；RAG 关闭时
-`internal_knowledge` 必须同时从 `enabled_business_agents` 中移除，否则启动前检查报错。
-
-### 启动页面
-
-先按上文部署 PostgreSQL 和 DBOS Executor，再启动 FastAPI 页面：
-
-```bash
-python -m open_deep_research.web.server
+```powershell
+uv sync --extra dev --locked --python 3.11
+uv run deep-research-executor --initialize-only
+uv run deep-research-executor --executor-id workstation-1
+uv run deep-research-web
 ```
 
-默认只绑定 `127.0.0.1:8000`。如果通过反向代理或其他方式对外提供服务，
-必须配置 `PUBLIC_OPINION_API_TOKEN` 才能接纳研究；对外服务请使用强随机令牌，并在代理层启用 HTTPS 和认证；
-不要直接将未认证的 Demo 服务暴露到公网。客户端只能选择服务端允许的模型，
-研究请求也有输入大小和并发保护。
+```powershell
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
 
-### 研究历史
-
-**研究历史** 按时间分页，可打开报告或已完成的阶段产物。Classic 页面可下载、复制报告，
-也可通过 **沿用参数** 填入原研究主题、组织背景和 RAG 选项。
-
-历史列表显示已交付终态的 Run。详情复用 Run 读取逻辑，从 DBOS 与业务账本获取请求参数、
-报告、已知用量和错误信息。历史查询是只读操作，保留期取决于对应的 DBOS 记录和业务账本。
-在页面的 **访问设置** 中填写 `PUBLIC_OPINION_API_TOKEN`，历史和 Run API 使用同一认证及 owner 范围。
- [历史 API 和数据保留](docs/architecture/dbos-deployment.md#历史查询与数据保留)
+打开 Vite 输出的地址，在系统设置中验证 `PUBLIC_OPINION_API_TOKEN`。Vite 将 `/api` 代理到本机 FastAPI。正式部署先执行 `npm --prefix frontend run build`，再启动 FastAPI，从 `/` 提供静态站点。构建产物可随 Python wheel 交付，正式部署无需运行 Node.js。CLI 可独立于前端使用。 [前端与 Web API](frontend/README.md)
 
 ## 📱 社媒采集插件
 

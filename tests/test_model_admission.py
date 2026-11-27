@@ -6,6 +6,7 @@ from dbos import error as dbos_error
 
 from open_deep_research import budget
 from open_deep_research.configuration import Configuration
+from open_deep_research.web.run_data import loads
 from open_deep_research.workflow import dbos_config, execution
 
 
@@ -52,6 +53,7 @@ def _scope(*, token_limit=True):
         {
             "run_id": "run",
             "stage_id": "stage",
+            "generation": 0,
             "expires_at": None,
             "config": Configuration(
                 budget_enabled=True,
@@ -76,7 +78,7 @@ def _install(monkeypatch):
 def test_blocked_model_call_waits_without_holding_a_transaction(monkeypatch):
     engine = _install(monkeypatch)
     bills = iter([({}, 1, False), ({}, 0, True)])
-    monkeypatch.setattr(budget, "model_bill", lambda _db, _run: next(bills))
+    monkeypatch.setattr(budget, "model_bill", lambda *_args, **_kwargs: next(bills))
     monkeypatch.setattr(
         budget, "require_physical_model_budget", lambda *_args, **_kwargs: None
     )
@@ -101,12 +103,19 @@ def test_blocked_model_call_waits_without_holding_a_transaction(monkeypatch):
         for statement, parameters in engine.transactions[-1].executions
         if "INSERT INTO por_domain.model_attempts" in statement
     ]
-    assert inserts == [{"r": "run", "id": "call-1", "stage": "stage"}]
+    [insert] = inserts
+    assert loads(insert.pop("reservation")) == {
+        "generation": 0,
+        "workflow": "workflow",
+        "executor": "executor",
+        "epoch": None,
+    }
+    assert insert == {"r": "run", "id": "call-1", "stage": "stage"}
 
 
 def test_model_admission_times_out_on_an_unsettled_bill(monkeypatch):
     engine = _install(monkeypatch)
-    monkeypatch.setattr(budget, "model_bill", lambda _db, _run: ({}, 1, False))
+    monkeypatch.setattr(budget, "model_bill", lambda *_args, **_kwargs: ({}, 1, False))
     monkeypatch.setattr(
         budget, "require_physical_model_budget", lambda *_args, **_kwargs: None
     )
@@ -134,7 +143,7 @@ def test_waiting_model_admission_observes_cancellation(monkeypatch):
             raise dbos_error.DBOSWorkflowCancelledError("cancelled")
 
     monkeypatch.setattr(execution, "require_live_effect", live)
-    monkeypatch.setattr(budget, "model_bill", lambda _db, _run: ({}, 1, False))
+    monkeypatch.setattr(budget, "model_bill", lambda *_args, **_kwargs: ({}, 1, False))
 
     with pytest.raises(dbos_error.DBOSWorkflowCancelledError):
         budget.start_model_attempt(
@@ -147,7 +156,11 @@ def test_waiting_model_admission_observes_cancellation(monkeypatch):
 
 def test_pending_bill_does_not_block_without_a_token_ceiling(monkeypatch):
     _install(monkeypatch)
-    monkeypatch.setattr(budget, "model_bill", lambda _db, _run: ({}, 1, False))
+    monkeypatch.setattr(
+        budget,
+        "model_bill",
+        lambda *_args, **kw: ({}, kw["generation"] is not None, False),
+    )
 
     budget.start_model_attempt(
         _scope(token_limit=False),
@@ -164,7 +177,7 @@ def test_finalized_bill_without_usage_does_not_block_later_calls(monkeypatch):
     monkeypatch.setattr(budget.time, "sleep", sleeps.append)
     # One finalized attempt whose provider reported no usage can never be
     # priced; it stays counted as a call and must not fence the whole Run.
-    monkeypatch.setattr(budget, "model_bill", lambda _db, _run: ({}, 0, False))
+    monkeypatch.setattr(budget, "model_bill", lambda *_args, **_kwargs: ({}, 0, False))
 
     budget.start_model_attempt(
         _scope(), "workflow", "executor", "call-1", wait_seconds=300
@@ -173,7 +186,7 @@ def test_finalized_bill_without_usage_does_not_block_later_calls(monkeypatch):
     assert sleeps == []
     assert engine.entered == engine.exited == 1
     assert any(
-        parameters == {"r": "run", "id": "call-1", "stage": "stage"}
+        parameters.get("id") == "call-1" and "reservation" in parameters
         for statement, parameters in engine.transactions[0].executions
         if "INSERT INTO por_domain.model_attempts" in statement
     )
@@ -181,7 +194,7 @@ def test_finalized_bill_without_usage_does_not_block_later_calls(monkeypatch):
 
 def test_budget_rejection_still_propagates(monkeypatch):
     _install(monkeypatch)
-    monkeypatch.setattr(budget, "model_bill", lambda _db, _run: ({}, 0, True))
+    monkeypatch.setattr(budget, "model_bill", lambda *_args, **_kwargs: ({}, 0, True))
 
     def reject(*_args, **_kwargs):
         raise budget.ModelBudgetExceeded("Physical call receipts exhausted")

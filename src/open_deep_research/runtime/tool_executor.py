@@ -13,13 +13,9 @@ proof that a call finished:
   accept that: the ledger keeps one logical call, so no allowance is charged
   twice, while the provider may receive the request twice. The duplicate is
   reported as a budget warning instead of being hidden;
-* ``protected`` tools never run twice. Their Operation receipt must still match
-  this call, so a receipt left by an earlier attempt fails the Run closed for
-  reconciliation.
-
-There is no third state to recover from: the journal cannot prove a request
-that never committed, and this module does not add a response cache to pretend
-otherwise.
+* ``protected`` tools consult the existing Operation. An Apify Actor reference
+  can be queried again. An operation without proof of absence or a reference
+  that can be resolved is fenced.
 """
 
 from __future__ import annotations
@@ -65,6 +61,7 @@ from open_deep_research.workflow.execution import (
     is_execution_control_failure,
     native_step_available,
     owned_io,
+    record_apify_run,
     stage_context,
     start_operation,
     unconfirmed,
@@ -114,10 +111,9 @@ class _Invocation:
 
 
 def _result_text(name: str, output: Any) -> str:
-    # Only explicitly defined protocol and business error envelopes affect status.
-    envelope = (
-        output.get("structured_content", output) if isinstance(output, dict) else output
-    )
+    # MCP result errors are checked by the MCP wrapper. Its structured_content
+    # contains business data, such as the state of an already started Actor.
+    envelope = output
     if isinstance(output, str):
         try:
             envelope = json.loads(output)
@@ -196,7 +192,10 @@ class ToolExecutor:
             harness, record, tool, context, arguments, previous, drain_on_cancel
         )
         try:
-            output = await self._step(call)
+            if native_step_available():
+                output = await self._step(call)
+            else:
+                output = await self._perform(call)
         except BaseException as exc:
             if completion is not None:
                 completion.set_exception(exc)
@@ -220,8 +219,6 @@ class ToolExecutor:
         A duplicate call ID still consumes its own Step slot while sharing the
         first result, including a result restored from the journal.
         """
-        if not native_step_available():
-            return await self._perform(call)
         executed = False
 
         async def invoke_step():
@@ -342,13 +339,11 @@ class ToolExecutor:
         """Charge and record one logical call before its arguments are validated."""
         name = record.tool_name
         increment = budget_from_tool_calls([{"name": name}], self.tools)
-        # This local snapshot only rejects a call this role already knows is
-        # unaffordable; the Run ledger below owns the cross-Agent ceiling. Tool
-        # admission never consults model calls or tokens.
-        if not can_spend_tool_call(self.config, self.budget.projected(), increment):
-            self._skip(name)
         scope = stage_context.get()
-        if scope is not None:
+        if scope is None:
+            if not can_spend_tool_call(self.config, self.budget.projected(), increment):
+                self._skip(name)
+        else:
             # Every admitted call is recorded, whether or not budget enforcement
             # is on. Concurrent Producers share the Run's State snapshot, so only
             # this atomic Run-level admission can enforce the configured ceiling.
@@ -371,7 +366,7 @@ class ToolExecutor:
                 raise cancellation
             if outcome == "rejected":
                 self._skip(name)
-            if outcome == "duplicate":
+            if outcome == "duplicate" and tool_effect(self.tools[name]) != "protected":
                 # An earlier attempt already paid for this logical call, so the
                 # allowance is not charged twice. Its uncommitted Step is exactly
                 # the window in which the provider may have been called twice.
@@ -455,12 +450,21 @@ class ToolExecutor:
             },
         }
 
+    async def remember_apify_run(self, context: ToolContext[Any], actor_run_id: str):
+        scope = stage_context.get()
+        record = context.context.results[context.tool_call_id]
+        if scope is not None and record.operation_id is not None:
+            await commit_receipt(
+                record_apify_run, scope.run_id, record.operation_id, actor_run_id
+            )
+
     async def execute(
         self,
         context: ToolContext[Any],
         function: Callable[..., Any],
         /,
         *args: Any,
+        recover_apify: Callable[..., Any] | None = None,
         **kwargs: Any,
     ) -> str:
         """Execute validated input and settle any external operation receipt."""
@@ -472,10 +476,11 @@ class ToolExecutor:
         # protection instead of silently skipping its receipt.
         protected = tool is None or tool_effect(tool) == "protected"
         operation_id = None
+        actor_run_id = None
         if scope is not None and protected:
             operation_id = self.operation_id(record)
             try:
-                _, cancelled = await owned_io(
+                actor_run_id, cancelled = await owned_io(
                     start_operation,
                     scope.run_id,
                     DBOS.workflow_id,
@@ -490,10 +495,13 @@ class ToolExecutor:
                     "External tool admission storage unavailable"
                 ) from exc
             if cancelled is not None:
-                await commit_receipt(
-                    finish_operation, scope.run_id, operation_id, "not_executed"
-                )
+                if actor_run_id is None:
+                    await commit_receipt(
+                        finish_operation, scope.run_id, operation_id, "not_executed"
+                    )
                 raise cancelled
+            if actor_run_id is not None and recover_apify is None:
+                raise unconfirmed("Apify receipt cannot be resolved by this tool")
             record.operation_id = operation_id
 
         metadata = {
@@ -503,6 +511,8 @@ class ToolExecutor:
             "invocation_id": record.sdk_run_id,
             "operation_id": operation_id,
         }
+        if actor_run_id is not None:
+            metadata["reason"] = "Reading the original Apify Actor run"
         if scope is not None:
             try:
                 await scope.observe(
@@ -515,7 +525,7 @@ class ToolExecutor:
                     call_id=call_id + ":started",
                 )
             except BaseException as exc:
-                if operation_id is not None:
+                if operation_id is not None and actor_run_id is None:
                     await commit_receipt(
                         finish_operation, scope.run_id, operation_id, "not_executed"
                     )
@@ -529,7 +539,9 @@ class ToolExecutor:
         try:
             with budget_capture() as captured:
                 try:
-                    if iscoroutinefunction(function):
+                    if actor_run_id is not None:
+                        output = await recover_apify(actor_run_id)
+                    elif iscoroutinefunction(function):
                         output = await function(*args, **kwargs)
                     else:
                         # The executor owns this task until the thread and receipt finish.
@@ -539,9 +551,10 @@ class ToolExecutor:
             result = _result_text(name, output)
         except BaseException as exc:
             if operation_id is not None:
-                await commit_receipt(
-                    finish_operation, scope.run_id, operation_id, "unknown"
-                )
+                if actor_run_id is None:
+                    await commit_receipt(
+                        finish_operation, scope.run_id, operation_id, "unknown"
+                    )
                 record.effect_status = "uncertain"
                 if isinstance(exc, Exception):
                     raise unconfirmed(
@@ -550,7 +563,11 @@ class ToolExecutor:
             raise
         if operation_id is not None:
             await commit_receipt(
-                finish_operation, scope.run_id, operation_id, "returned"
+                finish_operation,
+                scope.run_id,
+                operation_id,
+                "returned",
+                *((actor_run_id,) if actor_run_id else ()),
             )
         record.effect_status = "returned"
         if scope is not None:

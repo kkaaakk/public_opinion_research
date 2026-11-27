@@ -107,7 +107,7 @@ def test_cancel_before_model_admission_with_tracing_has_no_unsettled_bill(
     def delayed(*args):
         entered.set()
         assert release.wait(20)
-        original(*args)
+        return original(*args)
 
     monkeypatch.setattr(budget, "start_model_attempt", delayed)
     case = traced_case

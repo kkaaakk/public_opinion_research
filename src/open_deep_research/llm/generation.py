@@ -72,7 +72,10 @@ def _completion_error(
 
 
 async def metered_model_response(
-    model_ref: str, request: Callable[[str | None], Awaitable[ModelResponse]]
+    model_ref: str,
+    request: Callable[[str | None], Awaitable[ModelResponse]],
+    *,
+    max_output_tokens: int | None = None,
 ) -> tuple[ModelResponse, dict[str, Any], ProviderCompletion]:
     """Admit and settle exactly one SDK request inside its owning DBOS Step."""
     from open_deep_research.workflow.execution import (
@@ -81,7 +84,7 @@ async def metered_model_response(
     )
 
     try:
-        identity = await begin_model_call()
+        identity = await begin_model_call(model_ref, max_output_tokens)
     except SQLAlchemyError as exc:
         raise ExecutionControlError("Model admission storage unavailable") from exc
     with observe_provider_completion() as completion:
@@ -255,7 +258,7 @@ async def _generate(
 
             try:
                 response, delta, completion = await metered_model_response(
-                    model_ref, request
+                    model_ref, request, max_output_tokens=max_tokens
                 )
             except ModelOutputError as exc:
                 return "", exc.budget_usage, (str(exc), exc.retryable)

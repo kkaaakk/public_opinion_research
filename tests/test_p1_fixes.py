@@ -230,19 +230,16 @@ def test_web_research_requests_are_semaphore_limited(native_case):
     assert all(rt.harness.last_settlement.succeeded for rt in case.runtimes)
 
 
-# 验证 Markdown 报告渲染必须经过净化或回退纯文本。
 def test_markdown_report_rendering_is_sanitized() -> None:
-    """The frontend sanitizes marked HTML and fails closed if the CDN is absent."""
-    app_js = Path("src/open_deep_research/web/static/app.js").read_text(
-        encoding="utf-8"
-    )
-    index_html = Path("src/open_deep_research/web/static/index.html").read_text(
-        encoding="utf-8"
-    )
+    """Report Markdown skips raw HTML and applies an explicit safe URL policy."""
+    renderer = Path("frontend/src/components/Markdown.tsx").read_text(encoding="utf-8")
 
-    assert "DOMPurify.sanitize" in app_js
-    assert "reportEl.innerHTML = marked.parse" not in app_js
-    assert "dompurify@3.2.6" in index_html
+    assert "from 'react-markdown'" in renderer
+    assert "<ReactMarkdown" in renderer
+    assert "skipHtml" in renderer
+    assert "urlTransform={reportUrl}" in renderer
+    assert r"/^(https?:\/\/|mailto:|#)/i.test(url) ? defaultUrlTransform(url) : ''" in renderer
+    assert "dangerouslySetInnerHTML" not in renderer
 
 
 # 验证存储授权使用显式拒绝逻辑，避免优化模式禁用 assert。

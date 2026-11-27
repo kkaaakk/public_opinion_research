@@ -20,6 +20,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import aiohttp
 from agents.mcp import MCPServer, MCPServerStdio, MCPServerStreamableHttp
@@ -373,7 +374,25 @@ async def _load_server_tools(
 
         loaded: list[BusinessTool] = []
         taken = set(existing_tool_names)
+        endpoint = urlsplit(spec.params.get("url", ""))
+        hosted_apify = (
+            spec.name == "apify"
+            and endpoint.scheme == "https"
+            and endpoint.netloc == "mcp.apify.com"
+        )
         for mcp_tool in mcp_tools:
+            apify_actor = hosted_apify and mcp_tool.name == "call-actor"
+            apify_read = hosted_apify and mcp_tool.name in {
+                "search-actors",
+                "fetch-actor-details",
+                "get-actor-run",
+                "get-dataset-items",
+            }
+            effect = spec.effect
+            if apify_actor:
+                effect = "protected"
+            elif apify_read:
+                effect = "read"
             public_name = allocate_tool_name(spec.name, mcp_tool.name, taken)
             if public_name != mcp_tool.name:
                 logger.info(
@@ -391,7 +410,9 @@ async def _load_server_tools(
                         server_factory=spec.create,
                         public_name=public_name,
                         domain=spec.domain,
-                        effect=spec.effect,
+                        effect=effect,
+                        apify_actor=apify_actor,
+                        legacy_protected=apify_read,
                     )
                 )
             except Exception:

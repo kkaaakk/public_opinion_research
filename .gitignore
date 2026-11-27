@@ -95,6 +95,7 @@ data/indexes/rag/*
 
 .venv/
 
-# Execution Studio frontend dependencies and build outputs
+# Research workbench dependencies and build output
 frontend/node_modules/
-src/open_deep_research/web/studio/
+!/frontend/src/lib/
+src/open_deep_research/web/ui/

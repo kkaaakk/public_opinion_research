@@ -100,7 +100,11 @@ async def enrich_query_images(state: DeepResearchState, config: RunnableConfig) 
         try:
             context, cancellation = await owned_io(
                 query_images.build_query_image_context,
-                messages,
+                [
+                    message
+                    for message in messages
+                    if not getattr(message, "additional_kwargs", {}).get("web_research_input")
+                ],
                 vision_model=configurable.rag_vision_model,
                 vision_prompt=configurable.rag_query_image_prompt,
                 vision_max_tokens=configurable.rag_vision_max_tokens,

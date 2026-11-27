@@ -8,6 +8,7 @@ HTTP, plus the same offline SDK runtime fixtures as the local-tool tests.
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 import sys
 import threading
@@ -355,7 +356,11 @@ def test_mcp_result_mapping_rejects_multimodal_and_marks_errors():
         _normalise_result(
             "srv",
             "echo",
-            CallToolResult(content=[TextContent(type="text", text="denied")], isError=True),
+            CallToolResult(
+                content=[TextContent(type="text", text="denied")],
+                structuredContent={"status": "SUCCEEDED"},
+                isError=True,
+            ),
         )
 
     with pytest.raises(MCPToolError, match="multimodal"):
@@ -645,8 +650,9 @@ def test_cancelled_protected_mcp_call_settles_unknown(
     assert finishes[-1][-1] == "unknown"
 
 
+@pytest.mark.parametrize("actor_status", [None, "SUCCEEDED", "RUNNING", "FAILED"])
 def test_read_and_protected_mcp_effects_settle_operation_receipts(
-    monkeypatch, memory_ledger
+    monkeypatch, memory_ledger, actor_status
 ):
     from open_deep_research.runtime import tool_executor
 
@@ -679,8 +685,18 @@ def test_read_and_protected_mcp_effects_settle_operation_receipts(
             failure_error_function=None,
         )
         async def declared(context: ToolContext, query: str) -> str:
-            async def business(value: str) -> str:
-                return "ok:" + value
+            async def business(value: str) -> str | dict:
+                if actor_status is None:
+                    return "ok:" + value
+                receipt = {"runId": "actor-fixture", "status": actor_status}
+                return _normalise_result(
+                    "apify",
+                    "call-actor",
+                    CallToolResult(
+                        content=[TextContent(type="text", text=json.dumps(receipt))],
+                        structuredContent=receipt,
+                    ),
+                )
 
             return await context.context.tool_executor.execute(
                 context, business, query
@@ -724,9 +740,16 @@ def test_read_and_protected_mcp_effects_settle_operation_receipts(
         finally:
             stage_context.reset(token)
 
-    assert asyncio.run(run("read")) == "ok:q"
+    read_result = asyncio.run(run("read"))
+    if actor_status is None:
+        assert read_result == "ok:q"
+    else:
+        assert json.loads(read_result)["structured_content"] == {
+            "runId": "actor-fixture",
+            "status": actor_status,
+        }
     assert starts == [] and finishes == []
 
-    assert asyncio.run(run("protected")) == "ok:q"
+    assert asyncio.run(run("protected")) == read_result
     assert len(starts) == 1
     assert finishes[-1][-1] == "returned"

@@ -467,8 +467,8 @@ def _report(args) -> int:
 def _retry(args) -> int:
     client = _client()
     run = client.get(args.run_id, OWNER)
-    if not run["retry_safe"] or not run["events_complete"]:
-        raise RunConflict("Run requires reconciliation; no safe retry.")
+    if not run["retry_safe"]:
+        raise RunConflict(run.get("retry_reason") or "Run is not ready to resume.")
     key = args.key or uuid4().hex
     result = client.retry(args.run_id, OWNER, key, run["state_version"])
     print(f"Retry accepted: status={result['status']} key={key}")

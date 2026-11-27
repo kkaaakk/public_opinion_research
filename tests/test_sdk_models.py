@@ -78,7 +78,7 @@ def test_openai_plan_and_review_validate_and_bill_each_structured_attempt(monkey
     bodies = []
     receipts = []
 
-    async def begin():
+    async def begin(_model_ref, _max_output_tokens):
         return len(receipts) + 1
 
     async def settle(identity, usage):

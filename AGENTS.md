@@ -24,7 +24,12 @@ Runtime/backend selectors are no longer Configuration fields. Input aliases
 `langgraph`/`legacy` values fail closed, including environment configuration.
 There is no fallback or cross-engine Run redelivery. `get_workflow` is a rejection
 stub for old callers; use the durable Run API or `deep-research` CLI.
-Application version is `por-native-history-v1`. Drain `por-datasource-stage-v1`
+Application version is `por-resume-v1`. Drain active business journals with
+their matching release. Terminal research journals from `por-role-recovery-v1`
+and `por-native-history-v1` can resume through native rewind. Each recovery
+generation enqueues its own `por.finalize` on the existing queue. A closed relay
+resumes on the original Workflow ID and Stream.
+Drain `por-datasource-stage-v1`
 Finalizer and relay journals with their matching release. Completed Runs still
 use their native stage results, delivery receipts and call ledger. Drain `por-call-ledger-v1`,
 `por-agent-context-v1`, `por-inline-report-v1`, `por-research-agents-v1`,
@@ -80,8 +85,10 @@ external-operation receipts and settlement, and DBOS journals the result.
 `ToolExecutor._authorize()` still re-reads the domain at invocation because that
 is the execution boundary, not the assembly one. An uncommitted tool Step can
 only be handled per effect: `read`/`idempotent` re-run with one ledger row and an
-explicit duplicate-request warning, `protected` fails closed when its Operation
-receipt already exists. Never add a response cache, a second executor or a
+explicit duplicate-request warning, and `protected` uses its existing Operation
+receipt. A recorded Apify Actor Run ID permits a read-only lookup. An admitted
+operation without a usable reference or proof it never started fails closed.
+Never add a response cache, a second executor or a
 per-effect hierarchy to narrow that window. Read
 `docs/audits/tool-execution-recovery.md` and `docs/architecture/tools.md` before
 changing tool admission, identity derivation or recovery.

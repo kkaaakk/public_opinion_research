@@ -178,7 +178,7 @@ class MCPConfig(BaseModel):
 
 ## 6. 业务 Agent 中的工具执行
 
-1. `por.role_tools` 保存模型可见目录及 effect。恢复时比较名称、描述、Schema、领域和 effect，目录必须与当前声明完全一致才允许重放。第六轮删除了「目录缺少 `effect` 字段也算一致」的宽松分支：带 `effect` 的目录从 `dbos-events-v1` 起写入，而 DBOS 只恢复同 Application Version 的 journal（当前为 `por-call-ledger-v1`），因此无 `effect` 的目录只能来自本 Executor 永不恢复的旧版本，属于真实定义变更。
+1. `por.role_tools` 保存模型可见目录及 effect。恢复时核对名称、描述、Schema、领域和 effect。Apify 托管服务中已验证的只读查询兼容原来的 `protected` 声明。已提交的结果由 DBOS 重放。 [版本切换](dbos-deployment.md#应用版本切换)
 2. `ToolManager.bind()` 把 `BusinessTool.sdk_tool` 交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具与本地工具一样以 `BusinessTool` 装配，其声明来自 `MCPUtil.to_function_tool()`。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
 3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。预算预占之后才进入业务函数及外部效果边界。
 4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。`idempotent` 工具不写回执，调用配置携带同一个派生值作为 `idempotency_key`。
@@ -200,7 +200,7 @@ Harness 只有两类记录会停留在 `running`：执行器已进入、工具�
 `por.agent_tool` 已提交时直接重放结果，不执行业务函数。Step 未提交时按 effect 处理：
 
 - `read` / `idempotent`：重新执行。`tool_calls` 只有一行，额度不重复扣；`ToolExecutor` 追加一条 `budget_warnings`，说明供应商可能收到两次请求。
-- `protected`：`start_operation` 命中已有回执即 `unconfirmed`，Run 停止并要求人工核对。回执只证明外部效果被登记，不包含响应体，因此不能用来伪造结果。
+- `protected`：已有操作记录时，只有证实尚未执行才允许启动原调用。Apify `call-actor` 保留服务端的 Actor Run ID，通过 `get-actor-run` 查询原任务，再用 `get-dataset-items` 读取原 Dataset。无法验证原操作时返回具体原因并保留回执。 [Apify MCP](https://github.com/apify/apify-mcp-server)
 
 外部请求已发出、`por.agent_tool` 尚未提交时崩溃，是唯一无法用现有表消除的重复调用窗口；本轮不新增结果缓存表或分布式事务。完整分析见 [工具执行层与恢复审计](../audits/tool-execution-recovery.md)。
 

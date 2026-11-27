@@ -350,51 +350,86 @@ def require_live_effect(db, run_id, workflow_id, executor_id):
     )
     if not workflows or workflows[0].status == "CANCELLED":
         raise dbos_error.DBOSWorkflowCancelledError("Workflow is cancelled")
-    if (
-        workflows[0].status != "PENDING"
-        or workflows[0].executor_id != executor_id
-        or request["reconciliation"]
-    ):
+    if workflows[0].status != "PENDING" or workflows[0].executor_id != executor_id:
         raise ExecutionControlError("Native executor no longer owns this effect")
+    return workflows[0]
 
 
 def start_operation(
     run_id, workflow_id, executor_id, operation_id, tool_call_id, name, fingerprint
 ):
+    """Admit a fresh effect or return the original Apify run to look up."""
     with domain_engine().begin() as db:
         require_live_effect(db, run_id, workflow_id, executor_id)
+        keys = dict(
+            r=run_id,
+            id=operation_id,
+            tool_call=tool_call_id,
+            name=name,
+            fingerprint=fingerprint,
+            executor=executor_id,
+            workflow=workflow_id,
+            step=DBOS.step_id,
+        )
         if db.scalar(
             text("""
             SELECT EXISTS (SELECT 1 FROM por_domain.operations WHERE run_id=:r
-                AND (outcome='unknown' OR (outcome IS NULL AND executor_id<>:executor)))
+                AND id<>:id AND name=:name AND fingerprint=:fingerprint
+                AND (outcome IS NULL OR outcome='unknown'))
             """),
-            {"r": run_id, "executor": executor_id},
+            keys,
         ):
-            raise unconfirmed("An earlier executor has an unconfirmed external effect")
+            raise unconfirmed(
+                "Another call with the same input has an unconfirmed external effect"
+            )
+        if db.execute(
+            text("""
+            INSERT INTO por_domain.operations(
+                run_id,id,tool_call_id,name,fingerprint,executor_id,workflow_id,step_id)
+            VALUES (:r,:id,:tool_call,:name,:fingerprint,:executor,:workflow,:step)
+            ON CONFLICT DO NOTHING
+            """),
+            keys,
+        ).rowcount:
+            return None
+        operation = db.execute(
+            text("""
+            SELECT outcome, apify_run_id FROM por_domain.operations
+            WHERE run_id=:r AND id=:id AND fingerprint=:fingerprint
+            """),
+            keys,
+        ).first()
+        if operation and operation.apify_run_id:
+            return operation.apify_run_id
+        if operation and operation.outcome == "not_executed":
+            db.execute(
+                text("""
+                UPDATE por_domain.operations SET outcome=NULL, executor_id=:executor
+                WHERE run_id=:r AND id=:id
+                """),
+                keys,
+            )
+            return None
+        raise unconfirmed(
+            "External tool already ran for this call; its receipt is authoritative "
+            "and the response was not journaled"
+        )
+
+
+def record_apify_run(run_id, operation_id, actor_run_id):
+    """Retain the provider's receipt before result handling or Step commit."""
+    with domain_engine().begin() as db:
         if (
             db.execute(
                 text("""
-            INSERT INTO por_domain.operations(
-                run_id,id,tool_call_id,name,fingerprint,executor_id)
-            VALUES (:r,:id,:tool_call,:name,:fingerprint,:executor) ON CONFLICT DO NOTHING
+            UPDATE por_domain.operations SET apify_run_id=:actor
+            WHERE run_id=:r AND id=:id AND (apify_run_id IS NULL OR apify_run_id=:actor)
             """),
-                dict(
-                    r=run_id,
-                    id=operation_id,
-                    tool_call=tool_call_id,
-                    name=name,
-                    fingerprint=fingerprint,
-                    executor=executor_id,
-                ),
+                dict(r=run_id, id=operation_id, actor=actor_run_id),
             ).rowcount
             != 1
         ):
-            # The receipt, not the tool-call status, is what survives a crash
-            # here. It proves the effect was admitted, never what it returned.
-            raise unconfirmed(
-                "External tool already ran for this call; its receipt is authoritative "
-                "and the response was not journaled"
-            )
+            raise unconfirmed("Conflicting Apify Actor run receipt")
 
 
 def admit_tool_call(
@@ -474,15 +509,25 @@ def finish_tool_call(run_id, tool_call_id, status):
         )
 
 
-def finish_operation(run_id, operation_id, outcome):
+def finish_operation(run_id, operation_id, outcome, recovered_apify_run=None):
     with domain_engine().begin() as db:
         if (
             db.execute(
                 text("""
             UPDATE por_domain.operations SET outcome=:outcome
-            WHERE run_id=:r AND id=:id AND (outcome IS NULL OR outcome=:outcome)
+            WHERE run_id=:r AND id=:id
+            AND (CAST(:actor AS text) IS NULL OR apify_run_id=:actor)
+            AND (
+                outcome IS NULL OR outcome=:outcome
+                OR (outcome='unknown' AND :outcome='returned' AND :actor IS NOT NULL)
+            )
             """),
-                dict(r=run_id, id=operation_id, outcome=outcome),
+                dict(
+                    r=run_id,
+                    id=operation_id,
+                    outcome=outcome,
+                    actor=recovered_apify_run,
+                ),
             ).rowcount
             != 1
         ):

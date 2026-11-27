@@ -217,6 +217,10 @@ def initialize_domain(*, migrate_legacy=False):
                 session text NOT NULL, value text NOT NULL, cancel_requested boolean NOT NULL DEFAULT false,
                 reconciliation text, UNIQUE(owner, request_key))""",
             "CREATE INDEX IF NOT EXISTS por_request_session ON por_domain.requests(session)",
+            """CREATE TABLE IF NOT EXISTS por_domain.request_images
+               (run_id text REFERENCES por_domain.requests(id) ON DELETE CASCADE,
+                position int NOT NULL CHECK (position >= 0), media_type text NOT NULL,
+                content bytea NOT NULL, PRIMARY KEY(run_id, position))""",
             """CREATE TABLE IF NOT EXISTS por_domain.model_attempts
                (run_id text REFERENCES por_domain.requests(id), id text,
                 stage_id text NOT NULL, usage text, PRIMARY KEY(run_id, id))""",
@@ -243,6 +247,15 @@ def initialize_domain(*, migrate_legacy=False):
         ):
             db.exec_driver_sql(ddl)
         _upgrade_call_ledger(db)
+        db.exec_driver_sql(
+            "ALTER TABLE por_domain.model_attempts ADD COLUMN IF NOT EXISTS reservation jsonb"
+        )
+        db.exec_driver_sql("""
+            ALTER TABLE por_domain.operations
+            ADD COLUMN IF NOT EXISTS workflow_id text,
+            ADD COLUMN IF NOT EXISTS step_id integer,
+            ADD COLUMN IF NOT EXISTS apify_run_id text
+            """)
         db.execute(
             text("INSERT INTO por_domain.policy VALUES (1,:v) ON CONFLICT DO NOTHING"),
             {"v": _policy()},

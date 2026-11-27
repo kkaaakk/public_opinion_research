@@ -69,7 +69,7 @@ def install_sdk(
     async def respond(request):
         schema = request.schema_name
         if request.model_ref == "openai:fixture-review-attempt":
-            return Reply("controlled failed review", 2, 0)
+            return Reply("controlled failed review", 2, 0, status="length")
         if schema is None:
             if request.prompt == risk_assessment_prompt:
                 return "risk_assessment analysis"
