@@ -1,7 +1,7 @@
 ---
 name: xiaohongshu
 title: 小红书舆情调研
-description: 通过 Apify MCP 发现并运行小红书采集 Actor，覆盖关键词扩展、笔记与评论取证、投诉信号分类、去重、成本控制和代表性证据输出。
+description: 通过 Apify MCP 的小红书专属 Actor 工具采集笔记与评论，覆盖关键词扩展、投诉信号分类、去重、数量控制和代表性证据输出。
 ---
 
 # 小红书舆情调研
@@ -16,7 +16,7 @@ description: 通过 Apify MCP 发现并运行小红书采集 Actor，覆盖关�
 
 ## 工具可见性检查
 
-开始前确认工具列表中存在 `search-actors`、`fetch-actor-details`、`call-actor`、`get-actor-run`、`get-dataset-items`。
+开始前确认工具列表中存在专属工具 `zen-studio--rednote-search-scraper`，以及 `get-actor-run`、`get-dataset-items`。
 
 - 如果这些工具不存在，说明 `APIFY_TOKEN` 缺失或 Apify MCP 连接未建立。必须在报告中写明“社媒数据不可用：Apify MCP 未配置或连接失败”，不得用新闻、常识或虚构笔记替代。
 - 工具效果按服务级 `protected` 执行，每次调用可能产生外部操作回执和费用。不要为了绕过失败而重复启动同一个 Actor。
@@ -29,38 +29,24 @@ description: 通过 Apify MCP 发现并运行小红书采集 Actor，覆盖关�
    - 质量与售后：`质量`、`故障`、`续航`、`售后`、`客服`、`退款`、`退货`、`维权`、`赔偿`；
    - 购买决策：`测评`、`真实体验`、`开箱`、`对比`、`平替`。
    每轮查询使用 2–4 个变体，不要一次堆叠过多关键词导致召回为空。
-3. **发现 Actor**：调用 `search-actors`，`keywords` 使用平台与数据类型，而不是结论词或纯任务词。推荐组合：
-   - `xiaohongshu notes`（笔记、搜索页结果）；
-   - `xiaohongshu comments`（评论采集）；
-   - `xiaohongshu`（先看平台整体可用 Actor）。
-   `limit` 保持默认或不超过 10。没有合适候选时，记录“未发现可用 Actor”，不要勉强选择无关平台。
-4. **核对 Actor 能力与价格**：对候选调用 `fetch-actor-details`，至少读取 `inputSchema`、`pricing`、`stats`、`readme`。确认：
-   - 平台确实是小红书，产出是笔记或评论；
-   - 输入支持关键词、笔记链接/ID、时间范围中的哪些字段；
-   - 是否按结果或按计算单元计费，是否有最低收费；
-   - 是否支持评论、翻页和历史时间窗。
-   不了解输入 Schema 时不得猜测字段名。
-5. **构造输入并执行**：按真实 `inputSchema` 构造输入，把任务需要的关键词、数量上限和时间窗写入 Actor 自己的输入字段。调用 `call-actor` 时：
-   - `actor` 使用 `search-actors` 返回的完整 ID（`username/name`）；
-   - `callOptions` 设置 `maxTotalChargeUsd`，需要限制条数时同时设置 `maxItems`；
-   - `waitSecs` 不超过 45。本地预算或 `maxItems` 不等于 Apify 的实际费用上限，只有 `maxTotalChargeUsd` 是本次运行的账单上限。
-   首次使用付费 Actor 时，在报告中记录价格依据和本次上限。
-6. **等待运行完成**：`call-actor` 只返回运行状态和存储 ID，不返回数据。状态不是 `SUCCEEDED` 时，用返回的 run ID 调用 `get-actor-run` 轮询（参数名以实际 Schema 为准）；`FAILED`、`TIMED-OUT`、`ABORTED` 时读取 `statusMessage` 和 `exitCode` 并停止，不要立即用同样输入重启。超时或断连后，先查询原有运行的状态，确认没有已产生的数据集再决定是否继续。
-7. **读取真实结果**：用运行返回的 dataset ID（常见字段为 `defaultDatasetId`，以工具实际返回为准）调用 `get-dataset-items`。`limit` 按分析需要设置，不要一次性拉取远超任务所需的数据。数据集为空表示该 Actor 在此输入下没有返回内容，不能据此判断“无人讨论”。
-8. **补充评论**：需要评论区时，单独选择评论类 Actor，用笔记 URL 或 ID 作为输入。笔记正文与评论必须分别标注来源类型。评论 Actor 是否覆盖二级评论、楼中楼或历史评论，以其 README 和实际返回为准，不得假设。
-9. **必要时扩展**：只有当前结果不足以回答研究问题时，才用新的关键词或新的笔记样本执行下一轮；每轮都要重新说明目的和成本上限。
+3. **使用专属 Actor 工具**：直接调用 `zen-studio--rednote-search-scraper`。该工具的 Schema 就是 Actor 的业务输入；不要重新发现、选择或通过通用入口启动 Actor。
+4. **构造输入并执行**：输入字段以工具 Schema 为准：
+   - `keywords`（必填字符串数组）；
+   - `maxResults`（默认 100，控制单次规模）；
+   - `sortType`：`general`（综合）/ `popularity_descending`（最热）/ `time_descending`（最新）；
+   - `noteType`：`all` / `video` / `image` / `live`；
+   - `timeFilter`：`all` / `1d` / `1w` / `6mo`；
+   - `includeFullBody`、`topUpFromOtherSorts` 按需设置；
+   - `waitSecs` 为 0–45，默认 30。
+   枚举值必须原样复制英文标识，不要翻译成中文再传入。数量上限由 Actor 自己的 `maxResults` 控制；Apify 账户的月度配额是最终费用上限。
+5. **等待运行完成**：专属工具只返回运行状态和存储 ID，不返回数据。状态不是 `SUCCEEDED` 时，用返回的 run ID 调用 `get-actor-run` 轮询（参数名以实际 Schema 为准）；`FAILED`、`TIMED-OUT`、`ABORTED` 时读取 `statusMessage` 和 `exitCode` 并停止，不要立即用同样输入重启。超时或断连后，先查询原有运行的状态，确认没有已产生的数据集再决定是否继续。
+6. **读取真实结果**：用运行返回的 dataset ID（常见字段为 `defaultDatasetId`，以工具实际返回为准）调用 `get-dataset-items`。`limit` 按分析需要设置，不要一次性拉取远超任务所需的数据。数据集为空表示该 Actor 在此输入下没有返回内容，不能据此判断“无人讨论”。
+7. **补充评论**：需要评论区时，单独选择评论类工具或 Actor，用笔记 URL 或 ID 作为输入。笔记正文与评论必须分别标注来源类型。评论覆盖范围以实际返回为准，不得假设。
+8. **必要时扩展**：只有当前结果不足以回答研究问题时，才用新的关键词或新的笔记样本执行下一轮；每轮都要重新说明目的和数量上限。
 
-## Actor 选择标准
+## Actor 能力与限制
 
-优先选择同时满足以下条件的 Actor：
-
-- 描述明确写明小红书笔记或评论采集，而不是通用网页抓取。
-- 提供可核验的输入 Schema，能限制关键词、数量和（如支持）时间范围。
-- 返回字段至少包含可定位原文的 URL 或笔记 ID，以及正文、作者、时间中的多数信息。
-- 近期有成功运行记录，价格和计费方式可读。
-- 不需要账号密码、Cookie 或验证码人工介入。
-
-以下情况应放弃或改用其他 Actor：只返回截图/文件、只返回聚合统计、要求提供个人账号凭据、无法定位原文、平台明显不符。
+本插件固定使用 `zen-studio/rednote-search-scraper`（工具名 `zen-studio--rednote-search-scraper`）。它按关键词返回小红书搜索笔记；评论能力、时间窗和翻页以该 Actor 的实际返回为准，未返回的字段写“未提供”。
 
 ## 证据提取与字段保留
 
@@ -80,15 +66,15 @@ description: 通过 Apify MCP 发现并运行小红书采集 Actor，覆盖关�
 
 ## 数据缺口与失败处理
 
-- `call-actor`、`get-actor-run`、`get-dataset-items` 返回错误时，原样记录工具名称和错误要点，标记为数据缺口，不制造证据。
+- 专属 Actor 工具、`get-actor-run`、`get-dataset-items` 返回错误时，原样记录工具名称和错误要点，标记为数据缺口，不制造证据。
 - 运行未到终态时不得读取或引用结果。
 - 数据集为空、条数明显偏少、只覆盖最近几天、评论缺失、翻页受限，都要写成覆盖限制。
-- 达到 `maxTotalChargeUsd` 或 `maxItems` 上限时，明确说明“结果被成本/数量上限截断”，不要声称已覆盖全量讨论。
+- 达到 Actor 的 `maxResults` 上限时，明确说明“结果被数量上限截断”，不要声称已覆盖全量讨论。
 
 ## 输出要求
 
 - 调研问题与检索时间窗。
-- 使用的关键词变体、Actor ID、输入要点、`maxTotalChargeUsd`/`maxItems` 上限和运行状态。
+- 使用的关键词变体、Actor ID、输入要点、数量上限和运行状态。
 - 小红书舆情时间线：首次出现、集中讨论、官方或品牌回应（如检索到）。
 - 代表性证据表：类型（笔记/评论）、摘要、`url`、`published_at`、作者类型、互动量、命中的负面信号。
 - 投诉主题分布：每个主题下的代表证据数量与原文要点。

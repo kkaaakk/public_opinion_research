@@ -1,7 +1,7 @@
 {
   "id": "social-research",
   "name": "Social Research",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "roles": [
     "public_signal"
   ],

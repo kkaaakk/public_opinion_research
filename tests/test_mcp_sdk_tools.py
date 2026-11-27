@@ -43,7 +43,9 @@ from open_deep_research.tools import BusinessTool, register_tool
 from open_deep_research.workflow.execution import StageContext, stage_context
 
 SERVER_SCRIPT = '''from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
+from typing import Literal
 import time
 
 server = FastMCP("sdk-mcp-fixture")
@@ -65,11 +67,24 @@ def slow(seconds: float) -> str:
     return "slept"
 
 @server.tool()
-def record(path: str, query: str) -> str:
+def record(
+    path: str,
+    query: str,
+    action: Literal["general", "latest"] = "general",
+) -> str:
     """Record one remote invocation so tests can prove it was not called."""
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(query + "\\n")
     return "recorded:" + query
+
+
+@server.tool(name="reject-before-run")
+def reject_before_run(query: str) -> str:
+    """Reject like the Apify platform's pre-run input validation."""
+    raise ToolError(
+        "Failed to call Actor 'fixture/actor': input is invalid. "
+        "Please ensure the input is correct and matches the Actor's input schema."
+    )
 
 @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def annotated(query: str) -> str:
@@ -222,22 +237,176 @@ def test_allocate_tool_name_keeps_duplicates_visible():
     assert allocate_tool_name("dbhub", "lookup", taken) == "dbhub__lookup_2"
 
 
-def test_invalid_mcp_arguments_never_reach_the_remote_server(tmp_path):
+def test_invalid_mcp_arguments_never_reach_the_remote_server(
+    tmp_path, monkeypatch, memory_ledger
+):
+    from types import SimpleNamespace
+
+    from open_deep_research.llm import generation
+    from open_deep_research.runtime import sdk_runtime, tool_executor
+
     script = _write_server(tmp_path)
-    tools = _load(_stdio_spec(script))
+    tools = _load(_stdio_spec(script, effect="protected"))
     record = next(tool for tool in tools if tool.name == "record")
     counter = tmp_path / "calls.txt"
+    starts: list[tuple] = []
+    finishes: list[tuple] = []
 
-    model = _call_model(
-        "record",
-        '{"path":"' + counter.as_posix() + '"}',
-        call_id="invalid",
+    def start_operation(*args):
+        starts.append(args)
+
+    def finish_operation(*args):
+        finishes.append(args)
+
+    async def commit(write, *args):
+        await asyncio.to_thread(write, *args)
+
+    async def observe(_self, _kind, _payload, *, call_id=None):
+        return None
+
+    async def begin_model_call(*_args):
+        return None
+
+    monkeypatch.setattr(tool_executor, "start_operation", start_operation)
+    monkeypatch.setattr(tool_executor, "finish_operation", finish_operation)
+    monkeypatch.setattr(tool_executor, "commit_receipt", commit)
+    monkeypatch.setattr(StageContext, "observe", observe)
+    monkeypatch.setattr(generation, "begin_model_call", begin_model_call)
+    monkeypatch.setattr(
+        sdk_runtime, "settings", lambda: SimpleNamespace(session_path=None)
+    )
+
+    model = ScriptedModel(
+        [
+            [
+                function_call(
+                    "record",
+                    '{"path":"' + counter.as_posix() + '","query":"q","action":"综合"}',
+                    call_id="enum",
+                ),
+                function_call(
+                    "record",
+                    '{"path":"' + counter.as_posix() + '"}',
+                    call_id="missing",
+                ),
+            ],
+            [
+                function_call(
+                    "record",
+                    '{"path":"'
+                    + counter.as_posix()
+                    + '","query":"ok","action":"general"}',
+                    call_id="valid",
+                )
+            ],
+            [assistant_message("tool finished")],
+        ],
+        default_usage=TOKENS,
     )
     runtime = _runtime("internal_knowledge", tools=[record], model=model)
-    asyncio.run(runtime.run("task"))
+    scope = StageContext(
+        "fixture-run", "fixture-stage", "internal_knowledge_agent", 0, runtime.config, {}
+    )
+    token = stage_context.set(scope)
+    try:
+        asyncio.run(runtime.run("task"))
+    finally:
+        stage_context.reset(token)
 
-    assert runtime.harness.results["invalid"].status == "failed"
-    assert not counter.exists()
+    enum_result = runtime.harness.results["enum"]
+    missing_result = runtime.harness.results["missing"]
+    assert enum_result.status == "failed"
+    assert "action" in str(enum_result.observation)
+    assert "general" in str(enum_result.observation)
+    assert enum_result.operation_id is None
+    assert missing_result.status == "failed"
+    assert "query" in str(missing_result.observation)
+    assert "required" in str(missing_result.observation)
+    assert missing_result.operation_id is None
+    # The corrected call runs after the model receives the validation error.
+    assert runtime.harness.results["valid"].status == "succeeded"
+    assert runtime.harness.results["valid"].operation_id is not None
+    assert counter.read_text(encoding="utf-8").splitlines() == ["ok"]
+    assert len(starts) == 1
+    assert finishes[-1][-1] == "returned"
+
+
+def test_confirmed_apify_pre_run_rejection_is_not_executed(tmp_path):
+    from open_deep_research.mcp.tool_wrapper import _call_mcp_tool
+    from open_deep_research.tools import ToolNotExecuted
+
+    script = _write_server(tmp_path)
+    params = {"command": sys.executable, "args": [str(script)]}
+
+    def factory():
+        return MCPServerStdio(
+            params,
+            name="reject-fixture",
+            cache_tools_list=False,
+            client_session_timeout_seconds=10,
+        )
+
+    async def call():
+        return await _call_mcp_tool(
+            "apify",
+            factory,
+            "reject-before-run",
+            {"query": "q"},
+            apify_actor=True,
+        )
+
+    with pytest.raises(ToolNotExecuted, match="matches the Actor's input schema"):
+        asyncio.run(call())
+
+
+def test_apify_tool_policy_keeps_only_actor_runs_protected():
+    from open_deep_research.mcp.tools import _apify_tool_policy
+
+    assert _apify_tool_policy(
+        True, "zen-studio--douyin-search-scraper", "read"
+    ) == ("protected", True, False)
+    assert _apify_tool_policy(True, "call-actor", "read") == (
+        "protected",
+        True,
+        False,
+    )
+    assert _apify_tool_policy(True, "get-actor-run", "protected") == (
+        "read",
+        False,
+        True,
+    )
+    assert _apify_tool_policy(True, "abort-actor-run", "read") == (
+        "protected",
+        False,
+        False,
+    )
+    assert _apify_tool_policy(False, "echo", "read") == ("read", False, False)
+
+
+def test_nested_mcp_validation_message_names_the_field():
+    from jsonschema.validators import validator_for
+
+    from open_deep_research.mcp.tool_wrapper import _validation_message
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "options": {
+                "type": "object",
+                "properties": {
+                    "sort": {"type": "string", "enum": ["general", "latest"]}
+                },
+                "required": ["sort"],
+            }
+        },
+        "required": ["options"],
+    }
+    validator = validator_for(schema)(schema)
+    error = next(iter(validator.iter_errors({"options": {"sort": "综合"}})))
+    message = _validation_message("fixture", error)
+
+    assert "options.sort" in message
+    assert "not one of" in message
 
 
 def test_mcp_error_and_disconnect_are_recorded_as_failed(tmp_path):
@@ -410,6 +579,7 @@ def test_one_optional_failed_server_does_not_block_others(monkeypatch, tmp_path)
         "fail",
         "slow",
         "record",
+        "reject-before-run",
         "annotated",
     }
     assert existing == {tool.name for tool in loaded}
@@ -753,3 +923,143 @@ def test_read_and_protected_mcp_effects_settle_operation_receipts(
     assert asyncio.run(run("protected")) == read_result
     assert len(starts) == 1
     assert finishes[-1][-1] == "returned"
+
+
+def test_dedicated_apify_actor_reuses_the_original_run(
+    tmp_path, monkeypatch, memory_ledger
+):
+    from open_deep_research.runtime import tool_executor
+
+    actor_receipt = {
+        "runId": "run1abc",
+        "status": "SUCCEEDED",
+        "defaultDatasetId": "ds-1",
+    }
+    results = [
+        CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(actor_receipt))],
+            structuredContent=actor_receipt,
+        ),
+        CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(actor_receipt))],
+            structuredContent=actor_receipt,
+        ),
+    ]
+    calls: list[str] = []
+
+    class Connection:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def call_tool(self, name, _args):
+            calls.append(name)
+            return results.pop(0)
+
+    def factory():
+        return Connection()
+
+    class DeclarationServer:
+        name = "apify"
+        tool_input_guardrails = None
+        tool_output_guardrails = None
+
+        @staticmethod
+        def _get_failure_error_function(_failure):
+            return None
+
+        @staticmethod
+        def _get_needs_approval_for_tool(_tool, _agent):
+            return False
+
+    tool = build_mcp_tool(
+        Tool(
+            name="zen-studio--rednote-search-scraper",
+            description="fixture",
+            inputSchema={
+                "type": "object",
+                "properties": {"keywords": {"type": "array"}},
+                "required": ["keywords"],
+            },
+        ),
+        DeclarationServer(),
+        server_name="apify",
+        server_factory=factory,
+        public_name="zen-studio--rednote-search-scraper",
+        domain="social_media",
+        effect="protected",
+        apify_actor=True,
+    )
+    starts: list[tuple] = []
+    finishes: list[tuple] = []
+    receipts: list[tuple] = []
+
+    def start_operation(*_args):
+        starts.append(True)
+        # The second attempt recovers the receipt recorded by the first one.
+        return "run1abc" if len(starts) == 2 else None
+
+    def finish_operation(*args):
+        finishes.append(args)
+
+    def record_apify_run(*args):
+        receipts.append(args)
+
+    async def commit(write, *args):
+        await asyncio.to_thread(write, *args)
+
+    async def observe(_self, _kind, _payload, *, call_id=None):
+        return None
+
+    monkeypatch.setattr(tool_executor, "start_operation", start_operation)
+    monkeypatch.setattr(tool_executor, "finish_operation", finish_operation)
+    monkeypatch.setattr(tool_executor, "record_apify_run", record_apify_run)
+    monkeypatch.setattr(tool_executor, "commit_receipt", commit)
+    monkeypatch.setattr(StageContext, "observe", observe)
+
+    harness = SDKContextHarness(role="public_signal", task_id="apify-dedicated")
+    executor = ToolExecutor(
+        "public_signal",
+        frozenset({"social_media"}),
+        Configuration(research_model="openai:fixture"),
+        {"configurable": {}},
+        _RunBudget(initial={}),
+        {tool.name: tool},
+    )
+    harness.tool_executor = executor
+    scope = StageContext(
+        "fixture-run",
+        "fixture-stage-apify-dedicated",
+        "public_signal_agent",
+        0,
+        {"configurable": {}},
+        {},
+    )
+    arguments = '{"keywords":["售后"],"sortType":"general"}'
+
+    async def invoke(call_id):
+        token = stage_context.set(scope)
+        try:
+            context = ToolContext(
+                context=harness,
+                tool_name=tool.name,
+                tool_call_id=call_id,
+                tool_arguments=arguments,
+            )
+            return await executor.invoke(tool.sdk_tool, context, arguments)
+        finally:
+            stage_context.reset(token)
+
+    first = asyncio.run(invoke("call-1"))
+    assert json.loads(first)["structured_content"]["runId"] == "run1abc"
+    assert calls == ["zen-studio--rednote-search-scraper"]
+    assert receipts and receipts[-1][-1] == "run1abc"
+    assert finishes[0][-1] == "returned"
+
+    second = asyncio.run(invoke("call-2"))
+    assert json.loads(second)["structured_content"]["runId"] == "run1abc"
+    # Recovery polls the original run; it never starts a second Actor run.
+    assert calls == ["zen-studio--rednote-search-scraper", "get-actor-run"]
+    assert finishes[1][-1] == "run1abc"

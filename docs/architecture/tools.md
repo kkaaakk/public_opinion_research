@@ -148,6 +148,10 @@ class RetrievalMode(Enum):
 
 传输使用 Agents SDK 0.24.0 官方客户端 `MCPServerStdio` / `MCPServerStreamableHttp`。`MCPServerSpec` 保存可信本地策略（`domain`、`effect`）和连接参数；发现阶段用短生命周期连接执行 `list_tools()`，再由 `MCPUtil.to_function_tool()` 生成原生 `FunctionTool` 声明。`mcp/tool_wrapper.py` 只替换 `on_invoke_tool`，让每次调用重新建立连接并进入现有 `ToolExecutor.execute()`。服务方 `annotations` 不会改变领域或 Effect。
 
+社媒插件默认使用 Apify 的专属 Actor 工具：插件 MCP URL 的 `tools` 参数直接列出 `zen-studio/douyin-search-scraper`、`zen-studio/rednote-search-scraper`、`zhorex/weibo-scraper` 和读取 helper。MCP server 返回的工具名是 `username--actor-name`，其 `inputSchema` 就是该 Actor 的业务输入（含 `enum`、`required` 等约束）。`_load_server_tools` 将 Actor 工具标记为 `protected` 并保留 Run ID 回执路径；`get-actor-run`、`get-dataset-items`、`get-key-value-store-record` 为 `read`，`abort-actor-run` 等非 Actor 写入保持 `protected`。通用 `search-actors` / `fetch-actor-details` / `call-actor` 不再出现在社媒插件中。
+
+`mcp/tool_wrapper.py` 在声明期用服务端原始 `inputSchema` 构建 `jsonschema` validator，并在每次调用进入 `ToolExecutor.execute()` 的外部操作边界前校验模型参数。校验失败作为普通工具错误返回模型，不创建 `operations`、不发起 MCP 请求，也不触发 `ExecutionControlError`；本地 Python 工具继续使用 SDK/Pydantic 校验。
+
 兼容的单服务器配置对象（`mcp_config` 路径）：
 
 ```python
@@ -180,7 +184,7 @@ class MCPConfig(BaseModel):
 
 1. `por.role_tools` 保存模型可见目录及 effect。恢复时核对名称、描述、Schema、领域和 effect。Apify 托管服务中已验证的只读查询兼容原来的 `protected` 声明。已提交的结果由 DBOS 重放。 [版本切换](dbos-deployment.md#应用版本切换)
 2. `ToolManager.bind()` 把 `BusinessTool.sdk_tool` 交给 `ToolExecutor.bind`，只替换 `on_invoke_tool`；名称、描述、Schema 和严格模式保持 SDK 声明原样。MCP 工具与本地工具一样以 `BusinessTool` 装配，其声明来自 `MCPUtil.to_function_tool()`。DBOSRunner 在 Workflow 内调用 SDK，`ToolExecutor` 直接调度 `por.agent_tool` 并保持其结果格式。
-3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值。MCP 工具按服务方 Schema 验参。预算预占之后才进入业务函数及外部效果边界。
+3. `ToolExecutor` 在等待前检查权限和预占预算。普通 Python 工具由 SDK 验参和应用默认值；MCP 工具在 `mcp/tool_wrapper.py` 中用服务端原始 `inputSchema` 通过 `jsonschema` 验参。两类参数错误都作为普通工具结果返回模型，不进入 `operations`，不发起外部请求。预算预占之后才进入业务函数及外部效果边界。
 4. 工具 effect 为 `read`、`idempotent` 或 `protected`。未知 effect 使用 `protected`。受保护工具以 Workflow ID、工具名和原生 Tool Call ID 生成操作键，先登记 `operations`，后提交回执；业务函数在登记之后才读取带 `operation_id` 的调用配置。`idempotent` 工具不写回执，调用配置携带同一个派生值作为 `idempotency_key`。
 5. `ToolExecutor` 以 Tool Call ID 共享在途结果，并在取消时等待已启动的同步工具及其回执。已提交的 Step 恢复原输出、状态、工具身份、操作 ID 和局部用量；Harness 只接收恢复后的记录。成功结果由 Harness 记录并保留在 SDK 会话历史中。 [执行架构](agent-loop.md) · [DBOS Step](https://docs.dbos.dev/python/tutorials/step-tutorial)
 
@@ -200,7 +204,7 @@ Harness 只有两类记录会停留在 `running`：执行器已进入、工具�
 `por.agent_tool` 已提交时直接重放结果，不执行业务函数。Step 未提交时按 effect 处理：
 
 - `read` / `idempotent`：重新执行。`tool_calls` 只有一行，额度不重复扣；`ToolExecutor` 追加一条 `budget_warnings`，说明供应商可能收到两次请求。
-- `protected`：已有操作记录时，只有证实尚未执行才允许启动原调用。Apify `call-actor` 保留服务端的 Actor Run ID，通过 `get-actor-run` 查询原任务，再用 `get-dataset-items` 读取原 Dataset。无法验证原操作时返回具体原因并保留回执。 [Apify MCP](https://github.com/apify/apify-mcp-server)
+- `protected`：已有操作记录时，只有证实尚未执行才允许启动原调用。Apify 专属 Actor 工具（`username--actor-name`）或通用 `call-actor` 保留服务端的 Actor Run ID，通过 `get-actor-run` 查询原任务，再用 `get-dataset-items` 读取原 Dataset。服务方明确证明请求在启动前被拒绝（输入校验失败、Actor 不存在）时，Operation 结算为 `not_executed`，错误返回模型；其余无法验证的情况保留 `unknown` 并 fail closed。 [Apify MCP](https://github.com/apify/apify-mcp-server)
 
 外部请求已发出、`por.agent_tool` 尚未提交时崩溃，是唯一无法用现有表消除的重复调用窗口；本轮不新增结果缓存表或分布式事务。完整分析见 [工具执行层与恢复审计](../audits/tool-execution-recovery.md)。
 

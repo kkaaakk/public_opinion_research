@@ -281,6 +281,48 @@ def test_protected_tool_settles_receipts_and_unknown_failure(
     assert starts and len(starts) == 2
 
 
+# 验证外部服务在启动前明确拒绝时，回执记为 not_executed 且错误返回模型。
+def test_confirmed_pre_run_rejection_settles_not_executed(
+    monkeypatch, memory_ledger
+) -> None:
+    from open_deep_research.runtime import tool_executor
+    from open_deep_research.tools import ToolNotExecuted
+
+    starts: list[tuple] = []
+    finishes: list[tuple] = []
+
+    def start_operation(*args):
+        starts.append(args)
+
+    def finish_operation(*args):
+        finishes.append(args)
+
+    async def commit(write, *args):
+        await asyncio.to_thread(write, *args)
+
+    async def observe(_self, _kind, _payload, *, call_id=None):
+        return None
+
+    monkeypatch.setattr(tool_executor, "start_operation", start_operation)
+    monkeypatch.setattr(tool_executor, "finish_operation", finish_operation)
+    monkeypatch.setattr(tool_executor, "commit_receipt", commit)
+    monkeypatch.setattr(StageContext, "observe", observe)
+
+    @business_tool(domain="web_search", effect="protected")
+    async def web_search(context: ToolContext, query: str) -> str:
+        raise ToolNotExecuted("provider rejected the input before starting")
+
+    harness, executor = _executor(web_search)
+    output = _invoke(web_search, executor, harness)
+
+    assert output.startswith("Error executing tool:")
+    assert "provider rejected the input before starting" in output
+    assert starts and len(starts) == 1
+    assert finishes[-1][-1] == "not_executed"
+    assert harness.results["call-1"].status == "failed"
+    assert harness.results["call-1"].effect_status == "not_executed"
+
+
 # 验证同步业务函数在线程中执行，并自动启用取消等待。
 def test_sync_business_function_runs_in_a_thread_and_drains() -> None:
     observed: list[str] = []

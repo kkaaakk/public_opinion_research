@@ -24,10 +24,11 @@ from typing import Any
 from agents.mcp import MCPServer
 from agents.mcp.util import MCPUtil
 from agents.tool_context import ToolContext
+from jsonschema.exceptions import ValidationError
 from jsonschema.validators import validator_for
 
 from mcp import McpError
-from open_deep_research.tools import BusinessTool, ToolEffect
+from open_deep_research.tools import BusinessTool, ToolEffect, ToolNotExecuted
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,9 @@ def build_mcp_tool(
         server_name=server_name,
         server_factory=server_factory,
         mcp_tool_name=mcp_tool.name,
-        schema=declaration.params_json_schema,
+        # Validate against the server's original schema, not the SDK's copy.
+        # MCPUtil preserves it today, but the raw schema is the contract.
+        schema=mcp_tool.inputSchema,
         apify_actor=apify_actor,
     )
     declared = replace(
@@ -126,12 +129,14 @@ def _mcp_tool_invoker(
     schema: dict[str, Any],
     apify_actor: bool,
 ) -> Callable[[ToolContext[Any], str], Any]:
-    """Validate one MCP argument object, then enter the shared executor.
+    """Validate one MCP argument object before the external-operation boundary.
 
     ``build_mcp_tool`` replaces the SDK invocation callback, so the SDK's own
-    argument validation no longer runs. The service Schema is therefore checked
-    here once at declaration time and applied to every call: MCP tools keep the
-    same "validate, then admit" order as local business tools.
+    argument validation no longer runs. The server's original ``inputSchema`` is
+    therefore checked here once at declaration time and applied to every call.
+    A validation failure becomes a normal tool error for the model; it never
+    reaches ``ToolExecutor.execute``, so it cannot create an ``operations`` row
+    or an external request.
     """
     validator_class = validator_for(schema)
     validator_class.check_schema(schema)
@@ -141,8 +146,14 @@ def _mcp_tool_invoker(
         record = context.context.results[context.tool_call_id]
         args = record.args
         if not isinstance(args, dict):
-            raise ValueError("Tool arguments must be a JSON object.")
-        validator.validate(args)
+            raise MCPToolError(
+                f"MCP tool '{context.tool_name}' rejected its arguments: "
+                "expected a JSON object."
+            )
+        try:
+            validator.validate(args)
+        except ValidationError as exc:
+            raise MCPToolError(_validation_message(context.tool_name, exc)) from exc
         executor = context.context.tool_executor
         if apify_actor:
 
@@ -157,6 +168,7 @@ def _mcp_tool_invoker(
                     mcp_tool_name,
                     args,
                     observe_result=remember,
+                    apify_actor=True,
                 )
 
             async def lookup(run_id):
@@ -198,6 +210,44 @@ def _apify_run_id(receipt):
     )
 
 
+# 把 jsonschema 错误转成模型可直接修正的简短说明。
+def _validation_message(tool_name: str, error: ValidationError) -> str:
+    path = ".".join(str(part) for part in error.path) or "<arguments>"
+    if error.validator == "required":
+        missing = sorted(set(error.validator_value) - set(error.instance or {}))
+        detail = "missing required field(s): " + ", ".join(missing)
+    elif error.validator == "enum":
+        detail = f"{error.instance!r} is not one of {list(error.validator_value)!r}"
+    else:
+        detail = error.message
+    return f"MCP tool '{tool_name}' rejected its arguments at '{path}': {detail}"
+
+
+# Apify MCP 在启动 Actor 前明确拒绝请求时返回的稳定文本。
+# 只有确认没有 runId 且命中这些标记时才允许标记 not_executed。
+_APIFY_INPUT_REJECTION = (
+    "Please ensure the input is correct and matches the Actor's input schema."
+)
+_APIFY_ACTOR_NOT_FOUND = re.compile(r"^Actor '.*' was not found\.")
+
+
+# 提取 MCP 错误结果中的文本内容。
+def _text_content(result: Any) -> str:
+    return "\n".join(
+        item.text
+        for item in (result.content or ())
+        if getattr(item, "type", type(item).__name__) == "text"
+    )
+
+
+# 判断服务方是否明确证明请求在启动前被拒绝。
+def _confirmed_pre_run_rejection(text: str) -> bool:
+    return bool(
+        _APIFY_INPUT_REJECTION in text
+        or _APIFY_ACTOR_NOT_FOUND.match(text.strip())
+    )
+
+
 # 每次调用使用独立连接，断连或取消后不会复用失效会话。
 async def _call_mcp_tool(
     server_name: str,
@@ -206,6 +256,7 @@ async def _call_mcp_tool(
     args: dict[str, Any],
     *,
     observe_result=None,
+    apify_actor: bool = False,
 ) -> Any:
     """Call the remote MCP tool over a fresh SDK connection.
 
@@ -219,6 +270,13 @@ async def _call_mcp_tool(
             result = await server.call_tool(mcp_tool_name, args)
             if observe_result is not None:
                 await observe_result(result)
+            if (
+                apify_actor
+                and result.isError
+                and not _apify_run_id(result.structuredContent)
+                and _confirmed_pre_run_rejection(_text_content(result))
+            ):
+                raise ToolNotExecuted(_text_content(result))
     except BaseException as exc:
         interaction = _interaction_required_message(exc)
         if interaction is not None:
