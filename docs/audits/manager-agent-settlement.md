@@ -1,8 +1,8 @@
 # POR Manager Agent 的并发、清算与恢复验证
 
-2026-11-28 · 架构决策状态为建议
+2026-11-28 · 第 00 轮选定方案 B
 
-推荐方案 B。Manager 使用官方 `DBOSRunner` 调用原生 `Agent.as_tool()`，每次子 Agent 调用持有自己的 `SDKContextHarness` 和 `ToolExecutor`。复用现有的有界清算与持久化账本。SDK 已经负责工具调度、错误结果生成和首轮取消，应用侧只需处理到退出边界仍未收尾的工作，以及预算和外部效果的确认。
+方案 B 由 Manager Agent 通过 SDK 原生 `agent.as_tool()` 调度专业 Agent，以调用为单位隔离 `SDKContextHarness` 和 `ToolExecutor`，并保留 POR 的有界清算和持久化账本。本页的实验结果适用于受控模型和指定的 SDK/DBOS 版本。正式装配、业务切换与恢复验收安排在第 01、02 轮。
 
 有两个决定迁移边界的实测结果。Manager 被取消时，两条子 Agent 调用和两条业务工具调用仍可能在途。子 Agent 的整体 Step 未提交时，DBOS 恢复会重新从第一轮模型调用开始，连崩溃前已返回的业务工具也会再次执行。已提交的子 Step 直接返回结果，跳过 SDK `Usage` 累加与子 Hooks。
 
@@ -118,32 +118,71 @@ PostgreSQL 与 SQLite 各有 8 项离线断言通过。步骤序号来自 DBOS �
 
 这批证据支持保留表中的本地清算组件。可简化的是父子出口的重复职责，由子 Harness 做逐调用清算，父级只等待子调用。首个可考虑删除的字段是 `last_settlement`，前提是可用一次清算返回值覆盖它的消费者。细粒度子检查点可在整段恢复通过上述业务验证后，从新的执行路径移除。
 
-## 方案比较与建议
+## 方案比较
 
 | 方案 | 复杂度 | 可靠性与适用条件 | 结论 |
 | --- | --- | --- | --- |
 | A · 仅依赖 SDK 任务管理 | 低 | 已覆盖正常批次并行与同批取消。同步回执、取消尾部和持久化控制语义仍需 POR 确认。场景 2、4、5、6 和 10 反驳完全替代清算。 | 采用其中的 SDK 调度能力。将 `_closing`、`drain`、`settle` 视为可直接删除的做法缺少证据。 |
-| B · 每次子调用独立 ToolExecutor | 低至中 | 以公开 `ToolContext` 携带调用级业务对象，用现有有界清算。全 Run 持久账本仍集中，子实例可并行。场景 7 已验证上下文接线的可行性，正式绑定需带真实 Executor 回归。 | 推荐。Manager 只跟踪已启动的子调用及其清算结果，子级清算复用已有所有者。 |
-| C · ExecutionScope 与 ContextVar | 中至高 | 适用于确实无法显式携带业务依赖的入口。需要额外验证上下文继承、同角色并行、取消、重放身份及隔离。它对远端效果或清算期限无额外保障。 | 等 B 的明确失败场景，再按需要评估。 |
+| B · 每次子调用独立 ToolExecutor | 低至中 | 以公开 `ToolContext` 携带调用级业务对象，用现有有界清算。全 Run 持久账本仍集中，子实例可并行。场景 7 已验证上下文接线的可行性，正式绑定需带真实 Executor 回归。 | 第 00 轮选定。Manager 跟踪已启动的子调用及其清算结果，子级清算由原所有者负责。 |
+| C · ExecutionScope 与 ContextVar | 中至高 | 适用于确实无法显式携带业务依赖的入口。需要额外验证上下文继承、同角色并行、取消、重放身份及隔离。它对远端效果或清算期限无额外保障。 | 保留为备选方案的比较记录。 |
 | D · SDK 配置与公开入口 | 低 | `ToolContext`、`agent_tool_invocation`、`RunConfig.tool_execution.max_function_tool_concurrency` 和流式 `after_turn` 可用于相关性、限流及协作式停止。限流会降低同时在途数量。`after_turn` 适用于允许完成当前轮的流式入口。 | 作为 B 的补充。强制退出、持久化回执和已启动的远端工作仍由 POR 管理。[ToolExecutionConfig](https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/run_config.py#L143-L165) |
 
-### 拟议最小改造
+## 第 00 轮最终架构决策
 
-1. 保留原生 `as_tool()`，在调用入口记录所属 Manager Workflow 和外层 `tool_call_id`。在本次 `ToolContext` 上显式传入新建的子 Harness 和 Executor，沿用共享的 Run 级预算及实际成本账本。SDK 的 `Usage` 继续用于当前会话观测。
-2. 子 `Agent` 的工具配置保持稳定。当前 `ToolManager.bind()` 把回调静态绑定到一个 Executor，`as_tool(hooks=...)` 也捕获固定对象。可以在装配边界用 `ToolContext.context` 选取本次调用的已有执行器和 Hooks，复用 `ToolManager` 的工具目录与策略。模型输入过滤器同样可以按显式业务 Context 路由。场景 7、9 验证了传参机制，实际 POR 绑定还需回归。 [ToolManager.bind](https://github.com/kkaaakk/public_opinion_research/blob/f57c736012c1e3a8aed38c17ccfde3a9f11afeb8/src/open_deep_research/tools/manager.py#L105-L117)
-3. 用最小包装器持有子 Runner、复用子 Harness 的关口与有界清算并恢复父 Context。Manager 退出时对已进入的子调用做一次有界等待，超时从其现有清算结果及 journal/账本保留未决状态。结束 Hook、局部 Future 和 `CANCELLED` journal 只能作为观测输入。逐工具调度和首轮取消交给 SDK。
-4. 外层 Agent Tool 保留应当中止的控制异常。若需要持久化这类错误，在子 Step 边界从异常链提取 POR 已支持的确切类型、用量与 `unknown_outcome`，或者显式写入可序列化结构并测试恢复分类。首批集成应能从 journal 和 effect ledger 验证这一合同，再评估是否简化 `last_settlement` 的可变字段。
-5. 在启用子整体 Step 自动恢复前，先验证**未提交子 Step 的重新进入**。由已提交的父模型响应提供外层调用身份，避免把重新生成的内层 ID 当作旧调用。已有受保护操作或未确认的效果按当前政策核对，只读查有权威回执的实例，未能确认时保持中断。只在重试合同、实际费用记账、保护操作和取消并存时仍满足约束的入口启用整段重跑。
+场景 7 和 9 验证了对原生回调的委托、模拟业务 Context 的调用级隔离与恢复，以及共享 Usage。场景 2、4、5、6 和 9 说明清算必须覆盖 Runner 退出后的在途工作和重复取消。场景 10 验证了同一应用版本下两种本地数据库的进程中断恢复，并给出了直接持久化 SDK 异常和依赖恢复后 SDK Usage 的反例。
 
-## 限制与待验证项
+### 调度、Context 与清算
 
-| 项目 | 状态 | 说明 |
-| --- | --- | --- |
-| SDK 私有缓存和 DBOS 源码行为 | 源码确认 | 私有 Agent Tool 审批缓存、`ToolContext` 参数适配、分类错误传播和 DBOS Step 结果读取按版本审查。长期业务身份要使用公共调用信息及 POR 持久事实。 |
-| 真实 ToolExecutor 多子调用集成 | 尚未验证 | 隔离用模拟业务对象。真实 Harness Hooks、工具装配、共享账本并发，以及模型与受保护工具的新身份派生需要在正式实现前一起验证。 |
-| 真实 Apify、MCP、RAG 和付费模型 | 尚未验证 | 远端模拟只证明子任务不随本地取消结束。供应商取消、读回 Actor Run、ACK 丢失和账单由原有 Operations 及对应集成合同负责。 |
-| 审批和流式耐久运行 | 尚未验证 | 使用纯 SDK 流式及非流式子 Agent，DBOS 实验仅运行非流式 Manager 和非流式子 Agent。未复测 SDK `needs_approval`、`RunState` 恢复、共享 SDK Session、MCP 会话退出、事件队列溢出以及后处理中止的其他工具类型。 |
-| 分布式恢复和版本升级 | 尚未验证 | 本轮复现同版本独立进程的中断与恢复。跨 Executor 并发恢复、数据库服务中断、进程在副作用回执窗口崩溃、跨版本 journal 切换和 Finalizer 的真实授权走现有单独验收合同。 |
+1. 使用 **Manager Agent + SDK 原生 `agent.as_tool()`** 调度多 Agent。Manager 由官方 `DBOSRunner` 执行，子 Agent 使用 SDK 原生 `Runner`。
+2. 统一包装 `agent.as_tool()` 返回的 `FunctionTool.on_invoke_tool`，在该入口实施子 Agent 执行控制并委托原回调。沿用 SDK 的参数校验、输出提取、并行工具调度和首轮取消。
+3. 每次子 Agent 调用新建 `ToolExecutor` 和 `SDKContextHarness`。以 `dataclasses.replace()` 从父业务 Context 创建子业务 Context，注入本次调用的 `ToolContext.context`，退出时在 `finally` 中恢复父 Context。调用级依赖由 SDK Context 承载，沿用 SDK 原版 Runner。`ExecutionScope`、`ContextVar` 属于备选方案 C。此装配用真实 POR 对象验证后才接入正式路径。
+4. `ToolManager` 负责发现、角色准入与工具装配。业务工具入口在调用时从 `ctx.context.executor` 取得本次 Executor，取代现有的静态绑定。调用身份包含所属 Run 或 Manager Workflow 及外层 `tool_call_id`，子循环内的工具 ID 在该调用范围内使用。 [当前 ToolManager.bind](https://github.com/kkaaakk/public_opinion_research/blob/f57c736012c1e3a8aed38c17ccfde3a9f11afeb8/src/open_deep_research/tools/manager.py#L105-L117)
+5. 复用现有有界清算和取消保护。子 Agent 在包装入口的 `finally` 中由自己的 Harness 清算，Manager 在 Runner 外层清算自身调用，并对已经启动的子调用做有界等待。清算超时保留在途和未决状态，由原调用所有者与持久化事实确认结果。
+
+### 持久化边界与业务能力
+
+1. 尽可能复用 SDK 原生 `Usage`、Hooks、Context 与 `max_turns`。Run 级预算账本继续记录实际模型尝试和工具用量，保留原子准入及 Operations 副作用保护。恢复后展示的 SDK Usage 只用于运行观测。
+2. DBOS 的执行检查点收敛到 Manager 模型调用和整个 Agent Tool 调用。已提交的子 Step 复用整体结果。未提交的子 Step 可能从首轮模型重入，子 Agent 内部的模型与工具统一按整体调用边界恢复。启用重入前须核对持久化账本和未决效果，有已记录的 Apify Actor Run ID 时只读查询原 Run。无法确认的受保护效果须保持中断。
+3. 正式切换后只保留以下三个 Workflow。`por.plan`、`por.research`、`por.role` 等旧业务编排 Workflow 在迁移时退役。版本切换及历史读取以部署规则和迁移验收为准。 [DBOS 部署与恢复](../architecture/dbos-deployment.md)
+
+| Workflow | 职责 |
+| --- | --- |
+| `por.run` | Manager Agent 执行与恢复 |
+| `por.events` | 事件持久化与交付 |
+| `por.finalize` | 终态确认与收尾 |
+
+迁移保留 Brief、Plan、澄清、人工审批、并行取证、Review、补研、风险评估、回应策略、报告生成、RAG、MCP、Plugins 与 Skills。需要人工审批的执行入口只有在代码校验当前 Brief 的有效批准后才放行。 [现有业务链路](../architecture/agent-loop.md) · [Brief 与审批协议](../architecture/research-brief.md)
+
+## 正式迁移待验证项
+
+| 待验证事项 | 验收内容 |
+| --- | --- |
+| 真实 ToolExecutor 与新 Context 的装配 | 用真实 `ToolExecutor` 和 `SDKContextHarness` 验证 `dataclasses.replace()`、运行时执行器选取、Hooks、共享账本并发和父 Context 恢复。覆盖同一子 Agent 并行调用及内层 ID 重复。 |
+| Apify、MCP 与 Operations 的真实接入 | 验证实际工具路径的副作用准入、Actor Run ID 只读查回、MCP 会话退出、回执丢失和未知效果阻断。模拟供应商只覆盖了本地取消后远端任务仍可继续。 |
+| 跨 Executor 恢复 | 在不同 Executor 上验证中断、接手、并发恢复、回执写入窗口故障与 Finalizer 的授权，检查已提交结果复用以及重入前的保护条件。 |
+| 执行控制异常与 `unknown_outcome` 持久化 | 验证控制异常穿过 SDK 错误转换和 Agent Tool Step，读回时保留原类型与 `unknown_outcome`。现有实验已复现 `RunJSON` 读回丢失这两项。 |
+| 子 Agent Step 事件 | 验证 Step 内发送、恢复及并发下的事件去重，并验证 `por.events` 与 `por.finalize` 在成功、失败和取消时的终态排空。 |
+| 恢复后的真实预算消耗 | 按持久化模型尝试与工具记录核对恢复前后的实际开销。验证已提交 Step 的结果复用不重复计费，未提交 Step 重入后的真实尝试完整计入。 |
+| 新旧 Workflow 恢复兼容边界 | 对照应用版本、journal 命令序列和现有历史读取与重试授权，验证旧在途 Run 由匹配版本排空，以及终态历史和受支持恢复路径在切换时的行为。 |
+
+其余集成覆盖包括 RAG 在新 Context 下的调用、审批中断与 `RunState` 恢复、共享 SDK Session 和流式耐久运行。DBOS 实验使用非流式 Manager 和非流式子 Agent，SDK 流式样本独立运行。SDK 私有审批缓存仅作锁定版本的源码观察，持久化身份使用公开调用信息和 POR 持久化事实。
+
+## 后续迁移轮次
+
+### 第 01 轮 · 核心 Agent 架构迁移
+
+- 解耦 ToolManager 与 ToolExecutor，并注入 SDK Context。
+- 包装 Agent Tool，建立独立清算，适配预算、上下文及 Operations。
+- 迁移 Manager Agent 与专业 Agent 的业务能力。
+- 执行离线回归、可控模型测试和针对性集成验证。
+
+### 第 02 轮 · DBOS 收敛与最终清理
+
+- 正式切换 Manager Agent + DBOSRunner，适配 `por.run`、`por.events`、`por.finalize`。
+- 退役旧业务编排 Workflow，验证真实 DBOS 恢复以及并发、预算、副作用和事件回归。
+- 删除废弃代码、配置和测试，更新项目文档并统计改造前后代码量。
+
+完整真实模型舆情研究由用户自行运行。迁移验收由 Codex 完成离线回归、可控模型测试、真实 DBOS 恢复测试及必要的针对性集成验证。
 
 ## 复现命令
 
